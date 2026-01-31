@@ -1,0 +1,23 @@
+# Docker ignore file for Railway deployment
+node_modules
+npm-debug.log
+.git
+.gitignore
+*.md
+!README.md
+.env
+.env.*
+tests
+*.test.ts
+*.spec.ts
+.DS_Store
+*.mp4
+docs
+pages
+assets
+.repomix
+repomix-output.txt.xml
+
+# Don't ignore credentials for deployment (but use env vars instead!)
+# credentials.json
+# token.json

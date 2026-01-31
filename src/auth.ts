@@ -16,6 +16,60 @@ const TOKEN_PATH = path.join(projectRootDir, 'token.json');
 const CREDENTIALS_PATH = path.join(projectRootDir, 'credentials.json');
 // --- End of path calculation ---
 
+// --- Helper functions for Railway/cloud deployment ---
+// These allow reading credentials from environment variables instead of files
+
+/**
+ * Get credentials config from GOOGLE_CREDENTIALS env var or credentials.json file
+ * Priority: Environment variable > File
+ */
+function getCredentialsConfig(): any {
+  // Priority 1: Environment variable (for Railway/cloud deployment)
+  if (process.env.GOOGLE_CREDENTIALS) {
+    try {
+      console.error('Loading credentials from GOOGLE_CREDENTIALS env var');
+      return JSON.parse(process.env.GOOGLE_CREDENTIALS);
+    } catch (e) {
+      console.error('Failed to parse GOOGLE_CREDENTIALS env var:', e);
+    }
+  }
+
+  // Priority 2: Return null to let caller handle file loading
+  return null;
+}
+
+/**
+ * Get stored token from GOOGLE_TOKEN env var or token.json file
+ * Priority: Environment variable > File
+ */
+function getStoredTokenFromEnv(): any | null {
+  // Check environment variable first
+  if (process.env.GOOGLE_TOKEN) {
+    try {
+      console.error('Loading token from GOOGLE_TOKEN env var');
+      return JSON.parse(process.env.GOOGLE_TOKEN);
+    } catch (e) {
+      console.error('Failed to parse GOOGLE_TOKEN env var:', e);
+    }
+  }
+  return null;
+}
+
+/**
+ * Save token - logs to stderr for cloud deployment env var updates
+ */
+function logTokenForEnvUpdate(token: any): void {
+  // In cloud deployment, we can't easily save files
+  // Log the token so you can update the env var if needed
+  if (process.env.GOOGLE_CREDENTIALS || process.env.GOOGLE_TOKEN) {
+    console.error('='.repeat(50));
+    console.error('TOKEN REFRESHED - Update GOOGLE_TOKEN env var with:');
+    console.error(JSON.stringify(token));
+    console.error('='.repeat(50));
+  }
+}
+// --- End of helper functions for Railway/cloud deployment ---
+
 const SCOPES = [
   'https://www.googleapis.com/auth/documents',
   'https://www.googleapis.com/auth/drive', // Full Drive access for listing, searching, and document discovery
@@ -59,22 +113,67 @@ async function authorizeWithServiceAccount(): Promise<JWT> {
 
 async function loadSavedCredentialsIfExist(): Promise<OAuth2Client | null> {
   try {
-    const content = await fs.readFile(TOKEN_PATH);
-    const credentials = JSON.parse(content.toString());
+    // Try environment variable first (for Railway/cloud deployment)
+    let credentials = getStoredTokenFromEnv();
+
+    // Fall back to file if no env var
+    if (!credentials) {
+      try {
+        const content = await fs.readFile(TOKEN_PATH);
+        credentials = JSON.parse(content.toString());
+        console.error('Loading token from token.json file');
+      } catch (err: any) {
+        if (err.code === 'ENOENT') {
+          return null; // No token file, need to authenticate
+        }
+        throw err;
+      }
+    }
+
     const { client_secret, client_id, redirect_uris } = await loadClientSecrets();
     const client = new google.auth.OAuth2(client_id, client_secret, redirect_uris?.[0]);
     client.setCredentials(credentials);
+
+    // Set up token refresh handler for cloud deployments
+    client.on('tokens', (newTokens) => {
+      const updatedToken = { ...credentials, ...newTokens };
+      logTokenForEnvUpdate(updatedToken);
+      // Also try to save to file for local dev
+      fs.writeFile(TOKEN_PATH, JSON.stringify(updatedToken, null, 2))
+        .then(() => console.error('Token saved to token.json'))
+        .catch(() => console.error('Could not save token to file (expected in cloud deployment)'));
+    });
+
     return client;
   } catch (err) {
     return null;
   }
 }
 
+export async function loadClientCredentials() {
+  return loadClientSecrets();
+}
+
 async function loadClientSecrets() {
-  const content = await fs.readFile(CREDENTIALS_PATH);
-  const keys = JSON.parse(content.toString());
+  // Try environment variable first (for Railway/cloud deployment)
+  let keys = getCredentialsConfig();
+
+  // Fall back to file if no env var
+  if (!keys) {
+    try {
+      const content = await fs.readFile(CREDENTIALS_PATH);
+      keys = JSON.parse(content.toString());
+      console.error('Loading credentials from credentials.json file');
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        throw new Error('No Google credentials found! Set GOOGLE_CREDENTIALS env var or provide credentials.json');
+      }
+      throw err;
+    }
+  }
+
   const key = keys.installed || keys.web;
-   if (!key) throw new Error("Could not find client secrets in credentials.json.");
+  if (!key) throw new Error("Could not find client secrets in credentials.json or GOOGLE_CREDENTIALS env var.");
   return {
       client_id: key.client_id,
       client_secret: key.client_secret,
@@ -97,8 +196,8 @@ async function saveCredentials(client: OAuth2Client): Promise<void> {
 
 async function authenticate(): Promise<OAuth2Client> {
   const { client_secret, client_id, redirect_uris, client_type } = await loadClientSecrets();
-  // For web clients, use the configured redirect URI; for desktop clients, use 'urn:ietf:wg:oauth:2.0:oob'
-  const redirectUri = client_type === 'web' ? redirect_uris[0] : 'urn:ietf:wg:oauth:2.0:oob';
+  // Use http://localhost for desktop apps (OOB flow was deprecated by Google in 2022)
+  const redirectUri = redirect_uris[0] || 'http://localhost';
   console.error(`DEBUG: Using redirect URI: ${redirectUri}`);
   console.error(`DEBUG: Client type: ${client_type}`);
   const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirectUri);
@@ -108,11 +207,18 @@ async function authenticate(): Promise<OAuth2Client> {
   const authorizeUrl = oAuth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: SCOPES.join(' '),
+    prompt: 'select_account',  // Force account selection
   });
 
   console.error('DEBUG: Generated auth URL:', authorizeUrl);
-  console.error('Authorize this app by visiting this url:', authorizeUrl);
-  const code = await rl.question('Enter the code from that page here: ');
+  console.error('\n=== AUTHORIZATION REQUIRED ===');
+  console.error('1. Open this URL in your browser (use incognito for different account):');
+  console.error(authorizeUrl);
+  console.error('\n2. After granting access, your browser will redirect to a "localhost" page that fails to load.');
+  console.error('3. Copy the "code" value from the URL bar. It looks like: http://localhost/?code=4/0XXXXX&scope=...');
+  console.error('4. Copy everything between "code=" and "&scope" (or end of URL if no &scope)');
+  console.error('==============================\n');
+  const code = await rl.question('Paste the authorization code here: ');
   rl.close();
 
   try {

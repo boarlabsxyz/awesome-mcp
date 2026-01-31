@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Registration Complete - Google Docs MCP</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+      color: #333;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      max-width: 600px;
+      width: 100%;
+      padding: 2rem;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 2.5rem;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    }
+    .success-icon {
+      width: 48px;
+      height: 48px;
+      background: #34a853;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1rem;
+      color: #fff;
+      font-size: 1.5rem;
+    }
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .subtitle {
+      color: #666;
+      margin-bottom: 1.5rem;
+    }
+    .api-key-section {
+      background: #f8f9fa;
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+    .api-key-section label {
+      display: block;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      color: #888;
+      margin-bottom: 0.5rem;
+      letter-spacing: 0.05em;
+    }
+    .api-key-row {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .api-key-input {
+      flex: 1;
+      padding: 0.7rem;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 0.85rem;
+      background: #fff;
+    }
+    .btn-copy {
+      padding: 0.7rem 1rem;
+      background: #4285f4;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      white-space: nowrap;
+    }
+    .btn-copy:hover { background: #3367d6; }
+    .btn-copy.copied { background: #34a853; }
+    .config-section {
+      margin-bottom: 1rem;
+    }
+    .config-section h3 {
+      font-size: 0.95rem;
+      margin-bottom: 0.5rem;
+    }
+    .config-section p {
+      color: #666;
+      font-size: 0.9rem;
+      margin-bottom: 0.75rem;
+      line-height: 1.5;
+    }
+    pre {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.8rem;
+      line-height: 1.5;
+    }
+    .warning {
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      font-size: 0.85rem;
+      color: #856404;
+      margin-top: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="success-icon">&#10003;</div>
+      <h1>You're all set!</h1>
+      <p class="subtitle">Your Google account has been connected. Use the API key below in your MCP client.</p>
+
+      <div class="api-key-section">
+        <label>Your API Key</label>
+        <div class="api-key-row">
+          <input type="text" class="api-key-input" id="apiKey" readonly value="" />
+          <button class="btn-copy" id="copyBtn" onclick="copyKey()">Copy</button>
+        </div>
+      </div>
+
+      <div class="config-section">
+        <h3>Claude.ai Connector</h3>
+        <p>Paste this URL in Claude.ai &rarr; Settings &rarr; Connectors &rarr; Add custom connector:</p>
+        <div class="api-key-row" style="margin-bottom: 0.5rem;">
+          <input type="text" class="api-key-input" id="connectorUrl" readonly value="" />
+          <button class="btn-copy" id="copyUrlBtn" onclick="copyConnectorUrl()">Copy URL</button>
+        </div>
+      </div>
+
+      <div class="config-section">
+        <h3>Claude Desktop Configuration</h3>
+        <p>Add this to your Claude Desktop MCP config file:</p>
+        <pre id="configSnippet"></pre>
+      </div>
+
+      <div class="warning">
+        Save your API key now. For security, it won't be shown again. If you lose it, sign in again to get a new session.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const apiKey = params.get('apiKey') || 'ERROR: No API key received';
+    const baseUrl = window.location.origin;
+
+    const connectorUrl = baseUrl + '/mcp?apiKey=' + encodeURIComponent(apiKey);
+
+    document.getElementById('apiKey').value = apiKey;
+    document.getElementById('connectorUrl').value = connectorUrl;
+    document.getElementById('configSnippet').textContent = JSON.stringify({
+      "mcpServers": {
+        "google-docs": {
+          "url": baseUrl + "/mcp",
+          "headers": {
+            "Authorization": "Bearer " + apiKey
+          }
+        }
+      }
+    }, null, 2);
+
+    function copyConnectorUrl() {
+      navigator.clipboard.writeText(connectorUrl).then(() => {
+        const btn = document.getElementById('copyUrlBtn');
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy URL';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+
+    function copyKey() {
+      navigator.clipboard.writeText(apiKey).then(() => {
+        const btn = document.getElementById('copyBtn');
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+  </script>
+</body>
+</html>

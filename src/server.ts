@@ -3,7 +3,9 @@ import { FastMCP, UserError } from 'fastmcp';
 import { z } from 'zod';
 import { google, docs_v1, drive_v3, sheets_v4 } from 'googleapis';
 import { authorize } from './auth.js';
+import { loadClientCredentials } from './auth.js';
 import { OAuth2Client } from 'google-auth-library';
+import http from 'http';
 
 // Import types and helpers
 import {
@@ -22,49 +24,55 @@ NotImplementedError
 import * as GDocsHelpers from './googleDocsApiHelpers.js';
 import * as SheetsHelpers from './googleSheetsApiHelpers.js';
 
-let authClient: OAuth2Client | null = null;
-let googleDocs: docs_v1.Docs | null = null;
-let googleDrive: drive_v3.Drive | null = null;
-let googleSheets: sheets_v4.Sheets | null = null;
+// Multi-user imports
+import { UserSession } from './userSession.js';
+import { createUserSession } from './userSession.js';
+import { loadUsers, getUserByApiKey } from './userStore.js';
+import { initDatabase, closeDatabase } from './db.js';
+import { createWebApp } from './webServer.js';
 
-// --- Initialization ---
+// Global clients for stdio (single-user) mode
+let authClient: OAuth2Client | null = null;
+let globalDocsClient: docs_v1.Docs | null = null;
+let globalDriveClient: drive_v3.Drive | null = null;
+let globalSheetsClient: sheets_v4.Sheets | null = null;
+
+// --- Initialization (stdio single-user mode only) ---
 async function initializeGoogleClient() {
-if (googleDocs && googleDrive && googleSheets) return { authClient, googleDocs, googleDrive, googleSheets };
-if (!authClient) { // Check authClient instead of googleDocs to allow re-attempt
+if (globalDocsClient && globalDriveClient && globalSheetsClient) return { authClient, googleDocs: globalDocsClient, googleDrive: globalDriveClient, googleSheets: globalSheetsClient };
+if (!authClient) {
 try {
 console.error("Attempting to authorize Google API client...");
 const client = await authorize();
-authClient = client; // Assign client here
-googleDocs = google.docs({ version: 'v1', auth: authClient });
-googleDrive = google.drive({ version: 'v3', auth: authClient });
-googleSheets = google.sheets({ version: 'v4', auth: authClient });
+authClient = client;
+globalDocsClient = google.docs({ version: 'v1', auth: authClient });
+globalDriveClient = google.drive({ version: 'v3', auth: authClient });
+globalSheetsClient = google.sheets({ version: 'v4', auth: authClient });
 console.error("Google API client authorized successfully.");
 } catch (error) {
 console.error("FATAL: Failed to initialize Google API client:", error);
-authClient = null; // Reset on failure
-googleDocs = null;
-googleDrive = null;
-googleSheets = null;
-// Decide if server should exit or just fail tools
+authClient = null;
+globalDocsClient = null;
+globalDriveClient = null;
+globalSheetsClient = null;
 throw new Error("Google client initialization failed. Cannot start server tools.");
 }
 }
-// Ensure googleDocs, googleDrive, and googleSheets are set if authClient is valid
-if (authClient && !googleDocs) {
-googleDocs = google.docs({ version: 'v1', auth: authClient });
+if (authClient && !globalDocsClient) {
+globalDocsClient = google.docs({ version: 'v1', auth: authClient });
 }
-if (authClient && !googleDrive) {
-googleDrive = google.drive({ version: 'v3', auth: authClient });
+if (authClient && !globalDriveClient) {
+globalDriveClient = google.drive({ version: 'v3', auth: authClient });
 }
-if (authClient && !googleSheets) {
-googleSheets = google.sheets({ version: 'v4', auth: authClient });
+if (authClient && !globalSheetsClient) {
+globalSheetsClient = google.sheets({ version: 'v4', auth: authClient });
 }
 
-if (!googleDocs || !googleDrive || !googleSheets) {
+if (!globalDocsClient || !globalDriveClient || !globalSheetsClient) {
 throw new Error("Google Docs, Drive, and Sheets clients could not be initialized.");
 }
 
-return { authClient, googleDocs, googleDrive, googleSheets };
+return { authClient, googleDocs: globalDocsClient, googleDrive: globalDriveClient, googleSheets: globalSheetsClient };
 }
 
 // Set up process-level unhandled error/rejection handlers to prevent crashes
@@ -79,13 +87,46 @@ process.on('unhandledRejection', (reason, promise) => {
   // Don't exit process, just log the error and continue
 });
 
-const server = new FastMCP({
+const server = new FastMCP<UserSession>({
   name: 'Ultimate Google Docs & Sheets MCP Server',
-  version: '1.0.0'
+  version: '1.0.0',
+  authenticate: async (request: http.IncomingMessage | undefined) => {
+    // In stdio mode, request is undefined — no per-user auth needed
+    if (!request) return undefined as unknown as UserSession;
+
+    // Extract API key from Authorization header or query param
+    const authHeader = request.headers['authorization'];
+    let apiKey: string | undefined;
+
+    if (authHeader?.startsWith('Bearer ')) {
+      apiKey = authHeader.slice(7);
+    }
+
+    if (!apiKey) {
+      // Try query param from URL
+      const url = new URL(request.url || '', 'http://localhost');
+      apiKey = url.searchParams.get('apiKey') || undefined;
+    }
+
+    if (!apiKey) {
+      throw new Response(null, { status: 401, statusText: 'Missing API key. Provide Authorization: Bearer <key> header.' } as any);
+    }
+
+    await loadUsers();
+    const user = await getUserByApiKey(apiKey);
+    if (!user) {
+      throw new Response(null, { status: 401, statusText: 'Invalid API key.' } as any);
+    }
+
+    const { client_id, client_secret } = await loadClientCredentials();
+    return createUserSession(user, client_id, client_secret);
+  },
 });
 
 // --- Helper to get Docs client within tools ---
-async function getDocsClient() {
+// In multi-user mode, session provides the client; in stdio mode, falls back to global client
+async function getDocsClient(session?: UserSession) {
+if (session?.googleDocs) return session.googleDocs;
 const { googleDocs: docs } = await initializeGoogleClient();
 if (!docs) {
 throw new UserError("Google Docs client is not initialized. Authentication might have failed during startup or lost connection.");
@@ -94,7 +135,8 @@ return docs;
 }
 
 // --- Helper to get Drive client within tools ---
-async function getDriveClient() {
+async function getDriveClient(session?: UserSession) {
+if (session?.googleDrive) return session.googleDrive;
 const { googleDrive: drive } = await initializeGoogleClient();
 if (!drive) {
 throw new UserError("Google Drive client is not initialized. Authentication might have failed during startup or lost connection.");
@@ -103,12 +145,20 @@ return drive;
 }
 
 // --- Helper to get Sheets client within tools ---
-async function getSheetsClient() {
+async function getSheetsClient(session?: UserSession) {
+if (session?.googleSheets) return session.googleSheets;
 const { googleSheets: sheets } = await initializeGoogleClient();
 if (!sheets) {
 throw new UserError("Google Sheets client is not initialized. Authentication might have failed during startup or lost connection.");
 }
 return sheets;
+}
+
+// Helper to get the auth client for direct google API usage (comment tools)
+function getAuthClient(session?: UserSession): OAuth2Client {
+if (session?.oauthClient) return session.oauthClient;
+if (authClient) return authClient as unknown as OAuth2Client;
+throw new UserError("Not authenticated. Provide an API key or configure credentials.");
 }
 
 // === HELPER FUNCTIONS ===
@@ -284,8 +334,8 @@ format: z.enum(['text', 'json', 'markdown']).optional().default('text')
 maxLength: z.number().optional().describe('Maximum character limit for text output. If not specified, returns full document content. Use this to limit very large documents.'),
 tabId: z.string().optional().describe('The ID of the specific tab to read. If not specified, reads the first tab (or legacy document.body for documents without tabs).')
 }),
-execute: async (args, { log }) => {
-const docs = await getDocsClient();
+execute: async (args, { log, session }) => {
+const docs = await getDocsClient(session);
 log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.tabId ? `, Tab: ${args.tabId}` : ''}`);
 
     try {
@@ -421,8 +471,8 @@ parameters: DocumentIdParameter.extend({
   includeContent: z.boolean().optional().default(false)
     .describe('Whether to include a content summary for each tab (character count).')
 }),
-execute: async (args, { log }) => {
-  const docs = await getDocsClient();
+execute: async (args, { log, session }) => {
+  const docs = await getDocsClient(session);
   log.info(`Listing tabs for document: ${args.documentId}`);
 
   try {
@@ -519,8 +569,8 @@ textToAppend: z.string().min(1).describe('The text to add to the end.'),
 addNewlineIfNeeded: z.boolean().optional().default(true).describe("Automatically add a newline before the appended text if the doc doesn't end with one."),
 tabId: z.string().optional().describe('The ID of the specific tab to append to. If not specified, appends to the first tab (or legacy document.body for documents without tabs).')
 }),
-execute: async (args, { log }) => {
-const docs = await getDocsClient();
+execute: async (args, { log, session }) => {
+const docs = await getDocsClient(session);
 log.info(`Appending to Google Doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
 
     try {
@@ -591,8 +641,8 @@ textToInsert: z.string().min(1).describe('The text to insert.'),
 index: z.number().int().min(1).describe('The index (1-based) where the text should be inserted.'),
 tabId: z.string().optional().describe('The ID of the specific tab to insert into. If not specified, inserts into the first tab (or legacy document.body for documents without tabs).')
 }),
-execute: async (args, { log }) => {
-const docs = await getDocsClient();
+execute: async (args, { log, session }) => {
+const docs = await getDocsClient(session);
 log.info(`Inserting text in doc ${args.documentId} at index ${args.index}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
 try {
     if (args.tabId) {
@@ -638,8 +688,8 @@ parameters: DocumentIdParameter.extend({
   message: "endIndex must be greater than startIndex",
   path: ["endIndex"],
 }),
-execute: async (args, { log }) => {
-const docs = await getDocsClient();
+execute: async (args, { log, session }) => {
+const docs = await getDocsClient(session);
 log.info(`Deleting range ${args.startIndex}-${args.endIndex} in doc ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
 if (args.endIndex <= args.startIndex) {
 throw new UserError("End index must be greater than start index for deletion.");
@@ -685,8 +735,8 @@ server.addTool({
 name: 'applyTextStyle',
 description: 'Applies character-level formatting (bold, color, font, etc.) to a specific range or found text.',
 parameters: ApplyTextStyleToolParameters,
-execute: async (args: ApplyTextStyleToolArgs, { log }) => {
-const docs = await getDocsClient();
+execute: async (args: ApplyTextStyleToolArgs, { log, session }) => {
+const docs = await getDocsClient(session);
 let { startIndex, endIndex } = args.target as any; // Will be updated if target is text
 
         log.info(`Applying text style in doc ${args.documentId}. Target: ${JSON.stringify(args.target)}, Style: ${JSON.stringify(args.style)}`);
@@ -733,8 +783,8 @@ server.addTool({
 name: 'applyParagraphStyle',
 description: 'Applies paragraph-level formatting (alignment, spacing, named styles like Heading 1) to the paragraph(s) containing specific text, an index, or a range.',
 parameters: ApplyParagraphStyleToolParameters,
-execute: async (args: ApplyParagraphStyleToolArgs, { log }) => {
-const docs = await getDocsClient();
+execute: async (args: ApplyParagraphStyleToolArgs, { log, session }) => {
+const docs = await getDocsClient(session);
 let startIndex: number | undefined;
 let endIndex: number | undefined;
 
@@ -845,8 +895,8 @@ rows: z.number().int().min(1).describe('Number of rows for the new table.'),
 columns: z.number().int().min(1).describe('Number of columns for the new table.'),
 index: z.number().int().min(1).describe('The index (1-based) where the table should be inserted.'),
 }),
-execute: async (args, { log }) => {
-const docs = await getDocsClient();
+execute: async (args, { log, session }) => {
+const docs = await getDocsClient(session);
 log.info(`Inserting ${args.rows}x${args.columns} table in doc ${args.documentId} at index ${args.index}`);
 try {
 await GDocsHelpers.createTable(docs, args.documentId, args.rows, args.columns, args.index);
@@ -873,8 +923,8 @@ textStyle: TextStyleParameters.optional().describe("Optional: Text styles to app
 paragraphStyle: ParagraphStyleParameters.optional().describe("Optional: Paragraph styles (like alignment) to apply."),
 // cellBackgroundColor: z.string().optional()... // Cell-specific styles are complex
 }),
-execute: async (args, { log }) => {
-const docs = await getDocsClient();
+execute: async (args, { log, session }) => {
+const docs = await getDocsClient(session);
 log.info(`Editing cell (${args.rowIndex}, ${args.columnIndex}) in table starting at ${args.tableStartIndex}, doc ${args.documentId}`);
 
         // TODO: Implement complex logic
@@ -899,8 +949,8 @@ description: 'Inserts a page break at the specified index.',
 parameters: DocumentIdParameter.extend({
 index: z.number().int().min(1).describe('The index (1-based) where the page break should be inserted.'),
 }),
-execute: async (args, { log }) => {
-const docs = await getDocsClient();
+execute: async (args, { log, session }) => {
+const docs = await getDocsClient(session);
 log.info(`Inserting page break in doc ${args.documentId} at index ${args.index}`);
 try {
 const request: docs_v1.Schema$Request = {
@@ -929,8 +979,8 @@ index: z.number().int().min(1).describe('The index (1-based) where the image sho
 width: z.number().min(1).optional().describe('Optional: Width of the image in points.'),
 height: z.number().min(1).optional().describe('Optional: Height of the image in points.'),
 }),
-execute: async (args, { log }) => {
-const docs = await getDocsClient();
+execute: async (args, { log, session }) => {
+const docs = await getDocsClient(session);
 log.info(`Inserting image from URL ${args.imageUrl} at index ${args.index} in doc ${args.documentId}`);
 
 try {
@@ -967,9 +1017,9 @@ width: z.number().min(1).optional().describe('Optional: Width of the image in po
 height: z.number().min(1).optional().describe('Optional: Height of the image in points.'),
 uploadToSameFolder: z.boolean().optional().default(true).describe('If true, uploads the image to the same folder as the document. If false, uploads to Drive root.'),
 }),
-execute: async (args, { log }) => {
-const docs = await getDocsClient();
-const drive = await getDriveClient();
+execute: async (args, { log, session }) => {
+const docs = await getDocsClient(session);
+const drive = await getDriveClient(session);
 log.info(`Uploading local image ${args.localImagePath} and inserting at index ${args.index} in doc ${args.documentId}`);
 
 try {
@@ -1032,8 +1082,8 @@ parameters: DocumentIdParameter.extend({
 // Optional range to limit the scope, otherwise scans whole doc (potentially slow/risky)
 range: OptionalRangeParameters.optional().describe("Optional: Limit the fixing process to a specific range.")
 }),
-execute: async (args, { log }) => {
-const docs = await getDocsClient();
+execute: async (args, { log, session }) => {
+const docs = await getDocsClient(session);
 log.warn(`Executing EXPERIMENTAL fixListFormatting for doc ${args.documentId}. Range: ${JSON.stringify(args.range)}`);
 try {
 await GDocsHelpers.detectAndFormatLists(docs, args.documentId, args.range?.startIndex, args.range?.endIndex);
@@ -1053,17 +1103,17 @@ server.addTool({
   name: 'listComments',
   description: 'Lists all comments in a Google Document.',
   parameters: DocumentIdParameter,
-  execute: async (args, { log }) => {
+  execute: async (args, { log, session }) => {
     log.info(`Listing comments for document ${args.documentId}`);
-    const docsClient = await getDocsClient();
-    const driveClient = await getDriveClient();
+    const docsClient = await getDocsClient(session);
+    const driveClient = await getDriveClient(session);
 
     try {
       // First get the document to have context
       const doc = await docsClient.documents.get({ documentId: args.documentId });
 
       // Use Drive API v3 with proper fields to get quoted content
-      const drive = google.drive({ version: 'v3', auth: authClient! });
+      const drive = google.drive({ version: 'v3', auth: getAuthClient(session) });
       const response = await drive.comments.list({
         fileId: args.documentId,
         fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved)',
@@ -1113,11 +1163,11 @@ server.addTool({
   parameters: DocumentIdParameter.extend({
     commentId: z.string().describe('The ID of the comment to retrieve')
   }),
-  execute: async (args, { log }) => {
+  execute: async (args, { log, session }) => {
     log.info(`Getting comment ${args.commentId} from document ${args.documentId}`);
 
     try {
-      const drive = google.drive({ version: 'v3', auth: authClient! });
+      const drive = google.drive({ version: 'v3', auth: getAuthClient(session) });
       const response = await drive.comments.get({
         fileId: args.documentId,
         commentId: args.commentId,
@@ -1163,12 +1213,12 @@ server.addTool({
     message: 'endIndex must be greater than startIndex',
     path: ['endIndex'],
   }),
-  execute: async (args, { log }) => {
+  execute: async (args, { log, session }) => {
     log.info(`Adding comment to range ${args.startIndex}-${args.endIndex} in doc ${args.documentId}`);
 
     try {
       // First, get the text content that will be quoted
-      const docsClient = await getDocsClient();
+      const docsClient = await getDocsClient(session);
       const doc = await docsClient.documents.get({ documentId: args.documentId });
 
       // Extract the quoted text from the document
@@ -1196,7 +1246,7 @@ server.addTool({
       }
 
       // Use Drive API v3 for comments
-      const drive = google.drive({ version: 'v3', auth: authClient! });
+      const drive = google.drive({ version: 'v3', auth: getAuthClient(session) });
 
       const response = await drive.comments.create({
         fileId: args.documentId,
@@ -1236,11 +1286,11 @@ server.addTool({
     commentId: z.string().describe('The ID of the comment to reply to'),
     replyText: z.string().min(1).describe('The content of the reply')
   }),
-  execute: async (args, { log }) => {
+  execute: async (args, { log, session }) => {
     log.info(`Adding reply to comment ${args.commentId} in doc ${args.documentId}`);
 
     try {
-      const drive = google.drive({ version: 'v3', auth: authClient! });
+      const drive = google.drive({ version: 'v3', auth: getAuthClient(session) });
 
       const response = await drive.replies.create({
         fileId: args.documentId,
@@ -1266,11 +1316,11 @@ server.addTool({
   parameters: DocumentIdParameter.extend({
     commentId: z.string().describe('The ID of the comment to resolve')
   }),
-  execute: async (args, { log }) => {
+  execute: async (args, { log, session }) => {
     log.info(`Resolving comment ${args.commentId} in doc ${args.documentId}`);
 
     try {
-      const drive = google.drive({ version: 'v3', auth: authClient! });
+      const drive = google.drive({ version: 'v3', auth: getAuthClient(session) });
 
       // First, get the current comment content (required by the API)
       const currentComment = await drive.comments.get({
@@ -1318,11 +1368,11 @@ server.addTool({
   parameters: DocumentIdParameter.extend({
     commentId: z.string().describe('The ID of the comment to delete')
   }),
-  execute: async (args, { log }) => {
+  execute: async (args, { log, session }) => {
     log.info(`Deleting comment ${args.commentId} from doc ${args.documentId}`);
 
     try {
-      const drive = google.drive({ version: 'v3', auth: authClient! });
+      const drive = google.drive({ version: 'v3', auth: getAuthClient(session) });
 
       await drive.comments.delete({
         fileId: args.documentId,
@@ -1350,7 +1400,7 @@ textQuery: z.string().optional(),
 elementType: z.enum(['paragraph', 'table', 'list', 'image']).optional(),
 // styleQuery...
 }),
-execute: async (args, { log }) => {
+execute: async (args, { log, session }) => {
 log.warn("findElement tool called but is not implemented.");
 throw new NotImplementedError("Finding elements by complex criteria is not yet implemented.");
 }
@@ -1388,9 +1438,9 @@ parameters: z.object({
 .refine(data => Object.keys(data).some(key => !['documentId', 'textToFind', 'matchInstance'].includes(key) && data[key as keyof typeof data] !== undefined), {
     message: "At least one formatting option (bold, italic, fontSize, etc.) must be provided."
 }),
-execute: async (args, { log }) => {
+execute: async (args, { log, session }) => {
   // Adapt to use the new applyTextStyle implementation under the hood
-  const docs = await getDocsClient();
+  const docs = await getDocsClient(session);
   log.info(`Using formatMatchingText (legacy) for doc ${args.documentId}, target: "${args.textToFind}" (instance ${args.matchInstance})`);
 
   try {
@@ -1438,8 +1488,8 @@ parameters: z.object({
   query: z.string().optional().describe('Search query to filter documents by name or content.'),
   orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results.'),
 }),
-execute: async (args, { log }) => {
-const drive = await getDriveClient();
+execute: async (args, { log, session }) => {
+const drive = await getDriveClient(session);
 log.info(`Listing Google Docs. Query: ${args.query || 'none'}, Max: ${args.maxResults}, Order: ${args.orderBy}`);
 
 try {
@@ -1491,8 +1541,8 @@ parameters: z.object({
   maxResults: z.number().int().min(1).max(50).optional().default(10).describe('Maximum number of results to return.'),
   modifiedAfter: z.string().optional().describe('Only return documents modified after this date (ISO 8601 format, e.g., "2024-01-01").'),
 }),
-execute: async (args, { log }) => {
-const drive = await getDriveClient();
+execute: async (args, { log, session }) => {
+const drive = await getDriveClient(session);
 log.info(`Searching Google Docs for: "${args.searchQuery}" in ${args.searchIn}`);
 
 try {
@@ -1552,8 +1602,8 @@ parameters: z.object({
   maxResults: z.number().int().min(1).max(50).optional().default(10).describe('Maximum number of recent documents to return.'),
   daysBack: z.number().int().min(1).max(365).optional().default(30).describe('Only show documents modified within this many days.'),
 }),
-execute: async (args, { log }) => {
-const drive = await getDriveClient();
+execute: async (args, { log, session }) => {
+const drive = await getDriveClient(session);
 log.info(`Getting recent Google Docs: ${args.maxResults} results, ${args.daysBack} days back`);
 
 try {
@@ -1602,8 +1652,8 @@ server.addTool({
 name: 'getDocumentInfo',
 description: 'Gets detailed information about a specific Google Document.',
 parameters: DocumentIdParameter,
-execute: async (args, { log }) => {
-const drive = await getDriveClient();
+execute: async (args, { log, session }) => {
+const drive = await getDriveClient(session);
 log.info(`Getting info for document: ${args.documentId}`);
 
 try {
@@ -1668,8 +1718,8 @@ parameters: z.object({
   name: z.string().min(1).describe('Name for the new folder.'),
   parentFolderId: z.string().optional().describe('Parent folder ID. If not provided, creates folder in Drive root.'),
 }),
-execute: async (args, { log }) => {
-const drive = await getDriveClient();
+execute: async (args, { log, session }) => {
+const drive = await getDriveClient(session);
 log.info(`Creating folder "${args.name}" ${args.parentFolderId ? `in parent ${args.parentFolderId}` : 'in root'}`);
 
 try {
@@ -1707,8 +1757,8 @@ parameters: z.object({
   includeFiles: z.boolean().optional().default(true).describe('Whether to include files in results.'),
   maxResults: z.number().int().min(1).max(100).optional().default(50).describe('Maximum number of items to return.'),
 }),
-execute: async (args, { log }) => {
-const drive = await getDriveClient();
+execute: async (args, { log, session }) => {
+const drive = await getDriveClient(session);
 log.info(`Listing contents of folder: ${args.folderId}`);
 
 try {
@@ -1786,8 +1836,8 @@ description: 'Gets detailed information about a specific folder in Google Drive.
 parameters: z.object({
   folderId: z.string().describe('ID of the folder to get information about.'),
 }),
-execute: async (args, { log }) => {
-const drive = await getDriveClient();
+execute: async (args, { log, session }) => {
+const drive = await getDriveClient(session);
 log.info(`Getting folder info: ${args.folderId}`);
 
 try {
@@ -1852,8 +1902,8 @@ parameters: z.object({
   newParentId: z.string().describe('ID of the destination folder. Use "root" for Drive root.'),
   removeFromAllParents: z.boolean().optional().default(false).describe('If true, removes from all current parents. If false, adds to new parent while keeping existing parents.'),
 }),
-execute: async (args, { log }) => {
-const drive = await getDriveClient();
+execute: async (args, { log, session }) => {
+const drive = await getDriveClient(session);
 log.info(`Moving file ${args.fileId} to folder ${args.newParentId}`);
 
 try {
@@ -1897,8 +1947,8 @@ parameters: z.object({
   newName: z.string().optional().describe('Name for the copied file. If not provided, will use "Copy of [original name]".'),
   parentFolderId: z.string().optional().describe('ID of folder where copy should be placed. If not provided, places in same location as original.'),
 }),
-execute: async (args, { log }) => {
-const drive = await getDriveClient();
+execute: async (args, { log, session }) => {
+const drive = await getDriveClient(session);
 log.info(`Copying file ${args.fileId} ${args.newName ? `as "${args.newName}"` : ''}`);
 
 try {
@@ -1942,8 +1992,8 @@ parameters: z.object({
   fileId: z.string().describe('ID of the file or folder to rename.'),
   newName: z.string().min(1).describe('New name for the file or folder.'),
 }),
-execute: async (args, { log }) => {
-const drive = await getDriveClient();
+execute: async (args, { log, session }) => {
+const drive = await getDriveClient(session);
 log.info(`Renaming file ${args.fileId} to "${args.newName}"`);
 
 try {
@@ -1973,8 +2023,8 @@ parameters: z.object({
   fileId: z.string().describe('ID of the file or folder to delete.'),
   skipTrash: z.boolean().optional().default(false).describe('If true, permanently deletes the file. If false, moves to trash (can be restored).'),
 }),
-execute: async (args, { log }) => {
-const drive = await getDriveClient();
+execute: async (args, { log, session }) => {
+const drive = await getDriveClient(session);
 log.info(`Deleting file ${args.fileId} ${args.skipTrash ? '(permanent)' : '(to trash)'}`);
 
 try {
@@ -2020,8 +2070,8 @@ parameters: z.object({
   parentFolderId: z.string().optional().describe('ID of folder where document should be created. If not provided, creates in Drive root.'),
   initialContent: z.string().optional().describe('Initial text content to add to the document.'),
 }),
-execute: async (args, { log }) => {
-const drive = await getDriveClient();
+execute: async (args, { log, session }) => {
+const drive = await getDriveClient(session);
 log.info(`Creating new document "${args.title}"`);
 
 try {
@@ -2045,7 +2095,7 @@ try {
   // Add initial content if provided
   if (args.initialContent) {
     try {
-      const docs = await getDocsClient();
+      const docs = await getDocsClient(session);
       await docs.documents.batchUpdate({
         documentId: document.id!,
         requestBody: {
@@ -2083,8 +2133,8 @@ parameters: z.object({
   parentFolderId: z.string().optional().describe('ID of folder where document should be created. If not provided, creates in Drive root.'),
   replacements: z.record(z.string()).optional().describe('Key-value pairs for text replacements in the template (e.g., {"{{NAME}}": "John Doe", "{{DATE}}": "2024-01-01"}).'),
 }),
-execute: async (args, { log }) => {
-const drive = await getDriveClient();
+execute: async (args, { log, session }) => {
+const drive = await getDriveClient(session);
 log.info(`Creating document from template ${args.templateId} with title "${args.newTitle}"`);
 
 try {
@@ -2109,7 +2159,7 @@ try {
   // Apply text replacements if provided
   if (args.replacements && Object.keys(args.replacements).length > 0) {
     try {
-      const docs = await getDocsClient();
+      const docs = await getDocsClient(session);
       const requests: docs_v1.Schema$Request[] = [];
 
       // Create replace requests for each replacement
@@ -2161,8 +2211,8 @@ parameters: z.object({
   valueRenderOption: z.enum(['FORMATTED_VALUE', 'UNFORMATTED_VALUE', 'FORMULA']).optional().default('FORMATTED_VALUE')
     .describe('How values should be rendered in the output.'),
 }),
-execute: async (args, { log }) => {
-  const sheets = await getSheetsClient();
+execute: async (args, { log, session }) => {
+  const sheets = await getSheetsClient(session);
   log.info(`Reading spreadsheet ${args.spreadsheetId}, range: ${args.range}`);
 
   try {
@@ -2198,8 +2248,8 @@ parameters: z.object({
   valueInputOption: z.enum(['RAW', 'USER_ENTERED']).optional().default('USER_ENTERED')
     .describe('How input data should be interpreted. RAW: values are stored as-is. USER_ENTERED: values are parsed as if typed by a user.'),
 }),
-execute: async (args, { log }) => {
-  const sheets = await getSheetsClient();
+execute: async (args, { log, session }) => {
+  const sheets = await getSheetsClient(session);
   log.info(`Writing to spreadsheet ${args.spreadsheetId}, range: ${args.range}`);
 
   try {
@@ -2234,8 +2284,8 @@ parameters: z.object({
   valueInputOption: z.enum(['RAW', 'USER_ENTERED']).optional().default('USER_ENTERED')
     .describe('How input data should be interpreted. RAW: values are stored as-is. USER_ENTERED: values are parsed as if typed by a user.'),
 }),
-execute: async (args, { log }) => {
-  const sheets = await getSheetsClient();
+execute: async (args, { log, session }) => {
+  const sheets = await getSheetsClient(session);
   log.info(`Appending rows to spreadsheet ${args.spreadsheetId}, starting at: ${args.range}`);
 
   try {
@@ -2267,8 +2317,8 @@ parameters: z.object({
   spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
   range: z.string().describe('A1 notation range to clear (e.g., "A1:B10" or "Sheet1!A1:B10").'),
 }),
-execute: async (args, { log }) => {
-  const sheets = await getSheetsClient();
+execute: async (args, { log, session }) => {
+  const sheets = await getSheetsClient(session);
   log.info(`Clearing range ${args.range} in spreadsheet ${args.spreadsheetId}`);
 
   try {
@@ -2290,8 +2340,8 @@ description: 'Gets detailed information about a Google Spreadsheet including all
 parameters: z.object({
   spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
 }),
-execute: async (args, { log }) => {
-  const sheets = await getSheetsClient();
+execute: async (args, { log, session }) => {
+  const sheets = await getSheetsClient(session);
   log.info(`Getting info for spreadsheet: ${args.spreadsheetId}`);
 
   try {
@@ -2331,8 +2381,8 @@ parameters: z.object({
   spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
   sheetTitle: z.string().min(1).describe('Title for the new sheet/tab.'),
 }),
-execute: async (args, { log }) => {
-  const sheets = await getSheetsClient();
+execute: async (args, { log, session }) => {
+  const sheets = await getSheetsClient(session);
   log.info(`Adding sheet "${args.sheetTitle}" to spreadsheet ${args.spreadsheetId}`);
 
   try {
@@ -2360,9 +2410,9 @@ parameters: z.object({
   parentFolderId: z.string().optional().describe('ID of folder where spreadsheet should be created. If not provided, creates in Drive root.'),
   initialData: z.array(z.array(z.any())).optional().describe('Optional initial data to populate in the first sheet. Each inner array represents a row.'),
 }),
-execute: async (args, { log }) => {
-  const drive = await getDriveClient();
-  const sheets = await getSheetsClient();
+execute: async (args, { log, session }) => {
+  const drive = await getDriveClient(session);
+  const sheets = await getSheetsClient(session);
   log.info(`Creating new spreadsheet "${args.title}"`);
 
   try {
@@ -2423,8 +2473,8 @@ parameters: z.object({
   query: z.string().optional().describe('Search query to filter spreadsheets by name or content.'),
   orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results.'),
 }),
-execute: async (args, { log }) => {
-  const drive = await getDriveClient();
+execute: async (args, { log, session }) => {
+  const drive = await getDriveClient(session);
   log.info(`Listing Google Sheets. Query: ${args.query || 'none'}, Max: ${args.maxResults}, Order: ${args.orderBy}`);
 
   try {
@@ -2471,31 +2521,44 @@ execute: async (args, { log }) => {
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const HOST = process.env.HOST || "0.0.0.0";
 const TRANSPORT = process.env.TRANSPORT || "stdio"; // "stdio" or "httpStream"
+const INTERNAL_MCP_PORT = parseInt(process.env.INTERNAL_MCP_PORT || "3001", 10);
 
 // --- Server Startup ---
 async function startServer() {
   try {
-    await initializeGoogleClient(); // Authorize BEFORE starting listeners
     console.error("Starting Google Docs MCP Server...");
     console.error(`Mode: ${TRANSPORT}, Port: ${PORT}`);
 
     if (TRANSPORT === "httpStream" || TRANSPORT === "http" || TRANSPORT === "remote") {
-      // HTTP Streaming mode - for Railway/remote deployment
-      // This ALSO exposes SSE endpoint at /sse automatically!
+      // Multi-user HTTP mode — single public port with Express proxying to internal FastMCP
+      await initDatabase();
+      await loadUsers();
+
+      // Start FastMCP on an internal-only port (Express will proxy /mcp, /sse, /health to it)
       server.start({
         transportType: "httpStream",
         httpStream: {
-          port: PORT,
-          host: HOST,
+          port: INTERNAL_MCP_PORT,
+          host: "127.0.0.1",
         },
       });
-      console.error(`Server running!`);
-      console.error(`   HTTP Streaming: http://${HOST}:${PORT}/mcp`);
-      console.error(`   SSE Endpoint:   http://${HOST}:${PORT}/sse  <-- Use this for Claude connectors`);
-      console.error(`   Health Check:   http://${HOST}:${PORT}/health`);
+
+      // Create Express app with proxy routes and registration/OAuth pages
+      const expressApp = createWebApp(INTERNAL_MCP_PORT);
+
+      // Start Express on the public port — single port for all traffic
+      expressApp.listen(PORT, HOST, () => {
+        console.error(`Server running on port ${PORT}!`);
+        console.error(`   MCP Endpoint:   http://${HOST}:${PORT}/mcp`);
+        console.error(`   SSE Endpoint:   http://${HOST}:${PORT}/sse`);
+        console.error(`   Health Check:   http://${HOST}:${PORT}/health`);
+        console.error(`   Registration:   http://${HOST}:${PORT}/`);
+        console.error(`   OAuth Callback: http://${HOST}:${PORT}/auth/callback`);
+      });
 
     } else {
-      // Default: stdio mode for local Claude Desktop
+      // Default: stdio mode for local Claude Desktop (single-user, backward compatible)
+      await initializeGoogleClient();
       server.start({
         transportType: "stdio" as const,
       });
@@ -2509,3 +2572,9 @@ async function startServer() {
 }
 
 startServer();
+
+process.on('SIGTERM', async () => {
+  console.error('SIGTERM received, shutting down...');
+  await closeDatabase();
+  process.exit(0);
+});
