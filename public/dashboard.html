@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP Catalog - Dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    .hidden { display: none; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+      color: #333;
+      min-height: 100vh;
+    }
+    .page-container {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid #ddd;
+    }
+    .header h1 {
+      font-size: 1.5rem;
+    }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: #666;
+      font-size: 0.9rem;
+    }
+    .admin-badge {
+      background: #4285f4;
+      color: #fff;
+      font-size: 0.7rem;
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-weight: 500;
+      text-transform: uppercase;
+    }
+    .btn-logout {
+      padding: 0.5rem 1rem;
+      background: transparent;
+      color: #666;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: all 0.2s;
+    }
+    .btn-logout:hover {
+      background: #f5f5f5;
+      color: #333;
+    }
+
+    /* Catalog Grid */
+    .catalog-section {
+      margin-bottom: 2rem;
+    }
+    .catalog-section h2 {
+      font-size: 1.1rem;
+      color: #666;
+      margin-bottom: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .catalog-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 1rem;
+    }
+    .mcp-card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      cursor: pointer;
+      transition: all 0.2s;
+      border: 2px solid transparent;
+    }
+    .mcp-card:hover {
+      box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+      transform: translateY(-2px);
+    }
+    .mcp-card.selected {
+      border-color: #4285f4;
+      box-shadow: 0 4px 16px rgba(66, 133, 244, 0.2);
+    }
+    .mcp-card-icon {
+      width: 48px;
+      height: 48px;
+      background: #f0f4ff;
+      border-radius: 12px;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+    }
+    .mcp-card-icon img {
+      width: 32px;
+      height: 32px;
+      object-fit: contain;
+    }
+    .mcp-card h3 {
+      font-size: 1rem;
+      margin-bottom: 0.5rem;
+    }
+    .mcp-card p {
+      font-size: 0.85rem;
+      color: #666;
+      line-height: 1.4;
+    }
+
+    /* Connection Config Panel */
+    .config-panel {
+      background: #fff;
+      border-radius: 12px;
+      padding: 2rem;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    }
+    .config-panel.hidden {
+      display: none;
+    }
+    .config-header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid #eee;
+    }
+    .config-header-icon {
+      width: 48px;
+      height: 48px;
+      background: #f0f4ff;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+    }
+    .config-header-text h3 {
+      font-size: 1.2rem;
+      margin-bottom: 0.25rem;
+    }
+    .config-header-text p {
+      font-size: 0.9rem;
+      color: #666;
+    }
+
+    .config-section {
+      margin-bottom: 1.5rem;
+    }
+    .config-section h4 {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      color: #888;
+      margin-bottom: 0.5rem;
+      letter-spacing: 0.05em;
+    }
+    .config-section p {
+      color: #666;
+      font-size: 0.9rem;
+      margin-bottom: 0.75rem;
+      line-height: 1.5;
+    }
+    .input-row {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .config-input {
+      flex: 1;
+      padding: 0.7rem;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 0.85rem;
+      background: #f8f9fa;
+    }
+    .btn-copy {
+      padding: 0.7rem 1rem;
+      background: #4285f4;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      white-space: nowrap;
+    }
+    .btn-copy:hover { background: #3367d6; }
+    .btn-copy.copied { background: #34a853; }
+
+    pre {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.8rem;
+      line-height: 1.5;
+      position: relative;
+    }
+    .pre-wrapper {
+      position: relative;
+    }
+    .pre-copy-btn {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      padding: 0.4rem 0.8rem;
+      background: #444;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.75rem;
+    }
+    .pre-copy-btn:hover { background: #555; }
+    .pre-copy-btn.copied { background: #34a853; }
+
+    /* API Key Section */
+    .api-key-section {
+      background: #fff8e6;
+      border: 1px solid #ffe0a0;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .api-key-section h4 {
+      color: #856404;
+    }
+    .btn-regen {
+      padding: 0.7rem 1rem;
+      background: #fff;
+      color: #dc3545;
+      border: 1px solid #dc3545;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+    .btn-regen:hover {
+      background: #dc3545;
+      color: #fff;
+    }
+    .btn-regen:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 2rem;
+      color: #666;
+    }
+    .error {
+      background: #f8d7da;
+      border: 1px solid #f5c6cb;
+      border-radius: 8px;
+      padding: 1rem;
+      color: #721c24;
+      margin-bottom: 1rem;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 3rem;
+      color: #666;
+    }
+    .empty-state p {
+      margin-bottom: 0.5rem;
+    }
+
+    /* Admin Section */
+    .admin-section {
+      margin-bottom: 1.5rem;
+    }
+    .btn-add-mcp {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.25rem;
+      background: #4285f4;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: background 0.2s;
+    }
+    .btn-add-mcp:hover {
+      background: #3367d6;
+    }
+
+    /* Admin card controls */
+    .mcp-card-admin {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid #eee;
+    }
+    .btn-edit, .btn-delete {
+      flex: 1;
+      padding: 0.4rem 0.6rem;
+      font-size: 0.75rem;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-edit {
+      background: #f0f4ff;
+      color: #4285f4;
+      border: 1px solid #4285f4;
+    }
+    .btn-edit:hover {
+      background: #4285f4;
+      color: #fff;
+    }
+    .btn-delete {
+      background: #fff5f5;
+      color: #dc3545;
+      border: 1px solid #dc3545;
+    }
+    .btn-delete:hover {
+      background: #dc3545;
+      color: #fff;
+    }
+
+    /* Modal */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    .modal-overlay.hidden {
+      display: none;
+    }
+    .modal {
+      background: #fff;
+      border-radius: 12px;
+      padding: 2rem;
+      width: 90%;
+      max-width: 500px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    .modal h2 {
+      margin-bottom: 1.5rem;
+      font-size: 1.25rem;
+    }
+    .form-group {
+      margin-bottom: 1rem;
+    }
+    .form-group label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: #333;
+      margin-bottom: 0.25rem;
+    }
+    .form-group input[type="text"],
+    .form-group textarea {
+      width: 100%;
+      padding: 0.6rem;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    .form-group input:focus,
+    .form-group textarea:focus {
+      outline: none;
+      border-color: #4285f4;
+    }
+    .form-group textarea {
+      resize: vertical;
+      min-height: 80px;
+    }
+    .form-group-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .form-group-checkbox input {
+      width: 16px;
+      height: 16px;
+    }
+    .form-group-checkbox label {
+      margin-bottom: 0;
+    }
+    .form-hint {
+      font-size: 0.75rem;
+      color: #888;
+      margin-top: 0.25rem;
+    }
+    .modal-actions {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 1.5rem;
+      justify-content: flex-end;
+    }
+    .btn-cancel {
+      padding: 0.6rem 1.25rem;
+      background: #f5f5f5;
+      color: #666;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    .btn-cancel:hover {
+      background: #eee;
+    }
+    .btn-save {
+      padding: 0.6rem 1.25rem;
+      background: #4285f4;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    .btn-save:hover {
+      background: #3367d6;
+    }
+    .btn-save:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <div class="page-container">
+    <div class="header">
+      <h1>MCP Catalog</h1>
+      <div class="header-right">
+        <span class="user-info">
+          <span id="userInfo"></span>
+          <span class="admin-badge hidden" id="adminBadge">Admin</span>
+        </span>
+        <button class="btn-logout" onclick="logout()">Sign out</button>
+      </div>
+    </div>
+
+    <div id="loading" class="loading">Loading...</div>
+    <div id="error" class="error" style="display: none;"></div>
+
+    <div id="content" style="display: none;">
+      <!-- Admin Section (visible only to admins) -->
+      <div class="admin-section hidden" id="adminSection">
+        <button class="btn-add-mcp" onclick="showAddModal()">+ Add New MCP</button>
+      </div>
+
+      <!-- MCP Catalog Grid -->
+      <div class="catalog-section">
+        <h2>Available MCPs</h2>
+        <div class="catalog-grid" id="catalogGrid">
+          <!-- MCP cards will be inserted here -->
+        </div>
+      </div>
+
+      <!-- Connection Config Panel -->
+      <div class="config-panel hidden" id="configPanel">
+        <div class="config-header">
+          <div class="config-header-icon" id="selectedIcon"></div>
+          <div class="config-header-text">
+            <h3 id="selectedName"></h3>
+            <p id="selectedDescription"></p>
+          </div>
+        </div>
+
+        <div class="api-key-section">
+          <div class="config-section" style="margin-bottom: 0;">
+            <h4>Your API Key</h4>
+            <div class="input-row">
+              <input type="text" class="config-input" id="apiKey" readonly value="" />
+              <button class="btn-copy" id="copyKeyBtn" onclick="copyApiKey()">Copy</button>
+              <button class="btn-regen" id="regenBtn" onclick="regenerateKey()">Regenerate</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <h4>Claude.ai/Chat GPT Connector</h4>
+          <p>Paste this URL in Claude.ai &rarr; Settings &rarr; Connectors &rarr; Add custom connector:</p>
+          <p>Paste this URL in Chat GPT &rarr; Settings &rarr; Applications &rarr; Create application:</p>
+          <div class="input-row">
+            <input type="text" class="config-input" id="connectorUrl" readonly value="" />
+            <button class="btn-copy" id="copyUrlBtn" onclick="copyConnectorUrl()">Copy URL</button>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <h4>Claude Desktop Configuration</h4>
+          <p>Add this to your Claude Desktop MCP config file:</p>
+          <div class="pre-wrapper">
+            <pre id="configSnippet"></pre>
+            <button class="pre-copy-btn" id="copyConfigBtn" onclick="copyConfig()">Copy</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="empty-state hidden" id="emptyState">
+        <p>Select an MCP from above to see connection details.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Admin Modal -->
+  <div class="modal-overlay hidden" id="mcpModal">
+    <div class="modal">
+      <h2 id="modalTitle">Add New MCP</h2>
+      <form id="mcpForm" onsubmit="saveMcp(event)">
+        <input type="hidden" id="editingSlug" value="">
+
+        <div class="form-group">
+          <label for="mcpSlug">Slug</label>
+          <input type="text" id="mcpSlug" required pattern="[a-z0-9-]+" placeholder="e.g., my-mcp">
+          <div class="form-hint">URL-friendly identifier (lowercase letters, numbers, hyphens only)</div>
+        </div>
+
+        <div class="form-group">
+          <label for="mcpName">Name</label>
+          <input type="text" id="mcpName" required placeholder="e.g., My MCP Server">
+        </div>
+
+        <div class="form-group">
+          <label for="mcpDescription">Description</label>
+          <textarea id="mcpDescription" placeholder="Brief description of what this MCP does"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label for="mcpUrl">MCP URL</label>
+          <input type="text" id="mcpUrl" required placeholder="e.g., /mcp or https://example.com/mcp">
+          <div class="form-hint">Path for local MCPs (e.g., /mcp) or full URL for external MCPs</div>
+        </div>
+
+        <div class="form-group">
+          <label for="mcpIconUrl">Icon URL (optional)</label>
+          <input type="text" id="mcpIconUrl" placeholder="https://example.com/icon.png">
+        </div>
+
+        <div class="form-group form-group-checkbox">
+          <input type="checkbox" id="mcpIsLocal" checked>
+          <label for="mcpIsLocal">Is Local MCP</label>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-cancel" onclick="hideModal()">Cancel</button>
+          <button type="submit" class="btn-save" id="saveBtn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const baseUrl = window.location.origin;
+    let currentUser = null;
+    let catalogs = [];
+    let selectedMcp = null;
+    let isAdmin = false;
+
+    async function loadUserData() {
+      try {
+        const response = await fetch('/api/me', { credentials: 'same-origin' });
+        if (response.status === 401) {
+          window.location.href = '/';
+          return null;
+        }
+        if (!response.ok) {
+          throw new Error('Failed to load user data');
+        }
+        return await response.json();
+      } catch (err) {
+        throw err;
+      }
+    }
+
+    async function loadCatalogs() {
+      const response = await fetch('/api/v1/catalogs');
+      if (!response.ok) {
+        throw new Error('Failed to load catalogs');
+      }
+      const data = await response.json();
+      return data.catalogs || [];
+    }
+
+    function getIconForMcp(mcp) {
+      // Return an emoji or icon based on MCP slug
+      const icons = {
+        'google-docs': '\uD83D\uDCC4',
+        'clickup': '\u2705',
+        'github': '\uD83D\uDC19',
+        'slack': '\uD83D\uDCAC',
+        'notion': '\uD83D\uDCD3',
+      };
+      return icons[mcp.slug] || '\uD83D\uDD0C';
+    }
+
+    function renderCatalogGrid() {
+      const grid = document.getElementById('catalogGrid');
+      if (catalogs.length === 0) {
+        grid.innerHTML = '<p class="empty-state">No MCPs available.</p>';
+        return;
+      }
+
+      grid.innerHTML = catalogs.map(mcp => `
+        <div class="mcp-card ${selectedMcp?.slug === mcp.slug ? 'selected' : ''}"
+             data-slug="${mcp.slug}"
+             onclick="selectMcp('${mcp.slug}')">
+          <div class="mcp-card-icon">
+            ${mcp.iconUrl ? `<img src="${mcp.iconUrl}" alt="${mcp.name}">` : getIconForMcp(mcp)}
+          </div>
+          <h3>${escapeHtml(mcp.name)}</h3>
+          <p>${escapeHtml(mcp.description)}</p>
+          ${isAdmin ? `
+            <div class="mcp-card-admin" onclick="event.stopPropagation()">
+              <button class="btn-edit" onclick="showEditModal('${mcp.slug}')">Edit</button>
+              <button class="btn-delete" onclick="deleteMcp('${mcp.slug}')">Delete</button>
+            </div>
+          ` : ''}
+        </div>
+      `).join('');
+    }
+
+    function selectMcp(slug) {
+      selectedMcp = catalogs.find(c => c.slug === slug);
+      if (!selectedMcp) return;
+
+      // Update card selection
+      document.querySelectorAll('.mcp-card').forEach(card => {
+        card.classList.toggle('selected', card.dataset.slug === slug);
+      });
+
+      // Show config panel
+      document.getElementById('configPanel').classList.remove('hidden');
+      document.getElementById('emptyState').classList.add('hidden');
+
+      // Update config panel content
+      document.getElementById('selectedIcon').innerHTML = selectedMcp.iconUrl
+        ? `<img src="${selectedMcp.iconUrl}" alt="${selectedMcp.name}" style="width:32px;height:32px;">`
+        : getIconForMcp(selectedMcp);
+      document.getElementById('selectedName').textContent = selectedMcp.name;
+      document.getElementById('selectedDescription').textContent = selectedMcp.description;
+
+      // Build connector URL
+      const mcpPath = selectedMcp.mcpUrl.startsWith('/') ? selectedMcp.mcpUrl : '/' + selectedMcp.mcpUrl;
+      const connectorUrl = baseUrl + mcpPath + '?apiKey=' + encodeURIComponent(currentUser.apiKey);
+      document.getElementById('connectorUrl').value = connectorUrl;
+
+      // Build config snippet
+      const configObj = {
+        "mcpServers": {
+          [selectedMcp.slug]: {
+            "url": baseUrl + mcpPath,
+            "headers": {
+              "Authorization": "Bearer " + currentUser.apiKey
+            }
+          }
+        }
+      };
+      document.getElementById('configSnippet').textContent = JSON.stringify(configObj, null, 2);
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    async function init() {
+      try {
+        // Load user data and catalogs in parallel
+        const [user, catalogList] = await Promise.all([
+          loadUserData(),
+          loadCatalogs()
+        ]);
+
+        if (!user) return; // Redirected to login
+
+        currentUser = user;
+        catalogs = catalogList;
+        isAdmin = user.isAdmin || false;
+
+        document.getElementById('userInfo').textContent = user.email;
+        document.getElementById('apiKey').value = user.apiKey;
+
+        // Show admin UI if user is admin
+        if (isAdmin) {
+          document.getElementById('adminBadge').classList.remove('hidden');
+          document.getElementById('adminSection').classList.remove('hidden');
+        }
+
+        renderCatalogGrid();
+
+        // Auto-select first MCP if available
+        if (catalogs.length > 0) {
+          selectMcp(catalogs[0].slug);
+        } else {
+          document.getElementById('emptyState').classList.remove('hidden');
+        }
+
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('content').style.display = 'block';
+      } catch (err) {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('error').style.display = 'block';
+        document.getElementById('error').textContent = 'Failed to load data. Please try signing in again.';
+      }
+    }
+
+    async function logout() {
+      try {
+        await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
+      } catch (err) {}
+      window.location.href = '/';
+    }
+
+    function copyApiKey() {
+      const apiKey = document.getElementById('apiKey').value;
+      navigator.clipboard.writeText(apiKey).then(() => {
+        const btn = document.getElementById('copyKeyBtn');
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+
+    function copyConnectorUrl() {
+      const url = document.getElementById('connectorUrl').value;
+      navigator.clipboard.writeText(url).then(() => {
+        const btn = document.getElementById('copyUrlBtn');
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy URL';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+
+    function copyConfig() {
+      const config = document.getElementById('configSnippet').textContent;
+      navigator.clipboard.writeText(config).then(() => {
+        const btn = document.getElementById('copyConfigBtn');
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+
+    async function regenerateKey() {
+      if (!confirm('This will invalidate your current API key. Any existing integrations will stop working. Continue?')) {
+        return;
+      }
+
+      const btn = document.getElementById('regenBtn');
+      btn.disabled = true;
+      btn.textContent = 'Regenerating...';
+
+      try {
+        const response = await fetch('/api/regenerate-key', {
+          method: 'POST',
+          credentials: 'same-origin'
+        });
+        if (!response.ok) {
+          throw new Error('Failed to regenerate API key');
+        }
+        const data = await response.json();
+
+        // Update user data
+        currentUser.apiKey = data.apiKey;
+        document.getElementById('apiKey').value = data.apiKey;
+
+        // Re-render selected MCP config
+        if (selectedMcp) {
+          selectMcp(selectedMcp.slug);
+        }
+
+        btn.textContent = 'Regenerated!';
+        setTimeout(() => {
+          btn.textContent = 'Regenerate';
+          btn.disabled = false;
+        }, 2000);
+      } catch (err) {
+        alert('Failed to regenerate API key. Please try again.');
+        btn.textContent = 'Regenerate';
+        btn.disabled = false;
+      }
+    }
+
+    // Admin functions
+    function showAddModal() {
+      document.getElementById('modalTitle').textContent = 'Add New MCP';
+      document.getElementById('editingSlug').value = '';
+      document.getElementById('mcpSlug').value = '';
+      document.getElementById('mcpSlug').disabled = false;
+      document.getElementById('mcpName').value = '';
+      document.getElementById('mcpDescription').value = '';
+      document.getElementById('mcpUrl').value = '';
+      document.getElementById('mcpIconUrl').value = '';
+      document.getElementById('mcpIsLocal').checked = true;
+      document.getElementById('mcpModal').classList.remove('hidden');
+    }
+
+    function showEditModal(slug) {
+      const mcp = catalogs.find(c => c.slug === slug);
+      if (!mcp) return;
+
+      document.getElementById('modalTitle').textContent = 'Edit MCP';
+      document.getElementById('editingSlug').value = slug;
+      document.getElementById('mcpSlug').value = slug;
+      document.getElementById('mcpSlug').disabled = true; // Can't change slug
+      document.getElementById('mcpName').value = mcp.name;
+      document.getElementById('mcpDescription').value = mcp.description || '';
+      document.getElementById('mcpUrl').value = mcp.mcpUrl;
+      document.getElementById('mcpIconUrl').value = mcp.iconUrl || '';
+      document.getElementById('mcpIsLocal').checked = mcp.isLocal !== false;
+      document.getElementById('mcpModal').classList.remove('hidden');
+    }
+
+    function hideModal() {
+      document.getElementById('mcpModal').classList.add('hidden');
+    }
+
+    async function saveMcp(event) {
+      event.preventDefault();
+
+      const saveBtn = document.getElementById('saveBtn');
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving...';
+
+      const editingSlug = document.getElementById('editingSlug').value;
+      const isEditing = !!editingSlug;
+
+      const data = {
+        slug: document.getElementById('mcpSlug').value,
+        name: document.getElementById('mcpName').value,
+        description: document.getElementById('mcpDescription').value,
+        mcpUrl: document.getElementById('mcpUrl').value,
+        iconUrl: document.getElementById('mcpIconUrl').value || null,
+        isLocal: document.getElementById('mcpIsLocal').checked,
+      };
+
+      try {
+        let response;
+        if (isEditing) {
+          response = await fetch(`/api/v1/admin/catalogs/${editingSlug}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(data),
+          });
+        } else {
+          response = await fetch('/api/v1/admin/catalogs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(data),
+          });
+        }
+
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.error || 'Failed to save');
+        }
+
+        // Reload catalogs
+        catalogs = await loadCatalogs();
+        renderCatalogGrid();
+
+        // If we were viewing this MCP, update the config panel
+        if (selectedMcp && (selectedMcp.slug === editingSlug || selectedMcp.slug === data.slug)) {
+          selectMcp(data.slug);
+        }
+
+        hideModal();
+      } catch (err) {
+        alert('Failed to save MCP: ' + err.message);
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save';
+      }
+    }
+
+    async function deleteMcp(slug) {
+      const mcp = catalogs.find(c => c.slug === slug);
+      if (!mcp) return;
+
+      if (!confirm(`Are you sure you want to delete "${mcp.name}"? This action cannot be undone.`)) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/v1/admin/catalogs/${slug}`, {
+          method: 'DELETE',
+          credentials: 'same-origin',
+        });
+
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.error || 'Failed to delete');
+        }
+
+        // Reload catalogs
+        catalogs = await loadCatalogs();
+        renderCatalogGrid();
+
+        // If we were viewing this MCP, hide the config panel
+        if (selectedMcp && selectedMcp.slug === slug) {
+          selectedMcp = null;
+          document.getElementById('configPanel').classList.add('hidden');
+          if (catalogs.length > 0) {
+            selectMcp(catalogs[0].slug);
+          } else {
+            document.getElementById('emptyState').classList.remove('hidden');
+          }
+        }
+      } catch (err) {
+        alert('Failed to delete MCP: ' + err.message);
+      }
+    }
+
+    // Close modal when clicking outside
+    document.getElementById('mcpModal').addEventListener('click', function(e) {
+      if (e.target === this) {
+        hideModal();
+      }
+    });
+
+    // Initialize on page load
+    init();
+  </script>
+</body>
+</html>

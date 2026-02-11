@@ -15,8 +15,28 @@ CREATE TABLE IF NOT EXISTS users (
   email      VARCHAR(255) NOT NULL,
   google_id  VARCHAR(64)  NOT NULL UNIQUE,
   name       VARCHAR(255) NOT NULL DEFAULT '',
+  is_admin   BOOLEAN      NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+`;
+
+const ALTER_USERS_ADD_IS_ADMIN = `
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false;
+`;
+
+const CREATE_MCP_CATALOG_TABLE = `
+CREATE TABLE IF NOT EXISTS mcp_catalog (
+  id          SERIAL PRIMARY KEY,
+  slug        VARCHAR(100) NOT NULL UNIQUE,
+  name        VARCHAR(255) NOT NULL,
+  description TEXT,
+  icon_url    VARCHAR(2048),
+  mcp_url     VARCHAR(2048) NOT NULL,
+  is_local    BOOLEAN DEFAULT true,
+  is_active   BOOLEAN DEFAULT true,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
 `;
 
@@ -41,6 +61,13 @@ export async function initDatabase(): Promise<void> {
 
     await pool.query(CREATE_USERS_TABLE);
     console.error('Users table ensured.');
+
+    // Add is_admin column for existing installations
+    await pool.query(ALTER_USERS_ADD_IS_ADMIN);
+    console.error('Users is_admin column ensured.');
+
+    await pool.query(CREATE_MCP_CATALOG_TABLE);
+    console.error('MCP catalog table ensured.');
 
     dbAvailable = true;
   } catch (err) {

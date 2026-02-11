@@ -12,6 +12,7 @@ export interface UserProfile {
   email: string;
   googleId: string;
   name: string;
+  isAdmin: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -69,11 +70,21 @@ async function saveUsers(): Promise<void> {
 }
 
 function fileGetUserByApiKey(apiKey: string): UserRecord | undefined {
-  return users[apiKey];
+  const user = users[apiKey];
+  if (user) {
+    // Ensure isAdmin is always a boolean (handles legacy data without this field)
+    user.isAdmin = user.isAdmin === true;
+  }
+  return user;
 }
 
 function fileGetUserByGoogleId(googleId: string): UserRecord | undefined {
-  return Object.values(users).find(u => u.googleId === googleId);
+  const user = Object.values(users).find(u => u.googleId === googleId);
+  if (user) {
+    // Ensure isAdmin is always a boolean (handles legacy data without this field)
+    user.isAdmin = user.isAdmin === true;
+  }
+  return user;
 }
 
 async function fileCreateOrUpdateUser(
@@ -96,6 +107,7 @@ async function fileCreateOrUpdateUser(
     email: profile.email,
     googleId: profile.googleId,
     name: profile.name,
+    isAdmin: false,
     tokens,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -120,7 +132,7 @@ async function dbGetUserByApiKey(apiKey: string): Promise<UserRecord | undefined
   const redis = getRedis();
 
   const { rows } = await pool.query(
-    'SELECT api_key, email, google_id, name, created_at, updated_at FROM users WHERE api_key = $1',
+    'SELECT api_key, email, google_id, name, is_admin, created_at, updated_at FROM users WHERE api_key = $1',
     [apiKey]
   );
   if (rows.length === 0) return undefined;
@@ -134,6 +146,7 @@ async function dbGetUserByApiKey(apiKey: string): Promise<UserRecord | undefined
     email: row.email,
     googleId: row.google_id,
     name: row.name,
+    isAdmin: row.is_admin === true,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     tokens: JSON.parse(tokensJson),
@@ -145,7 +158,7 @@ async function dbGetUserByGoogleId(googleId: string): Promise<UserRecord | undef
   const redis = getRedis();
 
   const { rows } = await pool.query(
-    'SELECT api_key, email, google_id, name, created_at, updated_at FROM users WHERE google_id = $1',
+    'SELECT api_key, email, google_id, name, is_admin, created_at, updated_at FROM users WHERE google_id = $1',
     [googleId]
   );
   if (rows.length === 0) return undefined;
@@ -159,6 +172,7 @@ async function dbGetUserByGoogleId(googleId: string): Promise<UserRecord | undef
     email: row.email,
     googleId: row.google_id,
     name: row.name,
+    isAdmin: row.is_admin === true,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     tokens: JSON.parse(tokensJson),
@@ -174,7 +188,7 @@ async function dbCreateOrUpdateUser(
 
   const now = new Date();
 
-  // Check if user exists to preserve their apiKey
+  // Check if user exists to preserve their apiKey and isAdmin status
   const existing = await dbGetUserByGoogleId(profile.googleId);
   const apiKey = existing?.apiKey ?? generateApiKey();
 
@@ -185,7 +199,7 @@ async function dbCreateOrUpdateUser(
        email = EXCLUDED.email,
        name = EXCLUDED.name,
        updated_at = EXCLUDED.updated_at
-     RETURNING api_key, email, google_id, name, created_at, updated_at`,
+     RETURNING api_key, email, google_id, name, is_admin, created_at, updated_at`,
     [apiKey, profile.email, profile.googleId, profile.name, now]
   );
 
@@ -199,6 +213,7 @@ async function dbCreateOrUpdateUser(
     email: row.email,
     googleId: row.google_id,
     name: row.name,
+    isAdmin: row.is_admin === true,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     tokens,
@@ -269,4 +284,71 @@ export async function updateTokens(apiKey: string, tokens: Partial<UserTokens>):
     return dbUpdateTokens(apiKey, tokens);
   }
   return fileUpdateTokens(apiKey, tokens);
+}
+
+// ---------- Regenerate API Key ----------
+
+async function fileRegenerateApiKey(googleId: string): Promise<UserRecord | null> {
+  await fileLoadUsers();
+  const existing = fileGetUserByGoogleId(googleId);
+  if (!existing) return null;
+
+  // Remove old entry
+  delete users[existing.apiKey];
+
+  // Generate new key and update user
+  const newApiKey = generateApiKey();
+  existing.apiKey = newApiKey;
+  existing.updatedAt = new Date().toISOString();
+  // Ensure isAdmin is always a boolean
+  existing.isAdmin = existing.isAdmin === true;
+
+  // Store under new key
+  users[newApiKey] = existing;
+  await saveUsers();
+
+  return existing;
+}
+
+async function dbRegenerateApiKey(googleId: string): Promise<UserRecord | null> {
+  const pool = getPool();
+  const redis = getRedis();
+
+  // Check if user exists
+  const { rows: existingRows } = await pool.query(
+    'SELECT google_id FROM users WHERE google_id = $1',
+    [googleId]
+  );
+  if (existingRows.length === 0) return null;
+
+  // Generate new key and update
+  const newApiKey = generateApiKey();
+  const { rows } = await pool.query(
+    `UPDATE users SET api_key = $1, updated_at = NOW()
+     WHERE google_id = $2
+     RETURNING api_key, email, google_id, name, is_admin, created_at, updated_at`,
+    [newApiKey, googleId]
+  );
+
+  const row = rows[0];
+  const tokensJson = await redis.get(`tokens:${googleId}`);
+  if (!tokensJson) return null;
+
+  return {
+    apiKey: row.api_key,
+    email: row.email,
+    googleId: row.google_id,
+    name: row.name,
+    isAdmin: row.is_admin === true,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+    tokens: JSON.parse(tokensJson),
+  };
+}
+
+export async function regenerateApiKey(googleId: string): Promise<UserRecord | null> {
+  if (isDatabaseAvailable()) {
+    return dbRegenerateApiKey(googleId);
+  }
+  return fileRegenerateApiKey(googleId);
 }

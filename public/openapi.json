@@ -1,0 +1,380 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Google Docs MCP REST API",
+    "description": "REST API for reading Google Docs and managing comments. For use with ChatGPT Custom Actions.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://your-server-url.com",
+      "description": "Production server (update with your actual URL)"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/docs/read": {
+      "post": {
+        "operationId": "readGoogleDoc",
+        "summary": "Read a Google Document",
+        "description": "Reads the content of a Google Document. Returns plain text by default.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["documentId"],
+                "properties": {
+                  "documentId": {
+                    "type": "string",
+                    "description": "The ID of the Google Document (from the URL)"
+                  },
+                  "format": {
+                    "type": "string",
+                    "enum": ["text", "json"],
+                    "default": "text",
+                    "description": "Output format: 'text' for plain text, 'json' for raw structure"
+                  },
+                  "maxLength": {
+                    "type": "integer",
+                    "description": "Maximum character limit for output. Omit for full content."
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab ID to read a specific tab"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Document content retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "format": {
+                      "type": "string",
+                      "description": "The format of the returned content"
+                    },
+                    "content": {
+                      "oneOf": [
+                        { "type": "string" },
+                        { "type": "object" }
+                      ],
+                      "description": "The document content (string for text format, object for json format)"
+                    },
+                    "length": {
+                      "type": "integer",
+                      "description": "Length of the content in characters (for text format)"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing documentId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden - no access to document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/comments": {
+      "get": {
+        "operationId": "listComments",
+        "summary": "List all comments in a document",
+        "description": "Returns all comments in a Google Document, including replies.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The ID of the Google Document"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Comments retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string",
+                      "description": "The document ID"
+                    },
+                    "count": {
+                      "type": "integer",
+                      "description": "Number of comments"
+                    },
+                    "comments": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Comment"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "addComment",
+        "summary": "Add a comment to a document",
+        "description": "Adds a comment to a Google Document with quoted text context. The comment will appear in the Comments panel.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The ID of the Google Document"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["startIndex", "endIndex", "commentText"],
+                "properties": {
+                  "startIndex": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The starting index of the text range (inclusive, 1-based)"
+                  },
+                  "endIndex": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The ending index of the text range (exclusive)"
+                  },
+                  "commentText": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The content of the comment"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Comment created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Comment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key obtained from the registration dashboard"
+      }
+    },
+    "schemas": {
+      "Comment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the comment"
+          },
+          "content": {
+            "type": "string",
+            "description": "The comment text"
+          },
+          "quotedText": {
+            "type": "string",
+            "nullable": true,
+            "description": "The text that the comment is anchored to"
+          },
+          "author": {
+            "type": "string",
+            "description": "Display name of the comment author"
+          },
+          "createdTime": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the comment was created"
+          },
+          "resolved": {
+            "type": "boolean",
+            "description": "Whether the comment has been resolved"
+          },
+          "replies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Reply"
+            },
+            "description": "Replies to this comment"
+          }
+        }
+      },
+      "Reply": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the reply"
+          },
+          "content": {
+            "type": "string",
+            "description": "The reply text"
+          },
+          "author": {
+            "type": "string",
+            "description": "Display name of the reply author"
+          },
+          "createdTime": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the reply was created"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Error message"
+          }
+        }
+      }
+    }
+  }
+}

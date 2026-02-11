@@ -125,6 +125,16 @@ styleArgs => Object.values(styleArgs).some(v => v !== undefined),
 });
 export type ApplyParagraphStyleToolArgs = z.infer<typeof ApplyParagraphStyleToolParameters>;
 
+// --- Shared Drive Parameters Schema ---
+export const SharedDriveParameters = z.object({
+  includeSharedDrives: z.boolean().optional()
+    .describe('Include items from shared drives. Defaults to true.'),
+  driveId: z.string().optional()
+    .describe('Filter to a specific shared drive ID.'),
+  corpora: z.enum(['user', 'drive', 'allDrives', 'domain']).optional()
+    .describe('Source of files: user (My Drive), drive (specific), allDrives, domain.'),
+});
+
 // --- Error Class ---
 // Use FastMCP's UserError for client-facing issues
 // Define a custom error for internal issues if needed

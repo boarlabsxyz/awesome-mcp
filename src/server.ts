@@ -19,6 +19,7 @@ ParagraphStyleParameters,
 ParagraphStyleArgs,
 ApplyTextStyleToolParameters, ApplyTextStyleToolArgs,
 ApplyParagraphStyleToolParameters, ApplyParagraphStyleToolArgs,
+SharedDriveParameters,
 NotImplementedError
 } from './types.js';
 import * as GDocsHelpers from './googleDocsApiHelpers.js';
@@ -30,6 +31,7 @@ import { createUserSession } from './userSession.js';
 import { loadUsers, getUserByApiKey } from './userStore.js';
 import { initDatabase, closeDatabase } from './db.js';
 import { createWebApp } from './webServer.js';
+import { seedDefaultCatalogs } from './mcpCatalogStore.js';
 
 // Global clients for stdio (single-user) mode
 let authClient: OAuth2Client | null = null;
@@ -159,6 +161,29 @@ function getAuthClient(session?: UserSession): OAuth2Client {
 if (session?.oauthClient) return session.oauthClient;
 if (authClient) return authClient as unknown as OAuth2Client;
 throw new UserError("Not authenticated. Provide an API key or configure credentials.");
+}
+
+// Helper to build shared drive parameters for Google Drive API calls
+function buildSharedDriveParams(args: {
+  includeSharedDrives?: boolean;
+  driveId?: string;
+  corpora?: 'user' | 'drive' | 'allDrives' | 'domain';
+}) {
+  const supportsAllDrives = args.includeSharedDrives !== false;
+  const params: any = { supportsAllDrives };
+
+  if (supportsAllDrives) {
+    params.includeItemsFromAllDrives = true;
+  }
+  if (args.driveId) {
+    params.driveId = args.driveId;
+    params.corpora = 'drive';
+  } else if (args.corpora) {
+    params.corpora = args.corpora;
+  } else if (supportsAllDrives) {
+    params.corpora = 'allDrives';
+  }
+  return params;
 }
 
 // === HELPER FUNCTIONS ===
@@ -1204,7 +1229,7 @@ server.addTool({
 
 server.addTool({
   name: 'addComment',
-  description: 'Adds a comment anchored to a specific text range in the document. NOTE: Due to Google API limitations, comments created programmatically appear in the "All Comments" list but are not visibly anchored to text in the document UI (they show "original content deleted"). However, replies, resolve, and delete operations work on all comments including manually-created ones.',
+  description: 'Adds a comment to a Google Document with quoted text context. NOTE: Due to Google Drive API limitations, comments cannot be anchored to specific text positions in Google Docs. The comment will appear in the Comments panel with the quoted text displayed, but won\'t highlight text in the document body.',
   parameters: DocumentIdParameter.extend({
     startIndex: z.number().int().min(1).describe('The starting index of the text range (inclusive, starts from 1).'),
     endIndex: z.number().int().min(1).describe('The ending index of the text range (exclusive).'),
@@ -1256,17 +1281,8 @@ server.addTool({
           quotedFileContent: {
             value: quotedText,
             mimeType: 'text/html'
-          },
-          anchor: JSON.stringify({
-            r: args.documentId,
-            a: [{
-              txt: {
-                o: args.startIndex - 1,  // Drive API uses 0-based indexing
-                l: args.endIndex - args.startIndex,
-                ml: args.endIndex - args.startIndex
-              }
-            }]
-          })
+          }
+          // anchor removed - Google Drive API ignores it for Google Docs and causes "original content deleted"
         }
       });
 
@@ -1482,12 +1498,12 @@ execute: async (args, { log, session }) => {
 
 server.addTool({
 name: 'listGoogleDocs',
-description: 'Lists Google Documents from your Google Drive with optional filtering.',
+description: 'Lists Google Documents from your Google Drive and shared drives with optional filtering.',
 parameters: z.object({
   maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of documents to return (1-100).'),
   query: z.string().optional().describe('Search query to filter documents by name or content.'),
   orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results.'),
-}),
+}).merge(SharedDriveParameters),
 execute: async (args, { log, session }) => {
 const drive = await getDriveClient(session);
 log.info(`Listing Google Docs. Query: ${args.query || 'none'}, Max: ${args.maxResults}, Order: ${args.orderBy}`);
@@ -1499,11 +1515,13 @@ try {
     queryString += ` and (name contains '${args.query}' or fullText contains '${args.query}')`;
   }
 
+  const sharedDriveParams = buildSharedDriveParams(args);
   const response = await drive.files.list({
     q: queryString,
     pageSize: args.maxResults,
     orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
-    fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
+    fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress),driveId)',
+    ...sharedDriveParams,
   });
 
   const files = response.data.files || [];
@@ -1516,10 +1534,14 @@ try {
   files.forEach((file, index) => {
     const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown';
     const owner = file.owners?.[0]?.displayName || 'Unknown';
-    result += `${index + 1}. **${file.name}**\n`;
+    const driveInfo = file.driveId ? ` (Shared Drive)` : '';
+    result += `${index + 1}. **${file.name}**${driveInfo}\n`;
     result += `   ID: ${file.id}\n`;
     result += `   Modified: ${modifiedDate}\n`;
     result += `   Owner: ${owner}\n`;
+    if (file.driveId) {
+      result += `   Drive ID: ${file.driveId}\n`;
+    }
     result += `   Link: ${file.webViewLink}\n\n`;
   });
 
@@ -1534,13 +1556,13 @@ try {
 
 server.addTool({
 name: 'searchGoogleDocs',
-description: 'Searches for Google Documents by name, content, or other criteria.',
+description: 'Searches for Google Documents by name, content, or other criteria across My Drive and shared drives.',
 parameters: z.object({
   searchQuery: z.string().min(1).describe('Search term to find in document names or content.'),
   searchIn: z.enum(['name', 'content', 'both']).optional().default('both').describe('Where to search: document names, content, or both.'),
   maxResults: z.number().int().min(1).max(50).optional().default(10).describe('Maximum number of results to return.'),
   modifiedAfter: z.string().optional().describe('Only return documents modified after this date (ISO 8601 format, e.g., "2024-01-01").'),
-}),
+}).merge(SharedDriveParameters),
 execute: async (args, { log, session }) => {
 const drive = await getDriveClient(session);
 log.info(`Searching Google Docs for: "${args.searchQuery}" in ${args.searchIn}`);
@@ -1562,11 +1584,13 @@ try {
     queryString += ` and modifiedTime > '${args.modifiedAfter}'`;
   }
 
+  const sharedDriveParams = buildSharedDriveParams(args);
   const response = await drive.files.list({
     q: queryString,
     pageSize: args.maxResults,
     orderBy: 'modifiedTime desc',
-    fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName),parents)',
+    fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName),parents,driveId)',
+    ...sharedDriveParams,
   });
 
   const files = response.data.files || [];
@@ -1579,10 +1603,14 @@ try {
   files.forEach((file, index) => {
     const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown';
     const owner = file.owners?.[0]?.displayName || 'Unknown';
-    result += `${index + 1}. **${file.name}**\n`;
+    const driveInfo = file.driveId ? ` (Shared Drive)` : '';
+    result += `${index + 1}. **${file.name}**${driveInfo}\n`;
     result += `   ID: ${file.id}\n`;
     result += `   Modified: ${modifiedDate}\n`;
     result += `   Owner: ${owner}\n`;
+    if (file.driveId) {
+      result += `   Drive ID: ${file.driveId}\n`;
+    }
     result += `   Link: ${file.webViewLink}\n\n`;
   });
 
@@ -1597,11 +1625,11 @@ try {
 
 server.addTool({
 name: 'getRecentGoogleDocs',
-description: 'Gets the most recently modified Google Documents.',
+description: 'Gets the most recently modified Google Documents from My Drive and shared drives.',
 parameters: z.object({
   maxResults: z.number().int().min(1).max(50).optional().default(10).describe('Maximum number of recent documents to return.'),
   daysBack: z.number().int().min(1).max(365).optional().default(30).describe('Only show documents modified within this many days.'),
-}),
+}).merge(SharedDriveParameters),
 execute: async (args, { log, session }) => {
 const drive = await getDriveClient(session);
 log.info(`Getting recent Google Docs: ${args.maxResults} results, ${args.daysBack} days back`);
@@ -1613,11 +1641,13 @@ try {
 
   const queryString = `mimeType='application/vnd.google-apps.document' and trashed=false and modifiedTime > '${cutoffDateStr}'`;
 
+  const sharedDriveParams = buildSharedDriveParams(args);
   const response = await drive.files.list({
     q: queryString,
     pageSize: args.maxResults,
     orderBy: 'modifiedTime desc',
-    fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName),lastModifyingUser(displayName))',
+    fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName),lastModifyingUser(displayName),driveId)',
+    ...sharedDriveParams,
   });
 
   const files = response.data.files || [];
@@ -1631,11 +1661,15 @@ try {
     const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleString() : 'Unknown';
     const lastModifier = file.lastModifyingUser?.displayName || 'Unknown';
     const owner = file.owners?.[0]?.displayName || 'Unknown';
+    const driveInfo = file.driveId ? ` (Shared Drive)` : '';
 
-    result += `${index + 1}. **${file.name}**\n`;
+    result += `${index + 1}. **${file.name}**${driveInfo}\n`;
     result += `   ID: ${file.id}\n`;
     result += `   Last Modified: ${modifiedDate} by ${lastModifier}\n`;
     result += `   Owner: ${owner}\n`;
+    if (file.driveId) {
+      result += `   Drive ID: ${file.driveId}\n`;
+    }
     result += `   Link: ${file.webViewLink}\n\n`;
   });
 
@@ -1650,7 +1684,7 @@ try {
 
 server.addTool({
 name: 'getDocumentInfo',
-description: 'Gets detailed information about a specific Google Document.',
+description: 'Gets detailed information about a specific Google Document (works with shared drives).',
 parameters: DocumentIdParameter,
 execute: async (args, { log, session }) => {
 const drive = await getDriveClient(session);
@@ -1659,9 +1693,10 @@ log.info(`Getting info for document: ${args.documentId}`);
 try {
   const response = await drive.files.get({
     fileId: args.documentId,
+    supportsAllDrives: true,
     // Note: 'permissions' and 'alternateLink' fields removed - they cause
     // "Invalid field selection" errors for Google Docs files
-    fields: 'id,name,description,mimeType,size,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName,emailAddress),shared,parents,version',
+    fields: 'id,name,description,mimeType,size,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName,emailAddress),shared,parents,version,driveId',
   });
 
   const file = response.data;
@@ -1679,6 +1714,9 @@ try {
   result += `**Name:** ${file.name}\n`;
   result += `**ID:** ${file.id}\n`;
   result += `**Type:** Google Document\n`;
+  if (file.driveId) {
+    result += `**Location:** Shared Drive (ID: ${file.driveId})\n`;
+  }
   result += `**Created:** ${createdDate}\n`;
   result += `**Last Modified:** ${modifiedDate}\n`;
 
@@ -1713,10 +1751,10 @@ try {
 
 server.addTool({
 name: 'createFolder',
-description: 'Creates a new folder in Google Drive.',
+description: 'Creates a new folder in Google Drive or a shared drive.',
 parameters: z.object({
   name: z.string().min(1).describe('Name for the new folder.'),
-  parentFolderId: z.string().optional().describe('Parent folder ID. If not provided, creates folder in Drive root.'),
+  parentFolderId: z.string().optional().describe('Parent folder ID. If not provided, creates folder in Drive root. For shared drives, provide the shared drive ID or a folder ID within it.'),
 }),
 execute: async (args, { log, session }) => {
 const drive = await getDriveClient(session);
@@ -1734,11 +1772,13 @@ try {
 
   const response = await drive.files.create({
     requestBody: folderMetadata,
-    fields: 'id,name,parents,webViewLink',
+    supportsAllDrives: true,
+    fields: 'id,name,parents,webViewLink,driveId',
   });
 
   const folder = response.data;
-  return `Successfully created folder "${folder.name}" (ID: ${folder.id})\nLink: ${folder.webViewLink}`;
+  const locationInfo = folder.driveId ? ` in shared drive (ID: ${folder.driveId})` : '';
+  return `Successfully created folder "${folder.name}" (ID: ${folder.id})${locationInfo}\nLink: ${folder.webViewLink}`;
 } catch (error: any) {
   log.error(`Error creating folder: ${error.message || error}`);
   if (error.code === 404) throw new UserError("Parent folder not found. Check the parent folder ID.");
@@ -1750,13 +1790,13 @@ try {
 
 server.addTool({
 name: 'listFolderContents',
-description: 'Lists the contents of a specific folder in Google Drive.',
+description: 'Lists the contents of a specific folder in Google Drive or a shared drive.',
 parameters: z.object({
-  folderId: z.string().describe('ID of the folder to list contents of. Use "root" for the root Drive folder.'),
+  folderId: z.string().describe('ID of the folder to list contents of. Use "root" for the root Drive folder. For shared drives, use the shared drive ID.'),
   includeSubfolders: z.boolean().optional().default(true).describe('Whether to include subfolders in results.'),
   includeFiles: z.boolean().optional().default(true).describe('Whether to include files in results.'),
   maxResults: z.number().int().min(1).max(100).optional().default(50).describe('Maximum number of items to return.'),
-}),
+}).merge(SharedDriveParameters),
 execute: async (args, { log, session }) => {
 const drive = await getDriveClient(session);
 log.info(`Listing contents of folder: ${args.folderId}`);
@@ -1775,11 +1815,13 @@ try {
     queryString += ` and mimeType='application/vnd.google-apps.folder'`;
   }
 
+  const sharedDriveParams = buildSharedDriveParams(args);
   const response = await drive.files.list({
     q: queryString,
     pageSize: args.maxResults,
     orderBy: 'folder,name',
-    fields: 'files(id,name,mimeType,size,modifiedTime,webViewLink,owners(displayName))',
+    fields: 'files(id,name,mimeType,size,modifiedTime,webViewLink,owners(displayName),driveId)',
+    ...sharedDriveParams,
   });
 
   const items = response.data.files || [];
@@ -1798,7 +1840,8 @@ try {
   if (folders.length > 0 && args.includeSubfolders) {
     result += `**Folders (${folders.length}):**\n`;
     folders.forEach(folder => {
-      result += `📁 ${folder.name} (ID: ${folder.id})\n`;
+      const driveInfo = folder.driveId ? ' (Shared Drive)' : '';
+      result += `📁 ${folder.name}${driveInfo} (ID: ${folder.id})\n`;
     });
     result += '\n';
   }
@@ -1812,10 +1855,14 @@ try {
                       file.mimeType === 'application/vnd.google-apps.presentation' ? '📈' : '📎';
       const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown';
       const owner = file.owners?.[0]?.displayName || 'Unknown';
+      const driveInfo = file.driveId ? ' (Shared Drive)' : '';
 
-      result += `${fileType} ${file.name}\n`;
+      result += `${fileType} ${file.name}${driveInfo}\n`;
       result += `   ID: ${file.id}\n`;
       result += `   Modified: ${modifiedDate} by ${owner}\n`;
+      if (file.driveId) {
+        result += `   Drive ID: ${file.driveId}\n`;
+      }
       result += `   Link: ${file.webViewLink}\n\n`;
     });
   }
@@ -1832,7 +1879,7 @@ try {
 
 server.addTool({
 name: 'getFolderInfo',
-description: 'Gets detailed information about a specific folder in Google Drive.',
+description: 'Gets detailed information about a specific folder in Google Drive or a shared drive.',
 parameters: z.object({
   folderId: z.string().describe('ID of the folder to get information about.'),
 }),
@@ -1843,7 +1890,8 @@ log.info(`Getting folder info: ${args.folderId}`);
 try {
   const response = await drive.files.get({
     fileId: args.folderId,
-    fields: 'id,name,description,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName),shared,parents',
+    supportsAllDrives: true,
+    fields: 'id,name,description,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName),shared,parents,driveId,mimeType',
   });
 
   const folder = response.data;
@@ -1860,6 +1908,9 @@ try {
   let result = `**Folder Information:**\n\n`;
   result += `**Name:** ${folder.name}\n`;
   result += `**ID:** ${folder.id}\n`;
+  if (folder.driveId) {
+    result += `**Location:** Shared Drive (ID: ${folder.driveId})\n`;
+  }
   result += `**Created:** ${createdDate}\n`;
   result += `**Last Modified:** ${modifiedDate}\n`;
 
@@ -1896,10 +1947,10 @@ try {
 
 server.addTool({
 name: 'moveFile',
-description: 'Moves a file or folder to a different location in Google Drive.',
+description: 'Moves a file or folder to a different location in Google Drive (works with shared drives).',
 parameters: z.object({
   fileId: z.string().describe('ID of the file or folder to move.'),
-  newParentId: z.string().describe('ID of the destination folder. Use "root" for Drive root.'),
+  newParentId: z.string().describe('ID of the destination folder. Use "root" for Drive root. For shared drives, use a folder ID within the shared drive.'),
   removeFromAllParents: z.boolean().optional().default(false).describe('If true, removes from all current parents. If false, adds to new parent while keeping existing parents.'),
 }),
 execute: async (args, { log, session }) => {
@@ -1910,6 +1961,7 @@ try {
   // First get the current parents
   const fileInfo = await drive.files.get({
     fileId: args.fileId,
+    supportsAllDrives: true,
     fields: 'name,parents',
   });
 
@@ -1919,7 +1971,8 @@ try {
   let updateParams: any = {
     fileId: args.fileId,
     addParents: args.newParentId,
-    fields: 'id,name,parents',
+    supportsAllDrives: true,
+    fields: 'id,name,parents,driveId',
   };
 
   if (args.removeFromAllParents && currentParents.length > 0) {
@@ -1929,7 +1982,8 @@ try {
   const response = await drive.files.update(updateParams);
 
   const action = args.removeFromAllParents ? 'moved' : 'copied';
-  return `Successfully ${action} "${fileName}" to new location.\nFile ID: ${response.data.id}`;
+  const locationInfo = response.data.driveId ? ` (in shared drive ID: ${response.data.driveId})` : '';
+  return `Successfully ${action} "${fileName}" to new location${locationInfo}.\nFile ID: ${response.data.id}`;
 } catch (error: any) {
   log.error(`Error moving file: ${error.message || error}`);
   if (error.code === 404) throw new UserError("File or destination folder not found. Check the IDs.");
@@ -1941,11 +1995,11 @@ try {
 
 server.addTool({
 name: 'copyFile',
-description: 'Creates a copy of a Google Drive file or document.',
+description: 'Creates a copy of a Google Drive file or document (works with shared drives).',
 parameters: z.object({
   fileId: z.string().describe('ID of the file to copy.'),
   newName: z.string().optional().describe('Name for the copied file. If not provided, will use "Copy of [original name]".'),
-  parentFolderId: z.string().optional().describe('ID of folder where copy should be placed. If not provided, places in same location as original.'),
+  parentFolderId: z.string().optional().describe('ID of folder where copy should be placed. If not provided, places in same location as original. For shared drives, use a folder ID within the shared drive.'),
 }),
 execute: async (args, { log, session }) => {
 const drive = await getDriveClient(session);
@@ -1955,6 +2009,7 @@ try {
   // Get original file info
   const originalFile = await drive.files.get({
     fileId: args.fileId,
+    supportsAllDrives: true,
     fields: 'name,parents',
   });
 
@@ -1970,12 +2025,14 @@ try {
 
   const response = await drive.files.copy({
     fileId: args.fileId,
+    supportsAllDrives: true,
     requestBody: copyMetadata,
-    fields: 'id,name,webViewLink',
+    fields: 'id,name,webViewLink,driveId',
   });
 
   const copiedFile = response.data;
-  return `Successfully created copy "${copiedFile.name}" (ID: ${copiedFile.id})\nLink: ${copiedFile.webViewLink}`;
+  const locationInfo = copiedFile.driveId ? ` (in shared drive ID: ${copiedFile.driveId})` : '';
+  return `Successfully created copy "${copiedFile.name}" (ID: ${copiedFile.id})${locationInfo}\nLink: ${copiedFile.webViewLink}`;
 } catch (error: any) {
   log.error(`Error copying file: ${error.message || error}`);
   if (error.code === 404) throw new UserError("Original file or destination folder not found. Check the IDs.");
@@ -1987,7 +2044,7 @@ try {
 
 server.addTool({
 name: 'renameFile',
-description: 'Renames a file or folder in Google Drive.',
+description: 'Renames a file or folder in Google Drive (works with shared drives).',
 parameters: z.object({
   fileId: z.string().describe('ID of the file or folder to rename.'),
   newName: z.string().min(1).describe('New name for the file or folder.'),
@@ -1999,6 +2056,7 @@ log.info(`Renaming file ${args.fileId} to "${args.newName}"`);
 try {
   const response = await drive.files.update({
     fileId: args.fileId,
+    supportsAllDrives: true,
     requestBody: {
       name: args.newName,
     },
@@ -2018,10 +2076,10 @@ try {
 
 server.addTool({
 name: 'deleteFile',
-description: 'Permanently deletes a file or folder from Google Drive.',
+description: 'Permanently deletes a file or folder from Google Drive (works with shared drives).',
 parameters: z.object({
   fileId: z.string().describe('ID of the file or folder to delete.'),
-  skipTrash: z.boolean().optional().default(false).describe('If true, permanently deletes the file. If false, moves to trash (can be restored).'),
+  skipTrash: z.boolean().optional().default(false).describe('If true, permanently deletes the file. If false, moves to trash (can be restored). Note: Shared drive files cannot be trashed, only permanently deleted.'),
 }),
 execute: async (args, { log, session }) => {
 const drive = await getDriveClient(session);
@@ -2031,20 +2089,25 @@ try {
   // Get file info before deletion
   const fileInfo = await drive.files.get({
     fileId: args.fileId,
-    fields: 'name,mimeType',
+    supportsAllDrives: true,
+    fields: 'name,mimeType,driveId',
   });
 
   const fileName = fileInfo.data.name;
   const isFolder = fileInfo.data.mimeType === 'application/vnd.google-apps.folder';
+  const isSharedDrive = !!fileInfo.data.driveId;
 
-  if (args.skipTrash) {
+  // Shared drive files cannot be trashed, only permanently deleted
+  if (args.skipTrash || isSharedDrive) {
     await drive.files.delete({
       fileId: args.fileId,
+      supportsAllDrives: true,
     });
-    return `Permanently deleted ${isFolder ? 'folder' : 'file'} "${fileName}".`;
+    return `Permanently deleted ${isFolder ? 'folder' : 'file'} "${fileName}"${isSharedDrive ? ' from shared drive' : ''}.`;
   } else {
     await drive.files.update({
       fileId: args.fileId,
+      supportsAllDrives: true,
       requestBody: {
         trashed: true,
       },
@@ -2064,10 +2127,10 @@ try {
 
 server.addTool({
 name: 'createDocument',
-description: 'Creates a new Google Document.',
+description: 'Creates a new Google Document (works with shared drives).',
 parameters: z.object({
   title: z.string().min(1).describe('Title for the new document.'),
-  parentFolderId: z.string().optional().describe('ID of folder where document should be created. If not provided, creates in Drive root.'),
+  parentFolderId: z.string().optional().describe('ID of folder where document should be created. If not provided, creates in Drive root. For shared drives, use a folder ID within the shared drive.'),
   initialContent: z.string().optional().describe('Initial text content to add to the document.'),
 }),
 execute: async (args, { log, session }) => {
@@ -2086,11 +2149,13 @@ try {
 
   const response = await drive.files.create({
     requestBody: documentMetadata,
-    fields: 'id,name,webViewLink',
+    supportsAllDrives: true,
+    fields: 'id,name,webViewLink,driveId',
   });
 
   const document = response.data;
-  let result = `Successfully created document "${document.name}" (ID: ${document.id})\nView Link: ${document.webViewLink}`;
+  const locationInfo = document.driveId ? ` (in shared drive ID: ${document.driveId})` : '';
+  let result = `Successfully created document "${document.name}" (ID: ${document.id})${locationInfo}\nView Link: ${document.webViewLink}`;
 
   // Add initial content if provided
   if (args.initialContent) {
@@ -2126,11 +2191,11 @@ try {
 
 server.addTool({
 name: 'createFromTemplate',
-description: 'Creates a new Google Document from an existing document template.',
+description: 'Creates a new Google Document from an existing document template (works with shared drives).',
 parameters: z.object({
   templateId: z.string().describe('ID of the template document to copy from.'),
   newTitle: z.string().min(1).describe('Title for the new document.'),
-  parentFolderId: z.string().optional().describe('ID of folder where document should be created. If not provided, creates in Drive root.'),
+  parentFolderId: z.string().optional().describe('ID of folder where document should be created. If not provided, creates in Drive root. For shared drives, use a folder ID within the shared drive.'),
   replacements: z.record(z.string()).optional().describe('Key-value pairs for text replacements in the template (e.g., {"{{NAME}}": "John Doe", "{{DATE}}": "2024-01-01"}).'),
 }),
 execute: async (args, { log, session }) => {
@@ -2149,12 +2214,14 @@ try {
 
   const response = await drive.files.copy({
     fileId: args.templateId,
+    supportsAllDrives: true,
     requestBody: copyMetadata,
-    fields: 'id,name,webViewLink',
+    fields: 'id,name,webViewLink,driveId',
   });
 
   const document = response.data;
-  let result = `Successfully created document "${document.name}" from template (ID: ${document.id})\nView Link: ${document.webViewLink}`;
+  const locationInfo = document.driveId ? ` (in shared drive ID: ${document.driveId})` : '';
+  let result = `Successfully created document "${document.name}" from template (ID: ${document.id})${locationInfo}\nView Link: ${document.webViewLink}`;
 
   // Apply text replacements if provided
   if (args.replacements && Object.keys(args.replacements).length > 0) {
@@ -2244,7 +2311,7 @@ description: 'Writes data to a specific range in a Google Spreadsheet. Overwrite
 parameters: z.object({
   spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
   range: z.string().describe('A1 notation range to write to (e.g., "A1:B2" or "Sheet1!A1:B2").'),
-  values: z.array(z.array(z.any())).describe('2D array of values to write. Each inner array represents a row.'),
+  values: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).describe('2D array of values to write. Each inner array represents a row.'),
   valueInputOption: z.enum(['RAW', 'USER_ENTERED']).optional().default('USER_ENTERED')
     .describe('How input data should be interpreted. RAW: values are stored as-is. USER_ENTERED: values are parsed as if typed by a user.'),
 }),
@@ -2280,7 +2347,7 @@ description: 'Appends rows of data to the end of a sheet in a Google Spreadsheet
 parameters: z.object({
   spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
   range: z.string().describe('A1 notation range indicating where to append (e.g., "A1" or "Sheet1!A1"). Data will be appended starting from this range.'),
-  values: z.array(z.array(z.any())).describe('2D array of values to append. Each inner array represents a row.'),
+  values: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).describe('2D array of values to append. Each inner array represents a row.'),
   valueInputOption: z.enum(['RAW', 'USER_ENTERED']).optional().default('USER_ENTERED')
     .describe('How input data should be interpreted. RAW: values are stored as-is. USER_ENTERED: values are parsed as if typed by a user.'),
 }),
@@ -2404,11 +2471,11 @@ execute: async (args, { log, session }) => {
 
 server.addTool({
 name: 'createSpreadsheet',
-description: 'Creates a new Google Spreadsheet.',
+description: 'Creates a new Google Spreadsheet (works with shared drives).',
 parameters: z.object({
   title: z.string().min(1).describe('Title for the new spreadsheet.'),
-  parentFolderId: z.string().optional().describe('ID of folder where spreadsheet should be created. If not provided, creates in Drive root.'),
-  initialData: z.array(z.array(z.any())).optional().describe('Optional initial data to populate in the first sheet. Each inner array represents a row.'),
+  parentFolderId: z.string().optional().describe('ID of folder where spreadsheet should be created. If not provided, creates in Drive root. For shared drives, use a folder ID within the shared drive.'),
+  initialData: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).optional().describe('Optional initial data to populate in the first sheet. Each inner array represents a row.'),
 }),
 execute: async (args, { log, session }) => {
   const drive = await getDriveClient(session);
@@ -2428,7 +2495,8 @@ execute: async (args, { log, session }) => {
 
     const driveResponse = await drive.files.create({
       requestBody: spreadsheetMetadata,
-      fields: 'id,name,webViewLink',
+      supportsAllDrives: true,
+      fields: 'id,name,webViewLink,driveId',
     });
 
     const spreadsheetId = driveResponse.data.id;
@@ -2436,7 +2504,8 @@ execute: async (args, { log, session }) => {
       throw new UserError('Failed to create spreadsheet - no ID returned.');
     }
 
-    let result = `Successfully created spreadsheet "${driveResponse.data.name}" (ID: ${spreadsheetId})\nView Link: ${driveResponse.data.webViewLink}`;
+    const locationInfo = driveResponse.data.driveId ? ` (in shared drive ID: ${driveResponse.data.driveId})` : '';
+    let result = `Successfully created spreadsheet "${driveResponse.data.name}" (ID: ${spreadsheetId})${locationInfo}\nView Link: ${driveResponse.data.webViewLink}`;
 
     // Add initial data if provided
     if (args.initialData && args.initialData.length > 0) {
@@ -2467,12 +2536,12 @@ execute: async (args, { log, session }) => {
 
 server.addTool({
 name: 'listGoogleSheets',
-description: 'Lists Google Spreadsheets from your Google Drive with optional filtering.',
+description: 'Lists Google Spreadsheets from your Google Drive and shared drives with optional filtering.',
 parameters: z.object({
   maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of spreadsheets to return (1-100).'),
   query: z.string().optional().describe('Search query to filter spreadsheets by name or content.'),
   orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results.'),
-}),
+}).merge(SharedDriveParameters),
 execute: async (args, { log, session }) => {
   const drive = await getDriveClient(session);
   log.info(`Listing Google Sheets. Query: ${args.query || 'none'}, Max: ${args.maxResults}, Order: ${args.orderBy}`);
@@ -2484,11 +2553,13 @@ execute: async (args, { log, session }) => {
       queryString += ` and (name contains '${args.query}' or fullText contains '${args.query}')`;
     }
 
+    const sharedDriveParams = buildSharedDriveParams(args);
     const response = await drive.files.list({
       q: queryString,
       pageSize: args.maxResults,
       orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
-      fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
+      fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress),driveId)',
+      ...sharedDriveParams,
     });
 
     const files = response.data.files || [];
@@ -2501,10 +2572,14 @@ execute: async (args, { log, session }) => {
     files.forEach((file, index) => {
       const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown';
       const owner = file.owners?.[0]?.displayName || 'Unknown';
-      result += `${index + 1}. **${file.name}**\n`;
+      const driveInfo = file.driveId ? ` (Shared Drive)` : '';
+      result += `${index + 1}. **${file.name}**${driveInfo}\n`;
       result += `   ID: ${file.id}\n`;
       result += `   Modified: ${modifiedDate}\n`;
       result += `   Owner: ${owner}\n`;
+      if (file.driveId) {
+        result += `   Drive ID: ${file.driveId}\n`;
+      }
       result += `   Link: ${file.webViewLink}\n\n`;
     });
 
@@ -2513,6 +2588,61 @@ execute: async (args, { log, session }) => {
     log.error(`Error listing Google Sheets: ${error.message || error}`);
     if (error.code === 403) throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
     throw new UserError(`Failed to list spreadsheets: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+// === SHARED DRIVE TOOLS ===
+
+server.addTool({
+name: 'listSharedDrives',
+description: 'Lists shared drives (Team Drives) the user has access to.',
+parameters: z.object({
+  maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of shared drives to return (1-100).'),
+  query: z.string().optional().describe('Filter shared drives by name (case insensitive partial match).'),
+}),
+execute: async (args, { log, session }) => {
+  const drive = await getDriveClient(session);
+  log.info(`Listing shared drives. Query: ${args.query || 'none'}, Max: ${args.maxResults}`);
+
+  try {
+    const response = await drive.drives.list({
+      pageSize: args.maxResults,
+      q: args.query ? `name contains '${args.query}'` : undefined,
+      fields: 'drives(id,name,createdTime,capabilities)',
+    });
+
+    const drives = response.data.drives || [];
+
+    if (drives.length === 0) {
+      return args.query
+        ? `No shared drives found matching "${args.query}".`
+        : "No shared drives found. You may not have access to any shared drives.";
+    }
+
+    let result = `Found ${drives.length} Shared Drive(s):\n\n`;
+    drives.forEach((sharedDrive, index) => {
+      const createdDate = sharedDrive.createdTime ? new Date(sharedDrive.createdTime).toLocaleDateString() : 'Unknown';
+      const capabilities = sharedDrive.capabilities || {};
+
+      result += `${index + 1}. **${sharedDrive.name}**\n`;
+      result += `   ID: ${sharedDrive.id}\n`;
+      result += `   Created: ${createdDate}\n`;
+
+      // Show key capabilities
+      const canEdit = capabilities.canEdit ? 'Yes' : 'No';
+      const canManageMembers = capabilities.canManageMembers ? 'Yes' : 'No';
+      result += `   Can Edit: ${canEdit}\n`;
+      result += `   Can Manage Members: ${canManageMembers}\n\n`;
+    });
+
+    result += `\nUse a Drive ID with other tools (e.g., listFolderContents, listGoogleDocs) to browse shared drive contents.`;
+
+    return result;
+  } catch (error: any) {
+    log.error(`Error listing shared drives: ${error.message || error}`);
+    if (error.code === 403) throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
+    throw new UserError(`Failed to list shared drives: ${error.message || 'Unknown error'}`);
   }
 }
 });
@@ -2533,6 +2663,7 @@ async function startServer() {
       // Multi-user HTTP mode — single public port with Express proxying to internal FastMCP
       await initDatabase();
       await loadUsers();
+      await seedDefaultCatalogs();
 
       // Start FastMCP on an internal-only port (Express will proxy /mcp, /sse, /health to it)
       server.start({

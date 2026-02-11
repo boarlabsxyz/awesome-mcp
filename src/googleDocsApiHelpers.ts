@@ -567,6 +567,7 @@ export async function uploadImageToDrive(
     const uploadResponse = await drive.files.create({
         requestBody: fileMetadata,
         media: media,
+        supportsAllDrives: true,
         fields: 'id,webViewLink,webContentLink'
     });
 
@@ -578,6 +579,7 @@ export async function uploadImageToDrive(
     // Make the file publicly readable
     await drive.permissions.create({
         fileId: fileId,
+        supportsAllDrives: true,
         requestBody: {
             role: 'reader',
             type: 'anyone'
@@ -587,6 +589,7 @@ export async function uploadImageToDrive(
     // Get the webContentLink
     const fileInfo = await drive.files.get({
         fileId: fileId,
+        supportsAllDrives: true,
         fields: 'webContentLink'
     });
 
