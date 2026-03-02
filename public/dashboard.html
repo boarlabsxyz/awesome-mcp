@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MCP Dashboard</title>
+  <title>awesome MCP - Dashboard</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    .hidden { display: none !important; }
+    .hidden { display: none; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: #f5f5f5;
@@ -74,63 +74,47 @@
       border: 1px solid #f5c6cb;
     }
 
-    /* Section styles */
-    .section {
+    /* Catalog Grid */
+    .catalog-section {
       margin-bottom: 2rem;
     }
-    .section-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 1rem;
-    }
-    .section-header h2 {
+    .catalog-section h2 {
       font-size: 1.1rem;
       color: #666;
+      margin-bottom: 1rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }
-    .btn-add {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.6rem 1rem;
-      background: #4285f4;
-      color: #fff;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 0.9rem;
-      font-weight: 500;
-      transition: background 0.2s;
-    }
-    .btn-add:hover {
-      background: #3367d6;
-    }
-
-    /* Instance Grid */
-    .instance-grid {
+    .catalog-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
       gap: 1rem;
     }
-    .instance-card {
+    .mcp-card {
       background: #fff;
       border-radius: 12px;
       padding: 1.5rem;
       box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      transition: all 0.2s;
       border: 2px solid transparent;
     }
-    .instance-card:hover {
+    .mcp-card:hover {
       box-shadow: 0 4px 16px rgba(0,0,0,0.1);
     }
-    .instance-card-header {
+    .mcp-card.connected {
+      border-color: #34a853;
+    }
+    .mcp-card.selected {
+      border-color: #4285f4;
+      box-shadow: 0 4px 16px rgba(66, 133, 244, 0.2);
+    }
+    .mcp-card-header {
       display: flex;
       align-items: flex-start;
       gap: 1rem;
       margin-bottom: 1rem;
     }
-    .instance-icon {
+    .mcp-card-icon {
       width: 48px;
       height: 48px;
       background: #f0f4ff;
@@ -141,266 +125,230 @@
       font-size: 1.5rem;
       flex-shrink: 0;
     }
-    .instance-icon img {
+    .mcp-card-icon img {
       width: 32px;
       height: 32px;
       object-fit: contain;
     }
-    .instance-info {
+    .mcp-card-info {
       flex: 1;
       min-width: 0;
     }
-    .instance-name {
+    .mcp-card h3 {
       font-size: 1rem;
-      font-weight: 600;
       margin-bottom: 0.25rem;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
     }
-    .instance-name input {
-      flex: 1;
-      font-size: 1rem;
-      font-weight: 600;
-      padding: 0.25rem 0.5rem;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-    }
-    .instance-type {
-      font-size: 0.8rem;
-      color: #888;
-      text-transform: uppercase;
-      letter-spacing: 0.03em;
-    }
-    .instance-email {
+    .mcp-card p {
       font-size: 0.85rem;
       color: #666;
-      margin-top: 0.25rem;
+      line-height: 1.4;
     }
-
-    .instance-url-section {
+    .mcp-card-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.75rem;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      margin-top: 0.5rem;
+    }
+    .mcp-card-status.connected {
+      background: #d4edda;
+      color: #155724;
+    }
+    .mcp-card-status.not-connected {
+      background: #fff3cd;
+      color: #856404;
+    }
+    .mcp-card-actions {
+      display: flex;
+      gap: 0.5rem;
       margin-top: 1rem;
       padding-top: 1rem;
       border-top: 1px solid #eee;
     }
-    .instance-url-label {
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      color: #888;
-      margin-bottom: 0.5rem;
-      letter-spacing: 0.03em;
-    }
-    .instance-url-row {
-      display: flex;
-      gap: 0.5rem;
-    }
-    .instance-url-input {
+    .btn-connect {
       flex: 1;
-      padding: 0.6rem;
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      font-family: monospace;
-      font-size: 0.8rem;
-      background: #f8f9fa;
-    }
-    .btn-copy {
       padding: 0.6rem 1rem;
       background: #4285f4;
       color: #fff;
       border: none;
       border-radius: 6px;
       cursor: pointer;
-      font-size: 0.8rem;
-      white-space: nowrap;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: background 0.2s;
     }
-    .btn-copy:hover { background: #3367d6; }
-    .btn-copy.copied { background: #34a853; }
-
-    .instance-actions {
-      display: flex;
-      gap: 0.5rem;
-      margin-top: 1rem;
+    .btn-connect:hover {
+      background: #3367d6;
     }
-    .btn-rename {
-      padding: 0.5rem 0.75rem;
-      background: #fff;
-      color: #666;
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 0.8rem;
-      transition: all 0.2s;
-    }
-    .btn-rename:hover {
-      background: #f5f5f5;
-      color: #333;
-    }
-    .btn-delete {
-      padding: 0.5rem 0.75rem;
+    .btn-disconnect {
+      padding: 0.6rem 1rem;
       background: #fff;
       color: #dc3545;
       border: 1px solid #dc3545;
       border-radius: 6px;
       cursor: pointer;
-      font-size: 0.8rem;
+      font-size: 0.85rem;
       transition: all 0.2s;
     }
-    .btn-delete:hover {
+    .btn-disconnect:hover {
       background: #dc3545;
       color: #fff;
     }
-
-    /* Add Tool Modal */
-    .modal-overlay {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(0,0,0,0.5);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 1000;
+    .btn-view-config {
+      flex: 1;
+      padding: 0.6rem 1rem;
+      background: #fff;
+      color: #4285f4;
+      border: 1px solid #4285f4;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: all 0.2s;
     }
-    .modal {
+    .btn-view-config:hover {
+      background: #f0f4ff;
+    }
+
+    /* Connection Config Panel */
+    .config-panel {
       background: #fff;
       border-radius: 12px;
       padding: 2rem;
-      width: 90%;
-      max-width: 500px;
-      max-height: 80vh;
-      overflow-y: auto;
-      overflow-x: hidden;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      margin-top: 2rem;
     }
-    .modal-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 1.5rem;
-    }
-    .modal-header h3 {
-      font-size: 1.2rem;
-    }
-    .btn-close {
-      background: none;
-      border: none;
-      font-size: 1.5rem;
-      cursor: pointer;
-      color: #666;
-    }
-    .modal-step {
+    .config-panel.hidden {
       display: none;
     }
-    .modal-step.active {
-      display: block;
-      width: 100%;
-    }
-
-    /* MCP Type Selector */
-    .mcp-type-list {
-      display: flex;
-      flex-direction: column;
-      gap: 0.75rem;
-      width: 100%;
-    }
-    .mcp-type-item {
+    .config-header {
       display: flex;
       align-items: center;
       gap: 1rem;
-      padding: 1rem;
-      border: 1px solid #ddd;
-      border-radius: 8px;
-      cursor: pointer;
-      transition: all 0.2s;
+      margin-bottom: 1.5rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid #eee;
     }
-    .mcp-type-item:hover {
-      border-color: #4285f4;
+    .config-header-icon {
+      width: 48px;
+      height: 48px;
       background: #f0f4ff;
-    }
-    .mcp-type-icon {
-      width: 40px;
-      height: 40px;
-      background: #f0f4ff;
-      border-radius: 8px;
+      border-radius: 12px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 1.25rem;
+      font-size: 1.5rem;
     }
-    .mcp-type-icon img {
-      width: 24px;
-      height: 24px;
-    }
-    .mcp-type-info h4 {
-      font-size: 0.95rem;
+    .config-header-text h3 {
+      font-size: 1.2rem;
       margin-bottom: 0.25rem;
     }
-    .mcp-type-info p {
-      font-size: 0.8rem;
+    .config-header-text p {
+      font-size: 0.9rem;
       color: #666;
     }
 
-    /* Name Input Step */
-    .name-input-section {
+    .config-section {
       margin-bottom: 1.5rem;
     }
-    .name-input-section label {
-      display: block;
+    .config-section h4 {
       font-size: 0.85rem;
-      color: #666;
+      text-transform: uppercase;
+      color: #888;
       margin-bottom: 0.5rem;
+      letter-spacing: 0.05em;
     }
-    .name-input-section input {
-      width: 100%;
-      padding: 0.75rem;
+    .config-section p {
+      color: #666;
+      font-size: 0.9rem;
+      margin-bottom: 0.75rem;
+      line-height: 1.5;
+    }
+    .input-row {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .config-input {
+      flex: 1;
+      padding: 0.7rem;
       border: 1px solid #ddd;
       border-radius: 6px;
-      font-size: 1rem;
+      font-family: monospace;
+      font-size: 0.85rem;
+      background: #f8f9fa;
     }
-    .name-input-section input:focus {
-      outline: none;
-      border-color: #4285f4;
-    }
-    .name-suggestion {
-      font-size: 0.8rem;
-      color: #888;
-      margin-top: 0.5rem;
-    }
-    .btn-connect-google {
-      width: 100%;
-      padding: 0.75rem;
+    .btn-copy {
+      padding: 0.7rem 1rem;
       background: #4285f4;
       color: #fff;
       border: none;
       border-radius: 6px;
       cursor: pointer;
-      font-size: 1rem;
-      font-weight: 500;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0.5rem;
+      font-size: 0.85rem;
+      white-space: nowrap;
     }
-    .btn-connect-google:hover {
-      background: #3367d6;
-    }
-    .btn-connect-google:disabled {
-      background: #ccc;
-      cursor: not-allowed;
-    }
+    .btn-copy:hover { background: #3367d6; }
+    .btn-copy.copied { background: #34a853; }
 
-    /* Empty state */
-    .empty-state {
-      text-align: center;
-      padding: 3rem;
-      color: #666;
-      background: #fff;
-      border-radius: 12px;
-      border: 2px dashed #ddd;
+    pre {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.8rem;
+      line-height: 1.5;
+      position: relative;
     }
-    .empty-state p {
-      margin-bottom: 1rem;
+    .pre-wrapper {
+      position: relative;
+    }
+    .pre-copy-btn {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      padding: 0.4rem 0.8rem;
+      background: #444;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.75rem;
+    }
+    .pre-copy-btn:hover { background: #555; }
+    .pre-copy-btn.copied { background: #34a853; }
+
+    /* API Key Section */
+    .api-key-section {
+      background: #fff8e6;
+      border: 1px solid #ffe0a0;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .api-key-section h4 {
+      color: #856404;
+    }
+    .btn-regen {
+      padding: 0.7rem 1rem;
+      background: #fff;
+      color: #dc3545;
+      border: 1px solid #dc3545;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+    .btn-regen:hover {
+      background: #dc3545;
+      color: #fff;
+    }
+    .btn-regen:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
     }
 
     .loading {
@@ -416,74 +364,33 @@
       color: #721c24;
       margin-bottom: 1rem;
     }
-
-    /* Login overlay */
-    .login-overlay {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(245,245,245,0.95);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 2000;
-    }
-    .login-card {
-      background: #fff;
-      border-radius: 12px;
-      padding: 2.5rem;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    .empty-state {
       text-align: center;
-      max-width: 420px;
-      width: 90%;
+      padding: 3rem;
+      color: #666;
     }
-    .login-card h2 {
-      font-size: 1.5rem;
+    .empty-state p {
       margin-bottom: 0.5rem;
     }
-    .login-card .login-subtitle {
-      color: #666;
-      margin-bottom: 2rem;
-      line-height: 1.5;
-    }
-    .btn-google-login {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0.75rem;
-      width: 100%;
-      padding: 0.85rem 1.5rem;
-      background: #fff;
-      color: #333;
-      border: 1px solid #ddd;
+
+    .not-connected-warning {
+      background: #fff3cd;
+      border: 1px solid #ffc107;
       border-radius: 8px;
-      font-size: 1rem;
-      font-weight: 500;
-      cursor: pointer;
-      text-decoration: none;
-      transition: all 0.2s;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      color: #856404;
     }
-    .btn-google-login:hover {
-      background: #f8f9fa;
-      border-color: #ccc;
-    }
-    .btn-google-login svg {
-      width: 20px;
-      height: 20px;
-    }
-    .login-footer {
-      margin-top: 1.5rem;
-      font-size: 0.8rem;
-      color: #aaa;
+    .not-connected-warning strong {
+      display: block;
+      margin-bottom: 0.25rem;
     }
   </style>
 </head>
 <body>
   <div class="page-container">
     <div class="header">
-      <h1>MCP Dashboard</h1>
+      <a href="https://awesome-mcp.xyz" style="text-decoration:none;color:inherit;"><h1>awesome MCP</h1></a>
       <div class="header-right">
         <span class="user-info">
           <span id="userInfo"></span>
@@ -493,66 +400,70 @@
     </div>
 
     <div id="loading" class="loading">Loading...</div>
-    <div id="error" class="error hidden"></div>
-    <div id="successAlert" class="alert alert-success hidden"></div>
+    <div id="error" class="error" style="display: none;"></div>
+    <div id="successAlert" class="alert alert-success" style="display: none;"></div>
 
-    <div id="content" class="hidden">
-      <!-- Connected Tools Section -->
-      <div class="section">
-        <div class="section-header">
-          <h2>Your Connected Tools</h2>
-          <button class="btn-add" onclick="openAddToolModal()">+ Add Tool</button>
-        </div>
-        <div id="instanceGrid" class="instance-grid">
-          <!-- Instance cards will be inserted here -->
-        </div>
-        <div id="emptyState" class="empty-state hidden">
-          <p>No tools connected yet.</p>
-          <button class="btn-add" onclick="openAddToolModal()">+ Add Your First Tool</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Add Tool Modal -->
-  <div id="addToolModal" class="modal-overlay hidden">
-    <div class="modal">
-      <div class="modal-header">
-        <h3 id="modalTitle">Add Tool</h3>
-        <button class="btn-close" onclick="closeAddToolModal()">&times;</button>
-      </div>
-
-      <!-- Step 1: Select MCP Type -->
-      <div id="step1" class="modal-step active">
-        <div class="mcp-type-list" id="mcpTypeList">
-          <!-- MCP types will be inserted here -->
+    <div id="content" style="display: none;">
+      <!-- Connected MCPs -->
+      <div class="catalog-section" id="connectedSection" style="display: none;">
+        <h2>Connected MCPs</h2>
+        <div class="catalog-grid" id="connectedGrid">
+          <!-- Connected MCP cards will be inserted here -->
         </div>
       </div>
 
-      <!-- Step 2: Name Instance -->
-      <div id="step2" class="modal-step">
-        <div class="name-input-section">
-          <label for="instanceNameInput">Name this instance</label>
-          <input type="text" id="instanceNameInput" placeholder="e.g., Work Account, Personal" />
-          <p class="name-suggestion">Tip: Use a name that helps you identify which Google account this is for.</p>
+      <!-- Available MCPs -->
+      <div class="catalog-section">
+        <h2>Available MCPs</h2>
+        <div class="catalog-grid" id="availableGrid">
+          <!-- Available MCP cards will be inserted here -->
         </div>
-        <button class="btn-connect-google" id="connectGoogleBtn" onclick="startOAuth()">
-          Connect with Google
-        </button>
       </div>
-    </div>
-  </div>
 
-  <!-- Login Overlay (shown when not authenticated) -->
-  <div id="loginOverlay" class="login-overlay hidden">
-    <div class="login-card">
-      <h2>Sign in to continue</h2>
-      <p class="login-subtitle">Sign in with your Google account to access the MCP Dashboard.</p>
-      <a href="/auth/google" class="btn-google-login">
-        <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-        Sign in with Google
-      </a>
-      <p class="login-footer">Your credentials are stored securely and used only for MCP tool access.</p>
+      <!-- Connection Config Panel -->
+      <div class="config-panel hidden" id="configPanel">
+        <div class="config-header">
+          <div class="config-header-icon" id="selectedIcon"></div>
+          <div class="config-header-text">
+            <h3 id="selectedName"></h3>
+            <p id="selectedDescription"></p>
+          </div>
+        </div>
+
+        <div id="notConnectedWarning" class="not-connected-warning" style="display: none;">
+          <strong>MCP Not Connected</strong>
+          You need to connect this MCP before you can use it. Click the "Connect" button above to authorize access.
+        </div>
+
+        <div class="api-key-section">
+          <div class="config-section" style="margin-bottom: 0;">
+            <h4>Your API Key</h4>
+            <div class="input-row">
+              <input type="text" class="config-input" id="apiKey" readonly value="" />
+              <button class="btn-copy" id="copyKeyBtn" onclick="copyApiKey()">Copy</button>
+              <button class="btn-regen" id="regenBtn" onclick="regenerateKey()">Regenerate</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <h4>Claude.ai / ChatGPT Connector</h4>
+          <p>Paste this URL in Claude.ai Settings > Connectors > Add custom connector:</p>
+          <div class="input-row">
+            <input type="text" class="config-input" id="connectorUrl" readonly value="" />
+            <button class="btn-copy" id="copyUrlBtn" onclick="copyConnectorUrl()">Copy URL</button>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <h4>Claude Desktop / Cursor Config</h4>
+          <p>Add this to your claude_desktop_config.json or Cursor MCP settings:</p>
+          <div class="pre-wrapper">
+            <pre id="configSnippet"></pre>
+            <button class="pre-copy-btn" id="copyConfigBtn" onclick="copyConfig()">Copy</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -560,19 +471,14 @@
     const baseUrl = window.location.origin;
     let currentUser = null;
     let catalogs = [];
-    let instances = [];
-    let selectedMcpType = null;
-
-    function showLoginOverlay() {
-      document.getElementById('loginOverlay').classList.remove('hidden');
-      document.getElementById('loading').classList.add('hidden');
-    }
+    let connections = [];
+    let selectedMcp = null;
 
     async function loadUserData() {
       try {
         const response = await fetch('/api/me', { credentials: 'same-origin' });
         if (response.status === 401) {
-          showLoginOverlay();
+          window.location.href = '/';
           return null;
         }
         if (!response.ok) {
@@ -590,232 +496,165 @@
         throw new Error('Failed to load catalogs');
       }
       const data = await response.json();
-      console.log('Loaded catalogs:', data.catalogs);
       return data.catalogs || [];
     }
 
     function getIconForMcp(mcp) {
       const icons = {
-        'google-docs': '\u{1F4C4}',      // 📄
-        'google-calendar': '\u{1F4C5}',  // 📅
-        'clickup': '\u2705',             // ✅
-        'github': '\u{1F419}',           // 🐙
-        'slack': '\u{1F4AC}',            // 💬
-        'notion': '\u{1F4D3}',           // 📓
+        'google-docs': '\uD83D\uDCC4',
+        'google-calendar': '\uD83D\uDCC5',
+        'clickup': '\u2705',
+        'github': '\uD83D\uDC19',
+        'slack': '\uD83D\uDCAC',
+        'notion': '\uD83D\uDCD3',
       };
-      return icons[mcp.slug] || '\u{1F50C}'; // 🔌
+      return icons[mcp.slug] || '\uD83D\uDD0C';
     }
 
-    function getMcpUrl(mcpSlug, instanceId) {
-      const mcp = catalogs.find(c => c.slug === mcpSlug);
-      if (!mcp) return '';
-
-      let mcpFullUrl;
-      if (mcp.mcpUrl.startsWith('http://') || mcp.mcpUrl.startsWith('https://')) {
-        // External MCP service: connect directly (no proxy needed).
-        // MCP services don't advertise OAuth, so Claude.ai uses the apiKey as-is.
-        mcpFullUrl = mcp.mcpUrl;
-      } else {
-        // Local MCP (same service): use the path directly
-        const mcpPath = mcp.mcpUrl.startsWith('/') ? mcp.mcpUrl : '/' + mcp.mcpUrl;
-        mcpFullUrl = baseUrl + mcpPath;
-      }
-
-      // Use compound token format: apiKey.instanceId
-      // This embeds the instance ID in the bearer token itself, ensuring it
-      // survives MCP transport (SSE/HTTP) which may not preserve query params.
-      const url = new URL(mcpFullUrl);
-      url.searchParams.set('apiKey', currentUser.apiKey + '.' + instanceId);
-      return url.toString();
+    function isConnected(slug) {
+      return connections.some(c => c.mcpSlug === slug);
     }
 
-    function renderInstanceCard(instance) {
-      const mcp = catalogs.find(c => c.slug === instance.mcpSlug);
-      const mcpName = mcp?.name || instance.mcpSlug;
-      const mcpIcon = mcp?.iconUrl
-        ? `<img src="${mcp.iconUrl}" alt="${mcpName}">`
-        : getIconForMcp({ slug: instance.mcpSlug });
-      const instanceUrl = getMcpUrl(instance.mcpSlug, instance.instanceId);
+    function renderMcpCard(mcp, isConnectedMcp) {
+      const connected = isConnectedMcp || isConnected(mcp.slug);
+      const isSelected = selectedMcp?.slug === mcp.slug;
 
       return `
-        <div class="instance-card" data-instance-id="${instance.instanceId}">
-          <div class="instance-card-header">
-            <div class="instance-icon">
-              ${mcpIcon}
+        <div class="mcp-card ${connected ? 'connected' : ''} ${isSelected ? 'selected' : ''}" data-slug="${mcp.slug}">
+          <div class="mcp-card-header">
+            <div class="mcp-card-icon">
+              ${mcp.iconUrl ? `<img src="${mcp.iconUrl}" alt="${mcp.name}">` : getIconForMcp(mcp)}
             </div>
-            <div class="instance-info">
-              <div class="instance-name">
-                <span id="name-${instance.instanceId}">${escapeHtml(instance.instanceName)}</span>
-              </div>
-              <div class="instance-type">${escapeHtml(mcpName)}</div>
-              ${instance.googleEmail ? `<div class="instance-email">${escapeHtml(instance.googleEmail)}</div>` : ''}
-            </div>
-          </div>
-          <div class="instance-url-section">
-            <div class="instance-url-label">MCP URL (for Claude.ai Connector)</div>
-            <div class="instance-url-row">
-              <input type="text" class="instance-url-input" value="${escapeHtml(instanceUrl)}" readonly id="url-${instance.instanceId}" />
-              <button class="btn-copy" onclick="copyUrl('${instance.instanceId}', this)">Copy</button>
+            <div class="mcp-card-info">
+              <h3>${escapeHtml(mcp.name)}</h3>
+              <p>${escapeHtml(mcp.description)}</p>
+              <span class="mcp-card-status ${connected ? 'connected' : 'not-connected'}">
+                ${connected ? '\u2713 Connected' : '\u26A0 Not Connected'}
+              </span>
             </div>
           </div>
-          <div class="instance-actions">
-            <button class="btn-rename" onclick="renameInstance('${instance.instanceId}')">Rename</button>
-            <button class="btn-delete" onclick="deleteInstance('${instance.instanceId}', '${escapeHtml(instance.instanceName)}')">Delete</button>
+          <div class="mcp-card-actions">
+            ${connected
+              ? `<button class="btn-view-config" onclick="selectMcp('${mcp.slug}')">View Config</button>
+                 <button class="btn-disconnect" onclick="disconnectMcp('${mcp.slug}')">Disconnect</button>`
+              : `<button class="btn-connect" onclick="connectMcp('${mcp.slug}')">Connect</button>
+                 <button class="btn-view-config" onclick="selectMcp('${mcp.slug}')">View Config</button>`
+            }
           </div>
         </div>
       `;
     }
 
-    function renderInstances() {
-      const grid = document.getElementById('instanceGrid');
-      const emptyState = document.getElementById('emptyState');
+    function renderCatalogGrids() {
+      const connectedMcps = catalogs.filter(mcp => isConnected(mcp.slug));
+      const availableMcps = catalogs.filter(mcp => !isConnected(mcp.slug));
 
-      if (instances.length === 0) {
-        grid.innerHTML = '';
-        emptyState.classList.remove('hidden');
+      // Show connected section if there are connections
+      const connectedSection = document.getElementById('connectedSection');
+      const connectedGrid = document.getElementById('connectedGrid');
+      const availableGrid = document.getElementById('availableGrid');
+
+      if (connectedMcps.length > 0) {
+        connectedSection.style.display = 'block';
+        connectedGrid.innerHTML = connectedMcps.map(mcp => renderMcpCard(mcp, true)).join('');
       } else {
-        emptyState.classList.add('hidden');
-        grid.innerHTML = instances.map(renderInstanceCard).join('');
+        connectedSection.style.display = 'none';
       }
-    }
 
-    function openAddToolModal() {
-      selectedMcpType = null;
-      document.getElementById('step1').classList.add('active');
-      document.getElementById('step2').classList.remove('active');
-      document.getElementById('modalTitle').textContent = 'Add Tool';
-      document.getElementById('instanceNameInput').value = '';
-
-      console.log('Opening modal with catalogs:', catalogs, 'count:', catalogs.length);
-
-      // Render MCP type list
-      const list = document.getElementById('mcpTypeList');
-      const htmlItems = [];
-      for (const mcp of catalogs) {
-        console.log('Rendering MCP:', mcp.slug, mcp.name);
-        const icon = mcp.iconUrl
-          ? `<img src="${mcp.iconUrl}" alt="${escapeHtml(mcp.name)}">`
-          : getIconForMcp(mcp);
-        htmlItems.push(`
-          <div class="mcp-type-item" onclick="selectMcpType('${mcp.slug}')">
-            <div class="mcp-type-icon">${icon}</div>
-            <div class="mcp-type-info">
-              <h4>${escapeHtml(mcp.name || 'Unknown')}</h4>
-              <p>${escapeHtml(mcp.description || '')}</p>
-            </div>
-          </div>
-        `);
-      }
-      console.log('Generated', htmlItems.length, 'MCP items');
-      list.innerHTML = htmlItems.join('');
-      console.log('List children count:', list.children.length);
-
-      document.getElementById('addToolModal').classList.remove('hidden');
-    }
-
-    function closeAddToolModal() {
-      document.getElementById('addToolModal').classList.add('hidden');
-    }
-
-    function selectMcpType(slug) {
-      selectedMcpType = catalogs.find(c => c.slug === slug);
-      if (!selectedMcpType) return;
-
-      document.getElementById('step1').classList.remove('active');
-      document.getElementById('step2').classList.add('active');
-      document.getElementById('modalTitle').textContent = `Add ${selectedMcpType.name}`;
-
-      // Suggest a default name
-      const existingCount = instances.filter(i => i.mcpSlug === slug).length;
-      if (existingCount === 0) {
-        document.getElementById('instanceNameInput').value = selectedMcpType.name;
+      if (availableMcps.length > 0) {
+        availableGrid.innerHTML = availableMcps.map(mcp => renderMcpCard(mcp, false)).join('');
+      } else if (connectedMcps.length === catalogs.length && catalogs.length > 0) {
+        availableGrid.innerHTML = '<p class="empty-state">All MCPs are connected!</p>';
       } else {
-        document.getElementById('instanceNameInput').value = `${selectedMcpType.name} ${existingCount + 1}`;
+        availableGrid.innerHTML = '<p class="empty-state">No MCPs available.</p>';
       }
-
-      document.getElementById('instanceNameInput').focus();
     }
 
-    function startOAuth() {
-      const name = document.getElementById('instanceNameInput').value.trim();
-      if (!name) {
-        alert('Please enter a name for this instance');
-        return;
-      }
-      if (!selectedMcpType) {
-        alert('Please select an MCP type');
-        return;
-      }
+    function selectMcp(slug) {
+      selectedMcp = catalogs.find(c => c.slug === slug);
+      if (!selectedMcp) return;
 
-      // Redirect to OAuth flow with instance name
-      window.location.href = `/connect/${selectedMcpType.slug}?name=${encodeURIComponent(name)}`;
-    }
-
-    function copyUrl(instanceId, btn) {
-      const input = document.getElementById(`url-${instanceId}`);
-      navigator.clipboard.writeText(input.value).then(() => {
-        btn.textContent = 'Copied!';
-        btn.classList.add('copied');
-        setTimeout(() => {
-          btn.textContent = 'Copy';
-          btn.classList.remove('copied');
-        }, 2000);
+      // Update card selection
+      document.querySelectorAll('.mcp-card').forEach(card => {
+        card.classList.toggle('selected', card.dataset.slug === slug);
       });
+
+      // Show config panel
+      document.getElementById('configPanel').classList.remove('hidden');
+
+      // Update config panel content
+      document.getElementById('selectedIcon').innerHTML = selectedMcp.iconUrl
+        ? `<img src="${selectedMcp.iconUrl}" alt="${selectedMcp.name}" style="width:32px;height:32px;">`
+        : getIconForMcp(selectedMcp);
+      document.getElementById('selectedName').textContent = selectedMcp.name;
+      document.getElementById('selectedDescription').textContent = selectedMcp.description;
+
+      // Show warning if not connected
+      const connected = isConnected(selectedMcp.slug);
+      document.getElementById('notConnectedWarning').style.display = connected ? 'none' : 'block';
+
+      // Build MCP URL - mcpUrl can be absolute (https://...) or relative (/mcp)
+      let mcpFullUrl;
+      if (selectedMcp.mcpUrl.startsWith('http://') || selectedMcp.mcpUrl.startsWith('https://')) {
+        // Absolute URL - use as-is
+        mcpFullUrl = selectedMcp.mcpUrl;
+      } else {
+        // Relative path - prepend base URL
+        const mcpPath = selectedMcp.mcpUrl.startsWith('/') ? selectedMcp.mcpUrl : '/' + selectedMcp.mcpUrl;
+        mcpFullUrl = baseUrl + mcpPath;
+      }
+
+      // Connector URL with API key
+      const connectorUrl = mcpFullUrl + '?apiKey=' + encodeURIComponent(currentUser.apiKey);
+      document.getElementById('connectorUrl').value = connectorUrl;
+
+      // Build config snippet
+      const configObj = {
+        "mcpServers": {
+          [selectedMcp.slug]: {
+            "url": mcpFullUrl,
+            "headers": {
+              "Authorization": "Bearer " + currentUser.apiKey
+            }
+          }
+        }
+      };
+      document.getElementById('configSnippet').textContent = JSON.stringify(configObj, null, 2);
     }
 
-    async function renameInstance(instanceId) {
-      const instance = instances.find(i => i.instanceId === instanceId);
-      if (!instance) return;
+    function connectMcp(slug) {
+      window.location.href = `/connect/${slug}`;
+    }
 
-      const newName = prompt('Enter new name:', instance.instanceName);
-      if (!newName || newName.trim() === '' || newName === instance.instanceName) {
+    async function disconnectMcp(slug) {
+      if (!confirm(`Are you sure you want to disconnect ${slug}? You will need to reconnect to use this MCP.`)) {
         return;
       }
 
       try {
-        const response = await fetch(`/api/instances/${instanceId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'same-origin',
-          body: JSON.stringify({ name: newName.trim() }),
-        });
-
-        if (!response.ok) {
-          const data = await response.json();
-          throw new Error(data.error || 'Failed to rename');
-        }
-
-        // Update local state
-        instance.instanceName = newName.trim();
-        document.getElementById(`name-${instanceId}`).textContent = newName.trim();
-        showSuccess('Instance renamed successfully');
-      } catch (err) {
-        showError('Failed to rename instance: ' + err.message);
-      }
-    }
-
-    async function deleteInstance(instanceId, instanceName) {
-      if (!confirm(`Are you sure you want to delete "${instanceName}"? This cannot be undone.`)) {
-        return;
-      }
-
-      try {
-        const response = await fetch(`/api/instances/${instanceId}`, {
-          method: 'DELETE',
+        const response = await fetch(`/api/disconnect/${slug}`, {
+          method: 'POST',
           credentials: 'same-origin',
         });
 
         if (!response.ok) {
-          const data = await response.json();
-          throw new Error(data.error || 'Failed to delete');
+          throw new Error('Failed to disconnect');
         }
 
-        // Remove from local state
-        instances = instances.filter(i => i.instanceId !== instanceId);
-        renderInstances();
-        showSuccess('Instance deleted successfully');
+        // Remove from connections list
+        connections = connections.filter(c => c.mcpSlug !== slug);
+
+        // Re-render
+        renderCatalogGrids();
+
+        // Update selected MCP if it was the disconnected one
+        if (selectedMcp?.slug === slug) {
+          selectMcp(slug);
+        }
+
+        showSuccess(`Disconnected from ${slug}`);
       } catch (err) {
-        showError('Failed to delete instance: ' + err.message);
+        showError('Failed to disconnect. Please try again.');
       }
     }
 
@@ -828,22 +667,23 @@
     function showSuccess(message) {
       const alert = document.getElementById('successAlert');
       alert.textContent = message;
-      alert.classList.remove('hidden');
-      setTimeout(() => alert.classList.add('hidden'), 5000);
+      alert.style.display = 'block';
+      setTimeout(() => alert.style.display = 'none', 5000);
     }
 
     function showError(message) {
       const alert = document.getElementById('error');
       alert.textContent = message;
-      alert.classList.remove('hidden');
+      alert.style.display = 'block';
     }
 
     async function init() {
       try {
         // Check for success message from redirect
         const urlParams = new URLSearchParams(window.location.search);
-        const connectedInstance = urlParams.get('connected');
-        if (connectedInstance) {
+        const connectedMcp = urlParams.get('connected');
+        if (connectedMcp) {
+          // Clean up URL
           window.history.replaceState({}, '', '/dashboard');
         }
 
@@ -857,21 +697,29 @@
 
         currentUser = user;
         catalogs = catalogList;
-        instances = user.connections || [];
+        connections = user.connections || [];
 
         document.getElementById('userInfo').textContent = user.email;
+        document.getElementById('apiKey').value = user.apiKey;
 
-        renderInstances();
+        renderCatalogGrids();
 
         // Show success message if just connected
-        if (connectedInstance) {
-          showSuccess(`Successfully connected "${decodeURIComponent(connectedInstance)}"!`);
+        if (connectedMcp) {
+          showSuccess(`Successfully connected to ${connectedMcp}!`);
         }
 
-        document.getElementById('loading').classList.add('hidden');
-        document.getElementById('content').classList.remove('hidden');
+        // Auto-select first connected MCP if available, otherwise first available
+        const firstConnected = catalogs.find(c => isConnected(c.slug));
+        const firstMcp = firstConnected || catalogs[0];
+        if (firstMcp) {
+          selectMcp(firstMcp.slug);
+        }
+
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('content').style.display = 'block';
       } catch (err) {
-        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('loading').style.display = 'none';
         showError('Failed to load data. Please try signing in again.');
       }
     }
@@ -880,15 +728,88 @@
       try {
         await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
       } catch (err) {}
-      window.location.reload();
+      window.location.href = '/';
     }
 
-    // Close modal when clicking outside
-    document.getElementById('addToolModal').addEventListener('click', function(e) {
-      if (e.target === this) {
-        closeAddToolModal();
+    function copyApiKey() {
+      const apiKey = document.getElementById('apiKey').value;
+      navigator.clipboard.writeText(apiKey).then(() => {
+        const btn = document.getElementById('copyKeyBtn');
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+
+    function copyConnectorUrl() {
+      const url = document.getElementById('connectorUrl').value;
+      navigator.clipboard.writeText(url).then(() => {
+        const btn = document.getElementById('copyUrlBtn');
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy URL';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+
+
+    function copyConfig() {
+      const config = document.getElementById('configSnippet').textContent;
+      navigator.clipboard.writeText(config).then(() => {
+        const btn = document.getElementById('copyConfigBtn');
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+
+    async function regenerateKey() {
+      if (!confirm('This will invalidate your current API key. Any existing integrations will stop working. Continue?')) {
+        return;
       }
-    });
+
+      const btn = document.getElementById('regenBtn');
+      btn.disabled = true;
+      btn.textContent = 'Regenerating...';
+
+      try {
+        const response = await fetch('/api/regenerate-key', {
+          method: 'POST',
+          credentials: 'same-origin'
+        });
+        if (!response.ok) {
+          throw new Error('Failed to regenerate API key');
+        }
+        const data = await response.json();
+
+        // Update user data
+        currentUser.apiKey = data.apiKey;
+        document.getElementById('apiKey').value = data.apiKey;
+
+        // Re-render selected MCP config
+        if (selectedMcp) {
+          selectMcp(selectedMcp.slug);
+        }
+
+        btn.textContent = 'Regenerated!';
+        setTimeout(() => {
+          btn.textContent = 'Regenerate';
+          btn.disabled = false;
+        }, 2000);
+      } catch (err) {
+        alert('Failed to regenerate API key. Please try again.');
+        btn.textContent = 'Regenerate';
+        btn.disabled = false;
+      }
+    }
 
     // Initialize on page load
     init();
