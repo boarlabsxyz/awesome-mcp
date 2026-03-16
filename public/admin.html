@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin - Users</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    .hidden { display: none !important; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #000;
+      color: #ededed;
+      min-height: 100vh;
+    }
+    .page-container {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+      padding: 1rem 0;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(12px);
+      background: rgba(0,0,0,0.8);
+    }
+    .header h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .btn-back {
+      padding: 0.5rem 1rem;
+      background: transparent;
+      color: #888;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+    .btn-back:hover {
+      background: #111;
+      color: #ededed;
+    }
+    .summary {
+      margin-bottom: 1.5rem;
+      padding: 1rem 1.25rem;
+      background: #0a0a0a;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      font-size: 0.95rem;
+      color: #888;
+    }
+    .summary strong {
+      color: #ededed;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #0a0a0a;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    th {
+      background: rgba(255,255,255,0.03);
+      color: #888;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      font-weight: 600;
+    }
+    td {
+      font-size: 0.9rem;
+    }
+    tr:last-child td {
+      border-bottom: none;
+    }
+    .loading {
+      text-align: center;
+      padding: 2rem;
+      color: #888;
+    }
+    .error {
+      background: rgba(220,53,69,0.15);
+      border: 1px solid rgba(220,53,69,0.3);
+      border-radius: 8px;
+      padding: 1rem;
+      color: #dc3545;
+      margin-bottom: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="page-container">
+    <div class="header">
+      <h1>Admin - Users</h1>
+      <div class="header-right">
+        <a href="/dashboard" class="btn-back">Back to Dashboard</a>
+      </div>
+    </div>
+
+    <div id="loading" class="loading">Loading...</div>
+    <div id="error" class="error hidden"></div>
+
+    <div id="content" class="hidden">
+      <div id="summary" class="summary"></div>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Email</th>
+            <th>Name</th>
+            <th>Created At</th>
+            <th>MCP Connections</th>
+          </tr>
+        </thead>
+        <tbody id="usersBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text || '';
+      return div.innerHTML;
+    }
+
+    async function init() {
+      try {
+        const res = await fetch('/api/admin/users', { credentials: 'same-origin' });
+
+        if (res.status === 401) {
+          window.location.href = '/login';
+          return;
+        }
+        if (res.status === 403) {
+          document.getElementById('loading').classList.add('hidden');
+          document.getElementById('error').textContent = 'Access denied. You are not an admin.';
+          document.getElementById('error').classList.remove('hidden');
+          return;
+        }
+        if (!res.ok) {
+          throw new Error('Failed to load users');
+        }
+
+        const data = await res.json();
+        const users = data.users || [];
+
+        document.getElementById('summary').innerHTML =
+          `Total users: <strong>${users.length}</strong>`;
+
+        const tbody = document.getElementById('usersBody');
+        tbody.innerHTML = users.map(u => {
+          const conns = (u.connections || []).map(c =>
+            `${escapeHtml(c.mcpSlug)}${c.googleEmail ? ' (' + escapeHtml(c.googleEmail) + ')' : ''}`
+          ).join('<br>') || '-';
+          return `
+          <tr>
+            <td>${u.id ?? '-'}</td>
+            <td>${escapeHtml(u.email)}</td>
+            <td>${escapeHtml(u.name)}</td>
+            <td>${u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '-'}</td>
+            <td>${conns}</td>
+          </tr>`;
+        }).join('');
+
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('content').classList.remove('hidden');
+      } catch (err) {
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('error').textContent = 'Failed to load data: ' + err.message;
+        document.getElementById('error').classList.remove('hidden');
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

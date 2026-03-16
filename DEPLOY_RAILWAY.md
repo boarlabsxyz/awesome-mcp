@@ -77,6 +77,7 @@ Add these **Authorized redirect URIs** in Google Cloud Console:
 https://your-app.up.railway.app/auth/callback
 https://your-app.up.railway.app/connect/google-docs/callback
 https://your-app.up.railway.app/connect/google-calendar/callback
+https://your-app.up.railway.app/connect/google-sheets/callback
 ```
 
 ### Step 6: Deploy
@@ -109,9 +110,11 @@ Railway Project
     │   ├── /auth/*        → Password auth endpoints
     │   ├── /connect/*     → Per-MCP OAuth flows
     │   ├── /mcp           → Docs MCP (proxy → :3001)
-    │   └── /calendar      → Calendar MCP (proxy → :3002)
+    │   ├── /calendar      → Calendar MCP (proxy → :3002)
+    │   └── /sheets        → Sheets MCP (proxy → :3003)
     ├── Docs MCP Server (internal :3001)
-    └── Calendar MCP Server (internal :3002)
+    ├── Calendar MCP Server (internal :3002)
+    └── Sheets MCP Server (internal :3003)
 ```
 
 ---
@@ -127,10 +130,11 @@ Separate Railway services for website and each MCP. Useful for:
 
 1. Create Railway project
 2. Add PostgreSQL and Redis (shared)
-3. Create 3 services:
+3. Create 4 services:
    - `website` - Web UI + OAuth
    - `google-docs-mcp` - Docs MCP only
    - `google-calendar-mcp` - Calendar MCP only
+   - `google-sheets-mcp` - Sheets MCP only
 
 ### Step 2: Configure Website Service
 
@@ -177,7 +181,22 @@ TRANSPORT=httpStream
 NODE_ENV=production
 ```
 
-### Step 5: Google Cloud OAuth Setup
+### Step 5: Configure Google Sheets MCP Service
+
+**Variables:**
+```
+MCP_MODE=mcp
+MCP_SLUG=google-sheets
+BASE_URL=https://google-sheets-mcp.up.railway.app
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+REDIS_URL=${{Redis.REDIS_URL}}
+GOOGLE_CLIENT_ID=sheets-specific-client-id
+GOOGLE_CLIENT_SECRET=sheets-specific-secret
+TRANSPORT=httpStream
+NODE_ENV=production
+```
+
+### Step 6: Google Cloud OAuth Setup
 
 For multi-service deployment, you have two options:
 
@@ -202,7 +221,6 @@ Each MCP gets its own Google Cloud project with minimal scopes. This provides:
 In your Docs project, go to **APIs & Services** → **Library** and enable:
 - Google Docs API
 - Google Drive API
-- Google Sheets API
 
 **Step A3: Configure OAuth Consent Screen for Docs**
 
@@ -215,7 +233,6 @@ https://www.googleapis.com/auth/userinfo.email
 https://www.googleapis.com/auth/userinfo.profile
 https://www.googleapis.com/auth/documents
 https://www.googleapis.com/auth/drive
-https://www.googleapis.com/auth/spreadsheets
 ```
 5. Add test users (your email)
 
@@ -249,7 +266,25 @@ https://www.googleapis.com/auth/calendar.events
 https://YOUR-WEBSITE.up.railway.app/connect/google-calendar/callback
 ```
 
-**Step A6: Configure Railway Services**
+**Step A7: Create Google Sheets MCP Project**
+
+Repeat steps A1-A4 for Sheets:
+
+1. Create new project: `Google Sheets MCP`
+2. Enable APIs: **Google Sheets API**, **Google Drive API**
+3. Configure OAuth consent screen with scopes:
+```
+https://www.googleapis.com/auth/userinfo.email
+https://www.googleapis.com/auth/userinfo.profile
+https://www.googleapis.com/auth/spreadsheets
+https://www.googleapis.com/auth/drive
+```
+4. Create OAuth client with redirect URI:
+```
+https://YOUR-WEBSITE.up.railway.app/connect/google-sheets/callback
+```
+
+**Step A8: Configure Railway Services**
 
 Now use the credentials from each project:
 
@@ -263,6 +298,12 @@ GOOGLE_CLIENT_SECRET=YOUR_DOCS_PROJECT_CLIENT_SECRET
 ```
 GOOGLE_CLIENT_ID=YOUR_CALENDAR_PROJECT_CLIENT_ID
 GOOGLE_CLIENT_SECRET=YOUR_CALENDAR_PROJECT_CLIENT_SECRET
+```
+
+**Google Sheets MCP Service:**
+```
+GOOGLE_CLIENT_ID=YOUR_SHEETS_PROJECT_CLIENT_ID
+GOOGLE_CLIENT_SECRET=YOUR_SHEETS_PROJECT_CLIENT_SECRET
 ```
 
 **Website Service** (uses any project's credentials for initial login):
@@ -290,6 +331,7 @@ For the **Website Service** (handles all OAuth flows):
 https://website.up.railway.app/auth/callback
 https://website.up.railway.app/connect/google-docs/callback
 https://website.up.railway.app/connect/google-calendar/callback
+https://website.up.railway.app/connect/google-sheets/callback
 ```
 
 ### Architecture (Multi-Service)
@@ -304,7 +346,9 @@ Railway Project
 │   └── Per-MCP OAuth flows
 ├── Google Docs MCP Service
 │   └── /mcp endpoint (validates user connected this MCP)
-└── Google Calendar MCP Service
+├── Google Calendar MCP Service
+│   └── /mcp endpoint (validates user connected this MCP)
+└── Google Sheets MCP Service
     └── /mcp endpoint (validates user connected this MCP)
 ```
 
@@ -315,8 +359,9 @@ Railway Project
 1. **Visit website** → `https://your-app.up.railway.app`
 2. **Register** with email/password (or Google)
 3. **Dashboard** shows available MCPs
-4. **Click "Connect"** on Google Docs → Google OAuth (only docs/drive/sheets scopes)
+4. **Click "Connect"** on Google Docs → Google OAuth (only docs/drive scopes)
 5. **Click "Connect"** on Google Calendar → Google OAuth (only calendar scopes)
+5. **Click "Connect"** on Google Sheets → Google OAuth (only spreadsheets/drive scopes)
 6. **Add to Claude.ai:**
    - Settings → Connectors → Add custom connector
    - URL: `https://your-app.up.railway.app/mcp?apiKey=YOUR_API_KEY`
@@ -340,10 +385,13 @@ In your project, go to **APIs & Services** → **Library** and enable:
 **For Google Docs MCP:**
 - Google Docs API
 - Google Drive API
-- Google Sheets API
 
 **For Google Calendar MCP:**
 - Google Calendar API
+
+**For Google Sheets MCP:**
+- Google Sheets API
+- Google Drive API
 
 ### Step 3: Configure OAuth Consent Screen
 
@@ -366,7 +414,6 @@ https://www.googleapis.com/auth/userinfo.email
 https://www.googleapis.com/auth/userinfo.profile
 https://www.googleapis.com/auth/documents
 https://www.googleapis.com/auth/drive
-https://www.googleapis.com/auth/spreadsheets
 ```
 
 **For Google Calendar MCP:**
@@ -375,6 +422,14 @@ https://www.googleapis.com/auth/userinfo.email
 https://www.googleapis.com/auth/userinfo.profile
 https://www.googleapis.com/auth/calendar
 https://www.googleapis.com/auth/calendar.events
+```
+
+**For Google Sheets MCP:**
+```
+https://www.googleapis.com/auth/userinfo.email
+https://www.googleapis.com/auth/userinfo.profile
+https://www.googleapis.com/auth/spreadsheets
+https://www.googleapis.com/auth/drive
 ```
 
 3. Click **Save and Continue**
@@ -399,6 +454,7 @@ https://www.googleapis.com/auth/calendar.events
 https://YOUR-RAILWAY-APP.up.railway.app/auth/callback
 https://YOUR-RAILWAY-APP.up.railway.app/connect/google-docs/callback
 https://YOUR-RAILWAY-APP.up.railway.app/connect/google-calendar/callback
+https://YOUR-RAILWAY-APP.up.railway.app/connect/google-sheets/callback
 ```
 
 **For local development, also add:**
@@ -406,6 +462,7 @@ https://YOUR-RAILWAY-APP.up.railway.app/connect/google-calendar/callback
 http://localhost:8080/auth/callback
 http://localhost:8080/connect/google-docs/callback
 http://localhost:8080/connect/google-calendar/callback
+http://localhost:8080/connect/google-sheets/callback
 ```
 
 6. Click **Create**
@@ -446,14 +503,19 @@ While in "Testing" mode, only users you manually add can authenticate. To allow 
 For maximum scope isolation, create separate Google Cloud projects:
 
 **Project 1: Google Docs MCP**
-- Enable: Docs API, Drive API, Sheets API
-- Consent screen scopes: Only docs/drive/sheets
+- Enable: Docs API, Drive API
+- Consent screen scopes: Only docs/drive
 - OAuth client → Set as `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` for Docs MCP
 
 **Project 2: Google Calendar MCP**
 - Enable: Calendar API
 - Consent screen scopes: Only calendar
 - OAuth client → Set as separate credentials for Calendar MCP
+
+**Project 3: Google Sheets MCP**
+- Enable: Sheets API, Drive API
+- Consent screen scopes: Only spreadsheets/drive
+- OAuth client → Set as separate credentials for Sheets MCP
 
 ---
 
@@ -485,7 +547,7 @@ For maximum scope isolation, create separate Google Cloud projects:
 | Variable | Description |
 |----------|-------------|
 | `MCP_MODE` | `web` (website only), `mcp` (MCP only), or `all` (default) |
-| `MCP_SLUG` | For `MCP_MODE=mcp`: `google-docs` or `google-calendar` |
+| `MCP_SLUG` | For `MCP_MODE=mcp`: `google-docs`, `google-calendar`, or `google-sheets` |
 
 ---
 
@@ -500,6 +562,7 @@ For maximum scope isolation, create separate Google Cloud projects:
   - `/auth/callback` (legacy Google login)
   - `/connect/google-docs/callback`
   - `/connect/google-calendar/callback`
+  - `/connect/google-sheets/callback`
 
 ### Database connection failed
 - Verify PostgreSQL addon is attached

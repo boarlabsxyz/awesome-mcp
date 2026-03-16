@@ -14,4 +14,4 @@ ENV BASE_URL=http://localhost:8080
 ENV DATA_DIR=/app/data
 
 EXPOSE 8080
-CMD ["node", "dist/server.js"]
+CMD ["node", "dist/google-docs/server.js"]

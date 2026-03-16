@@ -249,28 +249,38 @@ export async function seedDefaultCatalogs(): Promise<void> {
 
   const googleDocsMcpUrl = normalizeUrl(process.env.GOOGLE_DOCS_MCP_URL, '/mcp');
   const googleCalendarMcpUrl = normalizeUrl(process.env.GOOGLE_CALENDAR_MCP_URL, '/calendar');
+  const googleSheetsMcpUrl = normalizeUrl(process.env.GOOGLE_SHEETS_MCP_URL, '/sheets');
 
-  console.error(`MCP URLs: google-docs=${googleDocsMcpUrl}, google-calendar=${googleCalendarMcpUrl}`);
+  // Per-MCP Google credentials allow each MCP to use its own Google Cloud project.
+  // If set, these are stored in the catalog so all services (website, MCP, REST API)
+  // use the same OAuth client for token operations.
+  const googleDocsClientId = process.env.GOOGLE_DOCS_CLIENT_ID || null;
+  const googleDocsClientSecret = process.env.GOOGLE_DOCS_CLIENT_SECRET || null;
+  const googleCalendarClientId = process.env.GOOGLE_CALENDAR_CLIENT_ID || null;
+  const googleCalendarClientSecret = process.env.GOOGLE_CALENDAR_CLIENT_SECRET || null;
+  const googleSheetsClientId = process.env.GOOGLE_SHEETS_CLIENT_ID || null;
+  const googleSheetsClientSecret = process.env.GOOGLE_SHEETS_CLIENT_SECRET || null;
+
+  console.error(`MCP URLs: google-docs=${googleDocsMcpUrl}, google-calendar=${googleCalendarMcpUrl}, google-sheets=${googleSheetsMcpUrl}`);
+  console.error(`MCP credentials: google-docs=${googleDocsClientId ? 'env' : 'global'}, google-calendar=${googleCalendarClientId ? 'env' : 'global'}, google-sheets=${googleSheetsClientId ? 'env' : 'global'}`);
 
   await createMcpCatalog({
     slug: 'google-docs',
     name: 'Google Docs MCP',
-    description: 'Read, write, and manage Google Docs, Sheets, and Drive',
-    iconUrl: null,
+    description: 'Read, write, and manage Google Docs and Drive',
+    iconUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/Google_Docs_2020_Logo.svg/960px-Google_Docs_2020_Logo.svg.png',
     mcpUrl: googleDocsMcpUrl,
     scopes: [
       'https://www.googleapis.com/auth/documents',
       'https://www.googleapis.com/auth/drive',
-      'https://www.googleapis.com/auth/spreadsheets',
     ],
-    googleClientId: null,
-    googleClientSecret: null,
+    googleClientId: googleDocsClientId,
+    googleClientSecret: googleDocsClientSecret,
     oauthScopes: [
       'https://www.googleapis.com/auth/userinfo.email',
       'https://www.googleapis.com/auth/userinfo.profile',
       'https://www.googleapis.com/auth/documents',
       'https://www.googleapis.com/auth/drive',
-      'https://www.googleapis.com/auth/spreadsheets',
     ],
     isLocal: process.env.GOOGLE_DOCS_MCP_URL ? false : true,
     isActive: true,
@@ -286,8 +296,8 @@ export async function seedDefaultCatalogs(): Promise<void> {
       'https://www.googleapis.com/auth/calendar',
       'https://www.googleapis.com/auth/calendar.events',
     ],
-    googleClientId: null,
-    googleClientSecret: null,
+    googleClientId: googleCalendarClientId,
+    googleClientSecret: googleCalendarClientSecret,
     oauthScopes: [
       'https://www.googleapis.com/auth/userinfo.email',
       'https://www.googleapis.com/auth/userinfo.profile',
@@ -295,6 +305,28 @@ export async function seedDefaultCatalogs(): Promise<void> {
       'https://www.googleapis.com/auth/calendar.events',
     ],
     isLocal: process.env.GOOGLE_CALENDAR_MCP_URL ? false : true,
+    isActive: true,
+  });
+
+  await createMcpCatalog({
+    slug: 'google-sheets',
+    name: 'Google Sheets MCP',
+    description: 'Read, write, and manage Google Spreadsheets',
+    iconUrl: 'https://www.torontomu.ca/content/dam/google/teach-with-google-apps/sign-up-sheets/sign-up-sheets-1.png',
+    mcpUrl: googleSheetsMcpUrl,
+    scopes: [
+      'https://www.googleapis.com/auth/spreadsheets',
+      'https://www.googleapis.com/auth/drive',
+    ],
+    googleClientId: googleSheetsClientId,
+    googleClientSecret: googleSheetsClientSecret,
+    oauthScopes: [
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/userinfo.profile',
+      'https://www.googleapis.com/auth/spreadsheets',
+      'https://www.googleapis.com/auth/drive',
+    ],
+    isLocal: process.env.GOOGLE_SHEETS_MCP_URL ? false : true,
     isActive: true,
   });
 

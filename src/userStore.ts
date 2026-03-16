@@ -335,6 +335,29 @@ async function dbUpdateTokens(apiKey: string, tokens: Partial<UserTokens>): Prom
   await pool.query('UPDATE users SET updated_at = NOW() WHERE api_key = $1', [apiKey]);
 }
 
+// ---------- Get All Users ----------
+
+function fileGetAllUsers(): UserProfile[] {
+  return Object.values(users).map(({ tokens, ...profile }) => profile);
+}
+
+async function dbGetAllUsers(): Promise<UserProfile[]> {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    'SELECT id, api_key, email, google_id, name, auth_method, created_at, updated_at FROM users ORDER BY created_at DESC'
+  );
+  return rows.map((row: any) => ({
+    id: row.id,
+    apiKey: row.api_key,
+    email: row.email,
+    googleId: row.google_id,
+    name: row.name,
+    authMethod: row.auth_method || 'google',
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  }));
+}
+
 // ---------- Public API ----------
 
 export function generateApiKey(): string {
@@ -347,6 +370,14 @@ export async function loadUsers(): Promise<void> {
     return;
   }
   await fileLoadUsers();
+}
+
+export async function getAllUsers(): Promise<UserProfile[]> {
+  if (isDatabaseAvailable()) {
+    return dbGetAllUsers();
+  }
+  await fileLoadUsers();
+  return fileGetAllUsers();
 }
 
 export async function getUserByApiKey(apiKey: string): Promise<UserRecord | undefined> {

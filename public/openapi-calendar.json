@@ -1,0 +1,743 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Google Calendar MCP REST API",
+    "description": "REST API for managing Google Calendar events. For use with ChatGPT Custom Actions.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://your-server-url.com",
+      "description": "Production server (update with your actual URL)"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/calendars": {
+      "get": {
+        "operationId": "listCalendars",
+        "summary": "List all calendars",
+        "description": "Lists all calendars accessible to the authenticated user.",
+        "parameters": [
+          {
+            "name": "showHidden",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Whether to show hidden calendars"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Calendars retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "calendars": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Calendar"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calendars/{calendarId}/events": {
+      "get": {
+        "operationId": "listEvents",
+        "summary": "List events from a calendar",
+        "description": "Lists events from a specified calendar within an optional date range.",
+        "parameters": [
+          {
+            "name": "calendarId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The calendar ID (use 'primary' for the user's primary calendar)"
+          },
+          {
+            "name": "timeMin",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Start of the time range (ISO 8601). Defaults to now."
+          },
+          {
+            "name": "timeMax",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "End of the time range (ISO 8601). Defaults to 30 days from now."
+          },
+          {
+            "name": "maxResults",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 2500
+            },
+            "description": "Maximum number of events to return"
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Free text search terms to find matching events"
+          },
+          {
+            "name": "singleEvents",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true
+            },
+            "description": "Whether to expand recurring events into instances"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Events retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "calendarId": {
+                      "type": "string"
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Event"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Calendar not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createEvent",
+        "summary": "Create a calendar event",
+        "description": "Creates a new event in the specified calendar.",
+        "parameters": [
+          {
+            "name": "calendarId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The calendar ID (use 'primary' for the user's primary calendar)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["summary", "startDateTime", "endDateTime"],
+                "properties": {
+                  "summary": {
+                    "type": "string",
+                    "description": "The title of the event"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Description or notes for the event"
+                  },
+                  "location": {
+                    "type": "string",
+                    "description": "Geographic location of the event"
+                  },
+                  "startDateTime": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Start time in ISO 8601 format (e.g., '2024-01-15T10:00:00-05:00')"
+                  },
+                  "endDateTime": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "End time in ISO 8601 format (e.g., '2024-01-15T11:00:00-05:00')"
+                  },
+                  "timeZone": {
+                    "type": "string",
+                    "description": "Time zone (e.g., 'America/New_York'). Defaults to calendar's time zone."
+                  },
+                  "attendees": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "email"
+                    },
+                    "description": "List of attendee email addresses"
+                  },
+                  "sendUpdates": {
+                    "type": "string",
+                    "enum": ["all", "externalOnly", "none"],
+                    "default": "none",
+                    "description": "Whether to send email notifications to attendees"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Event created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing required fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calendars/{calendarId}/events/{eventId}": {
+      "get": {
+        "operationId": "getEvent",
+        "summary": "Get event details",
+        "description": "Gets detailed information about a specific calendar event.",
+        "parameters": [
+          {
+            "name": "calendarId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The calendar ID"
+          },
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The event ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Event not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateEvent",
+        "summary": "Update a calendar event",
+        "description": "Updates an existing calendar event. Only provided fields are changed; omitted fields are preserved.",
+        "parameters": [
+          {
+            "name": "calendarId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The calendar ID"
+          },
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The event ID to update"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string",
+                    "description": "New title for the event"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "New description for the event"
+                  },
+                  "location": {
+                    "type": "string",
+                    "description": "New location for the event"
+                  },
+                  "startDateTime": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "New start time in ISO 8601 format"
+                  },
+                  "endDateTime": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "New end time in ISO 8601 format"
+                  },
+                  "timeZone": {
+                    "type": "string",
+                    "description": "Time zone for the start/end times"
+                  },
+                  "sendUpdates": {
+                    "type": "string",
+                    "enum": ["all", "externalOnly", "none"],
+                    "default": "none",
+                    "description": "Whether to send email notifications to attendees"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Event updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Event not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteEvent",
+        "summary": "Delete a calendar event",
+        "description": "Deletes a calendar event.",
+        "parameters": [
+          {
+            "name": "calendarId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The calendar ID"
+          },
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The event ID to delete"
+          },
+          {
+            "name": "sendUpdates",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["all", "externalOnly", "none"],
+              "default": "none"
+            },
+            "description": "Whether to send email notifications to attendees"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event deleted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Event not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key obtained from the registration dashboard"
+      }
+    },
+    "schemas": {
+      "Calendar": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the calendar"
+          },
+          "summary": {
+            "type": "string",
+            "description": "Title of the calendar"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "description": "Description of the calendar"
+          },
+          "primary": {
+            "type": "boolean",
+            "description": "Whether this is the user's primary calendar"
+          },
+          "accessRole": {
+            "type": "string",
+            "description": "The effective access role (owner, writer, reader, freeBusyReader)"
+          }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the event"
+          },
+          "summary": {
+            "type": "string",
+            "description": "Title of the event"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "description": "Description of the event"
+          },
+          "location": {
+            "type": "string",
+            "nullable": true,
+            "description": "Geographic location of the event"
+          },
+          "start": {
+            "type": "string",
+            "description": "Start time (ISO 8601 dateTime or date for all-day events)"
+          },
+          "end": {
+            "type": "string",
+            "description": "End time (ISO 8601 dateTime or date for all-day events)"
+          },
+          "status": {
+            "type": "string",
+            "description": "Status of the event (confirmed, tentative, cancelled)"
+          },
+          "htmlLink": {
+            "type": "string",
+            "nullable": true,
+            "description": "URL link to the event in Google Calendar"
+          },
+          "creator": {
+            "type": "string",
+            "nullable": true,
+            "description": "Email of the event creator"
+          },
+          "organizer": {
+            "type": "string",
+            "nullable": true,
+            "description": "Email of the event organizer"
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attendee"
+            },
+            "description": "List of event attendees"
+          },
+          "recurrence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "description": "Recurrence rules (RRULE format)"
+          }
+        }
+      },
+      "Attendee": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address of the attendee"
+          },
+          "responseStatus": {
+            "type": "string",
+            "description": "Attendance response (needsAction, declined, tentative, accepted)"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Error message"
+          }
+        }
+      }
+    }
+  }
+}

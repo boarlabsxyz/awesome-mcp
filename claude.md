@@ -36,9 +36,14 @@ FastMCP server with 42 tools for Google Docs, Sheets, and Drive.
 | File | Contains |
 |------|----------|
 | `src/types.ts` | Zod schemas, hex color validation, style parameter definitions |
-| `src/googleDocsApiHelpers.ts` | `findTextRange`, `executeBatchUpdate`, style request builders |
-| `src/googleSheetsApiHelpers.ts` | A1 notation parsing, range operations |
-| `src/server.ts` | All 42 tool definitions with full parameter schemas |
+| `src/google-docs/apiHelpers.ts` | `findTextRange`, `executeBatchUpdate`, style request builders |
+| `src/google-docs/server.ts` | Google Docs tool definitions, main entry point |
+| `src/google-sheets/apiHelpers.ts` | A1 notation parsing, range operations |
+| `src/google-sheets/server.ts` | Google Sheets tool definitions |
+| `src/google-calendar/server.ts` | Google Calendar tool definitions |
+| `src/website/webServer.ts` | Express app, proxy routes, registration/OAuth pages |
+| `src/website/oauthServer.ts` | MCP OAuth 2.1 authorization server |
+| `src/website/sessionStore.ts` | Session management (cookie/Redis) |
 
 ## See Also
 

@@ -4,13 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>awesome MCP - Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     .hidden { display: none !important; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #f5f5f5;
-      color: #333;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #000;
+      color: #ededed;
       min-height: 100vh;
     }
     .page-container {
@@ -23,11 +26,18 @@
       justify-content: space-between;
       align-items: center;
       margin-bottom: 2rem;
-      padding-bottom: 1rem;
-      border-bottom: 1px solid #ddd;
+      padding: 1rem 0;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(12px);
+      background: rgba(0,0,0,0.8);
     }
     .header h1 {
       font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
     }
     .header-right {
       display: flex;
@@ -38,22 +48,22 @@
       display: flex;
       align-items: center;
       gap: 0.5rem;
-      color: #666;
+      color: #888;
       font-size: 0.9rem;
     }
     .btn-logout {
       padding: 0.5rem 1rem;
       background: transparent;
-      color: #666;
-      border: 1px solid #ddd;
+      color: #888;
+      border: 1px solid rgba(255,255,255,0.15);
       border-radius: 6px;
       cursor: pointer;
       font-size: 0.85rem;
       transition: all 0.2s;
     }
     .btn-logout:hover {
-      background: #f5f5f5;
-      color: #333;
+      background: #111;
+      color: #ededed;
     }
 
     /* Alert styles */
@@ -64,14 +74,14 @@
       font-size: 0.9rem;
     }
     .alert-success {
-      background: #d4edda;
-      color: #155724;
-      border: 1px solid #c3e6cb;
+      background: rgba(52,168,83,0.15);
+      color: #34a853;
+      border: 1px solid rgba(52,168,83,0.3);
     }
     .alert-error {
-      background: #f8d7da;
-      color: #721c24;
-      border: 1px solid #f5c6cb;
+      background: rgba(220,53,69,0.15);
+      color: #dc3545;
+      border: 1px solid rgba(220,53,69,0.3);
     }
 
     /* Section styles */
@@ -86,16 +96,16 @@
     }
     .section-header h2 {
       font-size: 1.1rem;
-      color: #666;
+      color: #888;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: -0.02em;
     }
     .btn-add {
       display: flex;
       align-items: center;
       gap: 0.5rem;
       padding: 0.6rem 1rem;
-      background: #4285f4;
+      background: #0070f3;
       color: #fff;
       border: none;
       border-radius: 6px;
@@ -105,7 +115,7 @@
       transition: background 0.2s;
     }
     .btn-add:hover {
-      background: #3367d6;
+      background: #005bb5;
     }
 
     /* Instance Grid */
@@ -115,14 +125,15 @@
       gap: 1rem;
     }
     .instance-card {
-      background: #fff;
+      background: #0a0a0a;
       border-radius: 12px;
       padding: 1.5rem;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-      border: 2px solid transparent;
+      box-shadow: none;
+      border: 1px solid rgba(255,255,255,0.1);
+      transition: all 0.2s;
     }
     .instance-card:hover {
-      box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+      box-shadow: 0 4px 16px rgba(255,255,255,0.05);
     }
     .instance-card-header {
       display: flex;
@@ -133,7 +144,7 @@
     .instance-icon {
       width: 48px;
       height: 48px;
-      background: #f0f4ff;
+      background: rgba(255,255,255,0.06);
       border-radius: 12px;
       display: flex;
       align-items: center;
@@ -163,30 +174,35 @@
       font-size: 1rem;
       font-weight: 600;
       padding: 0.25rem 0.5rem;
-      border: 1px solid #ddd;
+      border: 1px solid rgba(255,255,255,0.15);
       border-radius: 4px;
+      background: #111;
+      color: #ededed;
     }
     .instance-type {
       font-size: 0.8rem;
-      color: #888;
+      color: #666;
       text-transform: uppercase;
       letter-spacing: 0.03em;
     }
     .instance-email {
       font-size: 0.85rem;
-      color: #666;
+      color: #888;
       margin-top: 0.25rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .instance-url-section {
       margin-top: 1rem;
       padding-top: 1rem;
-      border-top: 1px solid #eee;
+      border-top: 1px solid rgba(255,255,255,0.1);
     }
     .instance-url-label {
       font-size: 0.75rem;
       text-transform: uppercase;
-      color: #888;
+      color: #666;
       margin-bottom: 0.5rem;
       letter-spacing: 0.03em;
     }
@@ -197,15 +213,16 @@
     .instance-url-input {
       flex: 1;
       padding: 0.6rem;
-      border: 1px solid #ddd;
+      border: 1px solid rgba(255,255,255,0.15);
       border-radius: 6px;
       font-family: monospace;
       font-size: 0.8rem;
-      background: #f8f9fa;
+      background: #111;
+      color: #ededed;
     }
     .btn-copy {
       padding: 0.6rem 1rem;
-      background: #4285f4;
+      background: #0070f3;
       color: #fff;
       border: none;
       border-radius: 6px;
@@ -213,7 +230,7 @@
       font-size: 0.8rem;
       white-space: nowrap;
     }
-    .btn-copy:hover { background: #3367d6; }
+    .btn-copy:hover { background: #005bb5; }
     .btn-copy.copied { background: #34a853; }
 
     .instance-actions {
@@ -223,21 +240,21 @@
     }
     .btn-rename {
       padding: 0.5rem 0.75rem;
-      background: #fff;
-      color: #666;
-      border: 1px solid #ddd;
+      background: transparent;
+      color: #888;
+      border: 1px solid rgba(255,255,255,0.15);
       border-radius: 6px;
       cursor: pointer;
       font-size: 0.8rem;
       transition: all 0.2s;
     }
     .btn-rename:hover {
-      background: #f5f5f5;
-      color: #333;
+      background: #111;
+      color: #ededed;
     }
     .btn-delete {
       padding: 0.5rem 0.75rem;
-      background: #fff;
+      background: transparent;
       color: #dc3545;
       border: 1px solid #dc3545;
       border-radius: 6px;
@@ -257,14 +274,15 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0,0,0,0.5);
+      background: rgba(0,0,0,0.7);
       display: flex;
       align-items: center;
       justify-content: center;
       z-index: 1000;
     }
     .modal {
-      background: #fff;
+      background: #0a0a0a;
+      border: 1px solid rgba(255,255,255,0.1);
       border-radius: 12px;
       padding: 2rem;
       width: 90%;
@@ -281,13 +299,14 @@
     }
     .modal-header h3 {
       font-size: 1.2rem;
+      letter-spacing: -0.02em;
     }
     .btn-close {
       background: none;
       border: none;
       font-size: 1.5rem;
       cursor: pointer;
-      color: #666;
+      color: #888;
     }
     .modal-step {
       display: none;
@@ -309,19 +328,19 @@
       align-items: center;
       gap: 1rem;
       padding: 1rem;
-      border: 1px solid #ddd;
+      border: 1px solid rgba(255,255,255,0.1);
       border-radius: 8px;
       cursor: pointer;
       transition: all 0.2s;
     }
     .mcp-type-item:hover {
-      border-color: #4285f4;
-      background: #f0f4ff;
+      border-color: #0070f3;
+      background: rgba(0,112,243,0.1);
     }
     .mcp-type-icon {
       width: 40px;
       height: 40px;
-      background: #f0f4ff;
+      background: rgba(255,255,255,0.06);
       border-radius: 8px;
       display: flex;
       align-items: center;
@@ -338,7 +357,7 @@
     }
     .mcp-type-info p {
       font-size: 0.8rem;
-      color: #666;
+      color: #888;
     }
 
     /* Name Input Step */
@@ -348,29 +367,31 @@
     .name-input-section label {
       display: block;
       font-size: 0.85rem;
-      color: #666;
+      color: #888;
       margin-bottom: 0.5rem;
     }
     .name-input-section input {
       width: 100%;
       padding: 0.75rem;
-      border: 1px solid #ddd;
+      border: 1px solid rgba(255,255,255,0.15);
       border-radius: 6px;
       font-size: 1rem;
+      background: #111;
+      color: #ededed;
     }
     .name-input-section input:focus {
       outline: none;
-      border-color: #4285f4;
+      border-color: #0070f3;
     }
     .name-suggestion {
       font-size: 0.8rem;
-      color: #888;
+      color: #666;
       margin-top: 0.5rem;
     }
     .btn-connect-google {
       width: 100%;
       padding: 0.75rem;
-      background: #4285f4;
+      background: #0070f3;
       color: #fff;
       border: none;
       border-radius: 6px;
@@ -383,10 +404,10 @@
       gap: 0.5rem;
     }
     .btn-connect-google:hover {
-      background: #3367d6;
+      background: #005bb5;
     }
     .btn-connect-google:disabled {
-      background: #ccc;
+      background: #333;
       cursor: not-allowed;
     }
 
@@ -394,10 +415,10 @@
     .empty-state {
       text-align: center;
       padding: 3rem;
-      color: #666;
-      background: #fff;
+      color: #888;
+      background: #0a0a0a;
       border-radius: 12px;
-      border: 2px dashed #ddd;
+      border: 2px dashed rgba(255,255,255,0.15);
     }
     .empty-state p {
       margin-bottom: 1rem;
@@ -406,14 +427,14 @@
     .loading {
       text-align: center;
       padding: 2rem;
-      color: #666;
+      color: #888;
     }
     .error {
-      background: #f8d7da;
-      border: 1px solid #f5c6cb;
+      background: rgba(220,53,69,0.15);
+      border: 1px solid rgba(220,53,69,0.3);
       border-radius: 8px;
       padding: 1rem;
-      color: #721c24;
+      color: #dc3545;
       margin-bottom: 1rem;
     }
 
@@ -424,17 +445,18 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(245,245,245,0.95);
+      background: rgba(0,0,0,0.95);
       display: flex;
       align-items: center;
       justify-content: center;
       z-index: 2000;
     }
     .login-card {
-      background: #fff;
+      background: #0a0a0a;
+      border: 1px solid rgba(255,255,255,0.1);
       border-radius: 12px;
       padding: 2.5rem;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      box-shadow: 0 2px 12px rgba(0,0,0,0.3);
       text-align: center;
       max-width: 420px;
       width: 90%;
@@ -442,9 +464,10 @@
     .login-card h2 {
       font-size: 1.5rem;
       margin-bottom: 0.5rem;
+      letter-spacing: -0.02em;
     }
     .login-card .login-subtitle {
-      color: #666;
+      color: #888;
       margin-bottom: 2rem;
       line-height: 1.5;
     }
@@ -476,7 +499,7 @@
     .login-footer {
       margin-top: 1.5rem;
       font-size: 0.8rem;
-      color: #aaa;
+      color: #666;
     }
   </style>
 </head>
