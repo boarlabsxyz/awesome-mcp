@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test tests/",
+    "test:coverage": "c8 --reporter=lcov --reporter=text node --test tests/",
     "build": "tsc"
   },
   "keywords": [],
@@ -30,6 +31,7 @@
     "@types/express": "^5.0.6",
     "@types/node": "^22.14.1",
     "@types/pg": "^8.16.0",
+    "c8": "^11.0.0",
     "tsx": "^4.19.3",
     "typescript": "^5.8.3"
   }
