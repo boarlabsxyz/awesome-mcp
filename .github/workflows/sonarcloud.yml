@@ -19,9 +19,10 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install & test
+      - name: Install, build & test
         run: |
           npm ci
+          npm run build
           npm run test:coverage
 
       - name: SonarCloud scan
