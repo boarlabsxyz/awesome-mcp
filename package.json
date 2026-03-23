@@ -7,9 +7,9 @@
     "build": "tsc",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test tests/*.test.js src/__tests__/*.test.ts",
-    "test:watch": "node --import tsx --test --watch tests/*.test.js src/__tests__/*.test.ts",
-    "test:coverage": "c8 --reporter=lcov --reporter=text node --import tsx --test tests/*.test.js src/__tests__/*.test.ts"
+    "test": "node --import tsx --test tests/*.test.js $(find src -name '*.test.ts')",
+    "test:watch": "node --import tsx --test --watch tests/*.test.js $(find src -name '*.test.ts')",
+    "test:coverage": "c8 --reporter=lcov --reporter=text node --import tsx --test tests/*.test.js $(find src -name '*.test.ts')"
   },
   "keywords": [],
   "author": "",
