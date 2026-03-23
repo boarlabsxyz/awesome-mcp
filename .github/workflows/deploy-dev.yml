@@ -30,9 +30,14 @@ jobs:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_DEV }}
       - name: Notify Slack
         if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DEPLOY_STATUS: ${{ job.status }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          APP_URL: ${{ vars.DEV_APP_URL }}
         run: |
-          STATUS="${{ job.status }}"
-          curl -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+          PAYLOAD=$(jq -n --arg text "Deploy → Dev: ${DEPLOY_STATUS} — ${COMMIT_MESSAGE} (${APP_URL})" '{text: $text}')
+          curl -X POST "${SLACK_WEBHOOK_URL}" \
             -H 'Content-type: application/json' \
-            -d "{\"text\":\"Deploy → Dev: ${STATUS} — ${{ github.event.head_commit.message }} (${{ vars.DEV_APP_URL }})\"}" \
+            -d "${PAYLOAD}" \
             || true
