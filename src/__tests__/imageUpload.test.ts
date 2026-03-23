@@ -11,15 +11,15 @@ function makeMockDrive(overrides: {
 } = {}) {
   return {
     files: {
-      create: async (opts: any) => overrides.createResult ?? {
+      create: async (_opts: any) => overrides.createResult ?? {
         data: { id: 'file-123', webContentLink: 'https://drive.google.com/uc?id=file-123' }
       },
-      get: async (opts: any) => overrides.filesGetResult ?? {
+      get: async (_opts: any) => overrides.filesGetResult ?? {
         data: { webContentLink: 'https://drive.google.com/uc?id=file-123' }
       },
     },
     permissions: {
-      create: async (opts: any) => overrides.permissionsCreateResult ?? { data: {} },
+      create: async (_opts: any) => overrides.permissionsCreateResult ?? { data: {} },
     },
   };
 }
