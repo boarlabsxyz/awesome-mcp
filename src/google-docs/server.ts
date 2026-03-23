@@ -1139,13 +1139,7 @@ const docs = await getDocsClient(session);
 const drive = await getDriveClient(session);
 
 // Validate inputs
-const hasSource = args.imageUrl || args.driveFileId || args.localImagePath || args.imageBase64;
-if (!hasSource) {
-throw new UserError('Provide one of: imageUrl, driveFileId, localImagePath, or imageBase64.');
-}
-if (args.imageBase64 && !args.fileName) {
-throw new UserError('fileName is required when using imageBase64 (needed for MIME type detection).');
-}
+const strategy = GDocsHelpers.validateImageSource(args);
 
 const imageSource = args.imageUrl || args.driveFileId || args.localImagePath || args.fileName || 'base64 image';
 log.info(`Inserting image ${imageSource} at index ${args.index} in doc ${args.documentId}`);
@@ -1153,10 +1147,10 @@ log.info(`Inserting image ${imageSource} at index ${args.index} in doc ${args.do
 try {
 let resolvedImageUrl: string;
 
-if (args.driveFileId) {
+if (strategy === 'driveFile') {
 // Image already in Drive — just make it public and get URL
 log.info(`Using existing Drive file: ${args.driveFileId}`);
-resolvedImageUrl = await GDocsHelpers.getPublicUrlForDriveFile(drive, args.driveFileId);
+resolvedImageUrl = await GDocsHelpers.getPublicUrlForDriveFile(drive, args.driveFileId!);
 } else {
 // Need to upload to Drive first (from URL, local path, or base64)
 const imageBuffer = args.imageBase64 ? Buffer.from(args.imageBase64, 'base64') : undefined;

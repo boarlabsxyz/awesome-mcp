@@ -664,6 +664,31 @@ export async function getPublicUrlForDriveFile(
     return webContentLink;
 }
 
+// --- Image Source Validation ---
+
+export interface ImageSourceArgs {
+    imageUrl?: string;
+    driveFileId?: string;
+    localImagePath?: string;
+    imageBase64?: string;
+    fileName?: string;
+}
+
+/**
+ * Validates that exactly one image source is provided and returns
+ * which strategy to use: 'driveFile', 'upload', or throws on invalid input.
+ */
+export function validateImageSource(args: ImageSourceArgs): 'driveFile' | 'upload' {
+    const hasSource = args.imageUrl || args.driveFileId || args.localImagePath || args.imageBase64;
+    if (!hasSource) {
+        throw new UserError('Provide one of: imageUrl, driveFileId, localImagePath, or imageBase64.');
+    }
+    if (args.imageBase64 && !args.fileName) {
+        throw new UserError('fileName is required when using imageBase64 (needed for MIME type detection).');
+    }
+    return args.driveFileId ? 'driveFile' : 'upload';
+}
+
 // --- Tab Management Helpers ---
 
 /**

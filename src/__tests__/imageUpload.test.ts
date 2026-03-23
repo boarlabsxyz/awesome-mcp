@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
-import { uploadImageToDrive, getPublicUrlForDriveFile } from '../google-docs/apiHelpers.js';
+import { describe, it, beforeEach, afterEach } from 'node:test';
+import { uploadImageToDrive, getPublicUrlForDriveFile, validateImageSource } from '../google-docs/apiHelpers.js';
 
 // --- Helpers to build mock Drive clients ---
 
@@ -148,6 +148,113 @@ describe('uploadImageToDrive', () => {
 
   // --- MIME type mapping ---
 
+  // --- imageUrl fetch branch ---
+
+  describe('imageUrl branch', () => {
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    function mockFetch(status: number, body: ArrayBuffer, headers: Record<string, string> = {}) {
+      globalThis.fetch = (async (_input: any, _init?: any) => ({
+        ok: status >= 200 && status < 300,
+        status,
+        headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
+        arrayBuffer: async () => body,
+      })) as any;
+    }
+
+    it('fetches image from URL and uploads to Drive', async () => {
+      const fakeImage = new TextEncoder().encode('PNG_DATA').buffer;
+      mockFetch(200, fakeImage, { 'content-type': 'image/png' });
+
+      let capturedOpts: any;
+      const drive = {
+        ...makeMockDrive(),
+        files: {
+          create: async (opts: any) => { capturedOpts = opts; return { data: { id: 'url-file' } }; },
+          get: async () => ({ data: { webContentLink: 'https://drive.google.com/uc?id=url-file' } }),
+        },
+      };
+
+      const result = await uploadImageToDrive(drive, undefined, undefined, undefined, undefined, 'https://example.com/images/photo.png');
+
+      assert.equal(result, 'https://drive.google.com/uc?id=url-file');
+      assert.equal(capturedOpts.requestBody.name, 'photo.png');
+      assert.equal(capturedOpts.requestBody.mimeType, 'image/png');
+    });
+
+    it('throws when fetch returns non-OK status', async () => {
+      mockFetch(404, new ArrayBuffer(0));
+      const drive = makeMockDrive();
+
+      await assert.rejects(
+        () => uploadImageToDrive(drive, undefined, undefined, undefined, undefined, 'https://example.com/missing.png'),
+        (err: any) => {
+          assert.match(err.message, /Failed to fetch image from URL \(404\)/);
+          return true;
+        }
+      );
+    });
+
+    it('derives filename from URL path', async () => {
+      const fakeImage = new TextEncoder().encode('GIF_DATA').buffer;
+      mockFetch(200, fakeImage, { 'content-type': 'image/gif' });
+
+      let capturedOpts: any;
+      const drive = {
+        ...makeMockDrive(),
+        files: {
+          create: async (opts: any) => { capturedOpts = opts; return { data: { id: 'x' } }; },
+          get: async () => ({ data: { webContentLink: 'https://example.com/dl' } }),
+        },
+      };
+
+      await uploadImageToDrive(drive, undefined, undefined, undefined, undefined, 'https://cdn.example.com/assets/banner.gif');
+      assert.equal(capturedOpts.requestBody.name, 'banner.gif');
+      assert.equal(capturedOpts.requestBody.mimeType, 'image/gif');
+    });
+
+    it('uses fileName override when provided alongside imageUrl', async () => {
+      const fakeImage = new TextEncoder().encode('DATA').buffer;
+      mockFetch(200, fakeImage);
+
+      let capturedOpts: any;
+      const drive = {
+        ...makeMockDrive(),
+        files: {
+          create: async (opts: any) => { capturedOpts = opts; return { data: { id: 'x' } }; },
+          get: async () => ({ data: { webContentLink: 'https://example.com/dl' } }),
+        },
+      };
+
+      await uploadImageToDrive(drive, undefined, undefined, undefined, 'custom.webp', 'https://example.com/img');
+      assert.equal(capturedOpts.requestBody.name, 'custom.webp');
+      assert.equal(capturedOpts.requestBody.mimeType, 'image/webp');
+    });
+
+    it('falls back to content-type header when extension is unknown', async () => {
+      const fakeImage = new TextEncoder().encode('DATA').buffer;
+      mockFetch(200, fakeImage, { 'content-type': 'image/tiff' });
+
+      let capturedOpts: any;
+      const drive = {
+        ...makeMockDrive(),
+        files: {
+          create: async (opts: any) => { capturedOpts = opts; return { data: { id: 'x' } }; },
+          get: async () => ({ data: { webContentLink: 'https://example.com/dl' } }),
+        },
+      };
+
+      await uploadImageToDrive(drive, undefined, undefined, undefined, undefined, 'https://example.com/image.tiff');
+      assert.equal(capturedOpts.requestBody.mimeType, 'image/tiff');
+    });
+  });
+
+  // --- MIME type mapping ---
+
   it('resolves known extensions to correct MIME types via buffer path', async () => {
     const cases = [
       ['photo.jpg', 'image/jpeg'],
@@ -230,5 +337,55 @@ describe('getPublicUrlForDriveFile', () => {
         return true;
       }
     );
+  });
+});
+
+// ---------- validateImageSource ----------
+
+describe('validateImageSource', () => {
+
+  it('throws when no source is provided', () => {
+    assert.throws(
+      () => validateImageSource({}),
+      (err: any) => {
+        assert.match(err.message, /Provide one of/);
+        return true;
+      }
+    );
+  });
+
+  it('throws when imageBase64 is provided without fileName', () => {
+    assert.throws(
+      () => validateImageSource({ imageBase64: 'abc123' }),
+      (err: any) => {
+        assert.match(err.message, /fileName is required/);
+        return true;
+      }
+    );
+  });
+
+  it('returns "driveFile" when driveFileId is provided', () => {
+    const result = validateImageSource({ driveFileId: 'abc' });
+    assert.equal(result, 'driveFile');
+  });
+
+  it('returns "driveFile" even when other sources are also provided', () => {
+    const result = validateImageSource({ driveFileId: 'abc', imageUrl: 'https://example.com/img.png' });
+    assert.equal(result, 'driveFile');
+  });
+
+  it('returns "upload" when imageUrl is provided', () => {
+    const result = validateImageSource({ imageUrl: 'https://example.com/img.png' });
+    assert.equal(result, 'upload');
+  });
+
+  it('returns "upload" when localImagePath is provided', () => {
+    const result = validateImageSource({ localImagePath: '/tmp/img.png' });
+    assert.equal(result, 'upload');
+  });
+
+  it('returns "upload" when imageBase64 + fileName are provided', () => {
+    const result = validateImageSource({ imageBase64: 'abc123', fileName: 'photo.jpg' });
+    assert.equal(result, 'upload');
   });
 });
