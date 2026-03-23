@@ -1153,7 +1153,20 @@ log.info(`Using existing Drive file: ${args.driveFileId}`);
 resolvedImageUrl = await GDocsHelpers.getPublicUrlForDriveFile(drive, args.driveFileId!);
 } else {
 // Need to upload to Drive first (from URL, local path, or base64)
-const imageBuffer = args.imageBase64 ? Buffer.from(args.imageBase64, 'base64') : undefined;
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20 MB
+let imageBuffer: Buffer | undefined;
+if (args.imageBase64) {
+const b64 = args.imageBase64;
+if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) {
+throw new UserError('imageBase64 contains invalid characters. Provide a valid base64-encoded string.');
+}
+const decodedSize = Math.floor((b64.length * 3) / 4)
+  - (b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0);
+if (decodedSize > MAX_IMAGE_BYTES) {
+throw new UserError(`imageBase64 decodes to ${decodedSize} bytes, exceeding the ${MAX_IMAGE_BYTES} byte limit.`);
+}
+imageBuffer = Buffer.from(b64, 'base64');
+}
 
 // Get the document's parent folder if requested
 let parentFolderId: string | undefined;
