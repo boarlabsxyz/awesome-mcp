@@ -4,9 +4,12 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "node --test tests/",
-    "test:coverage": "c8 --reporter=lcov --reporter=text node --test tests/",
-    "build": "tsc"
+    "build": "tsc",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.js src/__tests__/*.test.ts",
+    "test:watch": "node --import tsx --test --watch tests/*.test.js src/__tests__/*.test.ts",
+    "test:coverage": "c8 --reporter=lcov --reporter=text node --import tsx --test tests/*.test.js src/__tests__/*.test.ts"
   },
   "keywords": [],
   "author": "",
@@ -26,13 +29,16 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/bcrypt": "^6.0.0",
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",
     "@types/node": "^22.14.1",
     "@types/pg": "^8.16.0",
     "c8": "^11.0.0",
+    "eslint": "^10.1.0",
     "tsx": "^4.19.3",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.57.1"
   }
 }

@@ -1,0 +1,32 @@
+name: PR Quality
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+jobs:
+  title-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Conventional Commits title
+        run: |
+          TITLE="${{ github.event.pull_request.title }}"
+          if ! echo "$TITLE" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|chore|ci|revert)(\(.+\))?!?:'; then
+            echo "::error::PR title must follow Conventional Commits: type(scope): description"
+            exit 1
+          fi
+
+  size-warning:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check PR size
+        run: |
+          ADDITIONS=${{ github.event.pull_request.additions }}
+          DELETIONS=${{ github.event.pull_request.deletions }}
+          TOTAL=$((ADDITIONS + DELETIONS))
+          if [ "$TOTAL" -gt 1000 ]; then
+            echo "::warning::Large PR ($TOTAL lines changed). Consider splitting into smaller PRs."
+          fi

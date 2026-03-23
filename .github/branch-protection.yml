@@ -1,0 +1,42 @@
+# Branch Protection Settings (docs-as-code reference)
+#
+# Apply these rules manually via GitHub UI:
+#   Settings → Branches → Add branch protection rule
+#
+# This file is NOT enforced by GitHub Actions — it documents
+# the recommended settings for the repository.
+
+branches:
+  main:
+    protection:
+      required_status_checks:
+        strict: true
+        contexts:
+          - lint
+          - typecheck
+          - test
+          - build
+      required_pull_request_reviews:
+        required_approving_review_count: 1
+        dismiss_stale_reviews: true
+      enforce_admins: true
+      restrictions: null
+      allow_force_pushes: false
+      allow_deletions: false
+
+  develop:
+    protection:
+      required_status_checks:
+        strict: true
+        contexts:
+          - lint
+          - typecheck
+          - test
+          - build
+      required_pull_request_reviews:
+        required_approving_review_count: 1
+        dismiss_stale_reviews: true
+      enforce_admins: false
+      restrictions: null
+      allow_force_pushes: false
+      allow_deletions: false

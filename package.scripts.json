@@ -1,0 +1,13 @@
+{
+  "_comment": "Merge these scripts into your existing package.json. The CI pipeline expects all of these.",
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint . --ext .ts,.js --max-warnings 0",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-vm-modules --test 'src/**/*.test.ts'",
+    "test:watch": "node --experimental-vm-modules --test --watch 'src/**/*.test.ts'",
+    "test:coverage": "node --experimental-vm-modules --test --experimental-test-coverage 'src/**/*.test.ts'"
+  },
+  "_note": "If you use tsx/ts-node for test execution, replace the test script accordingly.",
+  "_railway": "Ensure your Railway service start command matches your build output, e.g. node dist/index.js"
+}

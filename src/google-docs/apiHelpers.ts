@@ -523,19 +523,15 @@ export async function insertInlineImage(
  */
 export async function uploadImageToDrive(
     drive: any, // drive_v3.Drive type
-    localFilePath: string,
-    parentFolderId?: string
+    localFilePath: string | undefined,
+    parentFolderId?: string,
+    imageBuffer?: Buffer,
+    fileName?: string,
+    imageUrl?: string
 ): Promise<string> {
-    const fs = await import('fs');
     const path = await import('path');
+    const { Readable } = await import('stream');
 
-    // Verify file exists
-    if (!fs.existsSync(localFilePath)) {
-        throw new UserError(`Image file not found: ${localFilePath}`);
-    }
-
-    // Get file name and mime type
-    const fileName = path.basename(localFilePath);
     const mimeTypeMap: { [key: string]: string } = {
         '.jpg': 'image/jpeg',
         '.jpeg': 'image/jpeg',
@@ -546,12 +542,46 @@ export async function uploadImageToDrive(
         '.svg': 'image/svg+xml'
     };
 
-    const ext = path.extname(localFilePath).toLowerCase();
-    const mimeType = mimeTypeMap[ext] || 'application/octet-stream';
+    let resolvedFileName: string;
+    let mimeType: string;
+    let body: any;
+
+    if (imageBuffer && fileName) {
+        // Remote deployment: use provided buffer and filename
+        resolvedFileName = fileName;
+        const ext = path.extname(fileName).toLowerCase();
+        mimeType = mimeTypeMap[ext] || 'application/octet-stream';
+        body = Readable.from(imageBuffer);
+    } else if (imageUrl) {
+        // Remote deployment: fetch from URL
+        const response = await fetch(imageUrl);
+        if (!response.ok) {
+            throw new UserError(`Failed to fetch image from URL (${response.status}): ${imageUrl}`);
+        }
+        // Derive filename from URL path or Content-Disposition
+        const urlPath = new URL(imageUrl).pathname;
+        resolvedFileName = fileName || path.basename(urlPath) || 'image.png';
+        const ext = path.extname(resolvedFileName).toLowerCase();
+        mimeType = mimeTypeMap[ext] || response.headers.get('content-type') || 'application/octet-stream';
+        const arrayBuffer = await response.arrayBuffer();
+        body = Readable.from(Buffer.from(arrayBuffer));
+    } else if (localFilePath) {
+        // Local deployment: read from filesystem
+        const fs = await import('fs');
+        if (!fs.existsSync(localFilePath)) {
+            throw new UserError(`Image file not found: ${localFilePath}`);
+        }
+        resolvedFileName = path.basename(localFilePath);
+        const ext = path.extname(localFilePath).toLowerCase();
+        mimeType = mimeTypeMap[ext] || 'application/octet-stream';
+        body = fs.createReadStream(localFilePath);
+    } else {
+        throw new UserError('Either localFilePath, imageUrl, or imageBuffer + fileName must be provided.');
+    }
 
     // Upload file to Drive
     const fileMetadata: any = {
-        name: fileName,
+        name: resolvedFileName,
         mimeType: mimeType
     };
 
@@ -561,7 +591,7 @@ export async function uploadImageToDrive(
 
     const media = {
         mimeType: mimeType,
-        body: fs.createReadStream(localFilePath)
+        body: body
     };
 
     const uploadResponse = await drive.files.create({
@@ -596,6 +626,39 @@ export async function uploadImageToDrive(
     const webContentLink = fileInfo.data.webContentLink;
     if (!webContentLink) {
         throw new Error('Failed to get public URL for uploaded image');
+    }
+
+    return webContentLink;
+}
+
+/**
+ * Makes an existing Drive file publicly readable and returns its webContentLink.
+ * Useful when the image is already in Drive and just needs to be inserted into a doc.
+ */
+export async function getPublicUrlForDriveFile(
+    drive: any,
+    fileId: string
+): Promise<string> {
+    // Make the file publicly readable
+    await drive.permissions.create({
+        fileId: fileId,
+        supportsAllDrives: true,
+        requestBody: {
+            role: 'reader',
+            type: 'anyone'
+        }
+    });
+
+    // Get the webContentLink
+    const fileInfo = await drive.files.get({
+        fileId: fileId,
+        supportsAllDrives: true,
+        fields: 'webContentLink'
+    });
+
+    const webContentLink = fileInfo.data.webContentLink;
+    if (!webContentLink) {
+        throw new Error('Failed to get public URL for Drive file. Ensure the file is a binary file (image), not a Google Docs editor file.');
     }
 
     return webContentLink;
