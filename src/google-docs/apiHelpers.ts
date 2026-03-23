@@ -560,7 +560,8 @@ const BLOCKED_HOSTNAMES = new Set([
  */
 export async function rejectPrivateAddress(hostname: string): Promise<void> {
     // Reject known dangerous hostnames before DNS resolution
-    const normalised = hostname.toLowerCase().replace(/\.+$/, '');
+    let normalised = hostname.toLowerCase();
+    while (normalised.endsWith('.')) normalised = normalised.slice(0, -1);
     if (!normalised || BLOCKED_HOSTNAMES.has(normalised)) {
         throw new UserError(`Blocked hostname: ${hostname}. Refusing to fetch.`);
     }
