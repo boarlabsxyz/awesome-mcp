@@ -492,6 +492,41 @@ describe('rejectPrivateAddress', () => {
     );
   });
 
+  it('rejects "localhost"', async () => {
+    await assert.rejects(
+      () => rejectPrivateAddress('localhost'),
+      (err: any) => { assert.match(err.message, /Blocked hostname/); return true; }
+    );
+  });
+
+  it('rejects "localhost." (trailing dot)', async () => {
+    await assert.rejects(
+      () => rejectPrivateAddress('localhost.'),
+      (err: any) => { assert.match(err.message, /Blocked hostname/); return true; }
+    );
+  });
+
+  it('rejects "ip6-localhost"', async () => {
+    await assert.rejects(
+      () => rejectPrivateAddress('ip6-localhost'),
+      (err: any) => { assert.match(err.message, /Blocked hostname/); return true; }
+    );
+  });
+
+  it('rejects "metadata.google.internal"', async () => {
+    await assert.rejects(
+      () => rejectPrivateAddress('metadata.google.internal'),
+      (err: any) => { assert.match(err.message, /Blocked hostname/); return true; }
+    );
+  });
+
+  it('rejects empty hostname', async () => {
+    await assert.rejects(
+      () => rejectPrivateAddress(''),
+      (err: any) => { assert.match(err.message, /Blocked hostname/); return true; }
+    );
+  });
+
   it('allows public IPs', async () => {
     // 93.184.216.34 is example.com — a known public IP
     await assert.doesNotReject(() => rejectPrivateAddress('93.184.216.34'));

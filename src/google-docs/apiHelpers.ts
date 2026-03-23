@@ -545,11 +545,26 @@ export function validateFetchUrl(url: string): URL {
     return parsed;
 }
 
+const BLOCKED_HOSTNAMES = new Set([
+    'localhost',
+    'ip6-localhost',
+    'ip6-loopback',
+    'kubernetes.default',
+    'kubernetes.default.svc',
+    'metadata.google.internal',
+]);
+
 /**
  * Resolves a hostname to IP addresses and rejects private/internal ranges.
  * Prevents SSRF attacks targeting cloud metadata, localhost, or internal services.
  */
 export async function rejectPrivateAddress(hostname: string): Promise<void> {
+    // Reject known dangerous hostnames before DNS resolution
+    const normalised = hostname.toLowerCase().replace(/\.+$/, '');
+    if (!normalised || BLOCKED_HOSTNAMES.has(normalised)) {
+        throw new UserError(`Blocked hostname: ${hostname}. Refusing to fetch.`);
+    }
+
     const dns = await import('dns');
     const { promisify } = await import('util');
     const resolve4 = promisify(dns.resolve4);
@@ -557,12 +572,12 @@ export async function rejectPrivateAddress(hostname: string): Promise<void> {
 
     // Collect all resolved IPs
     const ips: string[] = [];
-    try { ips.push(...await resolve4(hostname)); } catch { /* no A records */ }
-    try { ips.push(...await resolve6(hostname)); } catch { /* no AAAA records */ }
+    try { ips.push(...await resolve4(normalised)); } catch { /* no A records */ }
+    try { ips.push(...await resolve6(normalised)); } catch { /* no AAAA records */ }
 
     // If hostname is already an IP literal, check it directly
     if (ips.length === 0) {
-        ips.push(hostname);
+        ips.push(normalised);
     }
 
     for (const ip of ips) {
