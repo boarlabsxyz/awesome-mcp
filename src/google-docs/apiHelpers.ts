@@ -514,6 +514,66 @@ export async function insertInlineImage(
     return executeBatchUpdate(docs, documentId, [request]);
 }
 
+// --- URL validation for SSRF protection ---
+
+const PRIVATE_CIDR_PATTERNS = [
+    /^127\./,                          // 127.0.0.0/8 loopback
+    /^10\./,                           // 10.0.0.0/8
+    /^172\.(1[6-9]|2\d|3[01])\./,     // 172.16.0.0/12
+    /^192\.168\./,                     // 192.168.0.0/16
+    /^169\.254\./,                     // link-local / cloud metadata
+    /^0\./,                            // 0.0.0.0/8
+    /^::1$/,                           // IPv6 loopback
+    /^f[cd]/i,                         // IPv6 ULA (fc00::/7)
+    /^fe80:/i,                         // IPv6 link-local
+];
+
+/**
+ * Validates that a URL uses http/https and parses it.
+ * Throws UserError for invalid or disallowed schemes.
+ */
+export function validateFetchUrl(url: string): URL {
+    let parsed: URL;
+    try {
+        parsed = new URL(url);
+    } catch {
+        throw new UserError(`Invalid image URL: ${url}`);
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new UserError(`Only http and https URLs are allowed, got: ${parsed.protocol}`);
+    }
+    return parsed;
+}
+
+/**
+ * Resolves a hostname to IP addresses and rejects private/internal ranges.
+ * Prevents SSRF attacks targeting cloud metadata, localhost, or internal services.
+ */
+export async function rejectPrivateAddress(hostname: string): Promise<void> {
+    const dns = await import('dns');
+    const { promisify } = await import('util');
+    const resolve4 = promisify(dns.resolve4);
+    const resolve6 = promisify(dns.resolve6);
+
+    // Collect all resolved IPs
+    const ips: string[] = [];
+    try { ips.push(...await resolve4(hostname)); } catch { /* no A records */ }
+    try { ips.push(...await resolve6(hostname)); } catch { /* no AAAA records */ }
+
+    // If hostname is already an IP literal, check it directly
+    if (ips.length === 0) {
+        ips.push(hostname);
+    }
+
+    for (const ip of ips) {
+        for (const pattern of PRIVATE_CIDR_PATTERNS) {
+            if (pattern.test(ip)) {
+                throw new UserError(`Image URL resolves to a private/internal address (${ip}). Refusing to fetch.`);
+            }
+        }
+    }
+}
+
 /**
  * Uploads a local image file to Google Drive and returns its public URL
  * @param drive - Google Drive API client
@@ -553,18 +613,65 @@ export async function uploadImageToDrive(
         mimeType = mimeTypeMap[ext] || 'application/octet-stream';
         body = Readable.from(imageBuffer);
     } else if (imageUrl) {
-        // Remote deployment: fetch from URL
-        const response = await fetch(imageUrl);
+        // Remote deployment: fetch from URL with SSRF and size protections
+        const validated = validateFetchUrl(imageUrl);
+        await rejectPrivateAddress(validated.hostname);
+
+        const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
+        const FETCH_TIMEOUT_MS = 30_000;
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+        let response: Response;
+        try {
+            response = await fetch(imageUrl, { signal: controller.signal, redirect: 'follow' });
+        } catch (err: any) {
+            clearTimeout(timeout);
+            if (err.name === 'AbortError') {
+                throw new UserError(`Image fetch timed out after ${FETCH_TIMEOUT_MS / 1000}s: ${imageUrl}`);
+            }
+            throw new UserError(`Failed to fetch image from URL: ${err.message}`);
+        }
+        clearTimeout(timeout);
+
         if (!response.ok) {
             throw new UserError(`Failed to fetch image from URL (${response.status}): ${imageUrl}`);
         }
-        // Derive filename from URL path or Content-Disposition
-        const urlPath = new URL(imageUrl).pathname;
-        resolvedFileName = fileName || path.basename(urlPath) || 'image.png';
+
+        // Reject early if Content-Length exceeds limit
+        const contentLength = Number(response.headers.get('content-length') || '0');
+        if (contentLength > MAX_IMAGE_SIZE) {
+            throw new UserError(`Image too large (${contentLength} bytes, max ${MAX_IMAGE_SIZE}): ${imageUrl}`);
+        }
+
+        // Stream with size enforcement instead of buffering entire response
+        const chunks: Uint8Array[] = [];
+        let totalBytes = 0;
+        const reader = response.body?.getReader();
+        if (!reader) {
+            throw new UserError(`No response body from URL: ${imageUrl}`);
+        }
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                totalBytes += value.byteLength;
+                if (totalBytes > MAX_IMAGE_SIZE) {
+                    reader.cancel();
+                    throw new UserError(`Image exceeds max size (${MAX_IMAGE_SIZE} bytes): ${imageUrl}`);
+                }
+                chunks.push(value);
+            }
+        } finally {
+            reader.releaseLock();
+        }
+
+        // Derive filename from URL path
+        resolvedFileName = fileName || path.basename(validated.pathname) || 'image.png';
         const ext = path.extname(resolvedFileName).toLowerCase();
         mimeType = mimeTypeMap[ext] || response.headers.get('content-type') || 'application/octet-stream';
-        const arrayBuffer = await response.arrayBuffer();
-        body = Readable.from(Buffer.from(arrayBuffer));
+        body = Readable.from(Buffer.concat(chunks.map(c => Buffer.from(c))));
     } else if (localFilePath) {
         // Local deployment: read from filesystem
         const fs = await import('fs');

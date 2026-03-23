@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it, beforeEach, afterEach } from 'node:test';
-import { uploadImageToDrive, getPublicUrlForDriveFile, validateImageSource } from '../google-docs/apiHelpers.js';
+import { uploadImageToDrive, getPublicUrlForDriveFile, validateImageSource, validateFetchUrl, rejectPrivateAddress } from '../google-docs/apiHelpers.js';
 
 // --- Helpers to build mock Drive clients ---
 
@@ -157,13 +157,26 @@ describe('uploadImageToDrive', () => {
       globalThis.fetch = originalFetch;
     });
 
-    function mockFetch(status: number, body: ArrayBuffer, headers: Record<string, string> = {}) {
-      globalThis.fetch = (async (_input: any, _init?: any) => ({
-        ok: status >= 200 && status < 300,
-        status,
-        headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
-        arrayBuffer: async () => body,
-      })) as any;
+    function mockFetch(status: number, data: ArrayBuffer, headers: Record<string, string> = {}) {
+      globalThis.fetch = (async (_input: any, _init?: any) => {
+        const bytes = new Uint8Array(data);
+        let read = false;
+        return {
+          ok: status >= 200 && status < 300,
+          status,
+          headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
+          body: {
+            getReader: () => ({
+              read: async () => {
+                if (!read) { read = true; return { done: false, value: bytes }; }
+                return { done: true, value: undefined };
+              },
+              cancel: async () => {},
+              releaseLock: () => {},
+            }),
+          },
+        };
+      }) as any;
     }
 
     it('fetches image from URL and uploads to Drive', async () => {
@@ -387,5 +400,100 @@ describe('validateImageSource', () => {
   it('returns "upload" when imageBase64 + fileName are provided', () => {
     const result = validateImageSource({ imageBase64: 'abc123', fileName: 'photo.jpg' });
     assert.equal(result, 'upload');
+  });
+});
+
+// ---------- validateFetchUrl ----------
+
+describe('validateFetchUrl', () => {
+
+  it('accepts https URLs', () => {
+    const url = validateFetchUrl('https://example.com/image.png');
+    assert.equal(url.hostname, 'example.com');
+  });
+
+  it('accepts http URLs', () => {
+    const url = validateFetchUrl('http://example.com/image.png');
+    assert.equal(url.protocol, 'http:');
+  });
+
+  it('rejects ftp:// URLs', () => {
+    assert.throws(
+      () => validateFetchUrl('ftp://example.com/image.png'),
+      (err: any) => { assert.match(err.message, /Only http and https/); return true; }
+    );
+  });
+
+  it('rejects file:// URLs', () => {
+    assert.throws(
+      () => validateFetchUrl('file:///etc/passwd'),
+      (err: any) => { assert.match(err.message, /Only http and https/); return true; }
+    );
+  });
+
+  it('rejects data: URLs', () => {
+    assert.throws(
+      () => validateFetchUrl('data:image/png;base64,abc'),
+      (err: any) => { assert.match(err.message, /Only http and https/); return true; }
+    );
+  });
+
+  it('rejects malformed URLs', () => {
+    assert.throws(
+      () => validateFetchUrl('not a url at all'),
+      (err: any) => { assert.match(err.message, /Invalid image URL/); return true; }
+    );
+  });
+});
+
+// ---------- rejectPrivateAddress ----------
+
+describe('rejectPrivateAddress', () => {
+
+  it('rejects 127.0.0.1 (loopback)', async () => {
+    await assert.rejects(
+      () => rejectPrivateAddress('127.0.0.1'),
+      (err: any) => { assert.match(err.message, /private\/internal/); return true; }
+    );
+  });
+
+  it('rejects 10.x.x.x (RFC1918)', async () => {
+    await assert.rejects(
+      () => rejectPrivateAddress('10.0.0.1'),
+      (err: any) => { assert.match(err.message, /private\/internal/); return true; }
+    );
+  });
+
+  it('rejects 172.16.x.x (RFC1918)', async () => {
+    await assert.rejects(
+      () => rejectPrivateAddress('172.16.0.1'),
+      (err: any) => { assert.match(err.message, /private\/internal/); return true; }
+    );
+  });
+
+  it('rejects 192.168.x.x (RFC1918)', async () => {
+    await assert.rejects(
+      () => rejectPrivateAddress('192.168.1.1'),
+      (err: any) => { assert.match(err.message, /private\/internal/); return true; }
+    );
+  });
+
+  it('rejects 169.254.x.x (cloud metadata)', async () => {
+    await assert.rejects(
+      () => rejectPrivateAddress('169.254.169.254'),
+      (err: any) => { assert.match(err.message, /private\/internal/); return true; }
+    );
+  });
+
+  it('rejects ::1 (IPv6 loopback)', async () => {
+    await assert.rejects(
+      () => rejectPrivateAddress('::1'),
+      (err: any) => { assert.match(err.message, /private\/internal/); return true; }
+    );
+  });
+
+  it('allows public IPs', async () => {
+    // 93.184.216.34 is example.com — a known public IP
+    await assert.doesNotReject(() => rejectPrivateAddress('93.184.216.34'));
   });
 });
