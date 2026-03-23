@@ -1122,9 +1122,13 @@ throw new UserError(`Failed to insert image: ${error.message || 'Unknown error'}
 
 server.addTool({
 name: 'insertLocalImage',
-description: 'Uploads a local image file to Google Drive and inserts it into a Google Document. The image will be uploaded to the same folder as the document (or optionally to a specified folder).',
+description: 'Inserts an image into a Google Document. Provide one of: (1) imageUrl — a public HTTP(S) URL to fetch, (2) driveFileId — ID of an image already in Google Drive, (3) localImagePath — absolute path for local/stdio deployments, or (4) imageBase64 + fileName — base64-encoded content for small images.',
 parameters: DocumentIdParameter.extend({
-localImagePath: z.string().describe('Absolute path to the local image file (supports .jpg, .jpeg, .png, .gif, .bmp, .webp, .svg).'),
+imageUrl: z.string().optional().describe('Public HTTP(S) URL of the image to fetch and insert (preferred for remote deployments).'),
+driveFileId: z.string().optional().describe('Google Drive file ID of an existing image. The image will be made publicly readable and inserted.'),
+localImagePath: z.string().optional().describe('Absolute path to a local image file (for local/stdio deployments only).'),
+imageBase64: z.string().optional().describe('Base64-encoded image content. Only for small images; prefer imageUrl for large files.'),
+fileName: z.string().optional().describe('File name with extension for MIME type detection (e.g. "photo.jpg"). Required when using imageBase64.'),
 index: z.number().int().min(1).describe('The index (1-based) where the image should be inserted in the document.'),
 width: z.number().min(1).optional().describe('Optional: Width of the image in points.'),
 height: z.number().min(1).optional().describe('Optional: Height of the image in points.'),
@@ -1133,9 +1137,37 @@ uploadToSameFolder: z.boolean().optional().default(true).describe('If true, uplo
 execute: async (args, { log, session }) => {
 const docs = await getDocsClient(session);
 const drive = await getDriveClient(session);
-log.info(`Uploading local image ${args.localImagePath} and inserting at index ${args.index} in doc ${args.documentId}`);
+
+// Validate inputs
+const strategy = GDocsHelpers.validateImageSource(args);
+
+const imageSource = args.imageUrl || args.driveFileId || args.localImagePath || args.fileName || 'base64 image';
+log.info(`Inserting image ${imageSource} at index ${args.index} in doc ${args.documentId}`);
 
 try {
+let resolvedImageUrl: string;
+
+if (strategy === 'driveFile') {
+// Image already in Drive — just make it public and get URL
+log.info(`Using existing Drive file: ${args.driveFileId}`);
+resolvedImageUrl = await GDocsHelpers.getPublicUrlForDriveFile(drive, args.driveFileId!);
+} else {
+// Need to upload to Drive first (from URL, local path, or base64)
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20 MB
+let imageBuffer: Buffer | undefined;
+if (args.imageBase64) {
+const b64 = args.imageBase64;
+if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) {
+throw new UserError('imageBase64 contains invalid characters. Provide a valid base64-encoded string.');
+}
+const decodedSize = Math.floor((b64.length * 3) / 4)
+  - (b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0);
+if (decodedSize > MAX_IMAGE_BYTES) {
+throw new UserError(`imageBase64 decodes to ${decodedSize} bytes, exceeding the ${MAX_IMAGE_BYTES} byte limit.`);
+}
+imageBuffer = Buffer.from(b64, 'base64');
+}
+
 // Get the document's parent folder if requested
 let parentFolderId: string | undefined;
 if (args.uploadToSameFolder) {
@@ -1153,20 +1185,23 @@ log.warn(`Could not determine document's parent folder, using Drive root: ${fold
 }
 }
 
-// Upload the image to Drive
 log.info(`Uploading image to Drive...`);
-const imageUrl = await GDocsHelpers.uploadImageToDrive(
+resolvedImageUrl = await GDocsHelpers.uploadImageToDrive(
 drive,
 args.localImagePath,
-parentFolderId
+parentFolderId,
+imageBuffer,
+args.fileName,
+args.imageUrl
 );
-log.info(`Image uploaded successfully, public URL: ${imageUrl}`);
+}
+log.info(`Image URL resolved: ${resolvedImageUrl}`);
 
 // Insert the image into the document
 await GDocsHelpers.insertInlineImage(
 docs,
 args.documentId,
-imageUrl,
+resolvedImageUrl,
 args.index,
 args.width,
 args.height
@@ -1177,11 +1212,11 @@ if (args.width && args.height) {
 sizeInfo = ` with size ${args.width}x${args.height}pt`;
 }
 
-return `Successfully uploaded image to Drive and inserted it at index ${args.index}${sizeInfo}.\nImage URL: ${imageUrl}`;
+return `Successfully inserted image at index ${args.index}${sizeInfo}.\nImage URL: ${resolvedImageUrl}`;
 } catch (error: any) {
-log.error(`Error uploading/inserting local image in doc ${args.documentId}: ${error.message || error}`);
+log.error(`Error inserting image in doc ${args.documentId}: ${error.message || error}`);
 if (error instanceof UserError) throw error;
-throw new UserError(`Failed to upload/insert local image: ${error.message || 'Unknown error'}`);
+throw new UserError(`Failed to insert image: ${error.message || 'Unknown error'}`);
 }
 }
 });

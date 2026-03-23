@@ -1,0 +1,43 @@
+name: Deploy → Dev
+
+on:
+  push:
+    branches: [develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli
+      - name: Deploy to Railway dev
+        run: railway up --service ${{ vars.RAILWAY_SERVICE_DEV }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_DEV }}
+      - name: Notify Slack
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DEPLOY_STATUS: ${{ job.status }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          APP_URL: ${{ vars.DEV_APP_URL }}
+        run: |
+          PAYLOAD=$(jq -n --arg text "Deploy → Dev: ${DEPLOY_STATUS} — ${COMMIT_MESSAGE} (${APP_URL})" '{text: $text}')
+          curl -X POST "${SLACK_WEBHOOK_URL}" \
+            -H 'Content-type: application/json' \
+            -d "${PAYLOAD}" \
+            || true
