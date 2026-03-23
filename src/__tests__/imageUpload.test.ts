@@ -15,7 +15,7 @@ function makeMockDrive(overrides: {
         data: { id: 'file-123', webContentLink: 'https://drive.google.com/uc?id=file-123' }
       },
       get: async (_opts: any) => overrides.filesGetResult ?? {
-        data: { webContentLink: 'https://drive.google.com/uc?id=file-123' }
+        data: { mimeType: 'image/png', webContentLink: 'https://drive.google.com/uc?id=file-123' }
       },
     },
     permissions: {
@@ -301,16 +301,16 @@ describe('getPublicUrlForDriveFile', () => {
 
   it('returns webContentLink when Drive responds normally', async () => {
     const drive = makeMockDrive({
-      filesGetResult: { data: { webContentLink: 'https://drive.google.com/uc?id=abc' } },
+      filesGetResult: { data: { mimeType: 'image/jpeg', webContentLink: 'https://drive.google.com/uc?id=abc' } },
     });
     const url = await getPublicUrlForDriveFile(drive, 'abc');
     assert.equal(url, 'https://drive.google.com/uc?id=abc');
   });
 
-  it('calls permissions.create with correct args', async () => {
+  it('calls permissions.create with correct args after validating file type', async () => {
     let capturedArgs: any;
     const drive = {
-      files: { get: async () => ({ data: { webContentLink: 'https://example.com/dl' } }) },
+      files: { get: async () => ({ data: { mimeType: 'image/png', webContentLink: 'https://example.com/dl' } }) },
       permissions: {
         create: async (args: any) => { capturedArgs = args; return { data: {} }; },
       },
@@ -323,12 +323,43 @@ describe('getPublicUrlForDriveFile', () => {
     assert.equal(capturedArgs.supportsAllDrives, true);
   });
 
-  it('throws when webContentLink is missing (e.g. Google Docs editor file)', async () => {
-    const drive = makeMockDrive({
-      filesGetResult: { data: { webContentLink: null } },
-    });
+  it('rejects non-image files without making them public', async () => {
+    let permissionsCalled = false;
+    const drive = {
+      files: { get: async () => ({ data: { mimeType: 'application/vnd.google-apps.document', webContentLink: null } }) },
+      permissions: {
+        create: async () => { permissionsCalled = true; return { data: {} }; },
+      },
+    };
     await assert.rejects(
       () => getPublicUrlForDriveFile(drive, 'doc-id'),
+      (err: any) => {
+        assert.match(err.message, /not an image/);
+        return true;
+      }
+    );
+    assert.equal(permissionsCalled, false, 'permissions.create should not be called for non-image files');
+  });
+
+  it('rejects files with missing mimeType', async () => {
+    const drive = makeMockDrive({
+      filesGetResult: { data: { mimeType: undefined, webContentLink: 'https://example.com/dl' } },
+    });
+    await assert.rejects(
+      () => getPublicUrlForDriveFile(drive, 'unknown-type'),
+      (err: any) => {
+        assert.match(err.message, /not an image/);
+        return true;
+      }
+    );
+  });
+
+  it('throws when webContentLink is missing for a valid image', async () => {
+    const drive = makeMockDrive({
+      filesGetResult: { data: { mimeType: 'image/png', webContentLink: null } },
+    });
+    await assert.rejects(
+      () => getPublicUrlForDriveFile(drive, 'img-id'),
       (err: any) => {
         assert.match(err.message, /Ensure the file is a binary file/);
         return true;
@@ -336,12 +367,12 @@ describe('getPublicUrlForDriveFile', () => {
     );
   });
 
-  it('propagates Drive API errors', async () => {
+  it('propagates Drive API errors from files.get', async () => {
     const drive = {
       permissions: {
-        create: async () => { throw new Error('403 Forbidden'); },
+        create: async () => ({ data: {} }),
       },
-      files: { get: async () => ({ data: {} }) },
+      files: { get: async () => { throw new Error('403 Forbidden'); } },
     };
     await assert.rejects(
       () => getPublicUrlForDriveFile(drive, 'no-access'),

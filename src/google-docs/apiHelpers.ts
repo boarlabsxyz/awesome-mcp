@@ -761,7 +761,21 @@ export async function getPublicUrlForDriveFile(
     drive: any,
     fileId: string
 ): Promise<string> {
-    // Make the file publicly readable
+    // Fetch metadata first to validate file type before publishing
+    const fileInfo = await drive.files.get({
+        fileId: fileId,
+        supportsAllDrives: true,
+        fields: 'mimeType,webContentLink'
+    });
+
+    const fileMimeType: string | undefined = fileInfo.data.mimeType;
+    if (!fileMimeType || !fileMimeType.startsWith('image/')) {
+        throw new UserError(
+            `Drive file ${fileId} is not an image (mimeType: ${fileMimeType || 'unknown'}). Only image files can be inserted.`
+        );
+    }
+
+    // Now safe to make it publicly readable
     await drive.permissions.create({
         fileId: fileId,
         supportsAllDrives: true,
@@ -769,13 +783,6 @@ export async function getPublicUrlForDriveFile(
             role: 'reader',
             type: 'anyone'
         }
-    });
-
-    // Get the webContentLink
-    const fileInfo = await drive.files.get({
-        fileId: fileId,
-        supportsAllDrives: true,
-        fields: 'webContentLink'
     });
 
     const webContentLink = fileInfo.data.webContentLink;
