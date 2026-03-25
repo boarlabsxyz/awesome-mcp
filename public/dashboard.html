@@ -266,6 +266,41 @@
       background: #dc3545;
       color: #fff;
     }
+    .btn-reconnect {
+      padding: 0.5rem 0.75rem;
+      background: transparent;
+      color: #f0ad4e;
+      border: 1px solid #f0ad4e;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: all 0.2s;
+    }
+    .btn-reconnect:hover {
+      background: #f0ad4e;
+      color: #000;
+    }
+    .token-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.75rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      margin-top: 0.35rem;
+    }
+    .token-status.expired {
+      background: rgba(220,53,69,0.15);
+      color: #dc3545;
+    }
+    .token-status.warning {
+      background: rgba(240,173,78,0.15);
+      color: #f0ad4e;
+    }
+    .token-status.ok {
+      background: rgba(52,168,83,0.15);
+      color: #34a853;
+    }
 
     /* Add Tool Modal */
     .modal-overlay {
@@ -652,6 +687,23 @@
       return url.toString();
     }
 
+    function getTokenStatusHtml(instance) {
+      const ts = instance.tokenStatus;
+      if (!ts) return '';
+      if (ts.isExpired) {
+        return '<div class="token-status expired">Token expired - reconnect required</div>';
+      }
+      if (!ts.hasRefreshToken) {
+        return '<div class="token-status warning">No refresh token - will expire soon</div>';
+      }
+      return '';
+    }
+
+    function needsReconnect(instance) {
+      const ts = instance.tokenStatus;
+      return ts && (ts.isExpired || !ts.hasRefreshToken);
+    }
+
     function renderInstanceCard(instance) {
       const mcp = catalogs.find(c => c.slug === instance.mcpSlug);
       const mcpName = mcp?.name || instance.mcpSlug;
@@ -659,6 +711,7 @@
         ? `<img src="${mcp.iconUrl}" alt="${mcpName}">`
         : getIconForMcp({ slug: instance.mcpSlug });
       const instanceUrl = getMcpUrl(instance.mcpSlug, instance.instanceId);
+      const showReconnect = needsReconnect(instance);
 
       return `
         <div class="instance-card" data-instance-id="${instance.instanceId}">
@@ -672,6 +725,7 @@
               </div>
               <div class="instance-type">${escapeHtml(mcpName)}</div>
               ${instance.googleEmail ? `<div class="instance-email">${escapeHtml(instance.googleEmail)}</div>` : ''}
+              ${getTokenStatusHtml(instance)}
             </div>
           </div>
           <div class="instance-url-section">
@@ -682,6 +736,7 @@
             </div>
           </div>
           <div class="instance-actions">
+            ${showReconnect ? `<button class="btn-reconnect" onclick="reconnectInstance('${instance.instanceId}', '${escapeHtml(instance.mcpSlug)}')">Reconnect</button>` : ''}
             <button class="btn-rename" onclick="renameInstance('${instance.instanceId}')">Rename</button>
             <button class="btn-delete" onclick="deleteInstance('${instance.instanceId}', '${escapeHtml(instance.instanceName)}')">Delete</button>
           </div>
@@ -817,6 +872,10 @@
       }
     }
 
+    function reconnectInstance(instanceId, mcpSlug) {
+      window.location.href = `/connect/${mcpSlug}?reconnect=${encodeURIComponent(instanceId)}`;
+    }
+
     async function deleteInstance(instanceId, instanceName) {
       if (!confirm(`Are you sure you want to delete "${instanceName}"? This cannot be undone.`)) {
         return;
@@ -866,7 +925,8 @@
         // Check for success message from redirect
         const urlParams = new URLSearchParams(window.location.search);
         const connectedInstance = urlParams.get('connected');
-        if (connectedInstance) {
+        const reconnectedInstance = urlParams.get('reconnected');
+        if (connectedInstance || reconnectedInstance) {
           window.history.replaceState({}, '', '/dashboard');
         }
 
@@ -886,9 +946,11 @@
 
         renderInstances();
 
-        // Show success message if just connected
+        // Show success message if just connected or reconnected
         if (connectedInstance) {
           showSuccess(`Successfully connected "${decodeURIComponent(connectedInstance)}"!`);
+        } else if (reconnectedInstance) {
+          showSuccess(`Successfully reconnected "${decodeURIComponent(reconnectedInstance)}"!`);
         }
 
         document.getElementById('loading').classList.add('hidden');

@@ -21,6 +21,7 @@ import {
   createMcpInstance,
   getMcpConnectionByInstanceId,
   updateMcpInstanceName,
+  updateMcpInstanceTokens,
   disconnectMcpInstance
 } from '../mcpConnectionStore.js';
 
@@ -354,12 +355,15 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       const state = crypto.randomBytes(32).toString('hex');
 
       // Store state with session info (now includes instanceName for new instances)
+      // reconnectInstanceId: if provided, callback will update existing instance tokens
+      const reconnectInstanceId = req.query.reconnect as string | undefined;
       const redis = await import('../db.js').then(m => m.isDatabaseAvailable() ? m.getRedis() : null);
       const stateData = JSON.stringify({
         sessionId,
         mcpSlug,
         googleId: session.googleId,
         instanceName: instanceName || null, // null means legacy single-instance mode
+        reconnectInstanceId: reconnectInstanceId || null,
       });
 
       if (redis) {
@@ -481,9 +485,26 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         console.error(`[MCP Connect] Got refresh_token for ${googleEmail} on ${mcpSlug}`);
       }
 
-      // Check if this is a new instance (has instanceName) or legacy single-instance
+      // Check if this is a reconnect (update existing instance tokens)
       let connection;
-      if (stateData.instanceName) {
+      if (stateData.reconnectInstanceId) {
+        const existing = await getMcpConnectionByInstanceId(stateData.reconnectInstanceId);
+        if (!existing || existing.userId !== user.id) {
+          res.status(404).send('Instance not found or access denied.');
+          return;
+        }
+        // Preserve existing refresh_token if Google didn't send a new one
+        if (!googleTokens.refresh_token && existing.googleTokens.refresh_token) {
+          googleTokens.refresh_token = existing.googleTokens.refresh_token;
+        }
+        await updateMcpInstanceTokens(existing.instanceId, googleTokens);
+        // Update google email if it changed
+        if (googleEmail && googleEmail !== existing.googleEmail) {
+          await updateMcpInstanceName(existing.instanceId, existing.instanceName); // touch updatedAt
+        }
+        connection = { ...existing, googleTokens, googleEmail: googleEmail || existing.googleEmail };
+        console.error(`User ${user.id} reconnected MCP instance: ${existing.instanceId} (${existing.instanceName})`);
+      } else if (stateData.instanceName) {
         // Create new instance with unique ID
         connection = await createMcpInstance(
           user.id,
@@ -500,7 +521,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       }
 
       // Redirect to dashboard with success message
-      res.redirect('/dashboard?connected=' + encodeURIComponent(connection.instanceName || mcpSlug));
+      const successParam = stateData.reconnectInstanceId ? 'reconnected' : 'connected';
+      res.redirect(`/dashboard?${successParam}=` + encodeURIComponent(connection.instanceName || mcpSlug));
     } catch (err: any) {
       console.error('MCP connect callback error:', err);
       res.status(500).send('Connection failed. Please try again.');
@@ -575,6 +597,13 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
           instanceName: c.instanceName,
           googleEmail: c.googleEmail,
           connectedAt: c.connectedAt,
+          tokenStatus: {
+            hasRefreshToken: !!c.googleTokens?.refresh_token,
+            expiryDate: c.googleTokens?.expiry_date || null,
+            isExpired: !c.googleTokens?.refresh_token && c.googleTokens?.expiry_date
+              ? c.googleTokens.expiry_date < Date.now()
+              : false,
+          },
         })),
       });
     } catch (err: any) {
@@ -1788,12 +1817,15 @@ export function createWebOnlyApp(): express.Express {
 
       const state = crypto.randomBytes(32).toString('hex');
 
+      // reconnectInstanceId: if provided, callback will update existing instance tokens
+      const reconnectInstanceId = req.query.reconnect as string | undefined;
       const redis = await import('../db.js').then(m => m.isDatabaseAvailable() ? m.getRedis() : null);
       const stateData = JSON.stringify({
         sessionId,
         mcpSlug,
         googleId: session.googleId,
         instanceName: instanceName || null,
+        reconnectInstanceId: reconnectInstanceId || null,
       });
 
       if (redis) {
@@ -1910,9 +1942,25 @@ export function createWebOnlyApp(): express.Express {
         console.error(`[MCP Connect] Got refresh_token for ${googleEmail} on ${mcpSlug}`);
       }
 
-      // Check if this is a new instance (has instanceName) or legacy single-instance
+      // Check if this is a reconnect (update existing instance tokens)
       let connection;
-      if (stateData.instanceName) {
+      if (stateData.reconnectInstanceId) {
+        const existing = await getMcpConnectionByInstanceId(stateData.reconnectInstanceId);
+        if (!existing || existing.userId !== user.id) {
+          res.status(404).send('Instance not found or access denied.');
+          return;
+        }
+        // Preserve existing refresh_token if Google didn't send a new one
+        if (!googleTokens.refresh_token && existing.googleTokens.refresh_token) {
+          googleTokens.refresh_token = existing.googleTokens.refresh_token;
+        }
+        await updateMcpInstanceTokens(existing.instanceId, googleTokens);
+        if (googleEmail && googleEmail !== existing.googleEmail) {
+          await updateMcpInstanceName(existing.instanceId, existing.instanceName);
+        }
+        connection = { ...existing, googleTokens, googleEmail: googleEmail || existing.googleEmail };
+        console.error(`User ${user.id} reconnected MCP instance: ${existing.instanceId} (${existing.instanceName})`);
+      } else if (stateData.instanceName) {
         connection = await createMcpInstance(
           user.id,
           mcpSlug,
@@ -1926,7 +1974,8 @@ export function createWebOnlyApp(): express.Express {
         console.error(`User ${user.id} connected MCP: ${mcpSlug}`);
       }
 
-      res.redirect('/dashboard?connected=' + encodeURIComponent(connection.instanceName || mcpSlug));
+      const successParam = stateData.reconnectInstanceId ? 'reconnected' : 'connected';
+      res.redirect(`/dashboard?${successParam}=` + encodeURIComponent(connection.instanceName || mcpSlug));
     } catch (err: any) {
       console.error('MCP connect callback error:', err);
       res.status(500).send('Connection failed. Please try again.');
@@ -2000,6 +2049,13 @@ export function createWebOnlyApp(): express.Express {
           instanceName: c.instanceName,
           googleEmail: c.googleEmail,
           connectedAt: c.connectedAt,
+          tokenStatus: {
+            hasRefreshToken: !!c.googleTokens?.refresh_token,
+            expiryDate: c.googleTokens?.expiry_date || null,
+            isExpired: !c.googleTokens?.refresh_token && c.googleTokens?.expiry_date
+              ? c.googleTokens.expiry_date < Date.now()
+              : false,
+          },
         })),
       });
     } catch (err: any) {
