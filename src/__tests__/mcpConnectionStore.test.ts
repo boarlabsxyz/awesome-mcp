@@ -11,9 +11,10 @@ const tmpDir = path.join(__dirname, '..', '..', '.test-data-' + Date.now());
 process.env.DATA_DIR = tmpDir;
 
 // Dynamic import after setting env
+import type { GoogleTokens } from '../mcpConnectionStore.js';
 const store = await import('../mcpConnectionStore.js');
 
-const sampleTokens: store.GoogleTokens = {
+const sampleTokens: GoogleTokens = {
   access_token: 'access-123',
   refresh_token: 'refresh-456',
   scope: 'email profile',

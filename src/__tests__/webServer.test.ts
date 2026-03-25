@@ -26,26 +26,20 @@ describe('computeTokenStatus – additional edge cases', () => {
     assert.equal(result.isExpired, true);
   });
 
-  it('returns full GoogleTokens-shaped input correctly', () => {
-    const fullTokens = {
-      access_token: 'acc-tok',
+  it('returns full token-shaped input correctly', () => {
+    const expiry = Date.now() + 7200_000;
+    const result = computeTokenStatus({
       refresh_token: 'ref-tok',
-      scope: 'email profile drive',
-      token_type: 'Bearer',
-      expiry_date: Date.now() + 7200_000,
-    };
-    const result = computeTokenStatus(fullTokens);
+      expiry_date: expiry,
+    });
     assert.equal(result.hasRefreshToken, true);
-    assert.equal(result.expiryDate, fullTokens.expiry_date);
+    assert.equal(result.expiryDate, expiry);
     assert.equal(result.isExpired, false);
   });
 
   it('returns expired for full tokens with empty refresh and past expiry', () => {
     const result = computeTokenStatus({
-      access_token: 'acc',
       refresh_token: '',
-      scope: 'email',
-      token_type: 'Bearer',
       expiry_date: Date.now() - 86400_000, // 24 hours ago
     });
     assert.equal(result.hasRefreshToken, false);
