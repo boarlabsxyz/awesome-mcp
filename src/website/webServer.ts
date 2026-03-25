@@ -52,6 +52,38 @@ interface ApiAuthenticatedRequest extends Request {
 }
 
 /**
+ * Computes the token status for a connection, used in /api/me response.
+ * Extracted for testability.
+ */
+export function computeTokenStatus(googleTokens: { refresh_token?: string; expiry_date?: number } | null | undefined): {
+  hasRefreshToken: boolean;
+  expiryDate: number | null;
+  isExpired: boolean;
+} {
+  return {
+    hasRefreshToken: !!googleTokens?.refresh_token,
+    expiryDate: googleTokens?.expiry_date || null,
+    isExpired: !googleTokens?.refresh_token && googleTokens?.expiry_date
+      ? googleTokens.expiry_date < Date.now()
+      : false,
+  };
+}
+
+/**
+ * Merges new OAuth tokens with existing ones, preserving refresh_token if not provided.
+ * Used during reconnect flow.
+ */
+export function mergeReconnectTokens(
+  newTokens: { access_token: string; refresh_token: string; scope: string; token_type: string; expiry_date: number },
+  existingRefreshToken: string | undefined
+): { access_token: string; refresh_token: string; scope: string; token_type: string; expiry_date: number } {
+  if (!newTokens.refresh_token && existingRefreshToken) {
+    return { ...newTokens, refresh_token: existingRefreshToken };
+  }
+  return newTokens;
+}
+
+/**
  * Registers all shared routes used by both single-service and multi-service modes.
  * Includes: auth, dashboard, connect/reconnect OAuth, API endpoints, admin, catalogs.
  */
@@ -443,9 +475,8 @@ function registerSharedRoutes(app: express.Express): void {
           return;
         }
         // Preserve existing refresh_token if Google didn't send a new one
-        if (!googleTokens.refresh_token && existing.googleTokens.refresh_token) {
-          googleTokens.refresh_token = existing.googleTokens.refresh_token;
-        }
+        const mergedTokens = mergeReconnectTokens(googleTokens, existing.googleTokens.refresh_token);
+        Object.assign(googleTokens, mergedTokens);
         await updateMcpInstanceTokens(existing.instanceId, googleTokens);
         // Update google email if it changed
         if (googleEmail && googleEmail !== existing.googleEmail) {
@@ -546,13 +577,7 @@ function registerSharedRoutes(app: express.Express): void {
           instanceName: c.instanceName,
           googleEmail: c.googleEmail,
           connectedAt: c.connectedAt,
-          tokenStatus: {
-            hasRefreshToken: !!c.googleTokens?.refresh_token,
-            expiryDate: c.googleTokens?.expiry_date || null,
-            isExpired: !c.googleTokens?.refresh_token && c.googleTokens?.expiry_date
-              ? c.googleTokens.expiry_date < Date.now()
-              : false,
-          },
+          tokenStatus: computeTokenStatus(c.googleTokens),
         })),
       });
     } catch (err: any) {
