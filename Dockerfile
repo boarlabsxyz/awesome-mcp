@@ -4,6 +4,7 @@ COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
+RUN cp -r public dist/public
 RUN mkdir -p /app/data
 
 ENV NODE_ENV=production
