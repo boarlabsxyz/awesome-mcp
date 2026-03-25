@@ -48,7 +48,7 @@ jobs:
         run: |
           railway up \
             --service ${{ matrix.service }} \
-            --environment dev \
+            --environment development \
             --detach
       - name: Notify Slack
         if: always()
