@@ -207,6 +207,19 @@ async function fileUpdateMcpInstanceName(
   return true;
 }
 
+async function fileUpdateMcpInstanceGoogleEmail(
+  instanceId: string,
+  googleEmail: string
+): Promise<boolean> {
+  await fileLoadConnections();
+  const connection = connections.find(c => c.instanceId === instanceId);
+  if (!connection) return false;
+  connection.googleEmail = googleEmail;
+  connection.updatedAt = new Date().toISOString();
+  await saveConnections();
+  return true;
+}
+
 async function fileDisconnectMcpInstance(instanceId: string): Promise<boolean> {
   await fileLoadConnections();
   const index = connections.findIndex(c => c.instanceId === instanceId);
@@ -546,6 +559,22 @@ async function dbUpdateMcpInstanceName(
   return (rowCount ?? 0) > 0;
 }
 
+async function dbUpdateMcpInstanceGoogleEmail(
+  instanceId: string,
+  googleEmail: string
+): Promise<boolean> {
+  const pool = getPool();
+
+  const { rowCount } = await pool.query(
+    `UPDATE mcp_connections
+     SET google_email = $1, updated_at = NOW()
+     WHERE instance_id = $2`,
+    [googleEmail, instanceId]
+  );
+
+  return (rowCount ?? 0) > 0;
+}
+
 async function dbDisconnectMcpInstance(instanceId: string): Promise<boolean> {
   const pool = getPool();
   const redis = getRedis();
@@ -680,6 +709,16 @@ export async function updateMcpInstanceName(
     return dbUpdateMcpInstanceName(instanceId, newName);
   }
   return fileUpdateMcpInstanceName(instanceId, newName);
+}
+
+export async function updateMcpInstanceGoogleEmail(
+  instanceId: string,
+  googleEmail: string
+): Promise<boolean> {
+  if (isDatabaseAvailable()) {
+    return dbUpdateMcpInstanceGoogleEmail(instanceId, googleEmail);
+  }
+  return fileUpdateMcpInstanceGoogleEmail(instanceId, googleEmail);
 }
 
 export async function disconnectMcpInstance(instanceId: string): Promise<boolean> {
