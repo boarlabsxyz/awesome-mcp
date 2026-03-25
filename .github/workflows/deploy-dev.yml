@@ -17,26 +17,49 @@ jobs:
       - run: npm run build
       - run: npm test
 
-  deploy:
-    needs: test
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.parse.outputs.services }}
+    steps:
+      - id: parse
+        run: |
+          SERVICES=$(echo '${{ vars.RAILWAY_SERVICES_DEV }}' | \
+            python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip().split(',')))")
+          echo "services=$SERVICES" >> $GITHUB_OUTPUT
+
+  deploy:
+    needs: [test, prepare]
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.prepare.outputs.services) }}
+      fail-fast: false
+    name: Deploy ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    environment:
+      name: dev
     steps:
       - uses: actions/checkout@v4
       - name: Install Railway CLI
         run: npm i -g @railway/cli
-      - name: Deploy to Railway dev
-        run: railway up --service ${{ vars.RAILWAY_SERVICE_DEV }}
+      - name: Deploy ${{ matrix.service }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_DEV }}
+        run: |
+          railway up \
+            --service ${{ matrix.service }} \
+            --environment dev \
+            --detach
       - name: Notify Slack
         if: always()
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           DEPLOY_STATUS: ${{ job.status }}
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          SERVICE_NAME: ${{ matrix.service }}
           APP_URL: ${{ vars.DEV_APP_URL }}
         run: |
-          PAYLOAD=$(jq -n --arg text "Deploy → Dev: ${DEPLOY_STATUS} — ${COMMIT_MESSAGE} (${APP_URL})" '{text: $text}')
+          PAYLOAD=$(jq -n --arg text "Deploy → Dev: ${SERVICE_NAME} ${DEPLOY_STATUS} — ${COMMIT_MESSAGE} (${APP_URL})" '{text: $text}')
           curl -X POST "${SLACK_WEBHOOK_URL}" \
             -H 'Content-type: application/json' \
             -d "${PAYLOAD}" \
