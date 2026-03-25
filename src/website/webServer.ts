@@ -471,7 +471,7 @@ function registerSharedRoutes(app: express.Express): void {
       let connection;
       if (stateData.reconnectInstanceId) {
         const existing = await getMcpConnectionByInstanceId(stateData.reconnectInstanceId);
-        if (!existing || existing.userId !== user.id) {
+        if (!existing || existing.userId !== user.id || existing.mcpSlug !== mcpSlug) {
           res.status(404).send('Instance not found or access denied.');
           return;
         }
