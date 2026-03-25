@@ -22,6 +22,7 @@ import {
   getMcpConnectionByInstanceId,
   updateMcpInstanceName,
   updateMcpInstanceTokens,
+  updateMcpInstanceGoogleEmail,
   disconnectMcpInstance
 } from '../mcpConnectionStore.js';
 
@@ -478,9 +479,9 @@ function registerSharedRoutes(app: express.Express): void {
         const mergedTokens = mergeReconnectTokens(googleTokens, existing.googleTokens.refresh_token);
         Object.assign(googleTokens, mergedTokens);
         await updateMcpInstanceTokens(existing.instanceId, googleTokens);
-        // Update google email if it changed
+        // Persist google email if it changed
         if (googleEmail && googleEmail !== existing.googleEmail) {
-          await updateMcpInstanceName(existing.instanceId, existing.instanceName); // touch updatedAt
+          await updateMcpInstanceGoogleEmail(existing.instanceId, googleEmail);
         }
         connection = { ...existing, googleTokens, googleEmail: googleEmail || existing.googleEmail };
         console.error(`User ${user.id} reconnected MCP instance: ${existing.instanceId} (${existing.instanceName})`);
