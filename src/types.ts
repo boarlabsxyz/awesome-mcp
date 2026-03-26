@@ -135,6 +135,80 @@ export const SharedDriveParameters = z.object({
     .describe('Source of files: user (My Drive), drive (specific), allDrives, domain.'),
 });
 
+// --- Batch Operation Schema ---
+
+const InsertTextOp = z.object({
+  type: z.literal('insert_text'),
+  index: z.number().int().min(1).describe('1-based index where text will be inserted.'),
+  text: z.string().min(1).describe('The text to insert.'),
+});
+
+const DeleteTextOp = z.object({
+  type: z.literal('delete_text'),
+  startIndex: z.number().int().min(1).describe('Start index (inclusive).'),
+  endIndex: z.number().int().min(1).describe('End index (exclusive).'),
+});
+
+const ReplaceTextOp = z.object({
+  type: z.literal('replace_text'),
+  findText: z.string().min(1).describe('Text to find.'),
+  replaceText: z.string().describe('Replacement text.'),
+  matchCase: z.boolean().optional().default(false).describe('Case-sensitive match.'),
+});
+
+const FormatTextOp = z.object({
+  type: z.literal('format_text'),
+  startIndex: z.number().int().min(1).describe('Start index (inclusive).'),
+  endIndex: z.number().int().min(1).describe('End index (exclusive).'),
+  style: TextStyleParameters,
+});
+
+const UpdateParagraphStyleOp = z.object({
+  type: z.literal('update_paragraph_style'),
+  startIndex: z.number().int().min(1).describe('Start index (inclusive).'),
+  endIndex: z.number().int().min(1).describe('End index (exclusive).'),
+  style: ParagraphStyleParameters,
+});
+
+const InsertTableOp = z.object({
+  type: z.literal('insert_table'),
+  index: z.number().int().min(1).describe('1-based index where table will be inserted.'),
+  rows: z.number().int().min(1).max(20).describe('Number of rows (1-20).'),
+  columns: z.number().int().min(1).max(20).describe('Number of columns (1-20).'),
+});
+
+const InsertPageBreakOp = z.object({
+  type: z.literal('insert_page_break'),
+  index: z.number().int().min(1).describe('1-based index where page break will be inserted.'),
+});
+
+const FindReplaceOp = z.object({
+  type: z.literal('find_replace'),
+  findText: z.string().min(1).describe('Text to find.'),
+  replaceText: z.string().describe('Replacement text.'),
+  matchCase: z.boolean().optional().default(false).describe('Case-sensitive match.'),
+});
+
+const CreateBulletListOp = z.object({
+  type: z.literal('create_bullet_list'),
+  startIndex: z.number().int().min(1).describe('Start index (inclusive).'),
+  endIndex: z.number().int().min(1).describe('End index (exclusive).'),
+});
+
+export const BatchOperationSchema = z.discriminatedUnion('type', [
+  InsertTextOp,
+  DeleteTextOp,
+  ReplaceTextOp,
+  FormatTextOp,
+  UpdateParagraphStyleOp,
+  InsertTableOp,
+  InsertPageBreakOp,
+  FindReplaceOp,
+  CreateBulletListOp,
+]);
+
+export type BatchOperation = z.infer<typeof BatchOperationSchema>;
+
 // --- Error Class ---
 // Use FastMCP's UserError for client-facing issues
 // Define a custom error for internal issues if needed
