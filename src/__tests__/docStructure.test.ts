@@ -183,6 +183,23 @@ describe('parseDocStructure - summary mode', () => {
     assert.equal(paraEl!.textPreview, 'In cell');
   });
 
+  it('falls back to legacy doc.body when no tabs exist', () => {
+    const doc: any = {
+      title: 'Legacy Doc',
+      tabs: [],
+      body: {
+        content: [
+          makeParagraph(0, 10, 'Legacy content'),
+        ],
+      },
+      headers: {},
+      footers: {},
+    };
+    const result = parseDocStructure(doc, false);
+    assert.equal(result.paragraphCount, 1);
+    assert.equal(result.title, 'Legacy Doc');
+  });
+
   it('detects headers and footers presence', () => {
     const doc = makeDoc({
       tabs: [{
@@ -302,6 +319,52 @@ describe('parseDocStructure - detailed mode', () => {
     assert.ok(result.elements);
     assert.equal(result.elements![0].textPreview!.length, 103); // 100 + '...'
     assert.ok(result.elements![0].textPreview!.endsWith('...'));
+  });
+
+  it('includes tableOfContents elements in detailed mode', () => {
+    const doc = makeDoc({
+      tabs: [{
+        tabProperties: { tabId: 'tab1', title: 'Tab 1' },
+        documentTab: {
+          body: {
+            content: [
+              makeParagraph(0, 10, 'Intro'),
+              { startIndex: 10, endIndex: 30, tableOfContents: {} },
+            ],
+          },
+        },
+        childTabs: [],
+      }],
+    });
+    const result = parseDocStructure(doc, true);
+    assert.ok(result.elements);
+    const tocEl = result.elements!.find(e => e.type === 'tableOfContents');
+    assert.ok(tocEl);
+    assert.equal(tocEl!.startIndex, 10);
+    assert.equal(tocEl!.endIndex, 30);
+  });
+
+  it('finds tab by ID in nested child tabs', () => {
+    const doc = makeDoc({
+      tabs: [{
+        tabProperties: { tabId: 'parent', title: 'Parent' },
+        documentTab: { body: { content: [] } },
+        childTabs: [{
+          tabProperties: { tabId: 'child', title: 'Child' },
+          documentTab: {
+            body: {
+              content: [
+                makeParagraph(0, 5, 'A'),
+                makeParagraph(5, 10, 'B'),
+              ],
+            },
+          },
+          childTabs: [],
+        }],
+      }],
+    });
+    const result = parseDocStructure(doc, false, 'child');
+    assert.equal(result.paragraphCount, 2);
   });
 
   it('respects tabId parameter', () => {

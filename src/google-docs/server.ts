@@ -2969,41 +2969,38 @@ execute: async (args, { log, session }) => {
   log.info(`Batch update on doc ${args.documentId}: ${args.operations.length} operation(s)`);
 
   // Map all operations to API requests
-  let allRequests: docs_v1.Schema$Request[] = [];
+  const allRequests: docs_v1.Schema$Request[] = [];
   const opSummary: string[] = [];
 
-  // Separate index-based and non-index-based operations
-  const indexBased: { op: BatchOperation; index: number }[] = [];
-  const nonIndexBased: BatchOperation[] = [];
+  // Detect mixing of global (replace_text/find_replace) and index-based ops
+  const hasGlobal = args.operations.some(op => op.type === 'replace_text' || op.type === 'find_replace');
+  const hasIndexBased = args.operations.some(op => op.type !== 'replace_text' && op.type !== 'find_replace');
 
-  for (const op of args.operations) {
-    const opAny = op as any;
-    if (op.type === 'replace_text' || op.type === 'find_replace') {
-      nonIndexBased.push(op);
-    } else if ('index' in op && typeof opAny.index === 'number') {
-      indexBased.push({ op, index: opAny.index });
-    } else if ('startIndex' in op && typeof opAny.startIndex === 'number') {
-      indexBased.push({ op, index: opAny.startIndex });
-    } else {
-      nonIndexBased.push(op);
+  if (hasGlobal && hasIndexBased) {
+    throw new UserError(
+      'Cannot mix global operations (replace_text, find_replace) with index-based operations in the same batch. ' +
+      'Global replacements change document length and invalidate indices. Submit them in separate batches.'
+    );
+  }
+
+  // For index-based batches, sort in descending index order to prevent shifting
+  let opsToProcess: BatchOperation[];
+  if (hasIndexBased) {
+    opsToProcess = [...args.operations].sort((a, b) => {
+      const aIdx = ('index' in a ? (a as any).index : (a as any).startIndex) ?? 0;
+      const bIdx = ('index' in b ? (b as any).index : (b as any).startIndex) ?? 0;
+      return bIdx - aIdx;
+    });
+  } else {
+    opsToProcess = args.operations;
+  }
+
+  for (const op of opsToProcess) {
+    const requests = GDocsHelpers.mapBatchOperationToRequest(op);
+    if (requests.length > 0) {
+      allRequests.push(...requests);
+      opSummary.push(op.type);
     }
-  }
-
-  // Sort index-based operations in descending order to prevent shifting
-  indexBased.sort((a, b) => b.index - a.index);
-
-  // Process non-index-based first (replace_text, find_replace)
-  for (const op of nonIndexBased) {
-    const requests = GDocsHelpers.mapBatchOperationToRequest(op);
-    allRequests.push(...requests);
-    opSummary.push(op.type);
-  }
-
-  // Then index-based in descending order
-  for (const { op } of indexBased) {
-    const requests = GDocsHelpers.mapBatchOperationToRequest(op);
-    allRequests.push(...requests);
-    opSummary.push(op.type);
   }
 
   if (allRequests.length === 0) {

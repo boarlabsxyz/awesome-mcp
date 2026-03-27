@@ -83,6 +83,30 @@ describe('BatchOperationSchema', () => {
     assert.equal(result.type, 'create_bullet_list');
   });
 
+  it('rejects delete_text when endIndex <= startIndex', () => {
+    assert.throws(() => {
+      BatchOperationSchema.parse({ type: 'delete_text', startIndex: 10, endIndex: 5 });
+    }, /endIndex must be greater than startIndex/);
+  });
+
+  it('rejects format_text when endIndex equals startIndex', () => {
+    assert.throws(() => {
+      BatchOperationSchema.parse({ type: 'format_text', startIndex: 5, endIndex: 5, style: { bold: true } });
+    }, /endIndex must be greater than startIndex/);
+  });
+
+  it('rejects create_bullet_list when endIndex <= startIndex', () => {
+    assert.throws(() => {
+      BatchOperationSchema.parse({ type: 'create_bullet_list', startIndex: 20, endIndex: 10 });
+    }, /endIndex must be greater than startIndex/);
+  });
+
+  it('rejects update_paragraph_style when endIndex <= startIndex', () => {
+    assert.throws(() => {
+      BatchOperationSchema.parse({ type: 'update_paragraph_style', startIndex: 5, endIndex: 3, style: { alignment: 'CENTER' } });
+    }, /endIndex must be greater than startIndex/);
+  });
+
   it('rejects unknown operation type', () => {
     assert.throws(() => {
       BatchOperationSchema.parse({ type: 'unknown_op', index: 1 });

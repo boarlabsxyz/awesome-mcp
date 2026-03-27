@@ -205,7 +205,17 @@ export const BatchOperationSchema = z.discriminatedUnion('type', [
   InsertPageBreakOp,
   FindReplaceOp,
   CreateBulletListOp,
-]);
+]).superRefine((op, ctx) => {
+  if ('startIndex' in op && 'endIndex' in op) {
+    if (op.endIndex <= op.startIndex) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'endIndex must be greater than startIndex',
+        path: ['endIndex'],
+      });
+    }
+  }
+});
 
 export type BatchOperation = z.infer<typeof BatchOperationSchema>;
 
