@@ -105,6 +105,84 @@ describe('parseDocStructure - summary mode', () => {
     assert.equal(result.paragraphCount, 1);
   });
 
+  it('counts paragraphs nested inside table cells', () => {
+    const doc = makeDoc({
+      tabs: [{
+        tabProperties: { tabId: 'tab1', title: 'Tab 1' },
+        documentTab: {
+          body: {
+            content: [
+              makeParagraph(0, 5, 'Before'),
+              {
+                startIndex: 5,
+                endIndex: 50,
+                table: {
+                  tableRows: [
+                    {
+                      tableCells: [
+                        { content: [makeParagraph(6, 15, 'Cell A1'), makeParagraph(15, 25, 'Cell A1 p2')] },
+                        { content: [makeParagraph(25, 35, 'Cell B1')] },
+                      ],
+                    },
+                    {
+                      tableCells: [
+                        { content: [makeParagraph(35, 45, 'Cell A2')] },
+                        { content: [makeParagraph(45, 50, 'Cell B2')] },
+                      ],
+                    },
+                  ],
+                  rows: 2,
+                  columns: 2,
+                },
+              },
+            ],
+          },
+        },
+        childTabs: [],
+      }],
+    });
+    const result = parseDocStructure(doc, false);
+    // 1 top-level paragraph + 5 paragraphs inside table cells
+    assert.equal(result.paragraphCount, 6);
+    assert.equal(result.tableCount, 1);
+  });
+
+  it('includes nested table cell paragraphs in detailed elements', () => {
+    const doc = makeDoc({
+      tabs: [{
+        tabProperties: { tabId: 'tab1', title: 'Tab 1' },
+        documentTab: {
+          body: {
+            content: [
+              {
+                startIndex: 0,
+                endIndex: 30,
+                table: {
+                  tableRows: [{
+                    tableCells: [
+                      { content: [makeParagraph(1, 10, 'In cell')] },
+                    ],
+                  }],
+                  rows: 1,
+                  columns: 1,
+                },
+              },
+            ],
+          },
+        },
+        childTabs: [],
+      }],
+    });
+    const result = parseDocStructure(doc, true);
+    assert.ok(result.elements);
+    // table element + nested paragraph
+    const tableEl = result.elements!.find(e => e.type === 'table');
+    const paraEl = result.elements!.find(e => e.type === 'paragraph');
+    assert.ok(tableEl);
+    assert.ok(paraEl);
+    assert.equal(paraEl!.textPreview, 'In cell');
+  });
+
   it('detects headers and footers presence', () => {
     const doc = makeDoc({
       tabs: [{

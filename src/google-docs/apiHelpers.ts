@@ -1077,65 +1077,77 @@ export function parseDocStructure(
     let documentLength = 0;
     const elements: DocStructureElement[] = [];
 
-    const content = body?.content || [];
-    for (const el of content) {
-        const startIdx = el.startIndex ?? 0;
-        const endIdx = el.endIndex ?? 0;
-        if (endIdx > documentLength) documentLength = endIdx;
+    // Recursive helper to process structural elements (top-level and inside table cells)
+    function processContent(contentItems: docs_v1.Schema$StructuralElement[]): void {
+        for (const el of contentItems) {
+            const startIdx = el.startIndex ?? 0;
+            const endIdx = el.endIndex ?? 0;
+            if (endIdx > documentLength) documentLength = endIdx;
 
-        if (el.paragraph) {
-            paragraphCount++;
-            if (detailed) {
-                let textPreview = '';
-                for (const pe of el.paragraph.elements || []) {
-                    if (pe.textRun?.content) {
-                        textPreview += pe.textRun.content;
+            if (el.paragraph) {
+                paragraphCount++;
+                if (detailed) {
+                    let textPreview = '';
+                    for (const pe of el.paragraph.elements || []) {
+                        if (pe.textRun?.content) {
+                            textPreview += pe.textRun.content;
+                        }
+                    }
+                    textPreview = textPreview.trim();
+                    if (textPreview.length > 100) {
+                        textPreview = textPreview.substring(0, 100) + '...';
+                    }
+                    elements.push({
+                        type: 'paragraph',
+                        startIndex: startIdx,
+                        endIndex: endIdx,
+                        textPreview: textPreview || undefined,
+                        namedStyleType: el.paragraph.paragraphStyle?.namedStyleType || undefined,
+                    });
+                }
+            } else if (el.table) {
+                tableCount++;
+                if (detailed) {
+                    const rows = el.table.tableRows?.length ?? 0;
+                    const columns = el.table.tableRows?.[0]?.tableCells?.length ?? 0;
+                    elements.push({
+                        type: 'table',
+                        startIndex: startIdx,
+                        endIndex: endIdx,
+                        tableRows: rows,
+                        tableColumns: columns,
+                    });
+                }
+                // Recurse into table cell content
+                for (const row of el.table.tableRows || []) {
+                    for (const cell of row.tableCells || []) {
+                        if (cell.content) {
+                            processContent(cell.content);
+                        }
                     }
                 }
-                textPreview = textPreview.trim();
-                if (textPreview.length > 100) {
-                    textPreview = textPreview.substring(0, 100) + '...';
+            } else if (el.sectionBreak) {
+                sectionBreakCount++;
+                if (detailed) {
+                    elements.push({
+                        type: 'sectionBreak',
+                        startIndex: startIdx,
+                        endIndex: endIdx,
+                    });
                 }
-                elements.push({
-                    type: 'paragraph',
-                    startIndex: startIdx,
-                    endIndex: endIdx,
-                    textPreview: textPreview || undefined,
-                    namedStyleType: el.paragraph.paragraphStyle?.namedStyleType || undefined,
-                });
-            }
-        } else if (el.table) {
-            tableCount++;
-            if (detailed) {
-                const rows = el.table.tableRows?.length ?? 0;
-                const columns = el.table.tableRows?.[0]?.tableCells?.length ?? 0;
-                elements.push({
-                    type: 'table',
-                    startIndex: startIdx,
-                    endIndex: endIdx,
-                    tableRows: rows,
-                    tableColumns: columns,
-                });
-            }
-        } else if (el.sectionBreak) {
-            sectionBreakCount++;
-            if (detailed) {
-                elements.push({
-                    type: 'sectionBreak',
-                    startIndex: startIdx,
-                    endIndex: endIdx,
-                });
-            }
-        } else if (el.tableOfContents) {
-            if (detailed) {
-                elements.push({
-                    type: 'tableOfContents',
-                    startIndex: startIdx,
-                    endIndex: endIdx,
-                });
+            } else if (el.tableOfContents) {
+                if (detailed) {
+                    elements.push({
+                        type: 'tableOfContents',
+                        startIndex: startIdx,
+                        endIndex: endIdx,
+                    });
+                }
             }
         }
     }
+
+    processContent(body?.content || []);
 
     const hasHeaders = headers ? Object.keys(headers).length > 0 : false;
     const hasFooters = footers ? Object.keys(footers).length > 0 : false;
