@@ -258,4 +258,21 @@ describe('parseDocStructure - detailed mode', () => {
     const result = parseDocStructure(doc, false, 'tab2');
     assert.equal(result.paragraphCount, 3);
   });
+
+  it('throws when tabId is provided but does not exist', () => {
+    const doc = makeDoc({
+      tabs: [{
+        tabProperties: { tabId: 'tab1', title: 'Tab 1' },
+        documentTab: { body: { content: [makeParagraph(0, 5, 'A')] } },
+        childTabs: [],
+      }],
+    });
+    assert.throws(
+      () => parseDocStructure(doc, false, 'nonexistent'),
+      (err: any) => {
+        assert.match(err.message, /tabId "nonexistent" does not exist/);
+        return true;
+      }
+    );
+  });
 });

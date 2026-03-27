@@ -1046,7 +1046,10 @@ export function parseDocStructure(
 
     if (tabId && doc.tabs) {
         const tab = findTabById(doc, tabId);
-        if (tab?.documentTab) {
+        if (!tab) {
+            throw new Error(`Tab not found: tabId "${tabId}" does not exist in this document.`);
+        }
+        if (tab.documentTab) {
             body = tab.documentTab.body;
             headers = tab.documentTab.headers;
             footers = tab.documentTab.footers;
