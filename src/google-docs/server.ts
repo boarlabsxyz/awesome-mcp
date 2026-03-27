@@ -25,6 +25,13 @@ BatchOperationSchema,
 BatchOperation
 } from '../types.js';
 import * as GDocsHelpers from './apiHelpers.js';
+import {
+  WORKSPACE_MIME_MAP,
+  getFileAndPermissions,
+  handleDriveError,
+  formatPermission,
+  summarizePermissions,
+} from './driveHelpers.js';
 
 // Multi-user imports
 import { UserSession, createUserSession, createUserSessionFromConnection } from '../userSession.js';
@@ -2709,37 +2716,9 @@ execute: async (args, { log, session }) => {
   const file = fileInfo.data;
   const mime = file.mimeType || '';
   const fileName = file.name || 'Untitled';
-
-  // Map of Google Workspace mime types to default export formats and export mime types
-  const workspaceMimeMap: Record<string, { defaultFormat: string; exports: Record<string, string> }> = {
-    'application/vnd.google-apps.document': {
-      defaultFormat: 'pdf',
-      exports: {
-        pdf: 'application/pdf',
-        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      },
-    },
-    'application/vnd.google-apps.spreadsheet': {
-      defaultFormat: 'xlsx',
-      exports: {
-        pdf: 'application/pdf',
-        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        csv: 'text/csv',
-      },
-    },
-    'application/vnd.google-apps.presentation': {
-      defaultFormat: 'pptx',
-      exports: {
-        pdf: 'application/pdf',
-        pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      },
-    },
-  };
-
-  const workspaceInfo = workspaceMimeMap[mime];
+  const workspaceInfo = WORKSPACE_MIME_MAP[mime];
 
   if (workspaceInfo) {
-    // Google Workspace file — export it
     const format = args.exportFormat || workspaceInfo.defaultFormat;
     const exportMime = workspaceInfo.exports[format];
     if (!exportMime) {
@@ -2778,7 +2757,6 @@ execute: async (args, { log, session }) => {
     const exported = uploadResponse.data;
     return `File exported successfully:\n  Source: ${fileName}\n  Exported as: ${exported.name}\n  File ID: ${exported.id}\n  Size: ${exported.size} bytes\n  Link: ${exported.webViewLink}`;
   } else {
-    // Binary file — return download link
     return `File: ${fileName}\n  File ID: ${file.id}\n  Type: ${mime}\n  Size: ${file.size || 'Unknown'} bytes\n  Download Link: ${file.webContentLink || 'Not available (file may not be downloadable directly)'}\n  View Link: ${file.webViewLink || 'Not available'}`;
   }
 }
@@ -2795,21 +2773,11 @@ execute: async (args, { log, session }) => {
   log.info(`Getting permissions for file ${args.fileId}`);
 
   try {
-    const [fileInfo, permResponse] = await Promise.all([
-      drive.files.get({
-        fileId: args.fileId,
-        supportsAllDrives: true,
-        fields: 'id,name,mimeType,shared,webViewLink',
-      }),
-      drive.permissions.list({
-        fileId: args.fileId,
-        supportsAllDrives: true,
-        fields: 'permissions(id,type,role,emailAddress,displayName,expirationTime,deleted)',
-      }),
-    ]);
-
-    const file = fileInfo.data;
-    const permissions = permResponse.data.permissions || [];
+    const { file, permissions } = await getFileAndPermissions(
+      drive, args.fileId,
+      'id,name,mimeType,shared,webViewLink',
+      'permissions(id,type,role,emailAddress,displayName,expirationTime,deleted)',
+    );
 
     let result = `Permissions for "${file.name}" (${file.id}):\n`;
     result += `  Type: ${file.mimeType}\n`;
@@ -2821,28 +2789,14 @@ execute: async (args, { log, session }) => {
     } else {
       result += `${permissions.length} permission(s):\n\n`;
       permissions.forEach((perm, index) => {
-        result += `${index + 1}. **${perm.role}** — `;
-        if (perm.type === 'anyone') {
-          result += 'Anyone with the link';
-        } else if (perm.type === 'domain') {
-          result += `Domain`;
-        } else {
-          result += `${perm.displayName || perm.emailAddress || 'Unknown'}`;
-          if (perm.emailAddress) result += ` (${perm.emailAddress})`;
-        }
-        result += `\n   Type: ${perm.type}`;
-        if (perm.expirationTime) result += `\n   Expires: ${perm.expirationTime}`;
-        if (perm.deleted) result += `\n   (Deleted user)`;
-        result += '\n';
+        result += formatPermission(perm, index);
       });
     }
 
     return result;
   } catch (error: any) {
     log.error(`Error getting permissions: ${error.message || error}`);
-    if (error.code === 404) throw new UserError(`File not found (ID: ${args.fileId}).`);
-    if (error.code === 403) throw new UserError("Permission denied. You don't have access to view permissions for this file.");
-    throw new UserError(`Failed to get permissions: ${error.message || 'Unknown error'}`);
+    handleDriveError(error, 'view permissions for', args.fileId);
   }
 }
 });
@@ -2863,7 +2817,6 @@ execute: async (args, { log, session }) => {
   const drive = await getDriveClient(session);
   log.info(`Sharing file ${args.fileId} as ${args.role} to ${args.type}${args.emailAddress ? ` (${args.emailAddress})` : ''}`);
 
-  // Validate required fields based on type
   if ((args.type === 'user' || args.type === 'group') && !args.emailAddress) {
     throw new UserError(`emailAddress is required when sharing with type "${args.type}".`);
   }
@@ -2887,7 +2840,6 @@ execute: async (args, { log, session }) => {
       requestBody: permissionBody,
     });
 
-    // Get updated file info for the link
     const fileInfo = await drive.files.get({
       fileId: args.fileId,
       supportsAllDrives: true,
@@ -2901,9 +2853,7 @@ execute: async (args, { log, session }) => {
     return `Shared successfully:\n  File: ${fileInfo.data.name}\n  Access: ${args.role} granted to ${target}\n  Link: ${fileInfo.data.webViewLink || 'N/A'}`;
   } catch (error: any) {
     log.error(`Error sharing file: ${error.message || error}`);
-    if (error.code === 404) throw new UserError(`File not found (ID: ${args.fileId}).`);
-    if (error.code === 403) throw new UserError("Permission denied. You don't have permission to share this file.");
-    throw new UserError(`Failed to share file: ${error.message || 'Unknown error'}`);
+    handleDriveError(error, 'share', args.fileId);
   }
 }
 });
@@ -2931,7 +2881,7 @@ execute: async (args, { log, session }) => {
 
     const fileMetadata: any = {
       name: args.title,
-      mimeType: 'application/vnd.google-apps.document', // Convert to Google Doc
+      mimeType: 'application/vnd.google-apps.document',
     };
     if (args.parentFolderId) {
       fileMetadata.parents = [args.parentFolderId];
@@ -2951,9 +2901,7 @@ execute: async (args, { log, session }) => {
     return `Google Doc created successfully:\n  Title: ${doc.name}\n  Document ID: ${doc.id}\n  Link: ${doc.webViewLink}`;
   } catch (error: any) {
     log.error(`Error importing to Google Doc: ${error.message || error}`);
-    if (error.code === 404) throw new UserError(`Parent folder not found (ID: ${args.parentFolderId}).`);
-    if (error.code === 403) throw new UserError("Permission denied. Check your access to the target folder.");
-    throw new UserError(`Failed to import content: ${error.message || 'Unknown error'}`);
+    handleDriveError(error, 'import content to', args.parentFolderId || args.title);
   }
 }
 });
@@ -2969,21 +2917,12 @@ execute: async (args, { log, session }) => {
   log.info(`Checking public access for file ${args.fileId}`);
 
   try {
-    const [fileInfo, permResponse] = await Promise.all([
-      drive.files.get({
-        fileId: args.fileId,
-        supportsAllDrives: true,
-        fields: 'id,name,mimeType,shared,webViewLink,webContentLink',
-      }),
-      drive.permissions.list({
-        fileId: args.fileId,
-        supportsAllDrives: true,
-        fields: 'permissions(id,type,role)',
-      }),
-    ]);
+    const { file, permissions } = await getFileAndPermissions(
+      drive, args.fileId,
+      'id,name,mimeType,shared,webViewLink,webContentLink',
+      'permissions(id,type,role)',
+    );
 
-    const file = fileInfo.data;
-    const permissions = permResponse.data.permissions || [];
     const publicPerm = permissions.find(p => p.type === 'anyone');
     const isPublic = !!publicPerm;
 
@@ -2997,26 +2936,16 @@ execute: async (args, { log, session }) => {
       result += `\nPublic Link: ${file.webViewLink}`;
     }
 
-    // Summarize other permissions
     const otherPerms = permissions.filter(p => p.type !== 'anyone');
     if (otherPerms.length > 0) {
       result += `\n\nOther permissions:\n`;
-      const typeCounts: Record<string, number> = {};
-      for (const p of otherPerms) {
-        const key = `${p.type}/${p.role}`;
-        typeCounts[key] = (typeCounts[key] || 0) + 1;
-      }
-      for (const [key, count] of Object.entries(typeCounts)) {
-        result += `  ${count}x ${key}\n`;
-      }
+      result += summarizePermissions(otherPerms);
     }
 
     return result;
   } catch (error: any) {
     log.error(`Error checking public access: ${error.message || error}`);
-    if (error.code === 404) throw new UserError(`File not found (ID: ${args.fileId}).`);
-    if (error.code === 403) throw new UserError("Permission denied. You don't have access to check this file's permissions.");
-    throw new UserError(`Failed to check public access: ${error.message || 'Unknown error'}`);
+    handleDriveError(error, 'check public access for', args.fileId);
   }
 }
 });
