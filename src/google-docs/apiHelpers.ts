@@ -2,7 +2,7 @@
 import { google, docs_v1 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { UserError } from 'fastmcp';
-import { TextStyleArgs, ParagraphStyleArgs, hexToRgbColor, NotImplementedError } from '../types.js';
+import { TextStyleArgs, ParagraphStyleArgs, hexToRgbColor, NotImplementedError, BatchOperation } from '../types.js';
 
 type Docs = docs_v1.Docs; // Alias for convenience
 
@@ -928,4 +928,244 @@ export function findTabById(doc: docs_v1.Schema$Document, tabId: string): docs_v
     };
 
     return searchTabs(doc.tabs);
+}
+
+// --- Batch Operation Mapper ---
+
+/**
+ * Maps a BatchOperation to Google Docs API request(s). Pure function.
+ */
+export function mapBatchOperationToRequest(op: BatchOperation): docs_v1.Schema$Request[] {
+    switch (op.type) {
+        case 'insert_text':
+            return [{
+                insertText: {
+                    location: { index: op.index },
+                    text: op.text,
+                }
+            }];
+
+        case 'delete_text':
+            return [{
+                deleteContentRange: {
+                    range: { startIndex: op.startIndex, endIndex: op.endIndex }
+                }
+            }];
+
+        case 'replace_text':
+        case 'find_replace':
+            return [{
+                replaceAllText: {
+                    containsText: { text: op.findText, matchCase: op.matchCase ?? false },
+                    replaceText: op.replaceText,
+                }
+            }];
+
+        case 'format_text': {
+            const result = buildUpdateTextStyleRequest(op.startIndex, op.endIndex, op.style);
+            return result ? [result.request] : [];
+        }
+
+        case 'update_paragraph_style': {
+            const result = buildUpdateParagraphStyleRequest(op.startIndex, op.endIndex, op.style);
+            return result ? [result.request] : [];
+        }
+
+        case 'insert_table':
+            return [{
+                insertTable: {
+                    location: { index: op.index },
+                    rows: op.rows,
+                    columns: op.columns,
+                }
+            }];
+
+        case 'insert_page_break':
+            return [{
+                insertPageBreak: {
+                    location: { index: op.index },
+                }
+            }];
+
+        case 'create_bullet_list':
+            return [{
+                createParagraphBullets: {
+                    range: { startIndex: op.startIndex, endIndex: op.endIndex },
+                    bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+                }
+            }];
+    }
+}
+
+// --- Document Structure Parser ---
+
+export interface DocStructureSummary {
+    title: string;
+    documentLength: number;
+    paragraphCount: number;
+    tableCount: number;
+    sectionBreakCount: number;
+    hasHeaders: boolean;
+    hasFooters: boolean;
+    tabs: { id: string; title: string; level: number }[];
+    elements?: DocStructureElement[];
+}
+
+export interface DocStructureElement {
+    type: 'paragraph' | 'table' | 'sectionBreak' | 'tableOfContents';
+    startIndex: number;
+    endIndex: number;
+    textPreview?: string;
+    tableRows?: number;
+    tableColumns?: number;
+    namedStyleType?: string;
+}
+
+/**
+ * Parses a Google Doc into a structure summary.
+ */
+export function parseDocStructure(
+    doc: docs_v1.Schema$Document,
+    detailed: boolean,
+    tabId?: string
+): DocStructureSummary {
+    const title = doc.title || 'Untitled';
+
+    // Get tab info
+    const allTabs = getAllTabs(doc);
+    const tabs = allTabs.map(t => ({
+        id: t.tabProperties?.tabId || '',
+        title: t.tabProperties?.title || '',
+        level: t.level,
+    }));
+
+    // Determine which content to analyze
+    let body: docs_v1.Schema$Body | undefined;
+    let headers: any = undefined;
+    let footers: any = undefined;
+
+    if (tabId && doc.tabs) {
+        const tab = findTabById(doc, tabId);
+        if (!tab) {
+            throw new Error(`Tab not found: tabId "${tabId}" does not exist in this document.`);
+        }
+        if (tab.documentTab) {
+            body = tab.documentTab.body;
+            headers = tab.documentTab.headers;
+            footers = tab.documentTab.footers;
+        }
+    } else if (doc.tabs && doc.tabs.length > 0) {
+        // Default to first tab
+        const firstTab = doc.tabs[0];
+        if (firstTab?.documentTab) {
+            body = firstTab.documentTab.body;
+            headers = firstTab.documentTab.headers;
+            footers = firstTab.documentTab.footers;
+        }
+    }
+
+    // Fallback to legacy body field
+    if (!body) {
+        body = doc.body;
+        headers = (doc as any).headers;
+        footers = (doc as any).footers;
+    }
+
+    let paragraphCount = 0;
+    let tableCount = 0;
+    let sectionBreakCount = 0;
+    let documentLength = 0;
+    const elements: DocStructureElement[] = [];
+
+    // Recursive helper to process structural elements (top-level and inside table cells)
+    function processContent(contentItems: docs_v1.Schema$StructuralElement[]): void {
+        for (const el of contentItems) {
+            const startIdx = el.startIndex ?? 0;
+            const endIdx = el.endIndex ?? 0;
+            if (endIdx > documentLength) documentLength = endIdx;
+
+            if (el.paragraph) {
+                paragraphCount++;
+                if (detailed) {
+                    let textPreview = '';
+                    for (const pe of el.paragraph.elements || []) {
+                        if (pe.textRun?.content) {
+                            textPreview += pe.textRun.content;
+                        }
+                    }
+                    textPreview = textPreview.trim();
+                    if (textPreview.length > 100) {
+                        textPreview = textPreview.substring(0, 100) + '...';
+                    }
+                    elements.push({
+                        type: 'paragraph',
+                        startIndex: startIdx,
+                        endIndex: endIdx,
+                        textPreview: textPreview || undefined,
+                        namedStyleType: el.paragraph.paragraphStyle?.namedStyleType || undefined,
+                    });
+                }
+            } else if (el.table) {
+                tableCount++;
+                if (detailed) {
+                    const rows = el.table.tableRows?.length ?? 0;
+                    const columns = el.table.tableRows?.[0]?.tableCells?.length ?? 0;
+                    elements.push({
+                        type: 'table',
+                        startIndex: startIdx,
+                        endIndex: endIdx,
+                        tableRows: rows,
+                        tableColumns: columns,
+                    });
+                }
+                // Recurse into table cell content
+                for (const row of el.table.tableRows || []) {
+                    for (const cell of row.tableCells || []) {
+                        if (cell.content) {
+                            processContent(cell.content);
+                        }
+                    }
+                }
+            } else if (el.sectionBreak) {
+                sectionBreakCount++;
+                if (detailed) {
+                    elements.push({
+                        type: 'sectionBreak',
+                        startIndex: startIdx,
+                        endIndex: endIdx,
+                    });
+                }
+            } else if (el.tableOfContents) {
+                if (detailed) {
+                    elements.push({
+                        type: 'tableOfContents',
+                        startIndex: startIdx,
+                        endIndex: endIdx,
+                    });
+                }
+            }
+        }
+    }
+
+    processContent(body?.content || []);
+
+    const hasHeaders = headers ? Object.keys(headers).length > 0 : false;
+    const hasFooters = footers ? Object.keys(footers).length > 0 : false;
+
+    const summary: DocStructureSummary = {
+        title,
+        documentLength,
+        paragraphCount,
+        tableCount,
+        sectionBreakCount,
+        hasHeaders,
+        hasFooters,
+        tabs,
+    };
+
+    if (detailed) {
+        summary.elements = elements;
+    }
+
+    return summary;
 }

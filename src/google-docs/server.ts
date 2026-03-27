@@ -20,7 +20,9 @@ ParagraphStyleArgs,
 ApplyTextStyleToolParameters, ApplyTextStyleToolArgs,
 ApplyParagraphStyleToolParameters, ApplyParagraphStyleToolArgs,
 SharedDriveParameters,
-NotImplementedError
+NotImplementedError,
+BatchOperationSchema,
+BatchOperation
 } from '../types.js';
 import * as GDocsHelpers from './apiHelpers.js';
 import * as SheetsHelpers from '../google-sheets/apiHelpers.js';
@@ -2767,6 +2769,256 @@ execute: async (args, { log, session }) => {
     if (error.code === 403) throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
     throw new UserError(`Failed to list shared drives: ${error.message || 'Unknown error'}`);
   }
+}
+});
+
+// === FIND AND REPLACE TOOL ===
+
+server.addTool({
+name: 'findAndReplace',
+description: 'Finds all occurrences of a text string in a Google Doc and replaces them. Returns the number of replacements made.',
+parameters: z.object({
+  documentId: z.string().describe('The ID of the Google Document.'),
+  findText: z.string().min(1).describe('The text to find.'),
+  replaceText: z.string().describe('The replacement text.'),
+  matchCase: z.boolean().optional().default(false).describe('Whether the search should be case-sensitive.'),
+  tabId: z.string().optional().describe('Optional tab ID to restrict the replacement to.'),
+}),
+execute: async (args, { log, session }) => {
+  const docs = await getDocsClient(session);
+  log.info(`Find and replace in doc ${args.documentId}: "${args.findText}" → "${args.replaceText}" (matchCase: ${args.matchCase})`);
+
+  const request: docs_v1.Schema$Request = {
+    replaceAllText: {
+      containsText: {
+        text: args.findText,
+        matchCase: args.matchCase ?? false,
+      },
+      replaceText: args.replaceText,
+    }
+  };
+
+  // If tabId specified, add tabsCriteria
+  if (args.tabId) {
+    (request.replaceAllText as any).tabsCriteria = { tabIds: [args.tabId] };
+  }
+
+  const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+
+  // Extract occurrences changed from the reply
+  const replies = response.replies || [];
+  let occurrencesChanged = 0;
+  for (const reply of replies) {
+    if (reply.replaceAllText?.occurrencesChanged) {
+      occurrencesChanged += reply.replaceAllText.occurrencesChanged;
+    }
+  }
+
+  return `Replaced ${occurrencesChanged} occurrence(s) of "${args.findText}" with "${args.replaceText}".`;
+}
+});
+
+// === INSPECT DOCUMENT STRUCTURE TOOL ===
+
+server.addTool({
+name: 'inspectDocStructure',
+description: 'Analyzes and returns the structure of a Google Doc: paragraph/table/section counts, headers/footers presence, tab hierarchy. Use detailed mode for element-by-element listing.',
+parameters: z.object({
+  documentId: z.string().describe('The ID of the Google Document.'),
+  detailed: z.boolean().optional().default(false).describe('If true, returns element-by-element listing with type, position, and text previews.'),
+  tabId: z.string().optional().describe('Optional tab ID to inspect (defaults to first tab).'),
+}),
+execute: async (args, { log, session }) => {
+  const docs = await getDocsClient(session);
+  log.info(`Inspecting structure of doc ${args.documentId} (detailed: ${args.detailed})`);
+
+  const res = await docs.documents.get({
+    documentId: args.documentId,
+    includeTabsContent: true,
+  });
+
+  const doc = res.data;
+  if (!doc) {
+    throw new UserError(`Document not found (ID: ${args.documentId}).`);
+  }
+
+  const structure = GDocsHelpers.parseDocStructure(doc, args.detailed ?? false, args.tabId);
+  return JSON.stringify(structure, null, 2);
+}
+});
+
+// === EXPORT DOC TO PDF TOOL ===
+
+server.addTool({
+name: 'exportDocToPdf',
+description: 'Exports a Google Doc as a PDF file and saves it to Google Drive. Returns the PDF file ID, name, and link.',
+parameters: z.object({
+  documentId: z.string().describe('The ID of the Google Document to export.'),
+  pdfFilename: z.string().optional().describe('Custom filename for the PDF (without extension). Defaults to the document title.'),
+  folderId: z.string().optional().describe('Optional Drive folder ID to save the PDF in.'),
+}),
+execute: async (args, { log, session }) => {
+  const drive = await getDriveClient(session);
+  log.info(`Exporting doc ${args.documentId} to PDF`);
+
+  // Validate the source is a Google Doc
+  const fileInfo = await drive.files.get({
+    fileId: args.documentId,
+    supportsAllDrives: true,
+    fields: 'mimeType,name',
+  });
+
+  if (fileInfo.data.mimeType !== 'application/vnd.google-apps.document') {
+    throw new UserError(`File is not a Google Doc (mimeType: ${fileInfo.data.mimeType}). Only Google Docs can be exported to PDF with this tool.`);
+  }
+
+  const docTitle = fileInfo.data.name || 'Untitled';
+  const pdfName = (args.pdfFilename || docTitle) + '.pdf';
+
+  // Export as PDF
+  const exportResponse = await drive.files.export({
+    fileId: args.documentId,
+    mimeType: 'application/pdf',
+  }, {
+    responseType: 'arraybuffer',
+  });
+
+  const pdfBuffer = Buffer.from(exportResponse.data as ArrayBuffer);
+
+  // Upload PDF to Drive
+  const { Readable } = await import('stream');
+  const fileMetadata: any = {
+    name: pdfName,
+    mimeType: 'application/pdf',
+  };
+  if (args.folderId) {
+    fileMetadata.parents = [args.folderId];
+  }
+
+  const uploadResponse = await drive.files.create({
+    requestBody: fileMetadata,
+    media: {
+      mimeType: 'application/pdf',
+      body: Readable.from(pdfBuffer),
+    },
+    supportsAllDrives: true,
+    fields: 'id,name,webViewLink,size',
+  });
+
+  const pdf = uploadResponse.data;
+  return `PDF exported successfully:\n  File ID: ${pdf.id}\n  Name: ${pdf.name}\n  Size: ${pdf.size} bytes\n  Link: ${pdf.webViewLink}`;
+}
+});
+
+// === IMPORT DOCX TOOL ===
+
+server.addTool({
+name: 'importDocx',
+description: 'Converts a .docx file already in Google Drive into a Google Doc. Drive auto-converts the format. Returns the new Google Doc ID and link.',
+parameters: z.object({
+  fileId: z.string().describe('The Drive file ID of the .docx file to convert.'),
+  targetFolderId: z.string().optional().describe('Optional folder ID to place the converted Google Doc in.'),
+}),
+execute: async (args, { log, session }) => {
+  const drive = await getDriveClient(session);
+  log.info(`Importing DOCX ${args.fileId} as Google Doc`);
+
+  // Validate the source is a docx file
+  const fileInfo = await drive.files.get({
+    fileId: args.fileId,
+    supportsAllDrives: true,
+    fields: 'mimeType,name',
+  });
+
+  const mime = fileInfo.data.mimeType || '';
+  if (mime !== 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+    throw new UserError(`File is not a .docx file (mimeType: ${mime}). Only Word documents (.docx) can be imported.`);
+  }
+
+  // Copy the file with Google Docs mimeType — Drive auto-converts
+  const copyMetadata: any = {
+    mimeType: 'application/vnd.google-apps.document',
+  };
+  if (args.targetFolderId) {
+    copyMetadata.parents = [args.targetFolderId];
+  }
+
+  const copyResponse = await drive.files.copy({
+    fileId: args.fileId,
+    requestBody: copyMetadata,
+    supportsAllDrives: true,
+    fields: 'id,name,webViewLink',
+  });
+
+  const newDoc = copyResponse.data;
+  return `DOCX imported successfully as Google Doc:\n  Document ID: ${newDoc.id}\n  Title: ${newDoc.name}\n  Link: ${newDoc.webViewLink}`;
+}
+});
+
+// === BATCH UPDATE DOC TOOL ===
+
+server.addTool({
+name: 'batchUpdateDoc',
+description: 'Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Index-based operations are automatically sorted in descending order to prevent index shifting.',
+parameters: z.object({
+  documentId: z.string().describe('The ID of the Google Document.'),
+  operations: z.array(BatchOperationSchema).min(1).max(50).describe('Array of operations to execute (1-50).'),
+}),
+execute: async (args, { log, session }) => {
+  const docs = await getDocsClient(session);
+  log.info(`Batch update on doc ${args.documentId}: ${args.operations.length} operation(s)`);
+
+  // Map all operations to API requests
+  const allRequests: docs_v1.Schema$Request[] = [];
+  const opSummary: string[] = [];
+
+  // Detect mixing of global (replace_text/find_replace) and index-based ops
+  const hasGlobal = args.operations.some(op => op.type === 'replace_text' || op.type === 'find_replace');
+  const hasIndexBased = args.operations.some(op => op.type !== 'replace_text' && op.type !== 'find_replace');
+
+  if (hasGlobal && hasIndexBased) {
+    throw new UserError(
+      'Cannot mix global operations (replace_text, find_replace) with index-based operations in the same batch. ' +
+      'Global replacements change document length and invalidate indices. Submit them in separate batches.'
+    );
+  }
+
+  // For index-based batches, sort in descending index order to prevent shifting
+  let opsToProcess: BatchOperation[];
+  if (hasIndexBased) {
+    opsToProcess = [...args.operations].sort((a, b) => {
+      const aIdx = ('index' in a ? (a as any).index : (a as any).startIndex) ?? 0;
+      const bIdx = ('index' in b ? (b as any).index : (b as any).startIndex) ?? 0;
+      return bIdx - aIdx;
+    });
+  } else {
+    opsToProcess = args.operations;
+  }
+
+  for (const op of opsToProcess) {
+    const requests = GDocsHelpers.mapBatchOperationToRequest(op);
+    if (requests.length > 0) {
+      allRequests.push(...requests);
+      opSummary.push(op.type);
+    }
+  }
+
+  if (allRequests.length === 0) {
+    return 'No valid operations to execute.';
+  }
+
+  await GDocsHelpers.executeBatchUpdate(docs, args.documentId, allRequests);
+
+  // Build summary
+  const typeCounts: Record<string, number> = {};
+  for (const t of opSummary) {
+    typeCounts[t] = (typeCounts[t] || 0) + 1;
+  }
+  const summary = Object.entries(typeCounts)
+    .map(([type, count]) => `${count}x ${type}`)
+    .join(', ');
+
+  return `Batch update completed: ${args.operations.length} operation(s) executed (${summary}).`;
 }
 });
 
