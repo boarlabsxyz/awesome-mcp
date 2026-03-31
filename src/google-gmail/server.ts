@@ -17,7 +17,7 @@ import { createRawEmail, parseEmailHeaders, formatEmailList } from './apiHelpers
 const MCP_SLUG = process.env.MCP_SLUG || 'google-gmail';
 
 const gmailServer = new FastMCP<UserSession>({
-  name: 'Google Gmail MCP Server',
+  name: 'Gmail MCP Server',
   version: '1.0.0',
   authenticate: async (request: http.IncomingMessage | undefined) => {
     // In stdio mode, request is undefined — no per-user auth needed

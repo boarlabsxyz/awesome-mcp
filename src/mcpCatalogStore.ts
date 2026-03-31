@@ -336,9 +336,9 @@ export async function seedDefaultCatalogs(): Promise<void> {
 
   await createMcpCatalog({
     slug: 'google-gmail',
-    name: 'Google Gmail MCP',
+    name: 'Gmail MCP',
     description: 'Send, read, search, and manage Gmail messages and labels',
-    iconUrl: null,
+    iconUrl: 'https://images.icon-icons.com/2642/PNG/512/google_mail_gmail_logo_icon_159346.png',
     mcpUrl: googleGmailMcpUrl,
     scopes: [
       'https://www.googleapis.com/auth/gmail.modify',
