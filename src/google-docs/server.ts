@@ -25,6 +25,18 @@ BatchOperationSchema,
 BatchOperation
 } from '../types.js';
 import * as GDocsHelpers from './apiHelpers.js';
+import {
+  WORKSPACE_MIME_MAP,
+  resolveExportFormat,
+  formatExportResult,
+  formatBinaryFileInfo,
+  getFileAndPermissions,
+  handleDriveError,
+  formatPermissionsList,
+  validateShareArgs,
+  formatShareTarget,
+  formatPublicAccessResult,
+} from './driveHelpers.js';
 
 // Multi-user imports
 import { UserSession, createUserSession, createUserSessionFromConnection } from '../userSession.js';
@@ -2683,6 +2695,224 @@ execute: async (args, { log, session }) => {
     .join(', ');
 
   return `Batch update completed: ${args.operations.length} operation(s) executed (${summary}).`;
+}
+});
+
+// === DRIVE FILE TOOLS ===
+
+server.addTool({
+name: 'downloadDriveFile',
+description: 'Download/export a Google Drive file. For Google Workspace files (Docs, Sheets, Slides), exports to a chosen format (PDF, DOCX, XLSX, PPTX, CSV) and saves the exported file to Drive. For binary files, returns the direct download link.',
+parameters: z.object({
+  fileId: z.string().describe('The Drive file ID to download/export.'),
+  exportFormat: z.enum(['pdf', 'docx', 'xlsx', 'pptx', 'csv']).optional().describe('Export format for Google Workspace files. Auto-detected from mime type if omitted.'),
+  folderId: z.string().optional().describe('Optional Drive folder ID to save the exported file in.'),
+}),
+execute: async (args, { log, session }) => {
+  const drive = await getDriveClient(session);
+  log.info(`Downloading/exporting file ${args.fileId} (format: ${args.exportFormat || 'auto'})`);
+
+  try {
+    const fileInfo = await drive.files.get({
+      fileId: args.fileId,
+      supportsAllDrives: true,
+      fields: 'id,name,mimeType,webContentLink,webViewLink,size',
+    });
+
+    const file = fileInfo.data;
+    const mime = file.mimeType || '';
+    const fileName = file.name || 'Untitled';
+    const resolved = resolveExportFormat(mime, args.exportFormat);
+
+    if (resolved) {
+      const exportResponse = await drive.files.export({
+        fileId: args.fileId,
+        mimeType: resolved.exportMime,
+      }, {
+        responseType: 'arraybuffer',
+      });
+
+      const buffer = Buffer.from(exportResponse.data as ArrayBuffer);
+      const { Readable } = await import('stream');
+      const fileMetadata: any = {
+        name: `${fileName}.${resolved.format}`,
+        mimeType: resolved.exportMime,
+      };
+      if (args.folderId) {
+        fileMetadata.parents = [args.folderId];
+      }
+
+      const uploadResponse = await drive.files.create({
+        requestBody: fileMetadata,
+        media: {
+          mimeType: resolved.exportMime,
+          body: Readable.from(buffer),
+        },
+        supportsAllDrives: true,
+        fields: 'id,name,webViewLink,size',
+      });
+
+      return formatExportResult(fileName, uploadResponse.data);
+    } else {
+      return formatBinaryFileInfo(file);
+    }
+  } catch (error: any) {
+    if (error instanceof UserError) throw error;
+    log.error(`Error downloading/exporting file: ${error.message || error}`);
+    handleDriveError(error, 'download/export', args.fileId);
+  }
+}
+});
+
+server.addTool({
+name: 'getFilePermissions',
+description: 'Retrieve all permissions on a Google Drive file or folder. Shows who has access, their roles, and sharing status.',
+parameters: z.object({
+  fileId: z.string().describe('The Drive file or folder ID.'),
+}),
+execute: async (args, { log, session }) => {
+  const drive = await getDriveClient(session);
+  log.info(`Getting permissions for file ${args.fileId}`);
+
+  try {
+    const { file, permissions } = await getFileAndPermissions(
+      drive, args.fileId,
+      'id,name,mimeType,shared,webViewLink',
+      'permissions(id,type,role,emailAddress,displayName,expirationTime,deleted)',
+    );
+
+    return formatPermissionsList(file, permissions);
+  } catch (error: any) {
+    log.error(`Error getting permissions: ${error.message || error}`);
+    handleDriveError(error, 'view permissions for', args.fileId);
+  }
+}
+});
+
+server.addTool({
+name: 'shareDriveFile',
+description: 'Share a Google Drive file or folder by creating a permission. Can share with specific users/groups, a domain, or create an "anyone with the link" share.',
+parameters: z.object({
+  fileId: z.string().describe('The Drive file or folder ID to share.'),
+  role: z.enum(['reader', 'writer', 'commenter']).describe('The access role to grant.'),
+  type: z.enum(['user', 'group', 'domain', 'anyone']).describe('The type of grantee.'),
+  emailAddress: z.string().optional().describe('Email address of the user or group (required for type "user" or "group").'),
+  domain: z.string().optional().describe('Domain name (required for type "domain").'),
+  sendNotification: z.boolean().optional().default(true).describe('Whether to send an email notification (only for user/group shares).'),
+  expirationTime: z.string().optional().describe('Expiration time in RFC 3339 format (e.g., "2025-12-31T23:59:59Z"). Only for user/group shares on files (not folders).'),
+}),
+execute: async (args, { log, session }) => {
+  const drive = await getDriveClient(session);
+  log.info(`Sharing file ${args.fileId} as ${args.role} to ${args.type}${args.emailAddress ? ` (${args.emailAddress})` : ''}`);
+
+  validateShareArgs(args);
+  const isUserOrGroup = args.type === 'user' || args.type === 'group';
+
+  try {
+    const permissionBody: any = {
+      role: args.role,
+      type: args.type,
+    };
+    if (args.emailAddress) permissionBody.emailAddress = args.emailAddress;
+    if (args.domain) permissionBody.domain = args.domain;
+    if (isUserOrGroup && args.expirationTime) permissionBody.expirationTime = args.expirationTime;
+
+    const createParams: any = {
+      fileId: args.fileId,
+      supportsAllDrives: true,
+      requestBody: permissionBody,
+    };
+    if (isUserOrGroup) {
+      createParams.sendNotificationEmail = args.sendNotification ?? true;
+    }
+
+    await drive.permissions.create(createParams);
+
+    const fileInfo = await drive.files.get({
+      fileId: args.fileId,
+      supportsAllDrives: true,
+      fields: 'name,webViewLink',
+    });
+
+    const target = formatShareTarget(args.type, args.emailAddress, args.domain);
+    return `Shared successfully:\n  File: ${fileInfo.data.name}\n  Access: ${args.role} granted to ${target}\n  Link: ${fileInfo.data.webViewLink || 'N/A'}`;
+  } catch (error: any) {
+    if (error instanceof UserError) throw error;
+    log.error(`Error sharing file: ${error.message || error}`);
+    handleDriveError(error, 'share', args.fileId);
+  }
+}
+});
+
+server.addTool({
+name: 'importToGoogleDoc',
+description: 'Import content (text, HTML, or markdown) into a new Google Doc. Google Drive auto-converts the content to Google Docs format.',
+parameters: z.object({
+  title: z.string().describe('Title for the new Google Doc.'),
+  content: z.string().describe('The content to import (text, HTML, or markdown string).'),
+  mimeType: z.enum([
+    'text/plain',
+    'text/html',
+    'text/markdown',
+  ]).optional().default('text/plain').describe('The mime type of the source content. For DOCX files already in Drive, use the importDocx tool instead.'),
+  parentFolderId: z.string().optional().describe('Optional Drive folder ID to create the doc in.'),
+}),
+execute: async (args, { log, session }) => {
+  const drive = await getDriveClient(session);
+  log.info(`Importing content as Google Doc: "${args.title}" (mimeType: ${args.mimeType})`);
+
+  try {
+    const { Readable } = await import('stream');
+
+    const fileMetadata: any = {
+      name: args.title,
+      mimeType: 'application/vnd.google-apps.document',
+    };
+    if (args.parentFolderId) {
+      fileMetadata.parents = [args.parentFolderId];
+    }
+
+    const response = await drive.files.create({
+      requestBody: fileMetadata,
+      media: {
+        mimeType: args.mimeType || 'text/plain',
+        body: Readable.from(Buffer.from(args.content, 'utf-8')),
+      },
+      supportsAllDrives: true,
+      fields: 'id,name,webViewLink,mimeType',
+    });
+
+    const doc = response.data;
+    return `Google Doc created successfully:\n  Title: ${doc.name}\n  Document ID: ${doc.id}\n  Link: ${doc.webViewLink}`;
+  } catch (error: any) {
+    log.error(`Error importing to Google Doc: ${error.message || error}`);
+    handleDriveError(error, 'import content to', args.parentFolderId || args.title);
+  }
+}
+});
+
+server.addTool({
+name: 'checkPublicAccess',
+description: 'Check whether a Google Drive file is publicly accessible ("anyone with the link"). Returns public/private status, file info, and permissions summary.',
+parameters: z.object({
+  fileId: z.string().describe('The Drive file ID to check.'),
+}),
+execute: async (args, { log, session }) => {
+  const drive = await getDriveClient(session);
+  log.info(`Checking public access for file ${args.fileId}`);
+
+  try {
+    const { file, permissions } = await getFileAndPermissions(
+      drive, args.fileId,
+      'id,name,mimeType,shared,webViewLink,webContentLink',
+      'permissions(id,type,role)',
+    );
+
+    return formatPublicAccessResult(file, permissions);
+  } catch (error: any) {
+    log.error(`Error checking public access: ${error.message || error}`);
+    handleDriveError(error, 'check public access for', args.fileId);
+  }
 }
 });
 
