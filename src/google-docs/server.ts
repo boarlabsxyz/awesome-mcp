@@ -27,10 +27,15 @@ BatchOperation
 import * as GDocsHelpers from './apiHelpers.js';
 import {
   WORKSPACE_MIME_MAP,
+  resolveExportFormat,
+  formatExportResult,
+  formatBinaryFileInfo,
   getFileAndPermissions,
   handleDriveError,
-  formatPermission,
-  summarizePermissions,
+  formatPermissionsList,
+  validateShareArgs,
+  formatShareTarget,
+  formatPublicAccessResult,
 } from './driveHelpers.js';
 
 // Multi-user imports
@@ -2717,29 +2722,21 @@ execute: async (args, { log, session }) => {
     const file = fileInfo.data;
     const mime = file.mimeType || '';
     const fileName = file.name || 'Untitled';
-    const workspaceInfo = WORKSPACE_MIME_MAP[mime];
+    const resolved = resolveExportFormat(mime, args.exportFormat);
 
-    if (workspaceInfo) {
-      const format = args.exportFormat || workspaceInfo.defaultFormat;
-      const exportMime = workspaceInfo.exports[format];
-      if (!exportMime) {
-        throw new UserError(`Format "${format}" is not supported for this file type (${mime}). Supported: ${Object.keys(workspaceInfo.exports).join(', ')}`);
-      }
-
+    if (resolved) {
       const exportResponse = await drive.files.export({
         fileId: args.fileId,
-        mimeType: exportMime,
+        mimeType: resolved.exportMime,
       }, {
         responseType: 'arraybuffer',
       });
 
       const buffer = Buffer.from(exportResponse.data as ArrayBuffer);
-      const exportName = `${fileName}.${format}`;
-
       const { Readable } = await import('stream');
       const fileMetadata: any = {
-        name: exportName,
-        mimeType: exportMime,
+        name: `${fileName}.${resolved.format}`,
+        mimeType: resolved.exportMime,
       };
       if (args.folderId) {
         fileMetadata.parents = [args.folderId];
@@ -2748,17 +2745,16 @@ execute: async (args, { log, session }) => {
       const uploadResponse = await drive.files.create({
         requestBody: fileMetadata,
         media: {
-          mimeType: exportMime,
+          mimeType: resolved.exportMime,
           body: Readable.from(buffer),
         },
         supportsAllDrives: true,
         fields: 'id,name,webViewLink,size',
       });
 
-      const exported = uploadResponse.data;
-      return `File exported successfully:\n  Source: ${fileName}\n  Exported as: ${exported.name}\n  File ID: ${exported.id}\n  Size: ${exported.size} bytes\n  Link: ${exported.webViewLink}`;
+      return formatExportResult(fileName, uploadResponse.data);
     } else {
-      return `File: ${fileName}\n  File ID: ${file.id}\n  Type: ${mime}\n  Size: ${file.size || 'Unknown'} bytes\n  Download Link: ${file.webContentLink || 'Not available (file may not be downloadable directly)'}\n  View Link: ${file.webViewLink || 'Not available'}`;
+      return formatBinaryFileInfo(file);
     }
   } catch (error: any) {
     if (error instanceof UserError) throw error;
@@ -2785,21 +2781,7 @@ execute: async (args, { log, session }) => {
       'permissions(id,type,role,emailAddress,displayName,expirationTime,deleted)',
     );
 
-    let result = `Permissions for "${file.name}" (${file.id}):\n`;
-    result += `  Type: ${file.mimeType}\n`;
-    result += `  Shared: ${file.shared ? 'Yes' : 'No'}\n`;
-    result += `  Link: ${file.webViewLink || 'N/A'}\n\n`;
-
-    if (permissions.length === 0) {
-      result += 'No permissions found.';
-    } else {
-      result += `${permissions.length} permission(s):\n\n`;
-      permissions.forEach((perm, index) => {
-        result += formatPermission(perm, index);
-      });
-    }
-
-    return result;
+    return formatPermissionsList(file, permissions);
   } catch (error: any) {
     log.error(`Error getting permissions: ${error.message || error}`);
     handleDriveError(error, 'view permissions for', args.fileId);
@@ -2823,16 +2805,8 @@ execute: async (args, { log, session }) => {
   const drive = await getDriveClient(session);
   log.info(`Sharing file ${args.fileId} as ${args.role} to ${args.type}${args.emailAddress ? ` (${args.emailAddress})` : ''}`);
 
-  if ((args.type === 'user' || args.type === 'group') && !args.emailAddress) {
-    throw new UserError(`emailAddress is required when sharing with type "${args.type}".`);
-  }
-  if (args.type === 'domain' && !args.domain) {
-    throw new UserError('domain is required when sharing with type "domain".');
-  }
+  validateShareArgs(args);
   const isUserOrGroup = args.type === 'user' || args.type === 'group';
-  if (args.expirationTime && !isUserOrGroup) {
-    throw new UserError(`expirationTime is only supported for type "user" or "group", not "${args.type}".`);
-  }
 
   try {
     const permissionBody: any = {
@@ -2860,12 +2834,10 @@ execute: async (args, { log, session }) => {
       fields: 'name,webViewLink',
     });
 
-    const target = args.type === 'anyone' ? 'anyone with the link'
-      : args.type === 'domain' ? `domain ${args.domain}`
-      : args.emailAddress;
-
+    const target = formatShareTarget(args.type, args.emailAddress, args.domain);
     return `Shared successfully:\n  File: ${fileInfo.data.name}\n  Access: ${args.role} granted to ${target}\n  Link: ${fileInfo.data.webViewLink || 'N/A'}`;
   } catch (error: any) {
+    if (error instanceof UserError) throw error;
     log.error(`Error sharing file: ${error.message || error}`);
     handleDriveError(error, 'share', args.fileId);
   }
@@ -2936,26 +2908,7 @@ execute: async (args, { log, session }) => {
       'permissions(id,type,role)',
     );
 
-    const publicPerm = permissions.find(p => p.type === 'anyone');
-    const isPublic = !!publicPerm;
-
-    let result = `File: ${file.name} (${file.id})\n`;
-    result += `Type: ${file.mimeType}\n`;
-    result += `Public Access: ${isPublic ? `YES — anyone with the link has "${publicPerm!.role}" access` : 'NO — not publicly shared'}\n`;
-    result += `Shared: ${file.shared ? 'Yes' : 'No'}\n`;
-    result += `Total permissions: ${permissions.length}\n`;
-
-    if (isPublic && file.webViewLink) {
-      result += `\nPublic Link: ${file.webViewLink}`;
-    }
-
-    const otherPerms = permissions.filter(p => p.type !== 'anyone');
-    if (otherPerms.length > 0) {
-      result += `\n\nOther permissions:\n`;
-      result += summarizePermissions(otherPerms);
-    }
-
-    return result;
+    return formatPublicAccessResult(file, permissions);
   } catch (error: any) {
     log.error(`Error checking public access: ${error.message || error}`);
     handleDriveError(error, 'check public access for', args.fileId);

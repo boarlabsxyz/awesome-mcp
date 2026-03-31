@@ -36,6 +36,45 @@ export const WORKSPACE_MIME_MAP: Record<string, WorkspaceExportInfo> = {
   },
 };
 
+// --- Export format resolution ---
+
+export interface ResolvedExport {
+  format: string;
+  exportMime: string;
+}
+
+export function resolveExportFormat(
+  mime: string,
+  requestedFormat?: string,
+): ResolvedExport | null {
+  const workspaceInfo = WORKSPACE_MIME_MAP[mime];
+  if (!workspaceInfo) return null;
+
+  const format = requestedFormat || workspaceInfo.defaultFormat;
+  const exportMime = workspaceInfo.exports[format];
+  if (!exportMime) {
+    throw new UserError(
+      `Format "${format}" is not supported for this file type (${mime}). Supported: ${Object.keys(workspaceInfo.exports).join(', ')}`,
+    );
+  }
+  return { format, exportMime };
+}
+
+// --- Download/export result formatters ---
+
+export function formatExportResult(
+  sourceName: string,
+  exported: { name?: string | null; id?: string | null; size?: string | null; webViewLink?: string | null },
+): string {
+  return `File exported successfully:\n  Source: ${sourceName}\n  Exported as: ${exported.name}\n  File ID: ${exported.id}\n  Size: ${exported.size} bytes\n  Link: ${exported.webViewLink}`;
+}
+
+export function formatBinaryFileInfo(
+  file: { name?: string | null; id?: string | null; mimeType?: string | null; size?: string | null; webContentLink?: string | null; webViewLink?: string | null },
+): string {
+  return `File: ${file.name || 'Untitled'}\n  File ID: ${file.id}\n  Type: ${file.mimeType}\n  Size: ${file.size || 'Unknown'} bytes\n  Download Link: ${file.webContentLink || 'Not available (file may not be downloadable directly)'}\n  View Link: ${file.webViewLink || 'Not available'}`;
+}
+
 // --- Fetch file info + permissions in parallel ---
 
 export interface FileWithPermissions {
@@ -130,4 +169,85 @@ export function summarizePermissions(permissions: drive_v3.Schema$Permission[]):
   return Object.entries(typeCounts)
     .map(([key, count]) => `  ${count}x ${key}`)
     .join('\n');
+}
+
+// --- Format full permissions list for getFilePermissions ---
+
+export function formatPermissionsList(
+  file: { name?: string | null; id?: string | null; mimeType?: string | null; shared?: boolean | null; webViewLink?: string | null },
+  permissions: drive_v3.Schema$Permission[],
+): string {
+  let result = `Permissions for "${file.name}" (${file.id}):\n`;
+  result += `  Type: ${file.mimeType}\n`;
+  result += `  Shared: ${file.shared ? 'Yes' : 'No'}\n`;
+  result += `  Link: ${file.webViewLink || 'N/A'}\n\n`;
+
+  if (permissions.length === 0) {
+    result += 'No permissions found.';
+  } else {
+    result += `${permissions.length} permission(s):\n\n`;
+    permissions.forEach((perm, index) => {
+      result += formatPermission(perm, index);
+    });
+  }
+
+  return result;
+}
+
+// --- Share parameter validation ---
+
+export interface ShareArgs {
+  type: string;
+  emailAddress?: string;
+  domain?: string;
+  expirationTime?: string;
+}
+
+export function validateShareArgs(args: ShareArgs): void {
+  if ((args.type === 'user' || args.type === 'group') && !args.emailAddress) {
+    throw new UserError(`emailAddress is required when sharing with type "${args.type}".`);
+  }
+  if (args.type === 'domain' && !args.domain) {
+    throw new UserError('domain is required when sharing with type "domain".');
+  }
+  const isUserOrGroup = args.type === 'user' || args.type === 'group';
+  if (args.expirationTime && !isUserOrGroup) {
+    throw new UserError(`expirationTime is only supported for type "user" or "group", not "${args.type}".`);
+  }
+}
+
+// --- Resolve share target label ---
+
+export function formatShareTarget(type: string, emailAddress?: string, domain?: string): string {
+  if (type === 'anyone') return 'anyone with the link';
+  if (type === 'domain') return `domain ${domain}`;
+  return emailAddress || 'unknown';
+}
+
+// --- Format public access check result ---
+
+export function formatPublicAccessResult(
+  file: { name?: string | null; id?: string | null; mimeType?: string | null; shared?: boolean | null; webViewLink?: string | null },
+  permissions: drive_v3.Schema$Permission[],
+): string {
+  const publicPerm = permissions.find(p => p.type === 'anyone');
+  const isPublic = !!publicPerm;
+
+  let result = `File: ${file.name} (${file.id})\n`;
+  result += `Type: ${file.mimeType}\n`;
+  result += `Public Access: ${isPublic ? `YES — anyone with the link has "${publicPerm!.role}" access` : 'NO — not publicly shared'}\n`;
+  result += `Shared: ${file.shared ? 'Yes' : 'No'}\n`;
+  result += `Total permissions: ${permissions.length}\n`;
+
+  if (isPublic && file.webViewLink) {
+    result += `\nPublic Link: ${file.webViewLink}`;
+  }
+
+  const otherPerms = permissions.filter(p => p.type !== 'anyone');
+  if (otherPerms.length > 0) {
+    result += `\n\nOther permissions:\n`;
+    result += summarizePermissions(otherPerms);
+  }
+
+  return result;
 }

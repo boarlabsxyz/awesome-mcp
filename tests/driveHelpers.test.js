@@ -1,10 +1,17 @@
 // tests/driveHelpers.test.js
 import {
   WORKSPACE_MIME_MAP,
+  resolveExportFormat,
+  formatExportResult,
+  formatBinaryFileInfo,
   getFileAndPermissions,
   handleDriveError,
   formatPermission,
   summarizePermissions,
+  formatPermissionsList,
+  validateShareArgs,
+  formatShareTarget,
+  formatPublicAccessResult,
 } from '../dist/google-docs/driveHelpers.js';
 import assert from 'node:assert';
 import { describe, it, mock } from 'node:test';
@@ -49,6 +56,80 @@ describe('Drive Helpers', () => {
     it('should not contain entries for non-workspace mime types', () => {
       assert.strictEqual(WORKSPACE_MIME_MAP['application/pdf'], undefined);
       assert.strictEqual(WORKSPACE_MIME_MAP['image/png'], undefined);
+    });
+  });
+
+  describe('resolveExportFormat', () => {
+    it('should return null for non-workspace mime types', () => {
+      assert.strictEqual(resolveExportFormat('application/pdf'), null);
+      assert.strictEqual(resolveExportFormat('image/png', 'pdf'), null);
+    });
+
+    it('should use default format when none requested', () => {
+      const result = resolveExportFormat('application/vnd.google-apps.document');
+      assert.deepStrictEqual(result, { format: 'pdf', exportMime: 'application/pdf' });
+    });
+
+    it('should use requested format when valid', () => {
+      const result = resolveExportFormat('application/vnd.google-apps.document', 'docx');
+      assert.deepStrictEqual(result, {
+        format: 'docx',
+        exportMime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      });
+    });
+
+    it('should resolve spreadsheet csv format', () => {
+      const result = resolveExportFormat('application/vnd.google-apps.spreadsheet', 'csv');
+      assert.deepStrictEqual(result, { format: 'csv', exportMime: 'text/csv' });
+    });
+
+    it('should resolve presentation pptx format', () => {
+      const result = resolveExportFormat('application/vnd.google-apps.presentation', 'pptx');
+      assert.strictEqual(result.exportMime, 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+    });
+
+    it('should throw UserError for unsupported format on workspace type', () => {
+      assert.throws(
+        () => resolveExportFormat('application/vnd.google-apps.document', 'pptx'),
+        (err) => err.message.includes('not supported') && err.message.includes('pdf, docx'),
+      );
+    });
+  });
+
+  describe('formatExportResult', () => {
+    it('should format export result with all fields', () => {
+      const result = formatExportResult('MyDoc', {
+        name: 'MyDoc.pdf', id: 'abc123', size: '1024', webViewLink: 'https://link',
+      });
+      assert.ok(result.includes('Source: MyDoc'));
+      assert.ok(result.includes('Exported as: MyDoc.pdf'));
+      assert.ok(result.includes('File ID: abc123'));
+      assert.ok(result.includes('Size: 1024 bytes'));
+      assert.ok(result.includes('Link: https://link'));
+    });
+  });
+
+  describe('formatBinaryFileInfo', () => {
+    it('should format binary file with all fields', () => {
+      const result = formatBinaryFileInfo({
+        name: 'photo.jpg', id: 'img1', mimeType: 'image/jpeg',
+        size: '2048', webContentLink: 'https://dl', webViewLink: 'https://view',
+      });
+      assert.ok(result.includes('File: photo.jpg'));
+      assert.ok(result.includes('Type: image/jpeg'));
+      assert.ok(result.includes('Size: 2048 bytes'));
+      assert.ok(result.includes('Download Link: https://dl'));
+      assert.ok(result.includes('View Link: https://view'));
+    });
+
+    it('should handle missing optional fields', () => {
+      const result = formatBinaryFileInfo({
+        name: null, id: 'x', mimeType: 'application/octet-stream',
+        size: null, webContentLink: null, webViewLink: null,
+      });
+      assert.ok(result.includes('File: Untitled'));
+      assert.ok(result.includes('Size: Unknown bytes'));
+      assert.ok(result.includes('Not available'));
     });
   });
 
@@ -293,6 +374,144 @@ describe('Drive Helpers', () => {
       const perms = [{ type: 'anyone', role: 'reader' }];
       const result = summarizePermissions(perms);
       assert.ok(result.includes('1x anyone/reader'));
+    });
+  });
+
+  describe('formatPermissionsList', () => {
+    it('should format file info and permission entries', () => {
+      const file = { name: 'Doc', id: 'f1', mimeType: 'text/plain', shared: true, webViewLink: 'https://link' };
+      const perms = [
+        { type: 'user', role: 'owner', displayName: 'Alice', emailAddress: 'alice@test.com' },
+        { type: 'anyone', role: 'reader' },
+      ];
+      const result = formatPermissionsList(file, perms);
+      assert.ok(result.includes('Permissions for "Doc" (f1)'));
+      assert.ok(result.includes('Shared: Yes'));
+      assert.ok(result.includes('2 permission(s)'));
+      assert.ok(result.includes('Alice'));
+      assert.ok(result.includes('Anyone with the link'));
+    });
+
+    it('should show "No permissions found" for empty list', () => {
+      const file = { name: 'Empty', id: 'f2', mimeType: 'text/plain', shared: false, webViewLink: null };
+      const result = formatPermissionsList(file, []);
+      assert.ok(result.includes('No permissions found'));
+      assert.ok(result.includes('Shared: No'));
+      assert.ok(result.includes('Link: N/A'));
+    });
+  });
+
+  describe('validateShareArgs', () => {
+    it('should throw when user type has no emailAddress', () => {
+      assert.throws(
+        () => validateShareArgs({ type: 'user' }),
+        (err) => err.message.includes('emailAddress is required'),
+      );
+    });
+
+    it('should throw when group type has no emailAddress', () => {
+      assert.throws(
+        () => validateShareArgs({ type: 'group' }),
+        (err) => err.message.includes('emailAddress is required'),
+      );
+    });
+
+    it('should throw when domain type has no domain', () => {
+      assert.throws(
+        () => validateShareArgs({ type: 'domain', emailAddress: 'x@y.com' }),
+        (err) => err.message.includes('domain is required'),
+      );
+    });
+
+    it('should throw when expirationTime used with anyone type', () => {
+      assert.throws(
+        () => validateShareArgs({ type: 'anyone', expirationTime: '2025-12-31T00:00:00Z' }),
+        (err) => err.message.includes('expirationTime is only supported'),
+      );
+    });
+
+    it('should throw when expirationTime used with domain type', () => {
+      assert.throws(
+        () => validateShareArgs({ type: 'domain', domain: 'example.com', expirationTime: '2025-12-31T00:00:00Z' }),
+        (err) => err.message.includes('not "domain"'),
+      );
+    });
+
+    it('should not throw for valid user share', () => {
+      assert.doesNotThrow(() =>
+        validateShareArgs({ type: 'user', emailAddress: 'user@test.com', expirationTime: '2025-12-31T00:00:00Z' }),
+      );
+    });
+
+    it('should not throw for valid anyone share', () => {
+      assert.doesNotThrow(() => validateShareArgs({ type: 'anyone' }));
+    });
+
+    it('should not throw for valid domain share', () => {
+      assert.doesNotThrow(() => validateShareArgs({ type: 'domain', domain: 'example.com' }));
+    });
+  });
+
+  describe('formatShareTarget', () => {
+    it('should return "anyone with the link" for anyone type', () => {
+      assert.strictEqual(formatShareTarget('anyone'), 'anyone with the link');
+    });
+
+    it('should return domain label for domain type', () => {
+      assert.strictEqual(formatShareTarget('domain', undefined, 'example.com'), 'domain example.com');
+    });
+
+    it('should return email for user type', () => {
+      assert.strictEqual(formatShareTarget('user', 'alice@test.com'), 'alice@test.com');
+    });
+
+    it('should return email for group type', () => {
+      assert.strictEqual(formatShareTarget('group', 'team@test.com'), 'team@test.com');
+    });
+
+    it('should return "unknown" when no email provided for user type', () => {
+      assert.strictEqual(formatShareTarget('user'), 'unknown');
+    });
+  });
+
+  describe('formatPublicAccessResult', () => {
+    it('should report public access when "anyone" permission exists', () => {
+      const file = { name: 'Public Doc', id: 'pub1', mimeType: 'text/plain', shared: true, webViewLink: 'https://view' };
+      const perms = [
+        { type: 'user', role: 'owner' },
+        { type: 'anyone', role: 'reader' },
+      ];
+      const result = formatPublicAccessResult(file, perms);
+      assert.ok(result.includes('Public Access: YES'));
+      assert.ok(result.includes('"reader" access'));
+      assert.ok(result.includes('Public Link: https://view'));
+      assert.ok(result.includes('Total permissions: 2'));
+      assert.ok(result.includes('1x user/owner'));
+    });
+
+    it('should report no public access when no "anyone" permission', () => {
+      const file = { name: 'Private Doc', id: 'priv1', mimeType: 'text/plain', shared: false, webViewLink: null };
+      const perms = [{ type: 'user', role: 'owner' }];
+      const result = formatPublicAccessResult(file, perms);
+      assert.ok(result.includes('Public Access: NO'));
+      assert.ok(result.includes('not publicly shared'));
+      assert.ok(!result.includes('Public Link:'));
+    });
+
+    it('should handle empty permissions', () => {
+      const file = { name: 'Lonely', id: 'lone1', mimeType: 'text/plain', shared: false, webViewLink: null };
+      const result = formatPublicAccessResult(file, []);
+      assert.ok(result.includes('Public Access: NO'));
+      assert.ok(result.includes('Total permissions: 0'));
+      assert.ok(!result.includes('Other permissions:'));
+    });
+
+    it('should not show other permissions section when only "anyone" exists', () => {
+      const file = { name: 'Open', id: 'o1', mimeType: 'text/plain', shared: true, webViewLink: 'https://v' };
+      const perms = [{ type: 'anyone', role: 'reader' }];
+      const result = formatPublicAccessResult(file, perms);
+      assert.ok(result.includes('Public Access: YES'));
+      assert.ok(!result.includes('Other permissions:'));
     });
   });
 
