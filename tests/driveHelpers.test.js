@@ -91,7 +91,7 @@ describe('Drive Helpers', () => {
       assert.deepStrictEqual(mockDrive.permissions.list.mock.calls[0].arguments[0], {
         fileId: 'file1',
         supportsAllDrives: true,
-        fields: 'permissions(id,type,role,emailAddress)',
+        fields: 'nextPageToken,permissions(id,type,role,emailAddress)',
       });
     });
 
@@ -111,6 +111,77 @@ describe('Drive Helpers', () => {
 
       const result = await getFileAndPermissions(mockDrive, 'file2', 'id,name', 'permissions(id)');
       assert.deepStrictEqual(result.permissions, []);
+    });
+
+    it('should paginate through all permission pages', async () => {
+      let callCount = 0;
+      const mockDrive = {
+        files: {
+          get: mock.fn(async () => ({
+            data: { id: 'file3', name: 'Many Perms' },
+          })),
+        },
+        permissions: {
+          list: mock.fn(async (params) => {
+            callCount++;
+            if (callCount === 1) {
+              return {
+                data: {
+                  permissions: [{ id: 'p1', type: 'user', role: 'writer' }],
+                  nextPageToken: 'token-page2',
+                },
+              };
+            } else if (callCount === 2) {
+              assert.strictEqual(params.pageToken, 'token-page2');
+              return {
+                data: {
+                  permissions: [{ id: 'p2', type: 'user', role: 'reader' }],
+                  nextPageToken: 'token-page3',
+                },
+              };
+            } else {
+              assert.strictEqual(params.pageToken, 'token-page3');
+              return {
+                data: {
+                  permissions: [{ id: 'p3', type: 'anyone', role: 'reader' }],
+                },
+              };
+            }
+          }),
+        },
+      };
+
+      const result = await getFileAndPermissions(
+        mockDrive, 'file3', 'id,name', 'permissions(id,type,role)',
+      );
+
+      assert.strictEqual(result.permissions.length, 3);
+      assert.strictEqual(result.permissions[0].id, 'p1');
+      assert.strictEqual(result.permissions[1].id, 'p2');
+      assert.strictEqual(result.permissions[2].id, 'p3');
+      assert.strictEqual(mockDrive.permissions.list.mock.calls.length, 3);
+    });
+
+    it('should not duplicate nextPageToken in fields if already present', async () => {
+      const mockDrive = {
+        files: {
+          get: mock.fn(async () => ({ data: { id: 'file4' } })),
+        },
+        permissions: {
+          list: mock.fn(async () => ({
+            data: { permissions: [] },
+          })),
+        },
+      };
+
+      await getFileAndPermissions(
+        mockDrive, 'file4', 'id', 'nextPageToken,permissions(id)',
+      );
+
+      assert.strictEqual(
+        mockDrive.permissions.list.mock.calls[0].arguments[0].fields,
+        'nextPageToken,permissions(id)',
+      );
     });
   });
 
@@ -183,10 +254,13 @@ describe('Drive Helpers', () => {
       assert.ok(result.includes('(Deleted user)'));
     });
 
-    it('should fall back to emailAddress when displayName is missing', () => {
+    it('should fall back to emailAddress when displayName is missing without duplicating it', () => {
       const perm = { type: 'user', role: 'writer', emailAddress: 'no-name@test.com' };
       const result = formatPermission(perm, 0);
       assert.ok(result.includes('no-name@test.com'));
+      // Email should appear exactly once, not as "email (email)"
+      const count = result.split('no-name@test.com').length - 1;
+      assert.strictEqual(count, 1, `Email should appear once but appeared ${count} times`);
     });
 
     it('should show "Unknown" when both displayName and emailAddress are missing', () => {

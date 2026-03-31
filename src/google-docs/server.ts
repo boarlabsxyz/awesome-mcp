@@ -2707,57 +2707,63 @@ execute: async (args, { log, session }) => {
   const drive = await getDriveClient(session);
   log.info(`Downloading/exporting file ${args.fileId} (format: ${args.exportFormat || 'auto'})`);
 
-  const fileInfo = await drive.files.get({
-    fileId: args.fileId,
-    supportsAllDrives: true,
-    fields: 'id,name,mimeType,webContentLink,webViewLink,size',
-  });
-
-  const file = fileInfo.data;
-  const mime = file.mimeType || '';
-  const fileName = file.name || 'Untitled';
-  const workspaceInfo = WORKSPACE_MIME_MAP[mime];
-
-  if (workspaceInfo) {
-    const format = args.exportFormat || workspaceInfo.defaultFormat;
-    const exportMime = workspaceInfo.exports[format];
-    if (!exportMime) {
-      throw new UserError(`Format "${format}" is not supported for this file type (${mime}). Supported: ${Object.keys(workspaceInfo.exports).join(', ')}`);
-    }
-
-    const exportResponse = await drive.files.export({
+  try {
+    const fileInfo = await drive.files.get({
       fileId: args.fileId,
-      mimeType: exportMime,
-    }, {
-      responseType: 'arraybuffer',
-    });
-
-    const buffer = Buffer.from(exportResponse.data as ArrayBuffer);
-    const exportName = `${fileName}.${format}`;
-
-    const { Readable } = await import('stream');
-    const fileMetadata: any = {
-      name: exportName,
-      mimeType: exportMime,
-    };
-    if (args.folderId) {
-      fileMetadata.parents = [args.folderId];
-    }
-
-    const uploadResponse = await drive.files.create({
-      requestBody: fileMetadata,
-      media: {
-        mimeType: exportMime,
-        body: Readable.from(buffer),
-      },
       supportsAllDrives: true,
-      fields: 'id,name,webViewLink,size',
+      fields: 'id,name,mimeType,webContentLink,webViewLink,size',
     });
 
-    const exported = uploadResponse.data;
-    return `File exported successfully:\n  Source: ${fileName}\n  Exported as: ${exported.name}\n  File ID: ${exported.id}\n  Size: ${exported.size} bytes\n  Link: ${exported.webViewLink}`;
-  } else {
-    return `File: ${fileName}\n  File ID: ${file.id}\n  Type: ${mime}\n  Size: ${file.size || 'Unknown'} bytes\n  Download Link: ${file.webContentLink || 'Not available (file may not be downloadable directly)'}\n  View Link: ${file.webViewLink || 'Not available'}`;
+    const file = fileInfo.data;
+    const mime = file.mimeType || '';
+    const fileName = file.name || 'Untitled';
+    const workspaceInfo = WORKSPACE_MIME_MAP[mime];
+
+    if (workspaceInfo) {
+      const format = args.exportFormat || workspaceInfo.defaultFormat;
+      const exportMime = workspaceInfo.exports[format];
+      if (!exportMime) {
+        throw new UserError(`Format "${format}" is not supported for this file type (${mime}). Supported: ${Object.keys(workspaceInfo.exports).join(', ')}`);
+      }
+
+      const exportResponse = await drive.files.export({
+        fileId: args.fileId,
+        mimeType: exportMime,
+      }, {
+        responseType: 'arraybuffer',
+      });
+
+      const buffer = Buffer.from(exportResponse.data as ArrayBuffer);
+      const exportName = `${fileName}.${format}`;
+
+      const { Readable } = await import('stream');
+      const fileMetadata: any = {
+        name: exportName,
+        mimeType: exportMime,
+      };
+      if (args.folderId) {
+        fileMetadata.parents = [args.folderId];
+      }
+
+      const uploadResponse = await drive.files.create({
+        requestBody: fileMetadata,
+        media: {
+          mimeType: exportMime,
+          body: Readable.from(buffer),
+        },
+        supportsAllDrives: true,
+        fields: 'id,name,webViewLink,size',
+      });
+
+      const exported = uploadResponse.data;
+      return `File exported successfully:\n  Source: ${fileName}\n  Exported as: ${exported.name}\n  File ID: ${exported.id}\n  Size: ${exported.size} bytes\n  Link: ${exported.webViewLink}`;
+    } else {
+      return `File: ${fileName}\n  File ID: ${file.id}\n  Type: ${mime}\n  Size: ${file.size || 'Unknown'} bytes\n  Download Link: ${file.webContentLink || 'Not available (file may not be downloadable directly)'}\n  View Link: ${file.webViewLink || 'Not available'}`;
+    }
+  } catch (error: any) {
+    if (error instanceof UserError) throw error;
+    log.error(`Error downloading/exporting file: ${error.message || error}`);
+    handleDriveError(error, 'download/export', args.fileId);
   }
 }
 });
@@ -2823,6 +2829,10 @@ execute: async (args, { log, session }) => {
   if (args.type === 'domain' && !args.domain) {
     throw new UserError('domain is required when sharing with type "domain".');
   }
+  const isUserOrGroup = args.type === 'user' || args.type === 'group';
+  if (args.expirationTime && !isUserOrGroup) {
+    throw new UserError(`expirationTime is only supported for type "user" or "group", not "${args.type}".`);
+  }
 
   try {
     const permissionBody: any = {
@@ -2831,14 +2841,18 @@ execute: async (args, { log, session }) => {
     };
     if (args.emailAddress) permissionBody.emailAddress = args.emailAddress;
     if (args.domain) permissionBody.domain = args.domain;
-    if (args.expirationTime) permissionBody.expirationTime = args.expirationTime;
+    if (isUserOrGroup && args.expirationTime) permissionBody.expirationTime = args.expirationTime;
 
-    await drive.permissions.create({
+    const createParams: any = {
       fileId: args.fileId,
       supportsAllDrives: true,
-      sendNotificationEmail: args.sendNotification ?? true,
       requestBody: permissionBody,
-    });
+    };
+    if (isUserOrGroup) {
+      createParams.sendNotificationEmail = args.sendNotification ?? true;
+    }
+
+    await drive.permissions.create(createParams);
 
     const fileInfo = await drive.files.get({
       fileId: args.fileId,
@@ -2868,8 +2882,7 @@ parameters: z.object({
     'text/plain',
     'text/html',
     'text/markdown',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  ]).optional().default('text/plain').describe('The mime type of the source content.'),
+  ]).optional().default('text/plain').describe('The mime type of the source content. For DOCX files already in Drive, use the importDocx tool instead.'),
   parentFolderId: z.string().optional().describe('Optional Drive folder ID to create the doc in.'),
 }),
 execute: async (args, { log, session }) => {

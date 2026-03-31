@@ -49,7 +49,13 @@ export async function getFileAndPermissions(
   fileFields: string,
   permissionFields: string,
 ): Promise<FileWithPermissions> {
-  const [fileInfo, permResponse] = await Promise.all([
+  // Ensure nextPageToken is in fields so pagination works
+  const paginatedFields = permissionFields.includes('nextPageToken')
+    ? permissionFields
+    : `nextPageToken,${permissionFields}`;
+
+  // Start file info fetch in parallel with the first permissions page
+  const [fileInfo, firstPage] = await Promise.all([
     drive.files.get({
       fileId,
       supportsAllDrives: true,
@@ -58,13 +64,30 @@ export async function getFileAndPermissions(
     drive.permissions.list({
       fileId,
       supportsAllDrives: true,
-      fields: permissionFields,
+      fields: paginatedFields,
     }),
   ]);
 
+  const allPermissions: drive_v3.Schema$Permission[] = [
+    ...(firstPage.data.permissions || []),
+  ];
+
+  // Fetch remaining pages if any
+  let nextPageToken = firstPage.data.nextPageToken;
+  while (nextPageToken) {
+    const nextPage = await drive.permissions.list({
+      fileId,
+      supportsAllDrives: true,
+      fields: paginatedFields,
+      pageToken: nextPageToken,
+    });
+    allPermissions.push(...(nextPage.data.permissions || []));
+    nextPageToken = nextPage.data.nextPageToken;
+  }
+
   return {
     file: fileInfo.data,
-    permissions: permResponse.data.permissions || [],
+    permissions: allPermissions,
   };
 }
 
@@ -85,8 +108,9 @@ export function formatPermission(perm: drive_v3.Schema$Permission, index: number
   } else if (perm.type === 'domain') {
     result += 'Domain';
   } else {
-    result += `${perm.displayName || perm.emailAddress || 'Unknown'}`;
-    if (perm.emailAddress) result += ` (${perm.emailAddress})`;
+    const principal = perm.displayName || perm.emailAddress || 'Unknown';
+    result += principal;
+    if (perm.displayName && perm.emailAddress) result += ` (${perm.emailAddress})`;
   }
   result += `\n   Type: ${perm.type}`;
   if (perm.expirationTime) result += `\n   Expires: ${perm.expirationTime}`;
