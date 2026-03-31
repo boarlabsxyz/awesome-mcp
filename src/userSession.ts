@@ -1,5 +1,5 @@
 // src/userSession.ts
-import { google, docs_v1, drive_v3, sheets_v4, calendar_v3 } from 'googleapis';
+import { google, docs_v1, drive_v3, sheets_v4, calendar_v3, gmail_v1 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { UserRecord, updateTokens } from './userStore.js';
 import { McpConnection, GoogleTokens, updateMcpInstanceTokens, clearMcpInstanceTokensCache } from './mcpConnectionStore.js';
@@ -14,6 +14,7 @@ export interface UserSession {
   googleDrive: drive_v3.Drive;
   googleSheets: sheets_v4.Sheets;
   googleCalendar: calendar_v3.Calendar;
+  googleGmail: gmail_v1.Gmail;
   oauthClient: OAuth2Client;
 }
 
@@ -53,6 +54,7 @@ export function createUserSession(
     googleDrive: google.drive({ version: 'v3', auth: oauthClient }),
     googleSheets: google.sheets({ version: 'v4', auth: oauthClient }),
     googleCalendar: google.calendar({ version: 'v3', auth: oauthClient }),
+    googleGmail: google.gmail({ version: 'v1', auth: oauthClient }),
     oauthClient,
   };
 
@@ -104,6 +106,7 @@ export function createUserSessionFromConnection(
     googleDrive: google.drive({ version: 'v3', auth: oauthClient }),
     googleSheets: google.sheets({ version: 'v4', auth: oauthClient }),
     googleCalendar: google.calendar({ version: 'v3', auth: oauthClient }),
+    googleGmail: google.gmail({ version: 'v1', auth: oauthClient }),
     oauthClient,
   };
 
