@@ -260,9 +260,13 @@ export async function seedDefaultCatalogs(): Promise<void> {
   const googleCalendarClientSecret = process.env.GOOGLE_CALENDAR_CLIENT_SECRET || null;
   const googleSheetsClientId = process.env.GOOGLE_SHEETS_CLIENT_ID || null;
   const googleSheetsClientSecret = process.env.GOOGLE_SHEETS_CLIENT_SECRET || null;
+  const googleGmailClientId = process.env.GOOGLE_GMAIL_CLIENT_ID || null;
+  const googleGmailClientSecret = process.env.GOOGLE_GMAIL_CLIENT_SECRET || null;
 
-  console.error(`MCP URLs: google-docs=${googleDocsMcpUrl}, google-calendar=${googleCalendarMcpUrl}, google-sheets=${googleSheetsMcpUrl}`);
-  console.error(`MCP credentials: google-docs=${googleDocsClientId ? 'env' : 'global'}, google-calendar=${googleCalendarClientId ? 'env' : 'global'}, google-sheets=${googleSheetsClientId ? 'env' : 'global'}`);
+  const googleGmailMcpUrl = normalizeUrl(process.env.GOOGLE_GMAIL_MCP_URL, '/gmail');
+
+  console.error(`MCP URLs: google-docs=${googleDocsMcpUrl}, google-calendar=${googleCalendarMcpUrl}, google-sheets=${googleSheetsMcpUrl}, google-gmail=${googleGmailMcpUrl}`);
+  console.error(`MCP credentials: google-docs=${googleDocsClientId ? 'env' : 'global'}, google-calendar=${googleCalendarClientId ? 'env' : 'global'}, google-sheets=${googleSheetsClientId ? 'env' : 'global'}, google-gmail=${googleGmailClientId ? 'env' : 'global'}`);
 
   await createMcpCatalog({
     slug: 'google-docs',
@@ -327,6 +331,26 @@ export async function seedDefaultCatalogs(): Promise<void> {
       'https://www.googleapis.com/auth/drive',
     ],
     isLocal: process.env.GOOGLE_SHEETS_MCP_URL ? false : true,
+    isActive: true,
+  });
+
+  await createMcpCatalog({
+    slug: 'google-gmail',
+    name: 'Gmail MCP',
+    description: 'Send, read, search, and manage Gmail messages and labels',
+    iconUrl: 'https://images.icon-icons.com/2642/PNG/512/google_mail_gmail_logo_icon_159346.png',
+    mcpUrl: googleGmailMcpUrl,
+    scopes: [
+      'https://www.googleapis.com/auth/gmail.modify',
+    ],
+    googleClientId: googleGmailClientId,
+    googleClientSecret: googleGmailClientSecret,
+    oauthScopes: [
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/userinfo.profile',
+      'https://www.googleapis.com/auth/gmail.modify',
+    ],
+    isLocal: process.env.GOOGLE_GMAIL_MCP_URL ? false : true,
     isActive: true,
   });
 

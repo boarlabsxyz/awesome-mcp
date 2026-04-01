@@ -887,7 +887,7 @@ function registerSharedRoutes(app: express.Express): void {
   });
 }
 
-export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheetsMcpPort: number): express.Express {
+export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheetsMcpPort: number, gmailMcpPort?: number): express.Express {
   const app = express();
   app.set('trust proxy', true);
 
@@ -909,39 +909,21 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   // Claude.ai from discovering OAuth and triggering a second Google consent.
 
   // Proxy MCP endpoints to internal FastMCP servers
-  const docsProxy = createProxyMiddleware({
-    target: `http://127.0.0.1:${docsMcpPort}`,
-    changeOrigin: true,
-    ws: true,
-    pathFilter: ['/mcp', '/sse'],
-  });
-  app.use(docsProxy);
+  function addMcpProxy(port: number, prefix?: string) {
+    const opts: any = { target: `http://127.0.0.1:${port}`, changeOrigin: true, ws: true };
+    if (prefix) {
+      opts.pathFilter = [`/${prefix}`, `/${prefix}-sse`];
+      opts.pathRewrite = { [`^/${prefix}-sse`]: '/sse', [`^/${prefix}`]: '/mcp' };
+    } else {
+      opts.pathFilter = ['/mcp', '/sse'];
+    }
+    app.use(createProxyMiddleware(opts));
+  }
 
-  // Calendar MCP proxy
-  const calendarProxy = createProxyMiddleware({
-    target: `http://127.0.0.1:${calendarMcpPort}`,
-    changeOrigin: true,
-    ws: true,
-    pathFilter: ['/calendar', '/calendar-sse'],
-    pathRewrite: {
-      '^/calendar-sse': '/sse',
-      '^/calendar': '/mcp',
-    },
-  });
-  app.use(calendarProxy);
-
-  // Sheets MCP proxy
-  const sheetsProxy = createProxyMiddleware({
-    target: `http://127.0.0.1:${sheetsMcpPort}`,
-    changeOrigin: true,
-    ws: true,
-    pathFilter: ['/sheets', '/sheets-sse'],
-    pathRewrite: {
-      '^/sheets-sse': '/sse',
-      '^/sheets': '/mcp',
-    },
-  });
-  app.use(sheetsProxy);
+  addMcpProxy(docsMcpPort);
+  addMcpProxy(calendarMcpPort, 'calendar');
+  addMcpProxy(sheetsMcpPort, 'sheets');
+  if (gmailMcpPort) addMcpProxy(gmailMcpPort, 'gmail');
 
   // Register all shared routes (auth, dashboard, connect, API, admin, catalogs)
   registerSharedRoutes(app);
