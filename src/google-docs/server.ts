@@ -2872,11 +2872,14 @@ async function startServer() {
 
         const { createMcpOnlyApp } = await import('../website/webServer.js');
         const expressApp = createMcpOnlyApp(INTERNAL_MCP_PORT);
-        expressApp.listen(PORT, HOST, () => {
+        const httpServer = expressApp.listen(PORT, HOST, () => {
           console.error(`${MCP_SLUG} MCP running on port ${PORT}!`);
           console.error(`   MCP Endpoint:   http://${HOST}:${PORT}/mcp`);
           console.error(`   OAuth Metadata: http://${HOST}:${PORT}/.well-known/oauth-authorization-server`);
         });
+        // Disable server-level timeouts for long-lived SSE streams
+        httpServer.timeout = 0;
+        httpServer.keepAliveTimeout = 120_000;
 
       } else {
         // Default "all" mode: Single service with Express + internal MCP servers
@@ -2929,7 +2932,7 @@ async function startServer() {
         const expressApp = createWebApp(DOCS_MCP_PORT, CALENDAR_MCP_PORT, SHEETS_MCP_PORT, GMAIL_MCP_PORT, SLIDES_MCP_PORT);
 
         // Start Express on the public port — single port for all traffic
-        expressApp.listen(PORT, HOST, () => {
+        const httpServer = expressApp.listen(PORT, HOST, () => {
           console.error(`Server running on port ${PORT}!`);
           console.error(`   Docs MCP:       http://${HOST}:${PORT}/mcp`);
           console.error(`   Calendar MCP:   http://${HOST}:${PORT}/calendar`);
@@ -2939,6 +2942,9 @@ async function startServer() {
           console.error(`   Registration:   http://${HOST}:${PORT}/`);
           console.error(`   OAuth Callback: http://${HOST}:${PORT}/auth/callback`);
         });
+        // Disable server-level timeouts for long-lived SSE streams
+        httpServer.timeout = 0;
+        httpServer.keepAliveTimeout = 120_000;
       }
 
     } else {

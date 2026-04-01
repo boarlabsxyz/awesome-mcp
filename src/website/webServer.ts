@@ -910,7 +910,28 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
 
   // Proxy MCP endpoints to internal FastMCP servers
   function addMcpProxy(port: number, prefix?: string) {
-    const opts: any = { target: `http://127.0.0.1:${port}`, changeOrigin: true, ws: true };
+    const opts: any = {
+      target: `http://127.0.0.1:${port}`,
+      changeOrigin: true,
+      ws: true,
+      // Disable proxy timeouts for long-lived SSE streams (default would kill after ~2min)
+      proxyTimeout: 0,
+      timeout: 0,
+      // Prevent buffering of SSE events
+      selfHandleResponse: false,
+      on: {
+        proxyRes: (proxyRes: any, req: any, res: any) => {
+          // For SSE streams (GET /mcp or /sse), set headers to prevent intermediate
+          // proxies (Cloudflare, Railway, nginx) from buffering or timing out
+          if (req.method === 'GET' && (
+            req.url?.includes('/mcp') || req.url?.includes('/sse')
+          )) {
+            res.setHeader('X-Accel-Buffering', 'no');
+            res.setHeader('Cache-Control', 'no-cache, no-transform');
+          }
+        },
+      },
+    };
     if (prefix) {
       opts.pathFilter = [`/${prefix}`, `/${prefix}-sse`];
       opts.pathRewrite = { [`^/${prefix}-sse`]: '/sse', [`^/${prefix}`]: '/mcp' };
@@ -1632,6 +1653,18 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
     changeOrigin: true,
     ws: true,
     pathFilter: ['/mcp', '/sse'],
+    proxyTimeout: 0,
+    timeout: 0,
+    on: {
+      proxyRes: (proxyRes: any, req: any, res: any) => {
+        if (req.method === 'GET' && (
+          req.url?.includes('/mcp') || req.url?.includes('/sse')
+        )) {
+          res.setHeader('X-Accel-Buffering', 'no');
+          res.setHeader('Cache-Control', 'no-cache, no-transform');
+        }
+      },
+    },
   });
   app.use(mcpProxy);
 
