@@ -887,7 +887,7 @@ function registerSharedRoutes(app: express.Express): void {
   });
 }
 
-export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheetsMcpPort: number, gmailMcpPort?: number): express.Express {
+export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheetsMcpPort: number, gmailMcpPort?: number, slidesMcpPort?: number): express.Express {
   const app = express();
   app.set('trust proxy', true);
 
@@ -924,6 +924,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   addMcpProxy(calendarMcpPort, 'calendar');
   addMcpProxy(sheetsMcpPort, 'sheets');
   if (gmailMcpPort) addMcpProxy(gmailMcpPort, 'gmail');
+  if (slidesMcpPort) addMcpProxy(slidesMcpPort, 'slides');
 
   // Register all shared routes (auth, dashboard, connect, API, admin, catalogs)
   registerSharedRoutes(app);

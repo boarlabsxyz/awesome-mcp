@@ -264,9 +264,12 @@ export async function seedDefaultCatalogs(): Promise<void> {
   const googleGmailClientSecret = process.env.GOOGLE_GMAIL_CLIENT_SECRET || null;
 
   const googleGmailMcpUrl = normalizeUrl(process.env.GOOGLE_GMAIL_MCP_URL, '/gmail');
+  const googleSlidesClientId = process.env.GOOGLE_SLIDES_CLIENT_ID || null;
+  const googleSlidesClientSecret = process.env.GOOGLE_SLIDES_CLIENT_SECRET || null;
+  const googleSlidesMcpUrl = normalizeUrl(process.env.GOOGLE_SLIDES_MCP_URL, '/slides');
 
-  console.error(`MCP URLs: google-docs=${googleDocsMcpUrl}, google-calendar=${googleCalendarMcpUrl}, google-sheets=${googleSheetsMcpUrl}, google-gmail=${googleGmailMcpUrl}`);
-  console.error(`MCP credentials: google-docs=${googleDocsClientId ? 'env' : 'global'}, google-calendar=${googleCalendarClientId ? 'env' : 'global'}, google-sheets=${googleSheetsClientId ? 'env' : 'global'}, google-gmail=${googleGmailClientId ? 'env' : 'global'}`);
+  console.error(`MCP URLs: google-docs=${googleDocsMcpUrl}, google-calendar=${googleCalendarMcpUrl}, google-sheets=${googleSheetsMcpUrl}, google-gmail=${googleGmailMcpUrl}, google-slides=${googleSlidesMcpUrl}`);
+  console.error(`MCP credentials: google-docs=${googleDocsClientId ? 'env' : 'global'}, google-calendar=${googleCalendarClientId ? 'env' : 'global'}, google-sheets=${googleSheetsClientId ? 'env' : 'global'}, google-gmail=${googleGmailClientId ? 'env' : 'global'}, google-slides=${googleSlidesClientId ? 'env' : 'global'}`);
 
   await createMcpCatalog({
     slug: 'google-docs',
@@ -351,6 +354,28 @@ export async function seedDefaultCatalogs(): Promise<void> {
       'https://www.googleapis.com/auth/gmail.modify',
     ],
     isLocal: process.env.GOOGLE_GMAIL_MCP_URL ? false : true,
+    isActive: true,
+  });
+
+  await createMcpCatalog({
+    slug: 'google-slides',
+    name: 'Google Slides MCP',
+    description: 'Create, read, and manage Google Slides presentations',
+    iconUrl: null,
+    mcpUrl: googleSlidesMcpUrl,
+    scopes: [
+      'https://www.googleapis.com/auth/presentations',
+      'https://www.googleapis.com/auth/drive',
+    ],
+    googleClientId: googleSlidesClientId,
+    googleClientSecret: googleSlidesClientSecret,
+    oauthScopes: [
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/userinfo.profile',
+      'https://www.googleapis.com/auth/presentations',
+      'https://www.googleapis.com/auth/drive',
+    ],
+    isLocal: process.env.GOOGLE_SLIDES_MCP_URL ? false : true,
     isActive: true,
   });
 

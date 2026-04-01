@@ -1,5 +1,5 @@
 // src/userSession.ts
-import { google, docs_v1, drive_v3, sheets_v4, calendar_v3, gmail_v1 } from 'googleapis';
+import { google, docs_v1, drive_v3, sheets_v4, calendar_v3, gmail_v1, slides_v1 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { UserRecord, updateTokens } from './userStore.js';
 import { McpConnection, GoogleTokens, updateMcpInstanceTokens, clearMcpInstanceTokensCache } from './mcpConnectionStore.js';
@@ -15,6 +15,7 @@ export interface UserSession {
   googleSheets: sheets_v4.Sheets;
   googleCalendar: calendar_v3.Calendar;
   googleGmail: gmail_v1.Gmail;
+  googleSlides: slides_v1.Slides;
   oauthClient: OAuth2Client;
 }
 
@@ -55,6 +56,7 @@ export function createUserSession(
     googleSheets: google.sheets({ version: 'v4', auth: oauthClient }),
     googleCalendar: google.calendar({ version: 'v3', auth: oauthClient }),
     googleGmail: google.gmail({ version: 'v1', auth: oauthClient }),
+    googleSlides: google.slides({ version: 'v1', auth: oauthClient }),
     oauthClient,
   };
 
@@ -107,6 +109,7 @@ export function createUserSessionFromConnection(
     googleSheets: google.sheets({ version: 'v4', auth: oauthClient }),
     googleCalendar: google.calendar({ version: 'v3', auth: oauthClient }),
     googleGmail: google.gmail({ version: 'v1', auth: oauthClient }),
+    googleSlides: google.slides({ version: 'v1', auth: oauthClient }),
     oauthClient,
   };
 
