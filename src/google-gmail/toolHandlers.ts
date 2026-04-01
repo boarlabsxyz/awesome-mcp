@@ -6,6 +6,20 @@ import { createRawEmail, parseEmailHeaders, formatEmailList, extractBody, listAt
 
 type LogLike = { info: (msg: string) => void; error: (msg: string) => void };
 
+/** Map of Gmail error codes to user-facing messages. */
+type ErrorCodeMap = Record<number, string>;
+
+/**
+ * Shared error handler for Gmail API calls.
+ * Logs the error, checks for known HTTP status codes, and throws a UserError.
+ */
+function handleGmailError(error: any, log: LogLike, operation: string, codeMessages: ErrorCodeMap = {}): never {
+  log.error(`Error ${operation}: ${error.message || error}`);
+  const msg = codeMessages[error.code];
+  if (msg) throw new UserError(msg);
+  throw new UserError(`Failed to ${operation}: ${error.message || 'Unknown error'}`);
+}
+
 export async function handleSendEmail(
   gmail: gmail_v1.Gmail,
   args: { to: string; subject: string; body: string; cc?: string; bcc?: string; isHtml?: boolean },
@@ -19,9 +33,9 @@ export async function handleSendEmail(
     const response = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
     return `Email sent successfully!\n\n**Message ID:** ${response.data.id}\n**Thread ID:** ${response.data.threadId}\n**To:** ${args.to}`;
   } catch (error: any) {
-    log.error(`Error sending email: ${error.message || error}`);
-    if (error.code === 403) throw new UserError("Permission denied. Make sure you have granted Gmail send access.");
-    throw new UserError(`Failed to send email: ${error.message || 'Unknown error'}`);
+    handleGmailError(error, log, 'sending email', {
+      403: "Permission denied. Make sure you have granted Gmail send access.",
+    });
   }
 }
 
@@ -38,9 +52,9 @@ export async function handleDraftEmail(
     const response = await gmail.users.drafts.create({ userId: 'me', requestBody: { message: { raw } } });
     return `Draft created successfully!\n\n**Draft ID:** ${response.data.id}\n**Message ID:** ${response.data.message?.id}\n**To:** ${args.to}`;
   } catch (error: any) {
-    log.error(`Error creating draft: ${error.message || error}`);
-    if (error.code === 403) throw new UserError("Permission denied. Make sure you have granted Gmail access.");
-    throw new UserError(`Failed to create draft: ${error.message || 'Unknown error'}`);
+    handleGmailError(error, log, 'creating draft', {
+      403: "Permission denied. Make sure you have granted Gmail access.",
+    });
   }
 }
 
@@ -76,10 +90,10 @@ export async function handleReadEmail(
     }
     return result;
   } catch (error: any) {
-    log.error(`Error reading email: ${error.message || error}`);
-    if (error.code === 404) throw new UserError(`Email not found (ID: ${args.messageId}).`);
-    if (error.code === 403) throw new UserError("Permission denied. Make sure you have granted Gmail read access.");
-    throw new UserError(`Failed to read email: ${error.message || 'Unknown error'}`);
+    handleGmailError(error, log, 'reading email', {
+      404: `Email not found (ID: ${args.messageId}).`,
+      403: "Permission denied. Make sure you have granted Gmail read access.",
+    });
   }
 }
 
@@ -115,9 +129,9 @@ export async function handleSearchEmails(
     }
     return result;
   } catch (error: any) {
-    log.error(`Error searching emails: ${error.message || error}`);
-    if (error.code === 403) throw new UserError("Permission denied. Make sure you have granted Gmail read access.");
-    throw new UserError(`Failed to search emails: ${error.message || 'Unknown error'}`);
+    handleGmailError(error, log, 'searching emails', {
+      403: "Permission denied. Make sure you have granted Gmail read access.",
+    });
   }
 }
 
@@ -134,10 +148,10 @@ export async function handleModifyEmail(
     });
     return `Email labels modified successfully!\n\n**Message ID:** ${response.data.id}\n**Current Labels:** ${response.data.labelIds?.join(', ') || 'none'}`;
   } catch (error: any) {
-    log.error(`Error modifying email: ${error.message || error}`);
-    if (error.code === 404) throw new UserError(`Email not found (ID: ${args.messageId}).`);
-    if (error.code === 403) throw new UserError("Permission denied.");
-    throw new UserError(`Failed to modify email: ${error.message || 'Unknown error'}`);
+    handleGmailError(error, log, 'modifying email', {
+      404: `Email not found (ID: ${args.messageId}).`,
+      403: "Permission denied.",
+    });
   }
 }
 
@@ -151,10 +165,10 @@ export async function handleDeleteEmail(
     await gmail.users.messages.trash({ userId: 'me', id: args.messageId });
     return `Email moved to trash (ID: ${args.messageId}).`;
   } catch (error: any) {
-    log.error(`Error trashing email: ${error.message || error}`);
-    if (error.code === 404) throw new UserError(`Email not found (ID: ${args.messageId}).`);
-    if (error.code === 403) throw new UserError("Permission denied.");
-    throw new UserError(`Failed to trash email: ${error.message || 'Unknown error'}`);
+    handleGmailError(error, log, 'trashing email', {
+      404: `Email not found (ID: ${args.messageId}).`,
+      403: "Permission denied.",
+    });
   }
 }
 
@@ -173,9 +187,7 @@ export async function handleBatchModifyEmails(
       (args.addLabelIds?.length ? `**Added labels:** ${args.addLabelIds.join(', ')}\n` : '') +
       (args.removeLabelIds?.length ? `**Removed labels:** ${args.removeLabelIds.join(', ')}` : '');
   } catch (error: any) {
-    log.error(`Error batch modifying emails: ${error.message || error}`);
-    if (error.code === 403) throw new UserError("Permission denied.");
-    throw new UserError(`Failed to batch modify emails: ${error.message || 'Unknown error'}`);
+    handleGmailError(error, log, 'batch modifying emails', { 403: "Permission denied." });
   }
 }
 
@@ -193,9 +205,7 @@ export async function handleBatchDeleteEmails(
     }
     return `Successfully moved ${args.messageIds.length} email(s) to trash.`;
   } catch (error: any) {
-    log.error(`Error batch deleting emails: ${error.message || error}`);
-    if (error.code === 403) throw new UserError("Permission denied.");
-    throw new UserError(`Failed to batch delete emails: ${error.message || 'Unknown error'}`);
+    handleGmailError(error, log, 'batch trashing emails', { 403: "Permission denied." });
   }
 }
 
@@ -223,9 +233,7 @@ export async function handleListLabels(
     }
     return result;
   } catch (error: any) {
-    log.error(`Error listing labels: ${error.message || error}`);
-    if (error.code === 403) throw new UserError("Permission denied.");
-    throw new UserError(`Failed to list labels: ${error.message || 'Unknown error'}`);
+    handleGmailError(error, log, 'listing labels', { 403: "Permission denied." });
   }
 }
 
@@ -246,10 +254,10 @@ export async function handleCreateLabel(
     });
     return `Label created successfully!\n\n**Name:** ${response.data.name}\n**ID:** ${response.data.id}\n**Type:** ${response.data.type}`;
   } catch (error: any) {
-    log.error(`Error creating label: ${error.message || error}`);
-    if (error.code === 409) throw new UserError(`Label "${args.name}" already exists.`);
-    if (error.code === 403) throw new UserError("Permission denied.");
-    throw new UserError(`Failed to create label: ${error.message || 'Unknown error'}`);
+    handleGmailError(error, log, 'creating label', {
+      409: `Label "${args.name}" already exists.`,
+      403: "Permission denied.",
+    });
   }
 }
 
@@ -268,10 +276,10 @@ export async function handleUpdateLabel(
     const response = await gmail.users.labels.update({ userId: 'me', id: args.labelId, requestBody });
     return `Label updated successfully!\n\n**Name:** ${response.data.name}\n**ID:** ${response.data.id}`;
   } catch (error: any) {
-    log.error(`Error updating label: ${error.message || error}`);
-    if (error.code === 404) throw new UserError(`Label not found (ID: ${args.labelId}).`);
-    if (error.code === 403) throw new UserError("Permission denied. Cannot modify system labels.");
-    throw new UserError(`Failed to update label: ${error.message || 'Unknown error'}`);
+    handleGmailError(error, log, 'updating label', {
+      404: `Label not found (ID: ${args.labelId}).`,
+      403: "Permission denied. Cannot modify system labels.",
+    });
   }
 }
 
@@ -290,10 +298,10 @@ export async function handleDeleteLabel(
     await gmail.users.labels.delete({ userId: 'me', id: args.labelId });
     return `Label deleted successfully (ID: ${args.labelId}).`;
   } catch (error: any) {
-    log.error(`Error deleting label: ${error.message || error}`);
-    if (error.code === 404) throw new UserError(`Label not found (ID: ${args.labelId}).`);
-    if (error.code === 403) throw new UserError("Permission denied. Cannot delete system labels.");
-    throw new UserError(`Failed to delete label: ${error.message || 'Unknown error'}`);
+    handleGmailError(error, log, 'deleting label', {
+      404: `Label not found (ID: ${args.labelId}).`,
+      403: "Permission denied. Cannot delete system labels.",
+    });
   }
 }
 
@@ -314,9 +322,7 @@ export async function handleGetOrCreateLabel(
     const response = await gmail.users.labels.create({ userId: 'me', requestBody: { name: args.name } });
     return `Label created!\n\n**Name:** ${response.data.name}\n**ID:** ${response.data.id}\n**Type:** ${response.data.type}`;
   } catch (error: any) {
-    log.error(`Error getting/creating label: ${error.message || error}`);
-    if (error.code === 403) throw new UserError("Permission denied.");
-    throw new UserError(`Failed to get or create label: ${error.message || 'Unknown error'}`);
+    handleGmailError(error, log, 'getting/creating label', { 403: "Permission denied." });
   }
 }
 
@@ -339,9 +345,9 @@ export async function handleGetAttachment(
     return `Attachment retrieved successfully!\n\n**Size:** ${data.size} bytes\n**Data (base64):**\n${base64}`;
   } catch (error: any) {
     if (error instanceof UserError) throw error;
-    log.error(`Error getting attachment: ${error.message || error}`);
-    if (error.code === 404) throw new UserError("Attachment not found.");
-    if (error.code === 403) throw new UserError("Permission denied.");
-    throw new UserError(`Failed to get attachment: ${error.message || 'Unknown error'}`);
+    handleGmailError(error, log, 'getting attachment', {
+      404: "Attachment not found.",
+      403: "Permission denied.",
+    });
   }
 }
