@@ -1,11 +1,12 @@
 // src/google-slides/server.ts
-import { FastMCP, UserError } from 'fastmcp';
+import { FastMCP } from 'fastmcp';
 import { z } from 'zod';
-import { slides_v1, drive_v3 } from 'googleapis';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import {
+  getSlidesClient,
+  getDriveClient,
   handleCreatePresentation,
   handleGetPresentation,
   handleGetPage,
@@ -19,17 +20,6 @@ const slidesServer = new FastMCP<UserSession>({
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-slides'),
 });
-
-// --- Helpers ---
-function getSlidesClient(session?: UserSession): slides_v1.Slides {
-  if (session?.googleSlides) return session.googleSlides;
-  throw new UserError("Google Slides client is not available. Make sure you have granted presentations access.");
-}
-
-function getDriveClient(session?: UserSession): drive_v3.Drive {
-  if (session?.googleDrive) return session.googleDrive;
-  throw new UserError("Google Drive client is not available. Make sure you have granted drive access.");
-}
 
 // === TOOL DEFINITIONS ===
 

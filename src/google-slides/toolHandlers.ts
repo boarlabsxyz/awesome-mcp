@@ -4,6 +4,18 @@ import { slides_v1, drive_v3 } from 'googleapis';
 
 type Log = { info: (msg: string) => void; error: (msg: string) => void };
 
+/** Validate and return a Slides client from the session, or throw UserError. */
+export function getSlidesClient(session?: { googleSlides?: slides_v1.Slides }): slides_v1.Slides {
+  if (session?.googleSlides) return session.googleSlides;
+  throw new UserError("Google Slides client is not available. Make sure you have granted presentations access.");
+}
+
+/** Validate and return a Drive client from the session, or throw UserError. */
+export function getDriveClient(session?: { googleDrive?: drive_v3.Drive }): drive_v3.Drive {
+  if (session?.googleDrive) return session.googleDrive;
+  throw new UserError("Google Drive client is not available. Make sure you have granted drive access.");
+}
+
 /** Extract trimmed text runs from a TextElement array. */
 export function extractTextRuns(textElements: slides_v1.Schema$TextElement[] | undefined): string[] {
   if (!textElements) return [];

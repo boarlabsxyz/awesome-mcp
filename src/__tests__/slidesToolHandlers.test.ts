@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it, mock } from 'node:test';
 import {
+  getSlidesClient,
+  getDriveClient,
   extractTextRuns,
   extractElementTexts,
   handleCreatePresentation,
@@ -148,6 +150,40 @@ function mockDrive(overrides: any = {}) {
     },
   } as any;
 }
+
+// === getSlidesClient / getDriveClient ===
+
+describe('getSlidesClient', () => {
+  it('returns googleSlides when present on session', () => {
+    const fakeSlides = { presentations: {} } as any;
+    const result = getSlidesClient({ googleSlides: fakeSlides });
+    assert.equal(result, fakeSlides);
+  });
+
+  it('throws UserError when session is undefined', () => {
+    assert.throws(() => getSlidesClient(undefined), { message: /Google Slides client is not available/ });
+  });
+
+  it('throws UserError when googleSlides is missing', () => {
+    assert.throws(() => getSlidesClient({} as any), { message: /Google Slides client is not available/ });
+  });
+});
+
+describe('getDriveClient', () => {
+  it('returns googleDrive when present on session', () => {
+    const fakeDrive = { comments: {} } as any;
+    const result = getDriveClient({ googleDrive: fakeDrive });
+    assert.equal(result, fakeDrive);
+  });
+
+  it('throws UserError when session is undefined', () => {
+    assert.throws(() => getDriveClient(undefined), { message: /Google Drive client is not available/ });
+  });
+
+  it('throws UserError when googleDrive is missing', () => {
+    assert.throws(() => getDriveClient({} as any), { message: /Google Drive client is not available/ });
+  });
+});
 
 // === extractTextRuns ===
 
@@ -319,6 +355,64 @@ describe('handleGetPresentation', () => {
       { message: /Permission denied/ }
     );
   });
+
+  it('throws generic UserError on unknown error code', async () => {
+    const slides = mockSlides({
+      presentations: {
+        get: mock.fn(async () => { const e: any = new Error('Server error'); e.code = 500; throw e; }),
+      },
+    });
+    await assert.rejects(
+      () => handleGetPresentation(slides, { presentationId: 'x' }, noopLog),
+      { message: /Failed to get presentation.*Server error/ }
+    );
+  });
+
+  it('extracts text from slides with table elements', async () => {
+    const slides = mockSlides({
+      presentations: {
+        get: mock.fn(async () => ({
+          data: {
+            presentationId: 'pres1',
+            title: 'With Table',
+            slides: [{
+              objectId: 's1',
+              pageElements: [{
+                table: {
+                  tableRows: [{
+                    tableCells: [
+                      { text: { textElements: [{ textRun: { content: 'Cell A' } }] } },
+                    ],
+                  }],
+                },
+              }],
+            }],
+          },
+        })),
+      },
+    });
+    const result = await handleGetPresentation(slides, { presentationId: 'pres1' }, noopLog);
+    assert.ok(result.includes('Cell A'));
+  });
+
+  it('skips slides with no text content', async () => {
+    const slides = mockSlides({
+      presentations: {
+        get: mock.fn(async () => ({
+          data: {
+            presentationId: 'pres1',
+            title: 'Empty Text',
+            slides: [{
+              objectId: 's1',
+              pageElements: [{ line: {} }],
+            }],
+          },
+        })),
+      },
+    });
+    const result = await handleGetPresentation(slides, { presentationId: 'pres1' }, noopLog);
+    assert.ok(!result.includes('Slide 1:'));
+  });
 });
 
 // === handleGetPage ===
@@ -364,6 +458,44 @@ describe('handleGetPage', () => {
     assert.ok(result.includes('**Type:** SLIDE'));
   });
 
+  it('handles shape without text', async () => {
+    const slides = mockSlides({
+      pages: {
+        get: mock.fn(async () => ({
+          data: {
+            objectId: 'slide1',
+            pageElements: [{
+              objectId: 'emptyShape',
+              shape: { shapeType: 'RECTANGLE' },
+            }],
+          },
+        })),
+      },
+    });
+    const result = await handleGetPage(slides, { presentationId: 'pres1', pageObjectId: 'slide1' }, noopLog);
+    assert.ok(result.includes('Type: Shape (RECTANGLE)'));
+    assert.ok(!result.includes('Text:'));
+  });
+
+  it('handles image without sourceUrl', async () => {
+    const slides = mockSlides({
+      pages: {
+        get: mock.fn(async () => ({
+          data: {
+            objectId: 'slide1',
+            pageElements: [{
+              objectId: 'img1',
+              image: {},
+            }],
+          },
+        })),
+      },
+    });
+    const result = await handleGetPage(slides, { presentationId: 'pres1', pageObjectId: 'slide1' }, noopLog);
+    assert.ok(result.includes('Type: Image'));
+    assert.ok(!result.includes('Source:'));
+  });
+
   it('throws UserError on 404', async () => {
     const slides = mockSlides({
       pages: {
@@ -373,6 +505,18 @@ describe('handleGetPage', () => {
     await assert.rejects(
       () => handleGetPage(slides, { presentationId: 'pres1', pageObjectId: 'bad' }, noopLog),
       { message: /Page not found/ }
+    );
+  });
+
+  it('throws UserError on 403', async () => {
+    const slides = mockSlides({
+      pages: {
+        get: mock.fn(async () => { const e: any = new Error('Forbidden'); e.code = 403; throw e; }),
+      },
+    });
+    await assert.rejects(
+      () => handleGetPage(slides, { presentationId: 'pres1', pageObjectId: 'bad' }, noopLog),
+      { message: /Permission denied/ }
     );
   });
 });
@@ -411,6 +555,18 @@ describe('handleGetPageThumbnail', () => {
     await assert.rejects(
       () => handleGetPageThumbnail(slides, { presentationId: 'pres1', pageObjectId: 's1', thumbnailSize: 'LARGE' }, noopLog),
       { message: /Permission denied/ }
+    );
+  });
+
+  it('throws generic UserError on unknown error', async () => {
+    const slides = mockSlides({
+      pages: {
+        getThumbnail: mock.fn(async () => { throw new Error('Timeout'); }),
+      },
+    });
+    await assert.rejects(
+      () => handleGetPageThumbnail(slides, { presentationId: 'pres1', pageObjectId: 's1', thumbnailSize: 'SMALL' }, noopLog),
+      { message: /Failed to get thumbnail.*Timeout/ }
     );
   });
 });
@@ -546,5 +702,36 @@ describe('handleListPresentationComments', () => {
       () => handleListPresentationComments(drive, { presentationId: 'x' }, noopLog),
       { message: /Permission denied/ }
     );
+  });
+
+  it('throws generic UserError on unknown error', async () => {
+    const drive = mockDrive({
+      comments: {
+        list: mock.fn(async () => { throw new Error('Rate limited'); }),
+      },
+    });
+    await assert.rejects(
+      () => handleListPresentationComments(drive, { presentationId: 'x' }, noopLog),
+      { message: /Failed to list comments.*Rate limited/ }
+    );
+  });
+
+  it('handles comment with missing author', async () => {
+    const drive = mockDrive({
+      comments: {
+        list: mock.fn(async () => ({
+          data: {
+            comments: [{
+              createdTime: '2024-01-01T00:00:00Z',
+              content: 'Anonymous comment',
+              resolved: false,
+            }],
+          },
+        })),
+      },
+    });
+    const result = await handleListPresentationComments(drive, { presentationId: 'pres1' }, noopLog);
+    assert.ok(result.includes('Unknown'));
+    assert.ok(result.includes('Anonymous comment'));
   });
 });
