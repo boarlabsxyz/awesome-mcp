@@ -2,127 +2,17 @@
 import { FastMCP, UserError } from 'fastmcp';
 import { z } from 'zod';
 import { sheets_v4, drive_v3 } from 'googleapis';
-import http from 'http';
 
-// Multi-user imports
-import { UserSession, createUserSession, createUserSessionFromConnection } from '../userSession.js';
-import { loadUsers, getUserByApiKey } from '../userStore.js';
-import { loadClientCredentials } from '../auth.js';
-import { getMcpConnection, getMcpConnectionByInstanceId } from '../mcpConnectionStore.js';
-import { getMcpCatalog } from '../mcpCatalogStore.js';
+import { UserSession } from '../userSession.js';
+import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 
 import * as SheetsHelpers from './apiHelpers.js';
 import { SharedDriveParameters } from '../types.js';
 
-const MCP_SLUG = process.env.MCP_SLUG || 'google-sheets';
-
 const sheetsServer = new FastMCP<UserSession>({
   name: 'Google Sheets MCP Server',
   version: '1.0.0',
-  authenticate: async (request: http.IncomingMessage | undefined) => {
-    // In stdio mode, request is undefined — no per-user auth needed
-    if (!request) return undefined as unknown as UserSession;
-
-    // Extract API key from Authorization header or query param
-    const authHeader = request.headers['authorization'];
-    let rawToken: string | undefined;
-
-    if (authHeader?.startsWith('Bearer ')) {
-      rawToken = authHeader.slice(7);
-    }
-
-    const url = new URL(request.url || '', 'http://localhost');
-
-    if (!rawToken) {
-      rawToken = url.searchParams.get('apiKey') || undefined;
-    }
-
-    if (!rawToken) {
-      throw new Response(null, { status: 401, statusText: 'Missing API key. Provide Authorization: Bearer <key> header.' } as any);
-    }
-
-    // Support compound token format: "apiKey.instanceId"
-    let apiKey: string;
-    let instanceId: string | undefined;
-
-    await loadUsers();
-
-    const dotIndex = rawToken.lastIndexOf('.');
-    if (dotIndex > 0) {
-      const possibleApiKey = rawToken.substring(0, dotIndex);
-      const possibleInstanceId = rawToken.substring(dotIndex + 1);
-      const possibleUser = await getUserByApiKey(possibleApiKey);
-      if (possibleUser) {
-        apiKey = possibleApiKey;
-        instanceId = possibleInstanceId;
-      } else {
-        apiKey = rawToken;
-      }
-    } else {
-      apiKey = rawToken;
-    }
-
-    if (!instanceId) {
-      instanceId = url.searchParams.get('instanceId') || undefined;
-    }
-
-    const user = await getUserByApiKey(apiKey);
-    if (!user) {
-      console.error(`[Sheets Auth] Invalid API key: ${apiKey.substring(0, 8)}...`);
-      throw new Response(null, { status: 401, statusText: 'Invalid API key.' } as any);
-    }
-
-    console.error(`[Sheets Auth] User ${user.id} (${user.email}), instanceId=${instanceId || 'none'}`);
-
-    if (!user.id) {
-      throw new Response(null, { status: 403, statusText: 'User ID not found. Please re-register.' } as any);
-    }
-
-    if (instanceId) {
-      const connection = await getMcpConnectionByInstanceId(instanceId);
-      if (!connection) {
-        console.error(`[Sheets Auth] Instance not found: ${instanceId}`);
-        throw new Response(null, { status: 404, statusText: `Instance not found: ${instanceId}` } as any);
-      }
-      if (connection.userId !== user.id) {
-        console.error(`[Sheets Auth] User ${user.id} tried to access instance ${instanceId} owned by user ${connection.userId}`);
-        throw new Response(null, { status: 403, statusText: 'You do not have access to this instance.' } as any);
-      }
-
-      console.error(`[Sheets Auth] Instance ${instanceId}: email=${connection.googleEmail}, has_refresh_token=${!!connection.googleTokens?.refresh_token}`);
-
-      const mcp = await getMcpCatalog(connection.mcpSlug);
-      const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
-        ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }
-        : await loadClientCredentials();
-
-      return createUserSessionFromConnection(user, connection, client_id, client_secret);
-    }
-
-    // Legacy flow (no instanceId): Always prefer MCP connection tokens
-    const connection = await getMcpConnection(user.id, MCP_SLUG);
-    if (connection) {
-      console.error(`[Sheets Auth] Legacy flow for user ${user.id}: instance=${connection.instanceId}, email=${connection.googleEmail}, has_refresh_token=${!!connection.googleTokens?.refresh_token}`);
-      const mcp = await getMcpCatalog(MCP_SLUG);
-      const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
-        ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }
-        : await loadClientCredentials();
-      return createUserSessionFromConnection(user, connection, client_id, client_secret);
-    }
-
-    // Fall back to user's global tokens
-    if (user.tokens && user.tokens.refresh_token) {
-      console.error(`[Sheets Auth] Falling back to global tokens for user ${user.id}`);
-      const { client_id, client_secret } = await loadClientCredentials();
-      return createUserSession(user, client_id, client_secret);
-    }
-
-    console.error(`[Sheets Auth] No connection and no global tokens for user ${user.id}`);
-    throw new Response(null, {
-      status: 403,
-      statusText: `MCP not connected. Visit the dashboard to connect ${MCP_SLUG}.`
-    } as any);
-  },
+  authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-sheets'),
 });
 
 // --- Helper to get Sheets client within tools ---

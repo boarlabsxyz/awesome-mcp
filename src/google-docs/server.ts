@@ -3,9 +3,7 @@ import { FastMCP, UserError } from 'fastmcp';
 import { z } from 'zod';
 import { google, docs_v1, drive_v3, sheets_v4 } from 'googleapis';
 import { authorize } from '../auth.js';
-import { loadClientCredentials } from '../auth.js';
 import { OAuth2Client } from 'google-auth-library';
-import http from 'http';
 
 // Import types and helpers
 import {
@@ -39,15 +37,15 @@ import {
 } from './driveHelpers.js';
 
 // Multi-user imports
-import { UserSession, createUserSession, createUserSessionFromConnection } from '../userSession.js';
-import { loadUsers, getUserByApiKey } from '../userStore.js';
+import { UserSession } from '../userSession.js';
+import { loadUsers } from '../userStore.js';
 import { initDatabase, closeDatabase } from '../db.js';
 import { createWebApp } from '../website/webServer.js';
-import { seedDefaultCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
+import { seedDefaultCatalogs } from '../mcpCatalogStore.js';
 import { calendarServer } from '../google-calendar/server.js';
 import { sheetsServer } from '../google-sheets/server.js';
 import { gmailServer } from '../google-gmail/server.js';
-import { getMcpConnection, getMcpConnectionByInstanceId } from '../mcpConnectionStore.js';
+import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 
 // Global clients for stdio (single-user) mode
 let authClient: OAuth2Client | null = null;
@@ -111,120 +109,7 @@ const MCP_SLUG = process.env.MCP_SLUG || 'google-docs';
 const server = new FastMCP<UserSession>({
   name: 'Ultimate Google Docs & Sheets MCP Server',
   version: '1.0.0',
-  authenticate: async (request: http.IncomingMessage | undefined) => {
-    // In stdio mode, request is undefined — no per-user auth needed
-    if (!request) return undefined as unknown as UserSession;
-
-    // Extract API key from Authorization header or query param
-    const authHeader = request.headers['authorization'];
-    let rawToken: string | undefined;
-
-    if (authHeader?.startsWith('Bearer ')) {
-      rawToken = authHeader.slice(7);
-    }
-
-    const url = new URL(request.url || '', 'http://localhost');
-
-    if (!rawToken) {
-      // Try query param from URL
-      rawToken = url.searchParams.get('apiKey') || undefined;
-    }
-
-    if (!rawToken) {
-      throw new Response(null, { status: 401, statusText: 'Missing API key. Provide Authorization: Bearer <key> header.' } as any);
-    }
-
-    // Support compound token format: "apiKey.instanceId"
-    // This ensures instanceId survives MCP transport (SSE, streamable HTTP)
-    // which may not preserve query params on follow-up requests.
-    let apiKey: string;
-    let instanceId: string | undefined;
-
-    await loadUsers();
-
-    const dotIndex = rawToken.lastIndexOf('.');
-    if (dotIndex > 0) {
-      const possibleApiKey = rawToken.substring(0, dotIndex);
-      const possibleInstanceId = rawToken.substring(dotIndex + 1);
-      // Verify the first part is a valid API key
-      const possibleUser = await getUserByApiKey(possibleApiKey);
-      if (possibleUser) {
-        apiKey = possibleApiKey;
-        instanceId = possibleInstanceId;
-      } else {
-        // Not a compound token, treat entire string as apiKey
-        apiKey = rawToken;
-      }
-    } else {
-      apiKey = rawToken;
-    }
-
-    // Also check query param for instanceId (backward compat)
-    if (!instanceId) {
-      instanceId = url.searchParams.get('instanceId') || undefined;
-    }
-
-    const user = await getUserByApiKey(apiKey);
-    if (!user) {
-      throw new Response(null, { status: 401, statusText: 'Invalid API key.' } as any);
-    }
-
-    if (!user.id) {
-      throw new Response(null, { status: 403, statusText: 'User ID not found. Please re-register.' } as any);
-    }
-
-    if (instanceId) {
-      // Instance-based routing - look up connection by instanceId
-      const connection = await getMcpConnectionByInstanceId(instanceId);
-      if (!connection) {
-        throw new Response(null, {
-          status: 404,
-          statusText: `Instance not found: ${instanceId}`
-        } as any);
-      }
-
-      // Verify user owns this instance
-      if (connection.userId !== user.id) {
-        throw new Response(null, {
-          status: 403,
-          statusText: 'You do not have access to this instance.'
-        } as any);
-      }
-
-      // Get MCP catalog to check for custom Google credentials
-      const mcp = await getMcpCatalog(connection.mcpSlug);
-      const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
-        ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }
-        : await loadClientCredentials();
-
-      // Create session from the instance's connection tokens
-      return createUserSessionFromConnection(user, connection, client_id, client_secret);
-    }
-
-    // Legacy flow (no instanceId): Always prefer MCP connection tokens over
-    // user's global tokens, because MCP connections have the correct Google scopes
-    // (Docs, Drive, Sheets, etc.) while global tokens may only have profile scopes.
-    const connection = await getMcpConnection(user.id, MCP_SLUG);
-    if (connection) {
-      const mcp = await getMcpCatalog(MCP_SLUG);
-      const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
-        ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }
-        : await loadClientCredentials();
-      return createUserSessionFromConnection(user, connection, client_id, client_secret);
-    }
-
-    // Fall back to user's global tokens (backward compat for users who registered
-    // with full scopes before per-MCP connections were introduced)
-    if (user.tokens && user.tokens.refresh_token) {
-      const { client_id, client_secret } = await loadClientCredentials();
-      return createUserSession(user, client_id, client_secret);
-    }
-
-    throw new Response(null, {
-      status: 403,
-      statusText: `MCP not connected. Visit the dashboard to connect ${MCP_SLUG}.`
-    } as any);
-  },
+  authenticate: createMcpAuthenticateHandler(MCP_SLUG),
 });
 
 // --- Helper to get Docs client within tools ---
