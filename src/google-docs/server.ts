@@ -45,6 +45,7 @@ import { seedDefaultCatalogs } from '../mcpCatalogStore.js';
 import { calendarServer } from '../google-calendar/server.js';
 import { sheetsServer } from '../google-sheets/server.js';
 import { gmailServer } from '../google-gmail/server.js';
+import { slidesServer } from '../google-slides/server.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 
 // Global clients for stdio (single-user) mode
@@ -2810,6 +2811,7 @@ const DOCS_MCP_PORT = parseInt(process.env.INTERNAL_MCP_PORT || "3001", 10);
 const CALENDAR_MCP_PORT = parseInt(process.env.CALENDAR_MCP_PORT || "3002", 10);
 const SHEETS_MCP_PORT = parseInt(process.env.SHEETS_MCP_PORT || "3003", 10);
 const GMAIL_MCP_PORT = parseInt(process.env.GMAIL_MCP_PORT || "3004", 10);
+const SLIDES_MCP_PORT = parseInt(process.env.SLIDES_MCP_PORT || "3005", 10);
 
 // Multi-service deployment mode
 // - undefined or "all": Run everything (website + MCPs) - default single-service mode
@@ -2857,6 +2859,7 @@ async function startServer() {
         const mcpToStart = MCP_SLUG === "google-calendar" ? calendarServer
                          : MCP_SLUG === "google-sheets"   ? sheetsServer
                          : MCP_SLUG === "google-gmail"    ? gmailServer
+                         : MCP_SLUG === "google-slides"   ? slidesServer
                          : server; // default: google-docs
 
         mcpToStart.start({
@@ -2869,11 +2872,14 @@ async function startServer() {
 
         const { createMcpOnlyApp } = await import('../website/webServer.js');
         const expressApp = createMcpOnlyApp(INTERNAL_MCP_PORT);
-        expressApp.listen(PORT, HOST, () => {
+        const httpServer = expressApp.listen(PORT, HOST, () => {
           console.error(`${MCP_SLUG} MCP running on port ${PORT}!`);
           console.error(`   MCP Endpoint:   http://${HOST}:${PORT}/mcp`);
           console.error(`   OAuth Metadata: http://${HOST}:${PORT}/.well-known/oauth-authorization-server`);
         });
+        // Disable server-level timeouts for long-lived SSE streams
+        httpServer.timeout = 0;
+        httpServer.keepAliveTimeout = 120_000;
 
       } else {
         // Default "all" mode: Single service with Express + internal MCP servers
@@ -2913,19 +2919,32 @@ async function startServer() {
           },
         });
 
+        // Start Google Slides MCP on separate internal port
+        slidesServer.start({
+          transportType: "httpStream",
+          httpStream: {
+            port: SLIDES_MCP_PORT,
+            host: "127.0.0.1",
+          },
+        });
+
         // Create Express app with proxy routes and registration/OAuth pages
-        const expressApp = createWebApp(DOCS_MCP_PORT, CALENDAR_MCP_PORT, SHEETS_MCP_PORT, GMAIL_MCP_PORT);
+        const expressApp = createWebApp(DOCS_MCP_PORT, CALENDAR_MCP_PORT, SHEETS_MCP_PORT, GMAIL_MCP_PORT, SLIDES_MCP_PORT);
 
         // Start Express on the public port — single port for all traffic
-        expressApp.listen(PORT, HOST, () => {
+        const httpServer = expressApp.listen(PORT, HOST, () => {
           console.error(`Server running on port ${PORT}!`);
           console.error(`   Docs MCP:       http://${HOST}:${PORT}/mcp`);
           console.error(`   Calendar MCP:   http://${HOST}:${PORT}/calendar`);
           console.error(`   Gmail MCP:      http://${HOST}:${PORT}/gmail`);
+          console.error(`   Slides MCP:     http://${HOST}:${PORT}/slides`);
           console.error(`   Health Check:   http://${HOST}:${PORT}/health`);
           console.error(`   Registration:   http://${HOST}:${PORT}/`);
           console.error(`   OAuth Callback: http://${HOST}:${PORT}/auth/callback`);
         });
+        // Disable server-level timeouts for long-lived SSE streams
+        httpServer.timeout = 0;
+        httpServer.keepAliveTimeout = 120_000;
       }
 
     } else {
