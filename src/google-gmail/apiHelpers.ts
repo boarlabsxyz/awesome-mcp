@@ -11,7 +11,6 @@ export function createRawEmail(
   body: string,
   options?: { cc?: string; bcc?: string; isHtml?: boolean }
 ): string {
-  const boundary = `boundary_${Date.now()}`;
   const contentType = options?.isHtml ? 'text/html' : 'text/plain';
 
   const lines: string[] = [
@@ -70,8 +69,61 @@ export function formatEmailList(
 }
 
 /**
- * Basic email validation.
+ * Extract the body text from a Gmail message payload.
  */
-export function isValidEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+export function extractBody(payload?: gmail_v1.Schema$MessagePart): string {
+  if (!payload) return '';
+
+  // Simple message with body data
+  if (payload.body?.data) {
+    return Buffer.from(payload.body.data, 'base64url').toString('utf-8');
+  }
+
+  // Multipart message — prefer text/plain, fall back to text/html
+  if (payload.parts) {
+    const textPart = payload.parts.find(p => p.mimeType === 'text/plain');
+    if (textPart?.body?.data) {
+      return Buffer.from(textPart.body.data, 'base64url').toString('utf-8');
+    }
+
+    const htmlPart = payload.parts.find(p => p.mimeType === 'text/html');
+    if (htmlPart?.body?.data) {
+      return Buffer.from(htmlPart.body.data, 'base64url').toString('utf-8');
+    }
+
+    // Recurse into nested multipart
+    for (const part of payload.parts) {
+      const body = extractBody(part);
+      if (body) return body;
+    }
+  }
+
+  return '';
+}
+
+/**
+ * List attachments in a Gmail message payload.
+ */
+export function listAttachments(
+  payload?: gmail_v1.Schema$MessagePart
+): { filename: string; mimeType: string; size: number; attachmentId: string }[] {
+  const attachments: { filename: string; mimeType: string; size: number; attachmentId: string }[] = [];
+
+  function walk(part?: gmail_v1.Schema$MessagePart) {
+    if (!part) return;
+    if (part.filename && part.body?.attachmentId) {
+      attachments.push({
+        filename: part.filename,
+        mimeType: part.mimeType || 'application/octet-stream',
+        size: part.body.size || 0,
+        attachmentId: part.body.attachmentId,
+      });
+    }
+    if (part.parts) {
+      part.parts.forEach(walk);
+    }
+  }
+
+  walk(payload);
+  return attachments;
 }
