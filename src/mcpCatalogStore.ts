@@ -361,7 +361,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
     slug: 'google-slides',
     name: 'Google Slides MCP',
     description: 'Create, read, and manage Google Slides presentations',
-    iconUrl: null,
+    iconUrl: 'https://play-lh.googleusercontent.com/DG-zbXPr8LItYD8F2nD4aR_SK_jpkipLBK77YWY-F0cdJt67VFgCHZtRtjsakzTw3EM=w240-h480-rw',
     mcpUrl: googleSlidesMcpUrl,
     scopes: [
       'https://www.googleapis.com/auth/presentations',
