@@ -723,13 +723,11 @@
               <div class="instance-name">
                 <span id="name-${instance.instanceId}">${escapeHtml(instance.instanceName)}</span>
               </div>
-              <div class="instance-type">${escapeHtml(mcpName)}</div>
               ${instance.googleEmail ? `<div class="instance-email">${escapeHtml(instance.googleEmail)}</div>` : ''}
               ${getTokenStatusHtml(instance)}
             </div>
           </div>
           <div class="instance-url-section">
-            <div class="instance-url-label">MCP URL (for Claude.ai Connector)</div>
             <div class="instance-url-row">
               <input type="text" class="instance-url-input" value="${escapeHtml(instanceUrl)}" readonly id="url-${instance.instanceId}" />
               <button class="btn-copy" onclick="copyUrl('${instance.instanceId}', this)">Copy</button>
