@@ -17,7 +17,7 @@
       min-height: 100vh;
     }
     .page-container {
-      max-width: 1000px;
+      max-width: 1200px;
       margin: 0 auto;
       padding: 2rem;
     }
@@ -84,6 +84,20 @@
       border: 1px solid rgba(220,53,69,0.3);
     }
 
+    /* Dashboard two-column layout */
+    .dashboard-layout {
+      display: flex;
+      gap: 2rem;
+    }
+    .main-content {
+      flex: 1;
+      min-width: 0;
+    }
+    .sidebar {
+      width: 300px;
+      flex-shrink: 0;
+    }
+
     /* Section styles */
     .section {
       margin-bottom: 2rem;
@@ -118,176 +132,91 @@
       background: #005bb5;
     }
 
-    /* Instance Grid */
-    .instance-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-      gap: 1rem;
-    }
-    .instance-card {
-      background: #0a0a0a;
-      border-radius: 12px;
-      padding: 1.5rem;
-      box-shadow: none;
-      border: 1px solid rgba(255,255,255,0.1);
-      transition: all 0.2s;
-    }
-    .instance-card:hover {
-      box-shadow: 0 4px 16px rgba(255,255,255,0.05);
-    }
-    .instance-card-header {
+    /* Instance List (rows) */
+    .instance-list {
       display: flex;
-      align-items: flex-start;
+      flex-direction: column;
+    }
+    .instance-row {
+      display: flex;
+      align-items: center;
       gap: 1rem;
-      margin-bottom: 1rem;
+      padding: 0.85rem 0;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      transition: background 0.15s;
+    }
+    .instance-row:hover {
+      background: rgba(255,255,255,0.03);
+    }
+    .instance-row:last-child {
+      border-bottom: none;
     }
     .instance-icon {
-      width: 48px;
-      height: 48px;
+      width: 40px;
+      height: 40px;
       background: rgba(255,255,255,0.06);
-      border-radius: 12px;
+      border-radius: 10px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 1.5rem;
+      font-size: 1.25rem;
       flex-shrink: 0;
     }
     .instance-icon img {
-      width: 32px;
-      height: 32px;
+      width: 24px;
+      height: 24px;
       object-fit: contain;
     }
     .instance-info {
       flex: 1;
       min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .instance-name-group {
+      min-width: 0;
     }
     .instance-name {
-      font-size: 1rem;
+      font-size: 0.95rem;
       font-weight: 600;
-      margin-bottom: 0.25rem;
       display: flex;
       align-items: center;
       gap: 0.5rem;
+      white-space: nowrap;
     }
     .instance-name input {
-      flex: 1;
-      font-size: 1rem;
+      font-size: 0.95rem;
       font-weight: 600;
-      padding: 0.25rem 0.5rem;
+      padding: 0.2rem 0.4rem;
       border: 1px solid rgba(255,255,255,0.15);
       border-radius: 4px;
       background: #111;
       color: #ededed;
+      width: 140px;
     }
     .instance-type {
-      font-size: 0.8rem;
-      color: #666;
+      font-size: 0.7rem;
+      color: #555;
       text-transform: uppercase;
       letter-spacing: 0.03em;
+      margin-top: 0.1rem;
     }
     .instance-email {
       font-size: 0.85rem;
-      color: #888;
-      margin-top: 0.25rem;
+      color: #666;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-    }
-
-    .instance-url-section {
-      margin-top: 1rem;
-      padding-top: 1rem;
-      border-top: 1px solid rgba(255,255,255,0.1);
-    }
-    .instance-url-label {
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      color: #666;
-      margin-bottom: 0.5rem;
-      letter-spacing: 0.03em;
-    }
-    .instance-url-row {
-      display: flex;
-      gap: 0.5rem;
-    }
-    .instance-url-input {
-      flex: 1;
-      padding: 0.6rem;
-      border: 1px solid rgba(255,255,255,0.15);
-      border-radius: 6px;
-      font-family: monospace;
-      font-size: 0.8rem;
-      background: #111;
-      color: #ededed;
-    }
-    .btn-copy {
-      padding: 0.6rem 1rem;
-      background: #0070f3;
-      color: #fff;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 0.8rem;
-      white-space: nowrap;
-    }
-    .btn-copy:hover { background: #005bb5; }
-    .btn-copy.copied { background: #34a853; }
-
-    .instance-actions {
-      display: flex;
-      gap: 0.5rem;
-      margin-top: 1rem;
-    }
-    .btn-rename {
-      padding: 0.5rem 0.75rem;
-      background: transparent;
-      color: #888;
-      border: 1px solid rgba(255,255,255,0.15);
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 0.8rem;
-      transition: all 0.2s;
-    }
-    .btn-rename:hover {
-      background: #111;
-      color: #ededed;
-    }
-    .btn-delete {
-      padding: 0.5rem 0.75rem;
-      background: transparent;
-      color: #dc3545;
-      border: 1px solid #dc3545;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 0.8rem;
-      transition: all 0.2s;
-    }
-    .btn-delete:hover {
-      background: #dc3545;
-      color: #fff;
-    }
-    .btn-reconnect {
-      padding: 0.5rem 0.75rem;
-      background: transparent;
-      color: #f0ad4e;
-      border: 1px solid #f0ad4e;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 0.8rem;
-      transition: all 0.2s;
-    }
-    .btn-reconnect:hover {
-      background: #f0ad4e;
-      color: #000;
     }
     .token-status {
       display: inline-flex;
       align-items: center;
       gap: 0.35rem;
-      font-size: 0.75rem;
-      padding: 0.2rem 0.5rem;
+      font-size: 0.7rem;
+      padding: 0.15rem 0.4rem;
       border-radius: 4px;
-      margin-top: 0.35rem;
+      white-space: nowrap;
     }
     .token-status.expired {
       background: rgba(220,53,69,0.15);
@@ -300,6 +229,141 @@
     .token-status.ok {
       background: rgba(52,168,83,0.15);
       color: #34a853;
+    }
+
+    .instance-row-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-shrink: 0;
+    }
+    .btn-copy {
+      padding: 0.4rem 0.7rem;
+      background: #0070f3;
+      color: #fff;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      white-space: nowrap;
+    }
+    .btn-copy:hover { background: #005bb5; }
+    .btn-copy.copied { background: #34a853; }
+    .btn-rename {
+      padding: 0.4rem 0.6rem;
+      background: transparent;
+      color: #888;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      transition: all 0.2s;
+    }
+    .btn-rename:hover {
+      background: #111;
+      color: #ededed;
+    }
+    .btn-delete {
+      padding: 0.4rem 0.6rem;
+      background: transparent;
+      color: #dc3545;
+      border: 1px solid rgba(220,53,69,0.3);
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      transition: all 0.2s;
+    }
+    .btn-delete:hover {
+      background: #dc3545;
+      color: #fff;
+    }
+    .btn-reconnect {
+      padding: 0.4rem 0.6rem;
+      background: transparent;
+      color: #f0ad4e;
+      border: 1px solid rgba(240,173,78,0.3);
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      transition: all 0.2s;
+    }
+    .btn-reconnect:hover {
+      background: #f0ad4e;
+      color: #000;
+    }
+
+    /* Sidebar */
+    .sidebar-card {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      padding: 1.5rem;
+      position: sticky;
+      top: 5rem;
+    }
+    .sidebar-card h3 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      color: #ccc;
+    }
+    .sidebar-steps {
+      list-style: none;
+      counter-reset: steps;
+    }
+    .sidebar-steps li {
+      counter-increment: steps;
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 0.85rem;
+      font-size: 0.82rem;
+      color: #888;
+      line-height: 1.5;
+    }
+    .sidebar-steps li::before {
+      content: counter(steps);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      background: rgba(0,112,243,0.15);
+      color: #0070f3;
+      border-radius: 50%;
+      font-size: 0.7rem;
+      font-weight: 600;
+      flex-shrink: 0;
+      margin-top: 0.05rem;
+    }
+    .sidebar-steps li:last-child {
+      margin-bottom: 0;
+    }
+
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 3rem;
+      color: #888;
+      background: #0a0a0a;
+      border-radius: 12px;
+      border: 2px dashed rgba(255,255,255,0.15);
+    }
+    .empty-state p {
+      margin-bottom: 1rem;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 2rem;
+      color: #888;
+    }
+    .error {
+      background: rgba(220,53,69,0.15);
+      border: 1px solid rgba(220,53,69,0.3);
+      border-radius: 8px;
+      padding: 1rem;
+      color: #dc3545;
+      margin-bottom: 1rem;
     }
 
     /* Add Tool Modal */
@@ -446,33 +510,6 @@
       cursor: not-allowed;
     }
 
-    /* Empty state */
-    .empty-state {
-      text-align: center;
-      padding: 3rem;
-      color: #888;
-      background: #0a0a0a;
-      border-radius: 12px;
-      border: 2px dashed rgba(255,255,255,0.15);
-    }
-    .empty-state p {
-      margin-bottom: 1rem;
-    }
-
-    .loading {
-      text-align: center;
-      padding: 2rem;
-      color: #888;
-    }
-    .error {
-      background: rgba(220,53,69,0.15);
-      border: 1px solid rgba(220,53,69,0.3);
-      border-radius: 8px;
-      padding: 1rem;
-      color: #dc3545;
-      margin-bottom: 1rem;
-    }
-
     /* Login overlay */
     .login-overlay {
       position: fixed;
@@ -536,6 +573,29 @@
       font-size: 0.8rem;
       color: #666;
     }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .dashboard-layout {
+        flex-direction: column;
+      }
+      .sidebar {
+        width: 100%;
+      }
+      .instance-info {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.25rem;
+      }
+      .instance-row {
+        flex-wrap: wrap;
+      }
+      .instance-row-actions {
+        width: 100%;
+        margin-top: 0.5rem;
+        padding-left: 3.5rem;
+      }
+    }
   </style>
 </head>
 <body>
@@ -555,18 +615,37 @@
     <div id="successAlert" class="alert alert-success hidden"></div>
 
     <div id="content" class="hidden">
-      <!-- Connected Tools Section -->
-      <div class="section">
-        <div class="section-header">
-          <h2>Your Connected Tools</h2>
-          <button class="btn-add" onclick="openAddToolModal()">+ Add Tool</button>
+      <div class="dashboard-layout">
+        <!-- Main content: instance list -->
+        <div class="main-content">
+          <div class="section">
+            <div class="section-header">
+              <h2>Your Connected Tools</h2>
+              <button class="btn-add" onclick="openAddToolModal()">+ Add Tool</button>
+            </div>
+            <div id="instanceList" class="instance-list">
+              <!-- Instance rows will be inserted here -->
+            </div>
+            <div id="emptyState" class="empty-state hidden">
+              <p>No tools connected yet.</p>
+              <button class="btn-add" onclick="openAddToolModal()">+ Add Your First Tool</button>
+            </div>
+          </div>
         </div>
-        <div id="instanceGrid" class="instance-grid">
-          <!-- Instance cards will be inserted here -->
-        </div>
-        <div id="emptyState" class="empty-state hidden">
-          <p>No tools connected yet.</p>
-          <button class="btn-add" onclick="openAddToolModal()">+ Add Your First Tool</button>
+
+        <!-- Sidebar: How to Connect -->
+        <div class="sidebar">
+          <div class="sidebar-card">
+            <h3>How to Connect</h3>
+            <ol class="sidebar-steps">
+              <li>Click "+ Add Tool" above</li>
+              <li>Choose your MCP type (e.g., Google Docs)</li>
+              <li>Name your instance and connect with Google</li>
+              <li>Copy the MCP URL</li>
+              <li>In Claude Desktop or VS Code, add a new MCP connector</li>
+              <li>Paste the URL and start using your tools</li>
+            </ol>
+          </div>
         </div>
       </div>
     </div>
@@ -670,18 +749,12 @@
 
       let mcpFullUrl;
       if (mcp.mcpUrl.startsWith('http://') || mcp.mcpUrl.startsWith('https://')) {
-        // External MCP service: connect directly (no proxy needed).
-        // MCP services don't advertise OAuth, so Claude.ai uses the apiKey as-is.
         mcpFullUrl = mcp.mcpUrl;
       } else {
-        // Local MCP (same service): use the path directly
         const mcpPath = mcp.mcpUrl.startsWith('/') ? mcp.mcpUrl : '/' + mcp.mcpUrl;
         mcpFullUrl = baseUrl + mcpPath;
       }
 
-      // Use compound token format: apiKey.instanceId
-      // This embeds the instance ID in the bearer token itself, ensuring it
-      // survives MCP transport (SSE/HTTP) which may not preserve query params.
       const url = new URL(mcpFullUrl);
       url.searchParams.set('apiKey', currentUser.apiKey + '.' + instanceId);
       return url.toString();
@@ -691,10 +764,10 @@
       const ts = instance.tokenStatus;
       if (!ts) return '';
       if (ts.isExpired) {
-        return '<div class="token-status expired">Token expired - reconnect required</div>';
+        return '<span class="token-status expired">Expired</span>';
       }
       if (!ts.hasRefreshToken) {
-        return '<div class="token-status warning">No refresh token - will expire soon</div>';
+        return '<span class="token-status warning">Expiring soon</span>';
       }
       return '';
     }
@@ -704,54 +777,50 @@
       return ts && (ts.isExpired || !ts.hasRefreshToken);
     }
 
-    function renderInstanceCard(instance) {
+    function renderInstanceRow(instance) {
       const mcp = catalogs.find(c => c.slug === instance.mcpSlug);
       const mcpName = mcp?.name || instance.mcpSlug;
       const mcpIcon = mcp?.iconUrl
         ? `<img src="${mcp.iconUrl}" alt="${mcpName}">`
         : getIconForMcp({ slug: instance.mcpSlug });
-      const instanceUrl = getMcpUrl(instance.mcpSlug, instance.instanceId);
       const showReconnect = needsReconnect(instance);
+      const tokenHtml = getTokenStatusHtml(instance);
 
       return `
-        <div class="instance-card" data-instance-id="${instance.instanceId}">
-          <div class="instance-card-header">
-            <div class="instance-icon">
-              ${mcpIcon}
-            </div>
-            <div class="instance-info">
+        <div class="instance-row" data-instance-id="${instance.instanceId}">
+          <div class="instance-icon">
+            ${mcpIcon}
+          </div>
+          <div class="instance-info">
+            <div class="instance-name-group">
               <div class="instance-name">
                 <span id="name-${instance.instanceId}">${escapeHtml(instance.instanceName)}</span>
+                ${tokenHtml}
               </div>
-              ${instance.googleEmail ? `<div class="instance-email">${escapeHtml(instance.googleEmail)}</div>` : ''}
-              ${getTokenStatusHtml(instance)}
+              <div class="instance-type">${escapeHtml(mcpName)}</div>
             </div>
+            ${instance.googleEmail ? `<div class="instance-email">${escapeHtml(instance.googleEmail)}</div>` : ''}
           </div>
-          <div class="instance-url-section">
-            <div class="instance-url-row">
-              <input type="text" class="instance-url-input" value="${escapeHtml(instanceUrl)}" readonly id="url-${instance.instanceId}" />
-              <button class="btn-copy" onclick="copyUrl('${instance.instanceId}', this)">Copy</button>
-            </div>
-          </div>
-          <div class="instance-actions">
-            ${showReconnect ? `<button class="btn-reconnect" onclick="reconnectInstance('${instance.instanceId}', '${escapeHtml(instance.mcpSlug)}')">Reconnect</button>` : ''}
+          <div class="instance-row-actions">
+            <button class="btn-copy" onclick="copyUrl('${instance.instanceId}', this)">Copy URL</button>
             <button class="btn-rename" onclick="renameInstance('${instance.instanceId}')">Rename</button>
             <button class="btn-delete" onclick="deleteInstance('${instance.instanceId}', '${escapeHtml(instance.instanceName)}')">Delete</button>
+            ${showReconnect ? `<button class="btn-reconnect" onclick="reconnectInstance('${instance.instanceId}', '${escapeHtml(instance.mcpSlug)}')">Reconnect</button>` : ''}
           </div>
         </div>
       `;
     }
 
     function renderInstances() {
-      const grid = document.getElementById('instanceGrid');
+      const list = document.getElementById('instanceList');
       const emptyState = document.getElementById('emptyState');
 
       if (instances.length === 0) {
-        grid.innerHTML = '';
+        list.innerHTML = '';
         emptyState.classList.remove('hidden');
       } else {
         emptyState.classList.add('hidden');
-        grid.innerHTML = instances.map(renderInstanceCard).join('');
+        list.innerHTML = instances.map(renderInstanceRow).join('');
       }
     }
 
@@ -828,12 +897,15 @@
     }
 
     function copyUrl(instanceId, btn) {
-      const input = document.getElementById(`url-${instanceId}`);
-      navigator.clipboard.writeText(input.value).then(() => {
+      const url = getMcpUrl(
+        instances.find(i => i.instanceId === instanceId)?.mcpSlug,
+        instanceId
+      );
+      navigator.clipboard.writeText(url).then(() => {
         btn.textContent = 'Copied!';
         btn.classList.add('copied');
         setTimeout(() => {
-          btn.textContent = 'Copy';
+          btn.textContent = 'Copy URL';
           btn.classList.remove('copied');
         }, 2000);
       });
