@@ -195,13 +195,6 @@
       color: #ededed;
       width: 140px;
     }
-    .instance-type {
-      font-size: 0.7rem;
-      color: #555;
-      text-transform: uppercase;
-      letter-spacing: 0.03em;
-      margin-top: 0.1rem;
-    }
     .instance-email {
       font-size: 0.85rem;
       color: #666;
@@ -638,12 +631,13 @@
           <div class="sidebar-card">
             <h3>How to Connect</h3>
             <ol class="sidebar-steps">
-              <li>Click "+ Add Tool" above</li>
+              <li>Click "+ Add Tool"</li>
               <li>Choose your MCP type (e.g., Google Docs)</li>
               <li>Name your instance and connect with Google</li>
-              <li>Copy the MCP URL</li>
-              <li>In Claude Desktop or VS Code, add a new MCP connector</li>
-              <li>Paste the URL and start using your tools</li>
+              <li>Press the "Copy URL" button</li>
+              <li>In Claude Desktop or Claude Web, go to the settings, custom connectors</li>
+              <li>Press "Add custom connector"</li>
+              <li>Paste the URL into the custom connector and start using your tools</li>
             </ol>
           </div>
         </div>
@@ -797,7 +791,7 @@
                 <span id="name-${instance.instanceId}">${escapeHtml(instance.instanceName)}</span>
                 ${tokenHtml}
               </div>
-              <div class="instance-type">${escapeHtml(mcpName)}</div>
+              <!-- type label removed -->
             </div>
             ${instance.googleEmail ? `<div class="instance-email">${escapeHtml(instance.googleEmail)}</div>` : ''}
           </div>
