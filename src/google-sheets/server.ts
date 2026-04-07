@@ -8,6 +8,7 @@ import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 
 import * as SheetsHelpers from './apiHelpers.js';
 import { SharedDriveParameters } from '../types.js';
+import { buildSharedDriveParams } from '../google-drive/toolHandlers.js';
 
 const sheetsServer = new FastMCP<UserSession>({
   name: 'Google Sheets MCP Server',
@@ -25,29 +26,6 @@ function getSheetsClient(session?: UserSession): sheets_v4.Sheets {
 function getDriveClient(session?: UserSession): drive_v3.Drive {
   if (session?.googleDrive) return session.googleDrive;
   throw new UserError("Google Drive client is not available. Make sure you have granted drive access.");
-}
-
-// Helper to build shared drive parameters for Google Drive API calls
-function buildSharedDriveParams(args: {
-  includeSharedDrives?: boolean;
-  driveId?: string;
-  corpora?: 'user' | 'drive' | 'allDrives' | 'domain';
-}) {
-  const supportsAllDrives = args.includeSharedDrives !== false;
-  const params: any = { supportsAllDrives };
-
-  if (supportsAllDrives) {
-    params.includeItemsFromAllDrives = true;
-  }
-  if (args.driveId) {
-    params.driveId = args.driveId;
-    params.corpora = 'drive';
-  } else if (args.corpora) {
-    params.corpora = args.corpora;
-  } else if (supportsAllDrives) {
-    params.corpora = 'allDrives';
-  }
-  return params;
 }
 
 // === TOOL DEFINITIONS ===
