@@ -19,7 +19,6 @@ import {
   handleCreateDocument,
   handleCreateFromTemplate,
   handleListSharedDrives,
-  handleExportDocToPdf,
   handleDownloadDriveFile,
   handleGetFilePermissions,
   handleShareDriveFile,
@@ -145,17 +144,6 @@ driveServer.addTool({
     query: z.string().optional().describe('Filter shared drives by name (case insensitive partial match).'),
   }),
   execute: async (args, { log, session }) => handleListSharedDrives(getDriveClient(session), args, log),
-});
-
-driveServer.addTool({
-  name: 'exportDocToPdf',
-  description: 'Exports a Google Doc as a PDF file and saves it to Google Drive. Returns the PDF file ID, name, and link.',
-  parameters: z.object({
-    documentId: z.string().describe('The ID of the Google Document to export.'),
-    pdfFilename: z.string().optional().describe('Custom filename for the PDF (without extension). Defaults to the document title.'),
-    folderId: z.string().optional().describe('Optional Drive folder ID to save the PDF in.'),
-  }),
-  execute: async (args, { log, session }) => handleExportDocToPdf(getDriveClient(session), args, log),
 });
 
 driveServer.addTool({

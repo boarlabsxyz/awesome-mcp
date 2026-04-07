@@ -28,7 +28,7 @@ import {
   handleListGoogleDocs,
   handleSearchGoogleDocs,
   handleGetRecentGoogleDocs,
-  handleListSharedDrives,
+  handleExportDocToPdf,
 } from '../google-drive/toolHandlers.js';
 
 // Multi-user imports
@@ -335,13 +335,14 @@ server.addTool({
 });
 
 server.addTool({
-  name: 'listSharedDrives',
-  description: 'Lists shared drives (Team Drives) the user has access to.',
+  name: 'exportDocToPdf',
+  description: 'Exports a Google Doc as a PDF file and saves it to Google Drive. Returns the PDF file ID, name, and link.',
   parameters: z.object({
-    maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of shared drives to return (1-100).'),
-    query: z.string().optional().describe('Filter shared drives by name (case insensitive partial match).'),
+    documentId: z.string().describe('The ID of the Google Document to export.'),
+    pdfFilename: z.string().optional().describe('Custom filename for the PDF (without extension). Defaults to the document title.'),
+    folderId: z.string().optional().describe('Optional Drive folder ID to save the PDF in.'),
   }),
-  execute: async (args, { log, session }) => handleListSharedDrives(await getDriveClient(session), args, log),
+  execute: async (args, { log, session }) => handleExportDocToPdf(await getDriveClient(session), args, log),
 });
 
 // --- Foundational Tools ---
