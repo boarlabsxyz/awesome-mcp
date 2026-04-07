@@ -34,6 +34,12 @@ export interface SharedDriveArgs {
   corpora?: 'user' | 'drive' | 'allDrives' | 'domain';
 }
 
+// Escape a string literal for safe use inside a Drive API `q` query.
+// See https://developers.google.com/drive/api/guides/ref-search-terms#string
+export function escapeDriveQueryLiteral(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
 export function buildSharedDriveParams(args: SharedDriveArgs): Record<string, any> {
   const supportsAllDrives = args.includeSharedDrives !== false;
   const params: any = { supportsAllDrives };
@@ -80,7 +86,8 @@ export async function handleListGoogleDocs(
   try {
     let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
     if (args.query) {
-      queryString += ` and (name contains '${args.query}' or fullText contains '${args.query}')`;
+      const q = escapeDriveQueryLiteral(args.query);
+      queryString += ` and (name contains '${q}' or fullText contains '${q}')`;
     }
     const response = await drive.files.list({
       q: queryString,
@@ -109,14 +116,15 @@ export async function handleSearchGoogleDocs(
   log.info(`Searching Google Docs for: "${args.searchQuery}" in ${args.searchIn}`);
   try {
     let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
+    const sq = escapeDriveQueryLiteral(args.searchQuery);
     if (args.searchIn === 'name') {
-      queryString += ` and name contains '${args.searchQuery}'`;
+      queryString += ` and name contains '${sq}'`;
     } else if (args.searchIn === 'content') {
-      queryString += ` and fullText contains '${args.searchQuery}'`;
+      queryString += ` and fullText contains '${sq}'`;
     } else {
-      queryString += ` and (name contains '${args.searchQuery}' or fullText contains '${args.searchQuery}')`;
+      queryString += ` and (name contains '${sq}' or fullText contains '${sq}')`;
     }
-    if (args.modifiedAfter) queryString += ` and modifiedTime > '${args.modifiedAfter}'`;
+    if (args.modifiedAfter) queryString += ` and modifiedTime > '${escapeDriveQueryLiteral(args.modifiedAfter)}'`;
     const response = await drive.files.list({
       q: queryString,
       pageSize: args.maxResults,
@@ -557,7 +565,7 @@ export async function handleListSharedDrives(
   try {
     const response = await drive.drives.list({
       pageSize: args.maxResults,
-      q: args.query ? `name contains '${args.query}'` : undefined,
+      q: args.query ? `name contains '${escapeDriveQueryLiteral(args.query)}'` : undefined,
       fields: 'drives(id,name,createdTime,capabilities)',
     });
     const drives = response.data.drives || [];
