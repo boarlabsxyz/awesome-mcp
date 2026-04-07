@@ -386,7 +386,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
     slug: 'google-drive',
     name: 'Google Drive MCP',
     description: 'Browse, search, share, and manage files in Google Drive',
-    iconUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/12/Google_Drive_icon_%282020%29.svg/2295px-Google_Drive_icon_%282020%29.svg.png',
+    iconUrl: 'https://www.computerhope.com/issues/pictures/google-drive-logo.png',
     mcpUrl: googleDriveMcpUrl,
     scopes: [
       'https://www.googleapis.com/auth/drive.file',
