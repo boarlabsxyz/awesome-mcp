@@ -608,32 +608,39 @@ export async function handleExportDocToPdf(
   log: Log
 ): Promise<string> {
   log.info(`Exporting doc ${args.documentId} to PDF`);
-  const fileInfo = await drive.files.get({
-    fileId: args.documentId,
-    supportsAllDrives: true,
-    fields: 'mimeType,name',
-  });
-  if (fileInfo.data.mimeType !== 'application/vnd.google-apps.document') {
-    throw new UserError(`File is not a Google Doc (mimeType: ${fileInfo.data.mimeType}). Only Google Docs can be exported to PDF with this tool.`);
+  try {
+    const fileInfo = await drive.files.get({
+      fileId: args.documentId,
+      supportsAllDrives: true,
+      fields: 'mimeType,name',
+    });
+    if (fileInfo.data.mimeType !== 'application/vnd.google-apps.document') {
+      throw new UserError(`File is not a Google Doc (mimeType: ${fileInfo.data.mimeType}). Only Google Docs can be exported to PDF with this tool.`);
+    }
+    const docTitle = fileInfo.data.name || 'Untitled';
+    const pdfName = (args.pdfFilename || docTitle) + '.pdf';
+    const exportResponse = await drive.files.export({
+      fileId: args.documentId,
+      mimeType: 'application/pdf',
+    }, { responseType: 'arraybuffer' });
+    const pdfBuffer = Buffer.from(exportResponse.data as ArrayBuffer);
+    const { Readable } = await import('stream');
+    const fileMetadata: any = { name: pdfName, mimeType: 'application/pdf' };
+    if (args.folderId) fileMetadata.parents = [args.folderId];
+    const uploadResponse = await drive.files.create({
+      requestBody: fileMetadata,
+      media: { mimeType: 'application/pdf', body: Readable.from(pdfBuffer) },
+      supportsAllDrives: true,
+      fields: 'id,name,webViewLink,size',
+    });
+    const pdf = uploadResponse.data;
+    return `PDF exported successfully:\n  File ID: ${pdf.id}\n  Name: ${pdf.name}\n  Size: ${pdf.size} bytes\n  Link: ${pdf.webViewLink}`;
+  } catch (error: any) {
+    if (error instanceof UserError) throw error;
+    log.error(`Error exporting doc to PDF: ${error.message || error}`);
+    handleDriveError(error, 'export to PDF', args.documentId);
+    throw error;
   }
-  const docTitle = fileInfo.data.name || 'Untitled';
-  const pdfName = (args.pdfFilename || docTitle) + '.pdf';
-  const exportResponse = await drive.files.export({
-    fileId: args.documentId,
-    mimeType: 'application/pdf',
-  }, { responseType: 'arraybuffer' });
-  const pdfBuffer = Buffer.from(exportResponse.data as ArrayBuffer);
-  const { Readable } = await import('stream');
-  const fileMetadata: any = { name: pdfName, mimeType: 'application/pdf' };
-  if (args.folderId) fileMetadata.parents = [args.folderId];
-  const uploadResponse = await drive.files.create({
-    requestBody: fileMetadata,
-    media: { mimeType: 'application/pdf', body: Readable.from(pdfBuffer) },
-    supportsAllDrives: true,
-    fields: 'id,name,webViewLink,size',
-  });
-  const pdf = uploadResponse.data;
-  return `PDF exported successfully:\n  File ID: ${pdf.id}\n  Name: ${pdf.name}\n  Size: ${pdf.size} bytes\n  Link: ${pdf.webViewLink}`;
 }
 
 export async function handleDownloadDriveFile(
