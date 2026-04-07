@@ -801,10 +801,11 @@
             ${instance.googleEmail ? `<div class="instance-email">${escapeHtml(instance.googleEmail)}</div>` : ''}
           </div>
           <div class="instance-row-actions">
-            <button class="btn-copy" onclick="copyUrl('${eid}', this)">Copy URL</button>
+            ${showReconnect
+              ? `<button class="btn-reconnect" onclick="reconnectInstance('${eid}', '${eslug}')">Reconnect</button>`
+              : `<button class="btn-copy" onclick="copyUrl('${eid}', this)">Copy URL</button>`}
             <button class="btn-rename" onclick="renameInstance('${eid}')">Rename</button>
             <button class="btn-delete" onclick="deleteInstance('${eid}', '${ename}')">Delete</button>
-            ${showReconnect ? `<button class="btn-reconnect" onclick="reconnectInstance('${eid}', '${eslug}')">Reconnect</button>` : ''}
           </div>
         </div>
       `;
