@@ -233,6 +233,28 @@ driveServer.addTool({
     domain: z.string().optional().describe('Domain name (required for type "domain").'),
     sendNotification: z.boolean().optional().default(true).describe('Whether to send an email notification (only for user/group shares).'),
     expirationTime: z.string().optional().describe('Expiration time in RFC 3339 format (e.g., "2025-12-31T23:59:59Z"). Only for user/group shares on files (not folders).'),
+  }).superRefine((val, ctx) => {
+    if ((val.type === 'user' || val.type === 'group') && !val.emailAddress) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['emailAddress'],
+        message: 'emailAddress is required when type is "user" or "group".',
+      });
+    }
+    if (val.type === 'domain' && !val.domain) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['domain'],
+        message: 'domain is required when type is "domain".',
+      });
+    }
+    if (val.expirationTime && val.type !== 'user' && val.type !== 'group') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['expirationTime'],
+        message: `expirationTime is only supported for user/group shares, not "${val.type}".`,
+      });
+    }
   }),
   execute: async (args, { log, session }) => (await handleShareDriveFile(getDriveClient(session), args, log)) as string,
 });

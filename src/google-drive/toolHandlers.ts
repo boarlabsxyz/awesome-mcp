@@ -41,7 +41,12 @@ export function escapeDriveQueryLiteral(value: string): string {
 }
 
 export function buildSharedDriveParams(args: SharedDriveArgs): Record<string, any> {
-  const supportsAllDrives = args.includeSharedDrives !== false;
+  if (args.corpora === 'drive' && !args.driveId) {
+    throw new UserError("driveId is required when corpora is 'drive'.");
+  }
+  // A driveId only makes sense for shared-drive queries, so force shared-drive
+  // support on regardless of includeSharedDrives.
+  const supportsAllDrives = args.driveId ? true : args.includeSharedDrives !== false;
   const params: any = { supportsAllDrives };
   if (supportsAllDrives) params.includeItemsFromAllDrives = true;
   if (args.driveId) {
