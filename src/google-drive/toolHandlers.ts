@@ -434,7 +434,7 @@ export async function handleDeleteFile(
     const fileName = fileInfo.data.name;
     const isFolder = fileInfo.data.mimeType === 'application/vnd.google-apps.folder';
     const isSharedDrive = !!fileInfo.data.driveId;
-    if (args.skipTrash || isSharedDrive) {
+    if (args.skipTrash) {
       await drive.files.delete({ fileId: args.fileId, supportsAllDrives: true });
       return `Permanently deleted ${isFolder ? 'folder' : 'file'} "${fileName}"${isSharedDrive ? ' from shared drive' : ''}.`;
     }

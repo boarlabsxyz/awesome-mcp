@@ -510,11 +510,18 @@ describe('handleDeleteFile', () => {
     const r = await handleDeleteFile(drive, { fileId: 'f1', skipTrash: true }, noopLog);
     assert.match(r, /Permanently deleted folder/);
   });
-  it('permanently deletes shared drive files regardless of flag', async () => {
+  it('trashes shared drive files when skipTrash is false', async () => {
     const drive = mkDrive({
       files: { ...mkDrive().files, get: mock.fn(async () => ({ data: { name: 'F', mimeType: 'text/plain', driveId: 'sd1' } })) },
     });
     const r = await handleDeleteFile(drive, { fileId: 'f1', skipTrash: false }, noopLog);
+    assert.match(r, /Moved file/);
+  });
+  it('permanently deletes shared drive files when skipTrash is true', async () => {
+    const drive = mkDrive({
+      files: { ...mkDrive().files, get: mock.fn(async () => ({ data: { name: 'F', mimeType: 'text/plain', driveId: 'sd1' } })) },
+    });
+    const r = await handleDeleteFile(drive, { fileId: 'f1', skipTrash: true }, noopLog);
     assert.match(r, /from shared drive/);
   });
   it('throws on 404', async () => {

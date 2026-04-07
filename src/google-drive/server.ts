@@ -150,7 +150,7 @@ driveServer.addTool({
   description: 'Permanently deletes a file or folder from Google Drive (works with shared drives).',
   parameters: z.object({
     fileId: z.string().describe('ID of the file or folder to delete.'),
-    skipTrash: z.boolean().optional().default(false).describe('If true, permanently deletes the file. If false, moves to trash (can be restored). Note: Shared drive files cannot be trashed, only permanently deleted.'),
+    skipTrash: z.boolean().optional().default(false).describe('If true, permanently deletes the file. If false, moves to trash (can be restored).'),
   }),
   execute: async (args, { log, session }) => handleDeleteFile(getDriveClient(session), args, log),
 });
