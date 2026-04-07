@@ -387,14 +387,14 @@ export async function seedDefaultCatalogs(): Promise<void> {
     iconUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/12/Google_Drive_icon_%282020%29.svg/2295px-Google_Drive_icon_%282020%29.svg.png',
     mcpUrl: googleDriveMcpUrl,
     scopes: [
-      'https://www.googleapis.com/auth/drive',
+      'https://www.googleapis.com/auth/drive.file',
     ],
     googleClientId: googleDriveClientId,
     googleClientSecret: googleDriveClientSecret,
     oauthScopes: [
       'https://www.googleapis.com/auth/userinfo.email',
       'https://www.googleapis.com/auth/userinfo.profile',
-      'https://www.googleapis.com/auth/drive',
+      'https://www.googleapis.com/auth/drive.file',
     ],
     isLocal: process.env.GOOGLE_DRIVE_MCP_URL ? false : true,
     isActive: true,
