@@ -349,17 +349,29 @@ export async function handleMoveFile(
     });
     const fileName = fileInfo.data.name;
     const currentParents = fileInfo.data.parents || [];
-    const updateParams: any = {
-      fileId: args.fileId,
-      addParents: args.newParentId,
-      supportsAllDrives: true,
-      fields: 'id,name,parents,driveId',
-    };
-    if (args.removeFromAllParents && currentParents.length > 0) {
-      updateParams.removeParents = currentParents.join(',');
+    let response;
+    let action: 'moved' | 'copied';
+    if (args.removeFromAllParents) {
+      const updateParams: any = {
+        fileId: args.fileId,
+        addParents: args.newParentId,
+        supportsAllDrives: true,
+        fields: 'id,name,parents,driveId',
+      };
+      if (currentParents.length > 0) {
+        updateParams.removeParents = currentParents.join(',');
+      }
+      response = await drive.files.update(updateParams);
+      action = 'moved';
+    } else {
+      response = await drive.files.copy({
+        fileId: args.fileId,
+        supportsAllDrives: true,
+        requestBody: { parents: [args.newParentId] },
+        fields: 'id,name,parents,driveId',
+      });
+      action = 'copied';
     }
-    const response = await drive.files.update(updateParams);
-    const action = args.removeFromAllParents ? 'moved' : 'copied';
     const locationInfo = response.data.driveId ? ` (in shared drive ID: ${response.data.driveId})` : '';
     return `Successfully ${action} "${fileName}" to new location${locationInfo}.\nFile ID: ${response.data.id}`;
   } catch (error: any) {
