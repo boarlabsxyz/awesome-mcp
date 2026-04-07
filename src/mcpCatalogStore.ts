@@ -389,14 +389,14 @@ export async function seedDefaultCatalogs(): Promise<void> {
     iconUrl: 'https://www.computerhope.com/issues/pictures/google-drive-logo.png',
     mcpUrl: googleDriveMcpUrl,
     scopes: [
-      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/drive',
     ],
     googleClientId: googleDriveClientId,
     googleClientSecret: googleDriveClientSecret,
     oauthScopes: [
       'https://www.googleapis.com/auth/userinfo.email',
       'https://www.googleapis.com/auth/userinfo.profile',
-      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/drive',
     ],
     isLocal: process.env.GOOGLE_DRIVE_MCP_URL ? false : true,
     isActive: true,

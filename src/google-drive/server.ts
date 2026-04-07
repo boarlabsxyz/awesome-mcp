@@ -35,45 +35,38 @@ const driveServer = new FastMCP<UserSession>({
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-drive'),
 });
 
-// NOTE: The following tools are disabled because they require the restricted
-// `auth/drive` scope (full Drive access), which needs Google OAuth app
-// verification. This service uses the non-sensitive `auth/drive.file` scope,
-// which only grants access to files the app created or opened — so global
-// list/search/recent tools return no useful results and are commented out.
-// Re-enable after completing Google OAuth verification for `auth/drive`.
-//
-// driveServer.addTool({
-//   name: 'listGoogleDocs',
-//   description: 'Lists Google Documents from your Google Drive and shared drives with optional filtering.',
-//   parameters: z.object({
-//     maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of documents to return (1-100).'),
-//     query: z.string().optional().describe('Search query to filter documents by name or content.'),
-//     orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results.'),
-//   }).merge(SharedDriveParameters),
-//   execute: async (args, { log, session }) => handleListGoogleDocs(getDriveClient(session), args, log),
-// });
-//
-// driveServer.addTool({
-//   name: 'searchGoogleDocs',
-//   description: 'Searches for Google Documents by name, content, or other criteria across My Drive and shared drives.',
-//   parameters: z.object({
-//     searchQuery: z.string().min(1).describe('Search term to find in document names or content.'),
-//     searchIn: z.enum(['name', 'content', 'both']).optional().default('both').describe('Where to search: document names, content, or both.'),
-//     maxResults: z.number().int().min(1).max(50).optional().default(10).describe('Maximum number of results to return.'),
-//     modifiedAfter: z.string().optional().describe('Only return documents modified after this date (ISO 8601 format, e.g., "2024-01-01").'),
-//   }).merge(SharedDriveParameters),
-//   execute: async (args, { log, session }) => handleSearchGoogleDocs(getDriveClient(session), args, log),
-// });
-//
-// driveServer.addTool({
-//   name: 'getRecentGoogleDocs',
-//   description: 'Gets the most recently modified Google Documents from My Drive and shared drives.',
-//   parameters: z.object({
-//     maxResults: z.number().int().min(1).max(50).optional().default(10).describe('Maximum number of recent documents to return.'),
-//     daysBack: z.number().int().min(1).max(365).optional().default(30).describe('Only show documents modified within this many days.'),
-//   }).merge(SharedDriveParameters),
-//   execute: async (args, { log, session }) => handleGetRecentGoogleDocs(getDriveClient(session), args, log),
-// });
+driveServer.addTool({
+  name: 'listGoogleDocs',
+  description: 'Lists Google Documents from your Google Drive and shared drives with optional filtering.',
+  parameters: z.object({
+    maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of documents to return (1-100).'),
+    query: z.string().optional().describe('Search query to filter documents by name or content.'),
+    orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results.'),
+  }).merge(SharedDriveParameters),
+  execute: async (args, { log, session }) => handleListGoogleDocs(getDriveClient(session), args, log),
+});
+
+driveServer.addTool({
+  name: 'searchGoogleDocs',
+  description: 'Searches for Google Documents by name, content, or other criteria across My Drive and shared drives.',
+  parameters: z.object({
+    searchQuery: z.string().min(1).describe('Search term to find in document names or content.'),
+    searchIn: z.enum(['name', 'content', 'both']).optional().default('both').describe('Where to search: document names, content, or both.'),
+    maxResults: z.number().int().min(1).max(50).optional().default(10).describe('Maximum number of results to return.'),
+    modifiedAfter: z.string().optional().describe('Only return documents modified after this date (ISO 8601 format, e.g., "2024-01-01").'),
+  }).merge(SharedDriveParameters),
+  execute: async (args, { log, session }) => handleSearchGoogleDocs(getDriveClient(session), args, log),
+});
+
+driveServer.addTool({
+  name: 'getRecentGoogleDocs',
+  description: 'Gets the most recently modified Google Documents from My Drive and shared drives.',
+  parameters: z.object({
+    maxResults: z.number().int().min(1).max(50).optional().default(10).describe('Maximum number of recent documents to return.'),
+    daysBack: z.number().int().min(1).max(365).optional().default(30).describe('Only show documents modified within this many days.'),
+  }).merge(SharedDriveParameters),
+  execute: async (args, { log, session }) => handleGetRecentGoogleDocs(getDriveClient(session), args, log),
+});
 
 driveServer.addTool({
   name: 'getDocumentInfo',
@@ -180,16 +173,15 @@ driveServer.addTool({
     handleCreateFromTemplate(getDriveClient(session), () => getDocsClient(session), args, log),
 });
 
-// Disabled: requires `auth/drive` restricted scope. See note above.
-// driveServer.addTool({
-//   name: 'listSharedDrives',
-//   description: 'Lists shared drives (Team Drives) the user has access to.',
-//   parameters: z.object({
-//     maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of shared drives to return (1-100).'),
-//     query: z.string().optional().describe('Filter shared drives by name (case insensitive partial match).'),
-//   }),
-//   execute: async (args, { log, session }) => handleListSharedDrives(getDriveClient(session), args, log),
-// });
+driveServer.addTool({
+  name: 'listSharedDrives',
+  description: 'Lists shared drives (Team Drives) the user has access to.',
+  parameters: z.object({
+    maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of shared drives to return (1-100).'),
+    query: z.string().optional().describe('Filter shared drives by name (case insensitive partial match).'),
+  }),
+  execute: async (args, { log, session }) => handleListSharedDrives(getDriveClient(session), args, log),
+});
 
 driveServer.addTool({
   name: 'exportDocToPdf',
