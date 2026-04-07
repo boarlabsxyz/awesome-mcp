@@ -686,6 +686,7 @@ export async function handleDownloadDriveFile(
     if (error instanceof UserError) throw error;
     log.error(`Error downloading/exporting file: ${error.message || error}`);
     handleDriveError(error, 'download/export', args.fileId);
+    throw error;
   }
 }
 
