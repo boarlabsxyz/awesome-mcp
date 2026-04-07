@@ -282,6 +282,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
     mcpUrl: googleDocsMcpUrl,
     scopes: [
       'https://www.googleapis.com/auth/documents',
+      'https://www.googleapis.com/auth/drive',
     ],
     googleClientId: googleDocsClientId,
     googleClientSecret: googleDocsClientSecret,
@@ -289,6 +290,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
       'https://www.googleapis.com/auth/userinfo.email',
       'https://www.googleapis.com/auth/userinfo.profile',
       'https://www.googleapis.com/auth/documents',
+      'https://www.googleapis.com/auth/drive',
     ],
     isLocal: process.env.GOOGLE_DOCS_MCP_URL ? false : true,
     isActive: true,
