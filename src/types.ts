@@ -219,6 +219,132 @@ export const BatchOperationSchema = z.discriminatedUnion('type', [
 
 export type BatchOperation = z.infer<typeof BatchOperationSchema>;
 
+// --- Sheets Batch Update (formatting) Schema ---
+
+const hexColor = z.string().refine(validateHexColor, {
+  message: 'Invalid hex color format (e.g., #FF0000 or #F00)',
+});
+
+const NumberFormatOp = z.object({
+  type: z.literal('numberFormat'),
+  range: z.string().describe('A1 notation range (e.g., "Sheet1!B2:B10").'),
+  format: z.enum(['CURRENCY', 'PERCENT', 'NUMBER', 'DATE', 'TIME', 'DATE_TIME', 'SCIENTIFIC', 'TEXT']),
+  pattern: z.string().optional().describe('Optional pattern string (e.g., "0.0%", "$#,##0.00").'),
+});
+
+const TextStyleOp = z.object({
+  type: z.literal('textStyle'),
+  range: z.string(),
+  bold: z.boolean().optional(),
+  italic: z.boolean().optional(),
+  underline: z.boolean().optional(),
+  strikethrough: z.boolean().optional(),
+  fontFamily: z.string().optional(),
+  fontSize: z.number().min(1).optional(),
+  foregroundColor: hexColor.optional(),
+});
+
+const BackgroundColorOp = z.object({
+  type: z.literal('backgroundColor'),
+  range: z.string(),
+  color: hexColor,
+});
+
+const BorderStyle = z.enum(['SOLID', 'SOLID_MEDIUM', 'SOLID_THICK', 'DASHED', 'DOTTED', 'DOUBLE', 'NONE']);
+
+const BordersOp = z.object({
+  type: z.literal('borders'),
+  range: z.string(),
+  top: z.boolean().optional(),
+  bottom: z.boolean().optional(),
+  left: z.boolean().optional(),
+  right: z.boolean().optional(),
+  innerHorizontal: z.boolean().optional(),
+  innerVertical: z.boolean().optional(),
+  style: BorderStyle.optional().default('SOLID'),
+  color: hexColor.optional(),
+});
+
+const FreezeOp = z.object({
+  type: z.literal('freeze'),
+  sheetName: z.string().optional(),
+  frozenRowCount: z.number().int().min(0).optional(),
+  frozenColumnCount: z.number().int().min(0).optional(),
+});
+
+const BooleanConditionType = z.enum([
+  'NUMBER_GREATER', 'NUMBER_GREATER_THAN_EQ', 'NUMBER_LESS', 'NUMBER_LESS_THAN_EQ',
+  'NUMBER_EQ', 'NUMBER_NOT_EQ', 'NUMBER_BETWEEN', 'NUMBER_NOT_BETWEEN',
+  'TEXT_CONTAINS', 'TEXT_NOT_CONTAINS', 'TEXT_STARTS_WITH', 'TEXT_ENDS_WITH',
+  'TEXT_EQ', 'BLANK', 'NOT_BLANK',
+]);
+
+const BooleanRuleSchema = z.object({
+  kind: z.literal('boolean'),
+  condition: BooleanConditionType,
+  value: z.union([z.string(), z.number()]).optional(),
+  value2: z.union([z.string(), z.number()]).optional().describe('Second value for BETWEEN conditions.'),
+  backgroundColor: hexColor.optional(),
+  textColor: hexColor.optional(),
+  bold: z.boolean().optional(),
+  italic: z.boolean().optional(),
+});
+
+const GradientRuleSchema = z.object({
+  kind: z.literal('gradient'),
+  minColor: hexColor,
+  midColor: hexColor.optional(),
+  maxColor: hexColor,
+});
+
+const ConditionalFormatOp = z.object({
+  type: z.literal('conditionalFormat'),
+  range: z.string(),
+  rule: z.discriminatedUnion('kind', [BooleanRuleSchema, GradientRuleSchema]),
+});
+
+const MergeCellsOp = z.object({
+  type: z.literal('mergeCells'),
+  range: z.string(),
+  mergeType: z.enum(['MERGE_ALL', 'MERGE_COLUMNS', 'MERGE_ROWS']).optional().default('MERGE_ALL'),
+});
+
+const UnmergeCellsOp = z.object({
+  type: z.literal('unmergeCells'),
+  range: z.string(),
+});
+
+const ColumnWidthOp = z.object({
+  type: z.literal('columnWidth'),
+  sheetName: z.string().optional(),
+  startColumn: z.number().int().min(1).describe('1-based start column (inclusive).'),
+  endColumn: z.number().int().min(1).describe('1-based end column (inclusive).'),
+  pixels: z.number().int().min(1),
+});
+
+const RowHeightOp = z.object({
+  type: z.literal('rowHeight'),
+  sheetName: z.string().optional(),
+  startRow: z.number().int().min(1).describe('1-based start row (inclusive).'),
+  endRow: z.number().int().min(1).describe('1-based end row (inclusive).'),
+  pixels: z.number().int().min(1),
+});
+
+export const BatchUpdateOperationSchema = z.discriminatedUnion('type', [
+  NumberFormatOp,
+  TextStyleOp,
+  BackgroundColorOp,
+  BordersOp,
+  FreezeOp,
+  ConditionalFormatOp,
+  MergeCellsOp,
+  UnmergeCellsOp,
+  ColumnWidthOp,
+  RowHeightOp,
+]);
+
+export type BatchUpdateOperation = z.infer<typeof BatchUpdateOperationSchema>;
+
 // --- Error Class ---
 // Use FastMCP's UserError for client-facing issues
 // Define a custom error for internal issues if needed

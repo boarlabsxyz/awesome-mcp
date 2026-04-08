@@ -243,7 +243,7 @@ export async function addSheet(
  * Parses A1 notation range to extract sheet name and cell range
  * Returns {sheetName, a1Range} where a1Range is just the cell part (e.g., "A1:B2")
  */
-function parseRange(range: string): { sheetName: string | null; a1Range: string } {
+export function parseRange(range: string): { sheetName: string | null; a1Range: string } {
   if (range.includes('!')) {
     const parts = range.split('!');
     return {
@@ -254,6 +254,76 @@ function parseRange(range: string): { sheetName: string | null; a1Range: string 
   return {
     sheetName: null,
     a1Range: range,
+  };
+}
+
+/**
+ * Resolves a sheet name to a sheet ID using the cached metadata.
+ * If sheetName is null/undefined, returns the first sheet's ID.
+ */
+export function resolveSheetId(
+  metadata: sheets_v4.Schema$Spreadsheet,
+  sheetName?: string | null
+): number {
+  if (sheetName) {
+    const sheet = metadata.sheets?.find(s => s.properties?.title === sheetName);
+    if (!sheet || sheet.properties?.sheetId == null) {
+      throw new UserError(`Sheet "${sheetName}" not found in spreadsheet.`);
+    }
+    return sheet.properties.sheetId;
+  }
+  const first = metadata.sheets?.[0];
+  if (!first?.properties || first.properties.sheetId == null) {
+    throw new UserError('Spreadsheet has no sheets.');
+  }
+  return first.properties.sheetId;
+}
+
+/**
+ * Converts an A1 range string (e.g. "Sheet1!A1:B2" or "A1:B2") to a Google Sheets GridRange.
+ * Uses the provided metadata to resolve sheet names to sheet IDs.
+ */
+export function a1RangeToGridRange(
+  metadata: sheets_v4.Schema$Spreadsheet,
+  range: string
+): sheets_v4.Schema$GridRange {
+  const { sheetName, a1Range } = parseRange(range);
+  const sheetId = resolveSheetId(metadata, sheetName);
+
+  const match = a1Range.match(/^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/i);
+  if (!match) {
+    throw new UserError(`Invalid range format: ${a1Range}. Expected format like "A1" or "A1:B2"`);
+  }
+
+  const startColStr = match[1].toUpperCase();
+  const startRow = parseInt(match[2], 10) - 1;
+  const endColStr = match[3] ? match[3].toUpperCase() : startColStr;
+  const endRow = match[4] ? parseInt(match[4], 10) - 1 : startRow;
+
+  const colToIndex = (col: string): number => {
+    let index = 0;
+    for (let i = 0; i < col.length; i++) {
+      index = index * 26 + (col.charCodeAt(i) - 64);
+    }
+    return index - 1;
+  };
+
+  const startColIndex = colToIndex(startColStr);
+  const endColIndex = colToIndex(endColStr);
+
+  if (startRow < 0 || endRow < 0 || startColIndex < 0 || endColIndex < 0) {
+    throw new UserError(`Invalid range: ${range}`);
+  }
+  if (endRow < startRow || endColIndex < startColIndex) {
+    throw new UserError(`Invalid range order: ${range}`);
+  }
+
+  return {
+    sheetId,
+    startRowIndex: startRow,
+    endRowIndex: endRow + 1,
+    startColumnIndex: startColIndex,
+    endColumnIndex: endColIndex + 1,
   };
 }
 

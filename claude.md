@@ -1,6 +1,6 @@
 # Google Docs MCP Server
 
-FastMCP server with 42 tools for Google Docs, Sheets, and Drive.
+FastMCP server with 43 tools for Google Docs, Sheets, and Drive.
 
 ## Tool Categories
 
@@ -10,7 +10,7 @@ FastMCP server with 42 tools for Google Docs, Sheets, and Drive.
 | Formatting | 3 | `applyTextStyle`, `applyParagraphStyle`, `formatMatchingText` |
 | Structure | 7 | `insertTable`, `insertPageBreak`, `insertImageFromUrl`, `insertLocalImage`, `editTableCell`*, `findElement`*, `fixListFormatting`* |
 | Comments | 6 | `listComments`, `getComment`, `addComment`, `replyToComment`, `resolveComment`, `deleteComment` |
-| Sheets | 8 | `readSpreadsheet`, `writeSpreadsheet`, `appendSpreadsheetRows`, `clearSpreadsheetRange`, `createSpreadsheet`, `listGoogleSheets` |
+| Sheets | 9 | `readSpreadsheet`, `writeSpreadsheet`, `appendSpreadsheetRows`, `clearSpreadsheetRange`, `createSpreadsheet`, `listGoogleSheets`, `batchUpdateSpreadsheet` |
 | Drive | 13 | `listGoogleDocs`, `searchGoogleDocs`, `getDocumentInfo`, `createFolder`, `moveFile`, `copyFile`, `createDocument` |
 
 *Not fully implemented
