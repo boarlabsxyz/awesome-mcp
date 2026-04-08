@@ -12,7 +12,7 @@ import {
   validateShareArgs,
   formatShareTarget,
   formatPublicAccessResult,
-} from '../dist/google-docs/driveHelpers.js';
+} from '../dist/google-drive/driveHelpers.js';
 import assert from 'node:assert';
 import { describe, it, mock } from 'node:test';
 

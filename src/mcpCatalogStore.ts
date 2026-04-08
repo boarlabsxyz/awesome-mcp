@@ -267,6 +267,9 @@ export async function seedDefaultCatalogs(): Promise<void> {
   const googleSlidesClientId = process.env.GOOGLE_SLIDES_CLIENT_ID || null;
   const googleSlidesClientSecret = process.env.GOOGLE_SLIDES_CLIENT_SECRET || null;
   const googleSlidesMcpUrl = normalizeUrl(process.env.GOOGLE_SLIDES_MCP_URL, '/slides');
+  const googleDriveClientId = process.env.GOOGLE_DRIVE_CLIENT_ID || null;
+  const googleDriveClientSecret = process.env.GOOGLE_DRIVE_CLIENT_SECRET || null;
+  const googleDriveMcpUrl = normalizeUrl(process.env.GOOGLE_DRIVE_MCP_URL, '/drive');
 
   console.error(`MCP URLs: google-docs=${googleDocsMcpUrl}, google-calendar=${googleCalendarMcpUrl}, google-sheets=${googleSheetsMcpUrl}, google-gmail=${googleGmailMcpUrl}, google-slides=${googleSlidesMcpUrl}`);
   console.error(`MCP credentials: google-docs=${googleDocsClientId ? 'env' : 'global'}, google-calendar=${googleCalendarClientId ? 'env' : 'global'}, google-sheets=${googleSheetsClientId ? 'env' : 'global'}, google-gmail=${googleGmailClientId ? 'env' : 'global'}, google-slides=${googleSlidesClientId ? 'env' : 'global'}`);
@@ -274,7 +277,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
   await createMcpCatalog({
     slug: 'google-docs',
     name: 'Google Docs MCP',
-    description: 'Read, write, and manage Google Docs and Drive',
+    description: 'Read, write, and manage Google Docs',
     iconUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/Google_Docs_2020_Logo.svg/960px-Google_Docs_2020_Logo.svg.png',
     mcpUrl: googleDocsMcpUrl,
     scopes: [
@@ -376,6 +379,26 @@ export async function seedDefaultCatalogs(): Promise<void> {
       'https://www.googleapis.com/auth/drive',
     ],
     isLocal: process.env.GOOGLE_SLIDES_MCP_URL ? false : true,
+    isActive: true,
+  });
+
+  await createMcpCatalog({
+    slug: 'google-drive',
+    name: 'Google Drive MCP',
+    description: 'Browse, search, share, and manage files in Google Drive',
+    iconUrl: 'https://www.computerhope.com/issues/pictures/google-drive-logo.png',
+    mcpUrl: googleDriveMcpUrl,
+    scopes: [
+      'https://www.googleapis.com/auth/drive',
+    ],
+    googleClientId: googleDriveClientId,
+    googleClientSecret: googleDriveClientSecret,
+    oauthScopes: [
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/userinfo.profile',
+      'https://www.googleapis.com/auth/drive',
+    ],
+    isLocal: process.env.GOOGLE_DRIVE_MCP_URL ? false : true,
     isActive: true,
   });
 
