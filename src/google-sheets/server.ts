@@ -7,7 +7,8 @@ import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 
 import * as SheetsHelpers from './apiHelpers.js';
-import { SharedDriveParameters } from '../types.js';
+import { operationToRequest, createBatchState } from './formatHelpers.js';
+import { SharedDriveParameters, BatchUpdateOperationSchema } from '../types.js';
 import { buildSharedDriveParams } from '../google-drive/toolHandlers.js';
 
 const sheetsServer = new FastMCP<UserSession>({
@@ -469,6 +470,58 @@ sheetsServer.addTool({
       newValue: args.newValue,
     }, null, 2);
   }
+});
+
+sheetsServer.addTool({
+  name: 'batchUpdateSpreadsheet',
+  description: 'Apply multiple formatting operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, and column/row sizing.',
+  parameters: z.object({
+    spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
+    operations: z.array(BatchUpdateOperationSchema).min(1).describe('Array of formatting operations to apply atomically.'),
+  }),
+  execute: async (args, { log, session }) => {
+    const sheets = getSheetsClient(session);
+    log.info(`batchUpdateSpreadsheet: ${args.operations.length} ops on ${args.spreadsheetId}`);
+
+    try {
+      const metadata = await SheetsHelpers.getSpreadsheetMetadata(sheets, args.spreadsheetId);
+      const batchState = createBatchState(metadata);
+
+      const requests: sheets_v4.Schema$Request[] = [];
+      const summaries: string[] = [];
+      args.operations.forEach((op, i) => {
+        try {
+          requests.push(operationToRequest(op, metadata, batchState));
+          const target = 'range' in op ? op.range : ('sheetName' in op && op.sheetName) ? op.sheetName : '(first sheet)';
+          summaries.push(`  ${i}. ${op.type} → ${target}`);
+        } catch (e: any) {
+          if (e instanceof UserError) {
+            throw new UserError(`operation[${i}] (type=${op.type}): ${e.message}`);
+          }
+          throw e;
+        }
+      });
+
+      const response = await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: args.spreadsheetId,
+        requestBody: { requests },
+      });
+
+      const applied = response.data.replies?.length ?? requests.length;
+      const title = metadata.properties?.title ?? args.spreadsheetId;
+      return `Applied ${applied} operation(s) to "${title}".\n${summaries.join('\n')}`;
+    } catch (error: any) {
+      log.error(`batchUpdateSpreadsheet failed: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
+      if (error.code === 404) throw new UserError(`Spreadsheet not found (ID: ${args.spreadsheetId}).`);
+      if (error.code === 403) throw new UserError(`Permission denied for spreadsheet (ID: ${args.spreadsheetId}).`);
+      const apiErrors = error?.errors || error?.response?.data?.error?.errors;
+      const detail = Array.isArray(apiErrors) && apiErrors.length > 0
+        ? apiErrors.map((e: any) => e.message).join('; ')
+        : (error.message || 'Unknown error');
+      throw new UserError(`Failed to apply batch update: ${detail}`);
+    }
+  },
 });
 
 export { sheetsServer };

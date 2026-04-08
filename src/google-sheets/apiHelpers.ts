@@ -243,7 +243,7 @@ export async function addSheet(
  * Parses A1 notation range to extract sheet name and cell range
  * Returns {sheetName, a1Range} where a1Range is just the cell part (e.g., "A1:B2")
  */
-function parseRange(range: string): { sheetName: string | null; a1Range: string } {
+export function parseRange(range: string): { sheetName: string | null; a1Range: string } {
   if (range.includes('!')) {
     const parts = range.split('!');
     return {
@@ -255,6 +255,103 @@ function parseRange(range: string): { sheetName: string | null; a1Range: string 
     sheetName: null,
     a1Range: range,
   };
+}
+
+/**
+ * Resolves a sheet name to a sheet ID using the cached metadata.
+ * If sheetName is null/undefined, returns the first sheet's ID.
+ */
+export function resolveSheetId(
+  metadata: sheets_v4.Schema$Spreadsheet,
+  sheetName?: string | null
+): number {
+  if (sheetName) {
+    const sheet = metadata.sheets?.find(s => s.properties?.title === sheetName);
+    if (!sheet || sheet.properties?.sheetId == null) {
+      throw new UserError(`Sheet "${sheetName}" not found in spreadsheet.`);
+    }
+    return sheet.properties.sheetId;
+  }
+  const first = metadata.sheets?.[0];
+  if (!first?.properties || first.properties.sheetId == null) {
+    throw new UserError('Spreadsheet has no sheets.');
+  }
+  return first.properties.sheetId;
+}
+
+/**
+ * Converts an A1 range string (e.g. "Sheet1!A1:B2" or "A1:B2") to a Google Sheets GridRange.
+ * Uses the provided metadata to resolve sheet names to sheet IDs.
+ */
+export function a1RangeToGridRange(
+  metadata: sheets_v4.Schema$Spreadsheet,
+  range: string
+): sheets_v4.Schema$GridRange {
+  const { sheetName, a1Range } = parseRange(range);
+  const sheetId = resolveSheetId(metadata, sheetName);
+
+  const colToIndex = (col: string): number => {
+    let index = 0;
+    for (let i = 0; i < col.length; i++) {
+      index = index * 26 + (col.charCodeAt(i) - 64);
+    }
+    return index - 1;
+  };
+
+  // Parse a single A1 endpoint (e.g. "A1", "A", "1", or ""/undefined) into
+  // optional 0-based col/row indices.
+  const parseEndpoint = (s: string | undefined): { col?: number; row?: number } => {
+    if (!s) return {};
+    const m = s.match(/^([A-Z]+)?(\d+)?$/i);
+    if (!m || (!m[1] && !m[2])) {
+      throw new UserError(`Invalid range format: ${a1Range}. Expected e.g. "A1", "A1:B2", "A:C", or "1:5".`);
+    }
+    const out: { col?: number; row?: number } = {};
+    if (m[1]) out.col = colToIndex(m[1].toUpperCase());
+    if (m[2]) out.row = parseInt(m[2], 10) - 1;
+    return out;
+  };
+
+  // Split on ':' (at most once) into start/end endpoints.
+  let startStr: string;
+  let endStr: string | undefined;
+  if (a1Range.includes(':')) {
+    const parts = a1Range.split(':');
+    if (parts.length !== 2) {
+      throw new UserError(`Invalid range format: ${a1Range}.`);
+    }
+    [startStr, endStr] = parts;
+  } else {
+    startStr = a1Range;
+    endStr = a1Range; // single-cell → start/end the same
+  }
+
+  const start = parseEndpoint(startStr);
+  const end = parseEndpoint(endStr);
+
+  if (
+    (start.col !== undefined && start.col < 0) ||
+    (start.row !== undefined && start.row < 0) ||
+    (end.col !== undefined && end.col < 0) ||
+    (end.row !== undefined && end.row < 0)
+  ) {
+    throw new UserError(`Invalid range: ${a1Range}`);
+  }
+
+  // Only validate ordering where both bounds are present.
+  if (start.row !== undefined && end.row !== undefined && end.row < start.row) {
+    throw new UserError(`Invalid range order: ${a1Range}`);
+  }
+  if (start.col !== undefined && end.col !== undefined && end.col < start.col) {
+    throw new UserError(`Invalid range order: ${a1Range}`);
+  }
+
+  const grid: sheets_v4.Schema$GridRange = { sheetId };
+  if (start.row !== undefined) grid.startRowIndex = start.row;
+  if (end.row !== undefined) grid.endRowIndex = end.row + 1;
+  if (start.col !== undefined) grid.startColumnIndex = start.col;
+  if (end.col !== undefined) grid.endColumnIndex = end.col + 1;
+  return grid;
 }
 
 /**
