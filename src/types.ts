@@ -279,6 +279,17 @@ const BooleanConditionType = z.enum([
   'TEXT_EQ', 'BLANK', 'NOT_BLANK',
 ]);
 
+const NUMERIC_SINGLE_OPERAND = new Set([
+  'NUMBER_GREATER', 'NUMBER_GREATER_THAN_EQ', 'NUMBER_LESS',
+  'NUMBER_LESS_THAN_EQ', 'NUMBER_EQ', 'NUMBER_NOT_EQ',
+]);
+const NUMERIC_BETWEEN = new Set(['NUMBER_BETWEEN', 'NUMBER_NOT_BETWEEN']);
+const TEXT_SINGLE_OPERAND = new Set([
+  'TEXT_CONTAINS', 'TEXT_NOT_CONTAINS', 'TEXT_STARTS_WITH',
+  'TEXT_ENDS_WITH', 'TEXT_EQ',
+]);
+const NO_OPERAND = new Set(['BLANK', 'NOT_BLANK']);
+
 const BooleanRuleSchema = z.object({
   kind: z.literal('boolean'),
   condition: BooleanConditionType,
@@ -288,6 +299,72 @@ const BooleanRuleSchema = z.object({
   textColor: hexColor.optional(),
   bold: z.boolean().optional(),
   italic: z.boolean().optional(),
+}).superRefine((r, ctx) => {
+  const { condition, value, value2 } = r;
+
+  if (NUMERIC_BETWEEN.has(condition)) {
+    if (typeof value !== 'number' || typeof value2 !== 'number') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Condition ${condition} requires both "value" and "value2" to be numbers.`,
+        path: ['value'],
+      });
+    }
+    return;
+  }
+
+  if (NUMERIC_SINGLE_OPERAND.has(condition)) {
+    if (typeof value !== 'number') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Condition ${condition} requires "value" to be a number.`,
+        path: ['value'],
+      });
+    }
+    if (value2 !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Condition ${condition} does not accept "value2".`,
+        path: ['value2'],
+      });
+    }
+    return;
+  }
+
+  if (TEXT_SINGLE_OPERAND.has(condition)) {
+    if (typeof value !== 'string') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Condition ${condition} requires "value" to be a string.`,
+        path: ['value'],
+      });
+    }
+    if (value2 !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Condition ${condition} does not accept "value2".`,
+        path: ['value2'],
+      });
+    }
+    return;
+  }
+
+  if (NO_OPERAND.has(condition)) {
+    if (value !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Condition ${condition} does not accept "value".`,
+        path: ['value'],
+      });
+    }
+    if (value2 !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Condition ${condition} does not accept "value2".`,
+        path: ['value2'],
+      });
+    }
+  }
 });
 
 const GradientRuleSchema = z.object({
@@ -300,7 +377,7 @@ const GradientRuleSchema = z.object({
 const ConditionalFormatOp = z.object({
   type: z.literal('conditionalFormat'),
   range: z.string(),
-  rule: z.discriminatedUnion('kind', [BooleanRuleSchema, GradientRuleSchema]),
+  rule: z.union([BooleanRuleSchema, GradientRuleSchema]),
 });
 
 const MergeCellsOp = z.object({

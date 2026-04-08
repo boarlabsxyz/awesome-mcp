@@ -14,8 +14,10 @@ function toColor(hex: string): Color {
   return { ...rgb, alpha: 1 };
 }
 
+// Default patterns per format type. CURRENCY is intentionally omitted so the
+// spreadsheet's locale-aware currency formatting is used unless the caller
+// passes an explicit pattern (e.g. "€#,##0.00").
 const NUMBER_FORMAT_PATTERNS: Record<string, string> = {
-  CURRENCY: '"$"#,##0.00',
   PERCENT: '0.00%',
   NUMBER: '#,##0.00',
   DATE: 'yyyy-mm-dd',
@@ -26,25 +28,45 @@ const NUMBER_FORMAT_PATTERNS: Record<string, string> = {
 };
 
 /**
+ * Mutable state shared across a batch of operations so that conditional-format
+ * rules receive monotonically increasing insertion indices (preserving caller
+ * order instead of reversing them with a constant index: 0).
+ */
+export interface BatchState {
+  /** Per-sheet next insertion index for addConditionalFormatRule. */
+  conditionalFormatNextIndex: Map<number, number>;
+}
+
+export function createBatchState(metadata: sheets_v4.Schema$Spreadsheet): BatchState {
+  const conditionalFormatNextIndex = new Map<number, number>();
+  for (const sheet of metadata.sheets ?? []) {
+    const id = sheet.properties?.sheetId;
+    if (id != null) {
+      conditionalFormatNextIndex.set(id, sheet.conditionalFormats?.length ?? 0);
+    }
+  }
+  return { conditionalFormatNextIndex };
+}
+
+/**
  * Translate a single operation into a Google Sheets Request.
  * Pure: no I/O. Throws UserError on invalid input.
  */
 export function operationToRequest(
   op: BatchUpdateOperation,
-  metadata: sheets_v4.Schema$Spreadsheet
+  metadata: sheets_v4.Schema$Spreadsheet,
+  state?: BatchState
 ): Request {
   switch (op.type) {
     case 'numberFormat': {
       const gridRange = a1RangeToGridRange(metadata, op.range);
       const pattern = op.pattern ?? NUMBER_FORMAT_PATTERNS[op.format];
+      const numberFormat: sheets_v4.Schema$NumberFormat = { type: op.format };
+      if (pattern !== undefined) numberFormat.pattern = pattern;
       return {
         repeatCell: {
           range: gridRange,
-          cell: {
-            userEnteredFormat: {
-              numberFormat: { type: op.format, pattern },
-            },
-          },
+          cell: { userEnteredFormat: { numberFormat } },
           fields: 'userEnteredFormat.numberFormat',
         },
       };
@@ -135,6 +157,13 @@ export function operationToRequest(
 
     case 'conditionalFormat': {
       const gridRange = a1RangeToGridRange(metadata, op.range);
+      // Compute per-sheet insertion index so rules preserve caller order.
+      const sheetId = gridRange.sheetId!;
+      let ruleIndex = 0;
+      if (state) {
+        ruleIndex = state.conditionalFormatNextIndex.get(sheetId) ?? 0;
+        state.conditionalFormatNextIndex.set(sheetId, ruleIndex + 1);
+      }
       if (op.rule.kind === 'boolean') {
         const r = op.rule;
         const condValues: sheets_v4.Schema$ConditionValue[] = [];
@@ -156,7 +185,7 @@ export function operationToRequest(
                 format,
               },
             },
-            index: 0,
+            index: ruleIndex,
           },
         };
       } else {
@@ -171,7 +200,7 @@ export function operationToRequest(
         return {
           addConditionalFormatRule: {
             rule: { ranges: [gridRange], gradientRule },
-            index: 0,
+            index: ruleIndex,
           },
         };
       }

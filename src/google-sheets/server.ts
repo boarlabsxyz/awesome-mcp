@@ -7,7 +7,7 @@ import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 
 import * as SheetsHelpers from './apiHelpers.js';
-import { operationToRequest } from './formatHelpers.js';
+import { operationToRequest, createBatchState } from './formatHelpers.js';
 import { SharedDriveParameters, BatchUpdateOperationSchema } from '../types.js';
 import { buildSharedDriveParams } from '../google-drive/toolHandlers.js';
 
@@ -485,12 +485,13 @@ sheetsServer.addTool({
 
     try {
       const metadata = await SheetsHelpers.getSpreadsheetMetadata(sheets, args.spreadsheetId);
+      const batchState = createBatchState(metadata);
 
       const requests: sheets_v4.Schema$Request[] = [];
       const summaries: string[] = [];
       args.operations.forEach((op, i) => {
         try {
-          requests.push(operationToRequest(op, metadata));
+          requests.push(operationToRequest(op, metadata, batchState));
           const target = 'range' in op ? op.range : ('sheetName' in op && op.sheetName) ? op.sheetName : '(first sheet)';
           summaries.push(`  ${i}. ${op.type} → ${target}`);
         } catch (e: any) {

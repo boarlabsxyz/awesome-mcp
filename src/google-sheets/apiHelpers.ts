@@ -290,16 +290,6 @@ export function a1RangeToGridRange(
   const { sheetName, a1Range } = parseRange(range);
   const sheetId = resolveSheetId(metadata, sheetName);
 
-  const match = a1Range.match(/^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/i);
-  if (!match) {
-    throw new UserError(`Invalid range format: ${a1Range}. Expected format like "A1" or "A1:B2"`);
-  }
-
-  const startColStr = match[1].toUpperCase();
-  const startRow = parseInt(match[2], 10) - 1;
-  const endColStr = match[3] ? match[3].toUpperCase() : startColStr;
-  const endRow = match[4] ? parseInt(match[4], 10) - 1 : startRow;
-
   const colToIndex = (col: string): number => {
     let index = 0;
     for (let i = 0; i < col.length; i++) {
@@ -308,23 +298,60 @@ export function a1RangeToGridRange(
     return index - 1;
   };
 
-  const startColIndex = colToIndex(startColStr);
-  const endColIndex = colToIndex(endColStr);
-
-  if (startRow < 0 || endRow < 0 || startColIndex < 0 || endColIndex < 0) {
-    throw new UserError(`Invalid range: ${range}`);
-  }
-  if (endRow < startRow || endColIndex < startColIndex) {
-    throw new UserError(`Invalid range order: ${range}`);
-  }
-
-  return {
-    sheetId,
-    startRowIndex: startRow,
-    endRowIndex: endRow + 1,
-    startColumnIndex: startColIndex,
-    endColumnIndex: endColIndex + 1,
+  // Parse a single A1 endpoint (e.g. "A1", "A", "1", or ""/undefined) into
+  // optional 0-based col/row indices.
+  const parseEndpoint = (s: string | undefined): { col?: number; row?: number } => {
+    if (!s) return {};
+    const m = s.match(/^([A-Z]+)?(\d+)?$/i);
+    if (!m || (!m[1] && !m[2])) {
+      throw new UserError(`Invalid range format: ${a1Range}. Expected e.g. "A1", "A1:B2", "A:C", or "1:5".`);
+    }
+    const out: { col?: number; row?: number } = {};
+    if (m[1]) out.col = colToIndex(m[1].toUpperCase());
+    if (m[2]) out.row = parseInt(m[2], 10) - 1;
+    return out;
   };
+
+  // Split on ':' (at most once) into start/end endpoints.
+  let startStr: string;
+  let endStr: string | undefined;
+  if (a1Range.includes(':')) {
+    const parts = a1Range.split(':');
+    if (parts.length !== 2) {
+      throw new UserError(`Invalid range format: ${a1Range}.`);
+    }
+    [startStr, endStr] = parts;
+  } else {
+    startStr = a1Range;
+    endStr = a1Range; // single-cell → start/end the same
+  }
+
+  const start = parseEndpoint(startStr);
+  const end = parseEndpoint(endStr);
+
+  if (
+    (start.col !== undefined && start.col < 0) ||
+    (start.row !== undefined && start.row < 0) ||
+    (end.col !== undefined && end.col < 0) ||
+    (end.row !== undefined && end.row < 0)
+  ) {
+    throw new UserError(`Invalid range: ${a1Range}`);
+  }
+
+  // Only validate ordering where both bounds are present.
+  if (start.row !== undefined && end.row !== undefined && end.row < start.row) {
+    throw new UserError(`Invalid range order: ${a1Range}`);
+  }
+  if (start.col !== undefined && end.col !== undefined && end.col < start.col) {
+    throw new UserError(`Invalid range order: ${a1Range}`);
+  }
+
+  const grid: sheets_v4.Schema$GridRange = { sheetId };
+  if (start.row !== undefined) grid.startRowIndex = start.row;
+  if (end.row !== undefined) grid.endRowIndex = end.row + 1;
+  if (start.col !== undefined) grid.startColumnIndex = start.col;
+  if (end.col !== undefined) grid.endColumnIndex = end.col + 1;
+  return grid;
 }
 
 /**
