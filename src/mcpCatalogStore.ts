@@ -21,6 +21,9 @@ export interface McpCatalogEntry {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+  provider?: string;                 // 'google' | 'clickup'
+  oauthAuthorizationUrl?: string;    // e.g. 'https://app.clickup.com/api'
+  oauthTokenUrl?: string;            // e.g. 'https://api.clickup.com/api/v2/oauth/token'
 }
 
 // ---------- File-based storage (fallback) ----------
@@ -91,6 +94,9 @@ async function fileCreateMcpCatalog(
     existing.oauthScopes = entry.oauthScopes || existing.oauthScopes;
     existing.isLocal = entry.isLocal;
     existing.isActive = entry.isActive;
+    if (entry.provider !== undefined) existing.provider = entry.provider;
+    if (entry.oauthAuthorizationUrl !== undefined) existing.oauthAuthorizationUrl = entry.oauthAuthorizationUrl;
+    if (entry.oauthTokenUrl !== undefined) existing.oauthTokenUrl = entry.oauthTokenUrl;
     existing.updatedAt = new Date().toISOString();
     await saveCatalog();
     return existing;
@@ -109,6 +115,9 @@ async function fileCreateMcpCatalog(
     oauthScopes: entry.oauthScopes || [],
     isLocal: entry.isLocal,
     isActive: entry.isActive,
+    provider: entry.provider,
+    oauthAuthorizationUrl: entry.oauthAuthorizationUrl,
+    oauthTokenUrl: entry.oauthTokenUrl,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -122,7 +131,7 @@ async function fileCreateMcpCatalog(
 async function dbListMcpCatalogs(): Promise<McpCatalogEntry[]> {
   const pool = getPool();
   const { rows } = await pool.query(
-    `SELECT id, slug, name, description, icon_url, mcp_url, scopes, google_client_id, google_client_secret, oauth_scopes, is_local, is_active, created_at, updated_at
+    `SELECT id, slug, name, description, icon_url, mcp_url, scopes, google_client_id, google_client_secret, oauth_scopes, is_local, is_active, created_at, updated_at, provider, oauth_authorization_url, oauth_token_url
      FROM mcp_catalog
      WHERE is_active = true
      ORDER BY name`
@@ -133,7 +142,7 @@ async function dbListMcpCatalogs(): Promise<McpCatalogEntry[]> {
 async function dbGetMcpCatalog(slug: string): Promise<McpCatalogEntry | null> {
   const pool = getPool();
   const { rows } = await pool.query(
-    `SELECT id, slug, name, description, icon_url, mcp_url, scopes, google_client_id, google_client_secret, oauth_scopes, is_local, is_active, created_at, updated_at
+    `SELECT id, slug, name, description, icon_url, mcp_url, scopes, google_client_id, google_client_secret, oauth_scopes, is_local, is_active, created_at, updated_at, provider, oauth_authorization_url, oauth_token_url
      FROM mcp_catalog
      WHERE slug = $1 AND is_active = true`,
     [slug]
@@ -151,8 +160,8 @@ async function dbCreateMcpCatalog(
   const oauthScopesJson = JSON.stringify(entry.oauthScopes || []);
 
   const { rows } = await pool.query(
-    `INSERT INTO mcp_catalog (slug, name, description, icon_url, mcp_url, scopes, google_client_id, google_client_secret, oauth_scopes, is_local, is_active, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
+    `INSERT INTO mcp_catalog (slug, name, description, icon_url, mcp_url, scopes, google_client_id, google_client_secret, oauth_scopes, is_local, is_active, created_at, updated_at, provider, oauth_authorization_url, oauth_token_url)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, $13, $14, $15)
      ON CONFLICT (slug) DO UPDATE SET
        name = EXCLUDED.name,
        description = EXCLUDED.description,
@@ -164,9 +173,12 @@ async function dbCreateMcpCatalog(
        oauth_scopes = COALESCE(EXCLUDED.oauth_scopes, mcp_catalog.oauth_scopes),
        is_local = EXCLUDED.is_local,
        is_active = EXCLUDED.is_active,
-       updated_at = EXCLUDED.updated_at
-     RETURNING id, slug, name, description, icon_url, mcp_url, scopes, google_client_id, google_client_secret, oauth_scopes, is_local, is_active, created_at, updated_at`,
-    [entry.slug, entry.name, entry.description, entry.iconUrl, entry.mcpUrl, scopesJson, entry.googleClientId || null, entry.googleClientSecret || null, oauthScopesJson, entry.isLocal, entry.isActive, now]
+       updated_at = EXCLUDED.updated_at,
+       provider = COALESCE(EXCLUDED.provider, mcp_catalog.provider),
+       oauth_authorization_url = COALESCE(EXCLUDED.oauth_authorization_url, mcp_catalog.oauth_authorization_url),
+       oauth_token_url = COALESCE(EXCLUDED.oauth_token_url, mcp_catalog.oauth_token_url)
+     RETURNING id, slug, name, description, icon_url, mcp_url, scopes, google_client_id, google_client_secret, oauth_scopes, is_local, is_active, created_at, updated_at, provider, oauth_authorization_url, oauth_token_url`,
+    [entry.slug, entry.name, entry.description, entry.iconUrl, entry.mcpUrl, scopesJson, entry.googleClientId || null, entry.googleClientSecret || null, oauthScopesJson, entry.isLocal, entry.isActive, now, entry.provider || 'google', entry.oauthAuthorizationUrl || null, entry.oauthTokenUrl || null]
   );
 
   return mapRowToEntry(rows[0]);
@@ -202,6 +214,9 @@ function mapRowToEntry(row: any): McpCatalogEntry {
     oauthScopes,
     isLocal: row.is_local,
     isActive: row.is_active,
+    provider: row.provider || 'google',
+    oauthAuthorizationUrl: row.oauth_authorization_url || undefined,
+    oauthTokenUrl: row.oauth_token_url || undefined,
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
   };
@@ -399,6 +414,28 @@ export async function seedDefaultCatalogs(): Promise<void> {
       'https://www.googleapis.com/auth/drive',
     ],
     isLocal: process.env.GOOGLE_DRIVE_MCP_URL ? false : true,
+    isActive: true,
+  });
+
+  // ClickUp MCP (non-Google provider)
+  const clickUpClientId = process.env.CLICKUP_CLIENT_ID || null;
+  const clickUpClientSecret = process.env.CLICKUP_CLIENT_SECRET || null;
+  const clickUpMcpUrl = normalizeUrl(process.env.CLICKUP_MCP_URL, '/clickup');
+
+  await createMcpCatalog({
+    slug: 'clickup',
+    name: 'ClickUp MCP',
+    description: 'Manage tasks, lists, docs, and time tracking in ClickUp',
+    iconUrl: null,
+    mcpUrl: clickUpMcpUrl,
+    provider: 'clickup',
+    scopes: [],
+    googleClientId: clickUpClientId,
+    googleClientSecret: clickUpClientSecret,
+    oauthAuthorizationUrl: 'https://app.clickup.com/api',
+    oauthTokenUrl: 'https://api.clickup.com/api/v2/oauth/token',
+    oauthScopes: [],
+    isLocal: !process.env.CLICKUP_MCP_URL,
     isActive: true,
   });
 

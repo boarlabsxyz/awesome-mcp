@@ -1,7 +1,7 @@
 // src/mcpAuthenticate.ts
 // Shared authenticate handler for all MCP servers.
 import http from 'http';
-import { UserSession, createUserSession, createUserSessionFromConnection } from './userSession.js';
+import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession } from './userSession.js';
 import { loadUsers, getUserByApiKey } from './userStore.js';
 import { loadClientCredentials } from './auth.js';
 import { getMcpConnection, getMcpConnectionByInstanceId } from './mcpConnectionStore.js';
@@ -17,6 +17,7 @@ export interface AuthDeps {
   getMcpCatalog: (slug: string) => Promise<any>;
   createUserSession: (user: any, clientId: string, clientSecret: string) => Promise<UserSession>;
   createUserSessionFromConnection: (user: any, conn: any, clientId: string, clientSecret: string) => Promise<UserSession>;
+  createClickUpSession: (user: any, conn: any) => UserSession;
 }
 
 /** Default dependencies wired to real implementations. */
@@ -29,6 +30,7 @@ const defaultDeps: AuthDeps = {
   getMcpCatalog,
   createUserSession: createUserSession as any,
   createUserSessionFromConnection: createUserSessionFromConnection as any,
+  createClickUpSession,
 };
 
 /**
@@ -105,6 +107,11 @@ export async function authenticateRequest(
       throw new Response(null, { status: 403, statusText: 'You do not have access to this instance.' } as any);
     }
 
+    // Branch on provider: ClickUp uses its own session factory
+    if (connection.provider === 'clickup') {
+      return deps.createClickUpSession(user, connection);
+    }
+
     const mcp = await deps.getMcpCatalog(connection.mcpSlug);
     const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
       ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }
@@ -116,6 +123,11 @@ export async function authenticateRequest(
   // Legacy flow (no instanceId): Always prefer MCP connection tokens
   const connection = await deps.getMcpConnection(user.id, mcpSlug);
   if (connection) {
+    // Branch on provider: ClickUp uses its own session factory
+    if (connection.provider === 'clickup') {
+      return deps.createClickUpSession(user, connection);
+    }
+
     const mcp = await deps.getMcpCatalog(mcpSlug);
     const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
       ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }

@@ -120,6 +120,22 @@ BEGIN
 END $$;
 `;
 
+// Provider support: add provider, provider_tokens, provider_email to mcp_connections
+const ALTER_MCP_CONNECTIONS_ADD_PROVIDER_COLUMNS = `
+ALTER TABLE mcp_connections
+  ADD COLUMN IF NOT EXISTS provider VARCHAR(50) DEFAULT 'google',
+  ADD COLUMN IF NOT EXISTS provider_tokens JSONB,
+  ADD COLUMN IF NOT EXISTS provider_email VARCHAR(255);
+`;
+
+// Provider support: add provider, oauth URLs to mcp_catalog
+const ALTER_MCP_CATALOG_ADD_PROVIDER_COLUMNS = `
+ALTER TABLE mcp_catalog
+  ADD COLUMN IF NOT EXISTS provider VARCHAR(50) DEFAULT 'google',
+  ADD COLUMN IF NOT EXISTS oauth_authorization_url VARCHAR(2048),
+  ADD COLUMN IF NOT EXISTS oauth_token_url VARCHAR(2048);
+`;
+
 // Add unique constraint on instance_id (each instance must be unique)
 const ADD_INSTANCE_ID_UNIQUE_CONSTRAINT = `
 DO $$
@@ -213,6 +229,14 @@ export async function initDatabase(): Promise<void> {
     // Add unique constraint on instance_id
     await pool.query(ADD_INSTANCE_ID_UNIQUE_CONSTRAINT);
     console.error('MCP connections instance_id unique constraint ensured.');
+
+    // Provider support: add provider columns to mcp_connections
+    await pool.query(ALTER_MCP_CONNECTIONS_ADD_PROVIDER_COLUMNS);
+    console.error('MCP connections provider columns ensured.');
+
+    // Provider support: add provider columns to mcp_catalog
+    await pool.query(ALTER_MCP_CATALOG_ADD_PROVIDER_COLUMNS);
+    console.error('MCP catalog provider columns ensured.');
 
     dbAvailable = true;
   } catch (err) {

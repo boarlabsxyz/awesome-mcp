@@ -18,6 +18,7 @@ function makeDeps(overrides: Partial<AuthDeps> = {}): AuthDeps {
     getMcpCatalog: mock.fn(async () => null),
     createUserSession: mock.fn(async () => fakeSession),
     createUserSessionFromConnection: mock.fn(async () => fakeSession),
+    createClickUpSession: mock.fn(() => fakeSession),
     ...overrides,
   };
 }

@@ -56,11 +56,18 @@ interface ApiAuthenticatedRequest extends Request {
  * Computes the token status for a connection, used in /api/me response.
  * Extracted for testability.
  */
-export function computeTokenStatus(googleTokens: { refresh_token?: string; expiry_date?: number } | null | undefined): {
+export function computeTokenStatus(
+  googleTokens: { refresh_token?: string; expiry_date?: number } | null | undefined,
+  provider?: string
+): {
   hasRefreshToken: boolean;
   expiryDate: number | null;
   isExpired: boolean;
 } {
+  // ClickUp tokens are long-lived (no refresh needed, no expiry)
+  if (provider === 'clickup') {
+    return { hasRefreshToken: false, expiryDate: null, isExpired: false };
+  }
   return {
     hasRefreshToken: !!googleTokens?.refresh_token,
     expiryDate: googleTokens?.expiry_date || null,
@@ -327,11 +334,11 @@ function registerSharedRoutes(app: express.Express): void {
         : await loadClientCredentials();
 
       console.error(`[MCP Connect] Starting OAuth for MCP: ${mcpSlug}${instanceName ? ` (instance: ${instanceName})` : ''}`);
+      console.error(`[MCP Connect] Provider: ${mcp.provider || 'google'}`);
       console.error(`[MCP Connect] Using MCP-specific credentials: ${!!(mcp.googleClientId)}`);
       console.error(`[MCP Connect] Client ID prefix: ${client_id?.substring(0, 20)}...`);
 
       const redirectUri = `${BASE_URL}/connect/${mcpSlug}/callback`;
-      const oauthClient = new OAuth2Client(client_id, client_secret, redirectUri);
 
       // Generate state to verify callback
       const state = crypto.randomBytes(32).toString('hex');
@@ -346,6 +353,7 @@ function registerSharedRoutes(app: express.Express): void {
         googleId: session.googleId,
         instanceName: instanceName || null, // null means legacy single-instance mode
         reconnectInstanceId: reconnectInstanceId || null,
+        provider: mcp.provider || 'google',
       });
 
       if (redis) {
@@ -357,21 +365,31 @@ function registerSharedRoutes(app: express.Express): void {
         setTimeout(() => (global as any).__mcpConnectStates?.delete(state), 600_000);
       }
 
-      // Use MCP's OAuth scopes
-      const scopes = mcp.oauthScopes.length > 0 ? mcp.oauthScopes : [
-        'https://www.googleapis.com/auth/userinfo.email',
-        'https://www.googleapis.com/auth/userinfo.profile',
-        ...mcp.scopes,
-      ];
+      // Branch on provider for authorization URL
+      if (mcp.provider === 'clickup') {
+        // ClickUp OAuth: simple redirect with client_id
+        const authorizeUrl = `${mcp.oauthAuthorizationUrl}?client_id=${encodeURIComponent(client_id)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
+        res.redirect(authorizeUrl);
+      } else {
+        // Google OAuth (default)
+        const oauthClient = new OAuth2Client(client_id, client_secret, redirectUri);
 
-      const authorizeUrl = oauthClient.generateAuthUrl({
-        access_type: 'offline',
-        scope: scopes,
-        prompt: 'consent select_account',
-        state,
-      });
+        // Use MCP's OAuth scopes
+        const scopes = mcp.oauthScopes.length > 0 ? mcp.oauthScopes : [
+          'https://www.googleapis.com/auth/userinfo.email',
+          'https://www.googleapis.com/auth/userinfo.profile',
+          ...mcp.scopes,
+        ];
 
-      res.redirect(authorizeUrl);
+        const authorizeUrl = oauthClient.generateAuthUrl({
+          access_type: 'offline',
+          scope: scopes,
+          prompt: 'consent select_account',
+          state,
+        });
+
+        res.redirect(authorizeUrl);
+      }
     } catch (err: any) {
       console.error('MCP connect error:', err);
       res.status(500).send('Failed to start connection. Please try again.');
@@ -423,28 +441,12 @@ function registerSharedRoutes(app: express.Express): void {
         return;
       }
 
-      // Use MCP's Google credentials if available
+      // Use MCP's credentials if available
       const { client_id, client_secret } = mcp.googleClientId && mcp.googleClientSecret
         ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }
         : await loadClientCredentials();
 
       const redirectUri = `${BASE_URL}/connect/${mcpSlug}/callback`;
-      const oauthClient = new OAuth2Client(client_id, client_secret, redirectUri);
-
-      // Exchange code for tokens
-      const { tokens } = await oauthClient.getToken(code);
-      oauthClient.setCredentials(tokens);
-
-      // Fetch the connected Google account's email
-      let googleEmail: string | null = null;
-      try {
-        const oauth2 = google.oauth2({ version: 'v2', auth: oauthClient });
-        const { data: profile } = await oauth2.userinfo.get();
-        googleEmail = profile.email || null;
-        console.error(`[MCP Connect] Google account email: ${googleEmail}`);
-      } catch (emailErr) {
-        console.error('[MCP Connect] Could not fetch Google email:', emailErr);
-      }
 
       // Get user from session
       const user = await getUserByGoogleId(stateData.googleId);
@@ -453,52 +455,128 @@ function registerSharedRoutes(app: express.Express): void {
         return;
       }
 
-      const googleTokens = {
-        access_token: tokens.access_token!,
-        refresh_token: tokens.refresh_token || '',
-        scope: tokens.scope!,
-        token_type: tokens.token_type!,
-        expiry_date: tokens.expiry_date!,
-      };
-
-      if (!tokens.refresh_token) {
-        console.error(`[MCP Connect] WARNING: No refresh_token received for ${googleEmail} on ${mcpSlug}. Token will expire and cannot be refreshed.`);
-      } else {
-        console.error(`[MCP Connect] Got refresh_token for ${googleEmail} on ${mcpSlug}`);
-      }
-
-      // Check if this is a reconnect (update existing instance tokens)
       let connection;
-      if (stateData.reconnectInstanceId) {
-        const existing = await getMcpConnectionByInstanceId(stateData.reconnectInstanceId);
-        if (!existing || existing.userId !== user.id || existing.mcpSlug !== mcpSlug) {
-          res.status(404).send('Instance not found or access denied.');
+      const provider = stateData.provider || mcp.provider || 'google';
+
+      if (provider === 'clickup') {
+        // ClickUp OAuth: exchange code for access_token
+        const tokenUrl = mcp.oauthTokenUrl || 'https://api.clickup.com/api/v2/oauth/token';
+        const tokenResponse = await fetch(tokenUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_id,
+            client_secret,
+            code,
+          }),
+        });
+
+        if (!tokenResponse.ok) {
+          const errText = await tokenResponse.text();
+          console.error(`[MCP Connect] ClickUp token exchange failed: ${errText}`);
+          res.status(500).send('ClickUp token exchange failed. Please try again.');
           return;
         }
-        // Preserve existing refresh_token if Google didn't send a new one
-        const mergedTokens = mergeReconnectTokens(googleTokens, existing.googleTokens.refresh_token);
-        Object.assign(googleTokens, mergedTokens);
-        await updateMcpInstanceTokens(existing.instanceId, googleTokens);
-        // Persist google email if it changed
-        if (googleEmail && googleEmail !== existing.googleEmail) {
-          await updateMcpInstanceGoogleEmail(existing.instanceId, googleEmail);
+
+        const tokenData = await tokenResponse.json() as { access_token: string };
+        const clickUpAccessToken = tokenData.access_token;
+
+        // Fetch ClickUp user info for email
+        let providerEmail: string | null = null;
+        try {
+          const userResponse = await fetch('https://api.clickup.com/api/v2/user', {
+            headers: { 'Authorization': clickUpAccessToken },
+          });
+          if (userResponse.ok) {
+            const userData = await userResponse.json() as { user: { email?: string; username?: string } };
+            providerEmail = userData.user?.email || null;
+            console.error(`[MCP Connect] ClickUp user email: ${providerEmail}`);
+          }
+        } catch (emailErr) {
+          console.error('[MCP Connect] Could not fetch ClickUp user info:', emailErr);
         }
-        connection = { ...existing, googleTokens, googleEmail: googleEmail || existing.googleEmail };
-        console.error(`User ${user.id} reconnected MCP instance: ${existing.instanceId} (${existing.instanceName})`);
-      } else if (stateData.instanceName) {
-        // Create new instance with unique ID
-        connection = await createMcpInstance(
-          user.id,
-          mcpSlug,
-          stateData.instanceName,
-          googleTokens,
-          googleEmail
-        );
-        console.error(`User ${user.id} created MCP instance: ${connection.instanceId} (${stateData.instanceName})`);
+
+        const providerTokens = { access_token: clickUpAccessToken };
+        // Use empty GoogleTokens placeholder (ClickUp doesn't use them)
+        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+
+        if (stateData.instanceName) {
+          connection = await createMcpInstance(
+            user.id, mcpSlug, stateData.instanceName, emptyGoogleTokens, null,
+            'clickup', providerTokens, providerEmail
+          );
+        } else {
+          connection = await createMcpInstance(
+            user.id, mcpSlug, mcpSlug, emptyGoogleTokens, null,
+            'clickup', providerTokens, providerEmail
+          );
+        }
+        console.error(`User ${user.id} connected ClickUp MCP: ${connection.instanceId}`);
       } else {
-        // Legacy: single instance per MCP type
-        connection = await connectMcp(user.id, mcpSlug, googleTokens, undefined, googleEmail);
-        console.error(`User ${user.id} connected MCP: ${mcpSlug}`);
+        // Google OAuth (default)
+        const oauthClient = new OAuth2Client(client_id, client_secret, redirectUri);
+
+        // Exchange code for tokens
+        const { tokens } = await oauthClient.getToken(code);
+        oauthClient.setCredentials(tokens);
+
+        // Fetch the connected Google account's email
+        let googleEmail: string | null = null;
+        try {
+          const oauth2 = google.oauth2({ version: 'v2', auth: oauthClient });
+          const { data: profile } = await oauth2.userinfo.get();
+          googleEmail = profile.email || null;
+          console.error(`[MCP Connect] Google account email: ${googleEmail}`);
+        } catch (emailErr) {
+          console.error('[MCP Connect] Could not fetch Google email:', emailErr);
+        }
+
+        const googleTokens = {
+          access_token: tokens.access_token!,
+          refresh_token: tokens.refresh_token || '',
+          scope: tokens.scope!,
+          token_type: tokens.token_type!,
+          expiry_date: tokens.expiry_date!,
+        };
+
+        if (!tokens.refresh_token) {
+          console.error(`[MCP Connect] WARNING: No refresh_token received for ${googleEmail} on ${mcpSlug}. Token will expire and cannot be refreshed.`);
+        } else {
+          console.error(`[MCP Connect] Got refresh_token for ${googleEmail} on ${mcpSlug}`);
+        }
+
+        // Check if this is a reconnect (update existing instance tokens)
+        if (stateData.reconnectInstanceId) {
+          const existing = await getMcpConnectionByInstanceId(stateData.reconnectInstanceId);
+          if (!existing || existing.userId !== user.id || existing.mcpSlug !== mcpSlug) {
+            res.status(404).send('Instance not found or access denied.');
+            return;
+          }
+          // Preserve existing refresh_token if Google didn't send a new one
+          const mergedTokens = mergeReconnectTokens(googleTokens, existing.googleTokens.refresh_token);
+          Object.assign(googleTokens, mergedTokens);
+          await updateMcpInstanceTokens(existing.instanceId, googleTokens);
+          // Persist google email if it changed
+          if (googleEmail && googleEmail !== existing.googleEmail) {
+            await updateMcpInstanceGoogleEmail(existing.instanceId, googleEmail);
+          }
+          connection = { ...existing, googleTokens, googleEmail: googleEmail || existing.googleEmail };
+          console.error(`User ${user.id} reconnected MCP instance: ${existing.instanceId} (${existing.instanceName})`);
+        } else if (stateData.instanceName) {
+          // Create new instance with unique ID
+          connection = await createMcpInstance(
+            user.id,
+            mcpSlug,
+            stateData.instanceName,
+            googleTokens,
+            googleEmail
+          );
+          console.error(`User ${user.id} created MCP instance: ${connection.instanceId} (${stateData.instanceName})`);
+        } else {
+          // Legacy: single instance per MCP type
+          connection = await connectMcp(user.id, mcpSlug, googleTokens, undefined, googleEmail);
+          console.error(`User ${user.id} connected MCP: ${mcpSlug}`);
+        }
       }
 
       // Redirect to dashboard with success message
@@ -576,9 +654,10 @@ function registerSharedRoutes(app: express.Express): void {
           mcpSlug: c.mcpSlug,
           instanceId: c.instanceId,
           instanceName: c.instanceName,
-          googleEmail: c.googleEmail,
+          googleEmail: c.googleEmail || c.providerEmail,
           connectedAt: c.connectedAt,
-          tokenStatus: computeTokenStatus(c.googleTokens),
+          provider: c.provider || 'google',
+          tokenStatus: computeTokenStatus(c.googleTokens, c.provider),
         })),
       });
     } catch (err: any) {
@@ -887,7 +966,7 @@ function registerSharedRoutes(app: express.Express): void {
   });
 }
 
-export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheetsMcpPort: number, gmailMcpPort?: number, slidesMcpPort?: number, driveMcpPort?: number): express.Express {
+export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheetsMcpPort: number, gmailMcpPort?: number, slidesMcpPort?: number, driveMcpPort?: number, clickUpMcpPort?: number): express.Express {
   const app = express();
   app.set('trust proxy', true);
 
@@ -949,6 +1028,10 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   if (driveMcpPort) {
     addMcpProxy(driveMcpPort, 'drive');
     console.error(`   Drive MCP proxy:  /drive → 127.0.0.1:${driveMcpPort}`);
+  }
+  if (clickUpMcpPort) {
+    addMcpProxy(clickUpMcpPort, 'clickup');
+    console.error(`   ClickUp MCP proxy:  /clickup → 127.0.0.1:${clickUpMcpPort}`);
   }
 
   // Register all shared routes (auth, dashboard, connect, API, admin, catalogs)
