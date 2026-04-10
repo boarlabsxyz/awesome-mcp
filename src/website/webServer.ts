@@ -485,7 +485,7 @@ function registerSharedRoutes(app: express.Express): void {
         let providerEmail: string | null = null;
         try {
           const userResponse = await fetch('https://api.clickup.com/api/v2/user', {
-            headers: { 'Authorization': clickUpAccessToken },
+            headers: { 'Authorization': `Bearer ${clickUpAccessToken}` },
           });
           if (userResponse.ok) {
             const userData = await userResponse.json() as { user: { email?: string; username?: string } };

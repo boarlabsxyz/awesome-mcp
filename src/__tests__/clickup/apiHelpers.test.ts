@@ -43,7 +43,7 @@ describe('ClickUpClient', () => {
       const client = new ClickUpClient('test-token-123');
       await client.getAuthorizedUser();
       assert.equal(calls.length, 1);
-      assert.equal((calls[0].headers as any)['Authorization'], 'test-token-123');
+      assert.equal((calls[0].headers as any)['Authorization'], 'Bearer test-token-123');
     });
   });
 
