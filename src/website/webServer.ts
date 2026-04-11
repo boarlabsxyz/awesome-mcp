@@ -465,15 +465,25 @@ function registerSharedRoutes(app: express.Express): void {
       if (provider === 'clickup') {
         // ClickUp OAuth: exchange code for access_token
         const tokenUrl = mcp.oauthTokenUrl || 'https://api.clickup.com/api/v2/oauth/token';
-        const tokenResponse = await fetch(tokenUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            client_id,
-            client_secret,
-            code,
-          }),
-        });
+        const tokenController = new AbortController();
+        const tokenTimeout = setTimeout(() => tokenController.abort(), 15_000);
+        let tokenResponse: globalThis.Response;
+        try {
+          tokenResponse = await fetch(tokenUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_id, client_secret, code }),
+            signal: tokenController.signal,
+          });
+        } catch (fetchErr: any) {
+          clearTimeout(tokenTimeout);
+          const msg = fetchErr.name === 'AbortError' ? 'ClickUp token exchange timed out.' : `ClickUp token exchange failed: ${fetchErr.message}`;
+          console.error(`[MCP Connect] ${msg}`);
+          res.status(502).send(`${msg} Please try again.`);
+          return;
+        } finally {
+          clearTimeout(tokenTimeout);
+        }
 
         if (!tokenResponse.ok) {
           const errText = await tokenResponse.text();
@@ -482,17 +492,26 @@ function registerSharedRoutes(app: express.Express): void {
           return;
         }
 
-        const tokenData = await tokenResponse.json() as { access_token: string };
+        const tokenData = await tokenResponse.json() as { access_token?: string };
         const clickUpAccessToken = tokenData.access_token;
+        if (!clickUpAccessToken) {
+          console.error('[MCP Connect] ClickUp token response missing access_token:', tokenData);
+          res.status(500).send('ClickUp returned no access token. Please try again.');
+          return;
+        }
 
         // Fetch ClickUp user info for email
         let providerEmail: string | null = null;
         try {
+          const userController = new AbortController();
+          const userTimeout = setTimeout(() => userController.abort(), 10_000);
           const userResponse = await fetch('https://api.clickup.com/api/v2/user', {
             headers: { 'Authorization': `Bearer ${clickUpAccessToken}` },
+            signal: userController.signal,
           });
+          clearTimeout(userTimeout);
           if (userResponse.ok) {
-            const userData = await userResponse.json() as { user: { email?: string; username?: string } };
+            const userData = await userResponse.json() as { user?: { email?: string; username?: string } };
             providerEmail = userData.user?.email || null;
             console.error(`[MCP Connect] ClickUp user email: ${providerEmail}`);
           }
