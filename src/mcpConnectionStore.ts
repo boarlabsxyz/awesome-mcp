@@ -15,6 +15,12 @@ export interface GoogleTokens {
   expiry_date: number;
 }
 
+export interface ClickUpTokens {
+  access_token: string;
+}
+
+export type ProviderTokens = GoogleTokens | ClickUpTokens;
+
 export interface McpConnection {
   id: number;
   userId: number;
@@ -25,6 +31,9 @@ export interface McpConnection {
   googleTokens: GoogleTokens;
   connectedAt: string;
   updatedAt: string;
+  provider?: string;              // 'google' | 'clickup', defaults to 'google'
+  providerTokens?: ProviderTokens;
+  providerEmail?: string | null;
 }
 
 // ---------- File-based storage (fallback) ----------
@@ -39,6 +48,9 @@ interface FileConnection {
   googleTokens: GoogleTokens;
   connectedAt: string;
   updatedAt: string;
+  provider?: string;
+  providerTokens?: ProviderTokens;
+  providerEmail?: string | null;
 }
 
 let connections: FileConnection[] = [];
@@ -171,7 +183,10 @@ async function fileCreateMcpInstance(
   mcpSlug: string,
   instanceName: string,
   tokens: GoogleTokens,
-  googleEmail: string | null
+  googleEmail: string | null,
+  provider?: string,
+  providerTokens?: ProviderTokens,
+  providerEmail?: string | null
 ): Promise<McpConnection> {
   await fileLoadConnections();
 
@@ -188,6 +203,9 @@ async function fileCreateMcpInstance(
     googleTokens: tokens,
     connectedAt: now,
     updatedAt: now,
+    provider,
+    providerTokens,
+    providerEmail,
   };
   connections.push(connection);
   await saveConnections();
@@ -231,6 +249,32 @@ async function fileDisconnectMcpInstance(instanceId: string): Promise<boolean> {
 
 // ---------- Database-backed storage ----------
 
+function mapDbRowToConnection(row: any): McpConnection {
+  const googleTokens = typeof row.google_tokens === 'string'
+    ? JSON.parse(row.google_tokens)
+    : row.google_tokens;
+  let providerTokens: ProviderTokens | undefined;
+  if (row.provider_tokens) {
+    providerTokens = typeof row.provider_tokens === 'string'
+      ? JSON.parse(row.provider_tokens)
+      : row.provider_tokens;
+  }
+  return {
+    id: row.id,
+    userId: row.user_id,
+    mcpSlug: row.mcp_slug,
+    instanceId: row.instance_id || `${row.mcp_slug}-${row.id}`,
+    instanceName: row.instance_name || row.mcp_slug,
+    googleEmail: row.google_email,
+    googleTokens: googleTokens || {},
+    connectedAt: row.connected_at instanceof Date ? row.connected_at.toISOString() : row.connected_at,
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+    provider: row.provider || 'google',
+    providerTokens,
+    providerEmail: row.provider_email || null,
+  };
+}
+
 async function dbConnectMcp(
   userId: number,
   mcpSlug: string,
@@ -269,19 +313,7 @@ async function dbConnectMcp(
         3600
       );
 
-      return {
-        id: row.id,
-        userId: row.user_id,
-        mcpSlug: row.mcp_slug,
-        instanceId: row.instance_id,
-        instanceName: row.instance_name,
-        googleEmail: row.google_email,
-        googleTokens: typeof row.google_tokens === 'string'
-          ? JSON.parse(row.google_tokens)
-          : row.google_tokens,
-        connectedAt: row.connected_at.toISOString(),
-        updatedAt: row.updated_at.toISOString(),
-      };
+      return mapDbRowToConnection(row);
     }
   }
 
@@ -306,19 +338,7 @@ async function dbConnectMcp(
     3600 // 1 hour cache
   );
 
-  return {
-    id: row.id,
-    userId: row.user_id,
-    mcpSlug: row.mcp_slug,
-    instanceId: row.instance_id,
-    instanceName: row.instance_name,
-    googleEmail: row.google_email,
-    googleTokens: typeof row.google_tokens === 'string'
-      ? JSON.parse(row.google_tokens)
-      : row.google_tokens,
-    connectedAt: row.connected_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-  };
+  return mapDbRowToConnection(row);
 }
 
 async function dbGetMcpConnection(
@@ -329,7 +349,7 @@ async function dbGetMcpConnection(
 
   // Fall back to database - get first connection for this mcp_slug (legacy behavior)
   const { rows } = await pool.query(
-    `SELECT id, user_id, mcp_slug, instance_id, instance_name, google_email, google_tokens, connected_at, updated_at
+    `SELECT id, user_id, mcp_slug, instance_id, instance_name, google_email, google_tokens, connected_at, updated_at, provider, provider_tokens, provider_email
      FROM mcp_connections
      WHERE user_id = $1 AND mcp_slug = $2
      ORDER BY connected_at ASC
@@ -338,49 +358,21 @@ async function dbGetMcpConnection(
   );
 
   if (rows.length === 0) return null;
-
-  const row = rows[0];
-  const tokens = typeof row.google_tokens === 'string'
-    ? JSON.parse(row.google_tokens)
-    : row.google_tokens;
-
-  return {
-    id: row.id,
-    userId: row.user_id,
-    mcpSlug: row.mcp_slug,
-    instanceId: row.instance_id || `${mcpSlug}-${row.id}`,
-    instanceName: row.instance_name || mcpSlug,
-    googleEmail: row.google_email,
-    googleTokens: tokens,
-    connectedAt: row.connected_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-  };
+  return mapDbRowToConnection(rows[0]);
 }
 
 async function dbGetUserConnectedMcps(userId: number): Promise<McpConnection[]> {
   const pool = getPool();
 
   const { rows } = await pool.query(
-    `SELECT id, user_id, mcp_slug, instance_id, instance_name, google_email, google_tokens, connected_at, updated_at
+    `SELECT id, user_id, mcp_slug, instance_id, instance_name, google_email, google_tokens, connected_at, updated_at, provider, provider_tokens, provider_email
      FROM mcp_connections
      WHERE user_id = $1
      ORDER BY connected_at DESC`,
     [userId]
   );
 
-  return rows.map(row => ({
-    id: row.id,
-    userId: row.user_id,
-    mcpSlug: row.mcp_slug,
-    instanceId: row.instance_id || `${row.mcp_slug}-${row.id}`,
-    instanceName: row.instance_name || row.mcp_slug,
-    googleEmail: row.google_email,
-    googleTokens: typeof row.google_tokens === 'string'
-      ? JSON.parse(row.google_tokens)
-      : row.google_tokens,
-    connectedAt: row.connected_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-  }));
+  return rows.map(mapDbRowToConnection);
 }
 
 async function dbDisconnectMcp(userId: number, mcpSlug: string): Promise<boolean> {
@@ -440,7 +432,7 @@ async function dbGetMcpConnectionByInstanceId(
   const cached = await redis.get(`mcp_tokens:instance:${instanceId}`);
   if (cached) {
     const { rows } = await pool.query(
-      `SELECT id, user_id, mcp_slug, instance_id, instance_name, google_email, connected_at, updated_at
+      `SELECT id, user_id, mcp_slug, instance_id, instance_name, google_email, connected_at, updated_at, provider, provider_tokens, provider_email
        FROM mcp_connections
        WHERE instance_id = $1`,
       [instanceId]
@@ -450,22 +442,14 @@ async function dbGetMcpConnectionByInstanceId(
       return null;
     }
     const row = rows[0];
-    return {
-      id: row.id,
-      userId: row.user_id,
-      mcpSlug: row.mcp_slug,
-      instanceId: row.instance_id,
-      instanceName: row.instance_name,
-      googleEmail: row.google_email,
-      googleTokens: JSON.parse(cached),
-      connectedAt: row.connected_at.toISOString(),
-      updatedAt: row.updated_at.toISOString(),
-    };
+    const conn = mapDbRowToConnection(row);
+    conn.googleTokens = JSON.parse(cached);
+    return conn;
   }
 
   // Fall back to database
   const { rows } = await pool.query(
-    `SELECT id, user_id, mcp_slug, instance_id, instance_name, google_email, google_tokens, connected_at, updated_at
+    `SELECT id, user_id, mcp_slug, instance_id, instance_name, google_email, google_tokens, connected_at, updated_at, provider, provider_tokens, provider_email
      FROM mcp_connections
      WHERE instance_id = $1`,
     [instanceId]
@@ -473,30 +457,17 @@ async function dbGetMcpConnectionByInstanceId(
 
   if (rows.length === 0) return null;
 
-  const row = rows[0];
-  const tokens = typeof row.google_tokens === 'string'
-    ? JSON.parse(row.google_tokens)
-    : row.google_tokens;
+  const conn = mapDbRowToConnection(rows[0]);
 
   // Cache for future lookups
   await redis.set(
     `mcp_tokens:instance:${instanceId}`,
-    JSON.stringify(tokens),
+    JSON.stringify(conn.googleTokens),
     'EX',
     3600
   );
 
-  return {
-    id: row.id,
-    userId: row.user_id,
-    mcpSlug: row.mcp_slug,
-    instanceId: row.instance_id,
-    instanceName: row.instance_name,
-    googleEmail: row.google_email,
-    googleTokens: tokens,
-    connectedAt: row.connected_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-  };
+  return conn;
 }
 
 async function dbCreateMcpInstance(
@@ -504,7 +475,10 @@ async function dbCreateMcpInstance(
   mcpSlug: string,
   instanceName: string,
   tokens: GoogleTokens,
-  googleEmail: string | null
+  googleEmail: string | null,
+  provider?: string,
+  providerTokens?: ProviderTokens,
+  providerEmail?: string | null
 ): Promise<McpConnection> {
   const pool = getPool();
   const redis = getRedis();
@@ -512,10 +486,10 @@ async function dbCreateMcpInstance(
   const instanceId = nanoid(10);
 
   const { rows } = await pool.query(
-    `INSERT INTO mcp_connections (user_id, mcp_slug, instance_id, instance_name, google_email, google_tokens, connected_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-     RETURNING id, user_id, mcp_slug, instance_id, instance_name, google_email, google_tokens, connected_at, updated_at`,
-    [userId, mcpSlug, instanceId, instanceName, googleEmail, JSON.stringify(tokens)]
+    `INSERT INTO mcp_connections (user_id, mcp_slug, instance_id, instance_name, google_email, google_tokens, connected_at, updated_at, provider, provider_tokens, provider_email)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW(), $7, $8, $9)
+     RETURNING id, user_id, mcp_slug, instance_id, instance_name, google_email, google_tokens, connected_at, updated_at, provider, provider_tokens, provider_email`,
+    [userId, mcpSlug, instanceId, instanceName, googleEmail, JSON.stringify(tokens), provider || 'google', providerTokens ? JSON.stringify(providerTokens) : null, providerEmail || null]
   );
 
   const row = rows[0];
@@ -528,19 +502,7 @@ async function dbCreateMcpInstance(
     3600
   );
 
-  return {
-    id: row.id,
-    userId: row.user_id,
-    mcpSlug: row.mcp_slug,
-    instanceId: row.instance_id,
-    instanceName: row.instance_name,
-    googleEmail: row.google_email,
-    googleTokens: typeof row.google_tokens === 'string'
-      ? JSON.parse(row.google_tokens)
-      : row.google_tokens,
-    connectedAt: row.connected_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-  };
+  return mapDbRowToConnection(row);
 }
 
 async function dbUpdateMcpInstanceName(
@@ -693,12 +655,15 @@ export async function createMcpInstance(
   mcpSlug: string,
   instanceName: string,
   tokens: GoogleTokens,
-  googleEmail: string | null
+  googleEmail: string | null,
+  provider?: string,
+  providerTokens?: ProviderTokens,
+  providerEmail?: string | null
 ): Promise<McpConnection> {
   if (isDatabaseAvailable()) {
-    return dbCreateMcpInstance(userId, mcpSlug, instanceName, tokens, googleEmail);
+    return dbCreateMcpInstance(userId, mcpSlug, instanceName, tokens, googleEmail, provider, providerTokens, providerEmail);
   }
-  return fileCreateMcpInstance(userId, mcpSlug, instanceName, tokens, googleEmail);
+  return fileCreateMcpInstance(userId, mcpSlug, instanceName, tokens, googleEmail, provider, providerTokens, providerEmail);
 }
 
 export async function updateMcpInstanceName(

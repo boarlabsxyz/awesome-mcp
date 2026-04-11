@@ -758,6 +758,8 @@
     function getTokenStatusHtml(instance) {
       const ts = instance.tokenStatus;
       if (!ts) return '';
+      // Non-Google providers (e.g. ClickUp) use long-lived tokens — no refresh needed
+      if (instance.provider && instance.provider !== 'google') return '';
       if (ts.isExpired) {
         return '<span class="token-status expired">Expired</span>';
       }
@@ -769,6 +771,8 @@
 
     function needsReconnect(instance) {
       const ts = instance.tokenStatus;
+      // Non-Google providers (e.g. ClickUp) use long-lived tokens — no reconnect needed
+      if (instance.provider && instance.provider !== 'google') return false;
       return ts && (ts.isExpired || !ts.hasRefreshToken);
     }
 

@@ -17,6 +17,7 @@ export interface UserSession {
   googleGmail: gmail_v1.Gmail;
   googleSlides: slides_v1.Slides;
   oauthClient: OAuth2Client;
+  clickUpAccessToken?: string;
 }
 
 // Cache sessions to avoid recreating clients per request
@@ -111,6 +112,43 @@ export function createUserSessionFromConnection(
     googleGmail: google.gmail({ version: 'v1', auth: oauthClient }),
     googleSlides: google.slides({ version: 'v1', auth: oauthClient }),
     oauthClient,
+  };
+
+  mcpSessionCache.set(cacheKey, session);
+  return session;
+}
+
+/**
+ * Create a user session for ClickUp connections.
+ * ClickUp uses a long-lived access token, no OAuth2Client needed.
+ */
+export function createClickUpSession(
+  user: UserRecord,
+  connection: McpConnection,
+): UserSession {
+  const accessToken = (connection.providerTokens as any)?.access_token;
+  if (!accessToken) {
+    throw new Error(`ClickUp access token missing for connection ${connection.instanceId}. Please reconnect.`);
+  }
+
+  const cacheKey = `${user.apiKey}:${connection.instanceId}`;
+  const cached = mcpSessionCache.get(cacheKey);
+  if (cached) return cached;
+
+  const session: UserSession = {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: connection.mcpSlug,
+    clickUpAccessToken: accessToken,
+    // Null placeholders for Google clients (ClickUp MCP won't use them)
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
   };
 
   mcpSessionCache.set(cacheKey, session);
