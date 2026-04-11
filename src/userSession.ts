@@ -126,6 +126,11 @@ export function createClickUpSession(
   user: UserRecord,
   connection: McpConnection,
 ): UserSession {
+  const accessToken = (connection.providerTokens as any)?.access_token;
+  if (!accessToken) {
+    throw new Error(`ClickUp access token missing for connection ${connection.instanceId}. Please reconnect.`);
+  }
+
   const cacheKey = `${user.apiKey}:${connection.instanceId}`;
   const cached = mcpSessionCache.get(cacheKey);
   if (cached) return cached;
@@ -135,7 +140,7 @@ export function createClickUpSession(
     apiKey: user.apiKey,
     email: user.email,
     mcpSlug: connection.mcpSlug,
-    clickUpAccessToken: (connection.providerTokens as any)?.access_token,
+    clickUpAccessToken: accessToken,
     // Null placeholders for Google clients (ClickUp MCP won't use them)
     googleDocs: null as any,
     googleDrive: null as any,

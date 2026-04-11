@@ -426,7 +426,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
     slug: 'clickup',
     name: 'ClickUp MCP',
     description: 'Manage tasks, lists, docs, and time tracking in ClickUp',
-    iconUrl: null,
+    iconUrl: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQw1eP08uvJwgm_J8ngyQPaOeth4Q0WdtjCOQ&s',
     mcpUrl: clickUpMcpUrl,
     provider: 'clickup',
     scopes: [],

@@ -366,8 +366,12 @@ function registerSharedRoutes(app: express.Express): void {
       }
 
       // Branch on provider for authorization URL
-      if (mcp.provider === 'clickup') {
-        // ClickUp OAuth: simple redirect with client_id
+      if (mcp.provider && mcp.provider !== 'google') {
+        // Non-Google OAuth (e.g. ClickUp): simple redirect with client_id
+        if (!mcp.oauthAuthorizationUrl) {
+          res.status(500).send(`OAuth authorization URL not configured for ${mcpSlug}.`);
+          return;
+        }
         const authorizeUrl = `${mcp.oauthAuthorizationUrl}?client_id=${encodeURIComponent(client_id)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
         res.redirect(authorizeUrl);
       } else {

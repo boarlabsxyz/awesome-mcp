@@ -2,20 +2,36 @@
 import { UserError } from 'fastmcp';
 
 const CLICKUP_API_BASE = 'https://api.clickup.com/api/v2';
+const CLICKUP_API_V3_BASE = 'https://api.clickup.com/api/v3';
 
 export class ClickUpClient {
   constructor(private accessToken: string) {}
 
-  private async request<T = any>(method: string, path: string, body?: any): Promise<T> {
-    const url = `${CLICKUP_API_BASE}${path}`;
-    const res = await fetch(url, {
-      method,
-      headers: {
-        'Authorization': `Bearer ${this.accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
+  private async request<T = any>(method: string, path: string, body?: any, baseUrl: string = CLICKUP_API_BASE): Promise<T> {
+    const url = `${baseUrl}${path}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method,
+        headers: {
+          'Authorization': `Bearer ${this.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+    } catch (err: any) {
+      clearTimeout(timeout);
+      if (err.name === 'AbortError') {
+        throw new UserError(`ClickUp API request timed out: ${method} ${path}`);
+      }
+      throw new UserError(`ClickUp API request failed (${method} ${path}): ${err.message || err}`);
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (res.status === 429) {
       throw new UserError('ClickUp rate limit exceeded. Please try again in a moment.');
@@ -220,10 +236,10 @@ export class ClickUpClient {
   // === Docs (v3 API) ===
 
   async listDocs(workspaceId: string): Promise<any> {
-    return this.request('GET', `/workspaces/${workspaceId}/docs`);
+    return this.request('GET', `/workspaces/${workspaceId}/docs`, undefined, CLICKUP_API_V3_BASE);
   }
 
   async searchDocs(workspaceId: string, query: string): Promise<any> {
-    return this.request('GET', `/workspaces/${workspaceId}/docs?search=${encodeURIComponent(query)}`);
+    return this.request('GET', `/workspaces/${workspaceId}/docs?search=${encodeURIComponent(query)}`, undefined, CLICKUP_API_V3_BASE);
   }
 }

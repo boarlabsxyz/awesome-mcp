@@ -119,4 +119,20 @@ describe('createClickUpSession', () => {
     const session2 = createClickUpSession(user, conn);
     assert.equal(session1, session2); // Same reference (cached)
   });
+
+  it('should throw when providerTokens has no access_token', () => {
+    const user: UserRecord = {
+      id: 3 as any,
+      apiKey: 'key789',
+      email: 'test3@test.com',
+      name: 'Test3',
+      authMethod: 'google',
+    } as any;
+
+    const conn = { ...fakeClickUpConnection, instanceId: 'cu-no-token', providerTokens: undefined };
+    assert.throws(
+      () => createClickUpSession(user, conn),
+      { message: /ClickUp access token missing/ }
+    );
+  });
 });
