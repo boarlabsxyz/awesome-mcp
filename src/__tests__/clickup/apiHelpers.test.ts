@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it, mock, beforeEach, afterEach } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import { ClickUpClient } from '../../clickup/apiHelpers.js';
 
 // Mock global fetch

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it, mock, beforeEach, afterEach } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import { UserError } from 'fastmcp';
 
 // ---------------------------------------------------------------------------
@@ -12,7 +12,7 @@ import { UserError } from 'fastmcp';
 // definition in a map we control.
 // ---------------------------------------------------------------------------
 
-const toolMap = new Map<string, { execute: Function; parameters: any }>();
+const toolMap = new Map<string, { execute: (...args: any[]) => any; parameters: any }>();
 
 // Patch addTool BEFORE importing server.ts
 const FastMCPModule = await import('fastmcp');

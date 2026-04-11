@@ -2,7 +2,7 @@
 import { google, docs_v1, drive_v3, sheets_v4, calendar_v3, gmail_v1, slides_v1 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { UserRecord, updateTokens } from './userStore.js';
-import { McpConnection, GoogleTokens, ProviderTokens, updateMcpInstanceTokens, clearMcpInstanceTokensCache } from './mcpConnectionStore.js';
+import { McpConnection, GoogleTokens, updateMcpInstanceTokens, clearMcpInstanceTokensCache } from './mcpConnectionStore.js';
 
 export interface UserSession {
   [key: string]: unknown;
