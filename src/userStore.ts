@@ -12,6 +12,7 @@ export interface UserProfile {
   apiKey: string;
   email: string;
   googleId: string | null;
+  auth0Sub?: string;
   name: string;
   authMethod: 'google' | 'password';
   createdAt: string;
@@ -424,6 +425,122 @@ export async function updateTokens(apiKey: string, tokens: Partial<UserTokens>):
     return dbUpdateTokens(apiKey, tokens);
   }
   return fileUpdateTokens(apiKey, tokens);
+}
+
+// ---------- Auth0 Subject Mapping ----------
+
+async function dbGetUserByAuth0Sub(sub: string): Promise<UserRecord | undefined> {
+  const pool = getPool();
+  const redis = getRedis();
+
+  const { rows } = await pool.query(
+    'SELECT id, api_key, email, google_id, auth0_sub, name, auth_method, created_at, updated_at FROM users WHERE auth0_sub = $1',
+    [sub]
+  );
+  if (rows.length === 0) return undefined;
+
+  const row = rows[0];
+  let tokens: UserTokens | undefined;
+  if (row.google_id) {
+    const tokensJson = await redis.get(`tokens:${row.google_id}`);
+    if (tokensJson) tokens = JSON.parse(tokensJson);
+  }
+
+  return {
+    id: row.id,
+    apiKey: row.api_key,
+    email: row.email,
+    googleId: row.google_id,
+    auth0Sub: row.auth0_sub,
+    name: row.name,
+    authMethod: row.auth_method || 'google',
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+    tokens,
+  };
+}
+
+function fileGetUserByAuth0Sub(sub: string): UserRecord | undefined {
+  return Object.values(users).find(u => u.auth0Sub === sub);
+}
+
+export async function getUserByAuth0Sub(sub: string): Promise<UserRecord | undefined> {
+  if (isDatabaseAvailable()) {
+    return dbGetUserByAuth0Sub(sub);
+  }
+  await fileLoadUsers();
+  return fileGetUserByAuth0Sub(sub);
+}
+
+async function dbSetAuth0Sub(userId: number, sub: string): Promise<void> {
+  const pool = getPool();
+  await pool.query('UPDATE users SET auth0_sub = $1, updated_at = NOW() WHERE id = $2', [sub, userId]);
+}
+
+async function fileSetAuth0Sub(userId: number, sub: string): Promise<void> {
+  const user = Object.values(users).find(u => u.id === userId);
+  if (user) {
+    user.auth0Sub = sub;
+    user.updatedAt = new Date().toISOString();
+    await saveUsers();
+  }
+}
+
+export async function setAuth0Sub(userId: number, sub: string): Promise<void> {
+  if (isDatabaseAvailable()) {
+    return dbSetAuth0Sub(userId, sub);
+  }
+  return fileSetAuth0Sub(userId, sub);
+}
+
+// ---------- Create User (minimal, for JWT-based auth) ----------
+
+async function dbCreateUser(profile: { email: string; name: string; auth0Sub?: string }): Promise<UserRecord> {
+  const pool = getPool();
+  const apiKey = generateApiKey();
+  const { rows } = await pool.query(
+    `INSERT INTO users (api_key, email, google_id, auth0_sub, name, auth_method, created_at, updated_at)
+     VALUES ($1, $2, NULL, $3, $4, 'google', NOW(), NOW())
+     RETURNING id, api_key, email, google_id, auth0_sub, name, auth_method, created_at, updated_at`,
+    [apiKey, profile.email, profile.auth0Sub || null, profile.name]
+  );
+  const row = rows[0];
+  return {
+    id: row.id,
+    apiKey: row.api_key,
+    email: row.email,
+    googleId: row.google_id,
+    auth0Sub: row.auth0_sub,
+    name: row.name,
+    authMethod: row.auth_method || 'google',
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+async function fileCreateUser(profile: { email: string; name: string; auth0Sub?: string }): Promise<UserRecord> {
+  await fileLoadUsers();
+  const apiKey = generateApiKey();
+  const user: UserRecord = {
+    apiKey,
+    email: profile.email,
+    googleId: null,
+    auth0Sub: profile.auth0Sub,
+    name: profile.name,
+    authMethod: 'google',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  users[apiKey] = user;
+  await saveUsers();
+  return user;
+}
+
+export async function createUser(profile: { email: string; name: string; auth0Sub?: string }): Promise<UserRecord> {
+  if (isDatabaseAvailable()) {
+    return dbCreateUser(profile);
+  }
+  return fileCreateUser(profile);
 }
 
 // ---------- Regenerate API Key ----------

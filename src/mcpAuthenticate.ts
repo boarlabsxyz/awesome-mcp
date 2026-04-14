@@ -2,7 +2,7 @@
 // Shared authenticate handler for all MCP servers.
 import http from 'http';
 import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession } from './userSession.js';
-import { loadUsers, getUserByApiKey } from './userStore.js';
+import { loadUsers, getUserByApiKey, getUserById } from './userStore.js';
 import { loadClientCredentials } from './auth.js';
 import { getMcpConnection, getMcpConnectionByInstanceId } from './mcpConnectionStore.js';
 import { getMcpCatalog } from './mcpCatalogStore.js';
@@ -11,6 +11,7 @@ import { getMcpCatalog } from './mcpCatalogStore.js';
 export interface AuthDeps {
   loadUsers: () => Promise<void>;
   getUserByApiKey: (key: string) => Promise<any>;
+  getUserById: (id: number) => Promise<any>;
   loadClientCredentials: () => Promise<{ client_id: string; client_secret: string }>;
   getMcpConnection: (userId: any, slug: string) => Promise<any>;
   getMcpConnectionByInstanceId: (id: string) => Promise<any>;
@@ -24,6 +25,7 @@ export interface AuthDeps {
 const defaultDeps: AuthDeps = {
   loadUsers,
   getUserByApiKey,
+  getUserById,
   loadClientCredentials,
   getMcpConnection,
   getMcpConnectionByInstanceId,
@@ -45,6 +47,62 @@ export async function authenticateRequest(
 ): Promise<UserSession> {
   // In stdio mode, request is undefined — no per-user auth needed
   if (!request) return undefined as unknown as UserSession;
+
+  // JWT pre-authenticated path: the resource server middleware already validated the token
+  // and forwarded the internal user ID via a trusted header (only from 127.0.0.1 proxy)
+  const trustedUserId = request.headers['x-mcp-user-id'];
+  if (trustedUserId && typeof trustedUserId === 'string') {
+    const user = await deps.getUserById(Number(trustedUserId));
+    if (!user) {
+      throw new Response(null, { status: 401, statusText: 'JWT-authenticated user not found.' } as any);
+    }
+
+    // Use instanceId if provided (same logic as API-key path below)
+    const url = new URL(request.url || '', 'http://localhost');
+    const instanceId = url.searchParams.get('instanceId') || undefined;
+
+    if (instanceId) {
+      const connection = await deps.getMcpConnectionByInstanceId(instanceId);
+      if (!connection) {
+        throw new Response(null, { status: 404, statusText: `Instance not found: ${instanceId}` } as any);
+      }
+      if (connection.userId !== user.id) {
+        throw new Response(null, { status: 403, statusText: 'You do not have access to this instance.' } as any);
+      }
+      if (connection.provider === 'clickup') {
+        return deps.createClickUpSession(user, connection);
+      }
+      const mcp = await deps.getMcpCatalog(connection.mcpSlug);
+      const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
+        ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }
+        : await deps.loadClientCredentials();
+      return deps.createUserSessionFromConnection(user, connection, client_id, client_secret);
+    }
+
+    // Legacy flow: find connection by slug
+    const connection = await deps.getMcpConnection(user.id, mcpSlug);
+    if (connection) {
+      if (connection.provider === 'clickup') {
+        return deps.createClickUpSession(user, connection);
+      }
+      const mcp = await deps.getMcpCatalog(mcpSlug);
+      const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
+        ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }
+        : await deps.loadClientCredentials();
+      return deps.createUserSessionFromConnection(user, connection, client_id, client_secret);
+    }
+
+    // Fall back to user's global tokens
+    if (user.tokens && user.tokens.refresh_token) {
+      const { client_id, client_secret } = await deps.loadClientCredentials();
+      return deps.createUserSession(user, client_id, client_secret);
+    }
+
+    throw new Response(null, {
+      status: 403,
+      statusText: `MCP not connected. Visit the dashboard to connect ${mcpSlug}.`
+    } as any);
+  }
 
   // Extract API key from Authorization header or query param
   const authHeader = request.headers['authorization'];
