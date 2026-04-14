@@ -35,6 +35,49 @@ const defaultDeps: AuthDeps = {
   createClickUpSession,
 };
 
+/** Create a session from a verified connection. */
+async function sessionFromConnection(user: any, connection: any, deps: AuthDeps): Promise<UserSession> {
+  if (connection.provider === 'clickup') {
+    return deps.createClickUpSession(user, connection);
+  }
+  const mcp = await deps.getMcpCatalog(connection.mcpSlug);
+  const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
+    ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }
+    : await deps.loadClientCredentials();
+  return deps.createUserSessionFromConnection(user, connection, client_id, client_secret);
+}
+
+/** Resolve a user + optional instanceId/slug to a session. */
+async function resolveSession(user: any, mcpSlug: string, instanceId: string | undefined, deps: AuthDeps): Promise<UserSession> {
+  if (instanceId) {
+    const connection = await deps.getMcpConnectionByInstanceId(instanceId);
+    if (!connection) {
+      throw new Response(null, { status: 404, statusText: `Instance not found: ${instanceId}` } as any);
+    }
+    if (connection.userId !== user.id) {
+      throw new Response(null, { status: 403, statusText: 'You do not have access to this instance.' } as any);
+    }
+    return sessionFromConnection(user, connection, deps);
+  }
+
+  // Legacy flow: find connection by slug
+  const connection = await deps.getMcpConnection(user.id, mcpSlug);
+  if (connection) {
+    return sessionFromConnection(user, connection, deps);
+  }
+
+  // Fall back to user's global tokens
+  if (user.tokens && user.tokens.refresh_token) {
+    const { client_id, client_secret } = await deps.loadClientCredentials();
+    return deps.createUserSession(user, client_id, client_secret);
+  }
+
+  throw new Response(null, {
+    status: 403,
+    statusText: `MCP not connected. Visit the dashboard to connect ${mcpSlug}.`
+  } as any);
+}
+
 /**
  * Core authenticate logic, extracted for testability.
  * All MCP servers (docs, calendar, sheets, gmail) use the same auth logic;
@@ -49,59 +92,19 @@ export async function authenticateRequest(
   if (!request) return undefined as unknown as UserSession;
 
   // JWT pre-authenticated path: the resource server middleware already validated the token
-  // and forwarded the internal user ID via a trusted header (only from 127.0.0.1 proxy)
-  const trustedUserId = request.headers['x-mcp-user-id'];
+  // and forwarded the internal user ID via a trusted header. Only trust this header from
+  // the local proxy (127.0.0.1 / ::1) to prevent spoofing from external clients.
+  const remoteAddr = request.socket?.remoteAddress;
+  const isLocalProxy = remoteAddr === '127.0.0.1' || remoteAddr === '::1' || remoteAddr === '::ffff:127.0.0.1';
+  const trustedUserId = isLocalProxy ? request.headers['x-mcp-user-id'] : undefined;
   if (trustedUserId && typeof trustedUserId === 'string') {
     const user = await deps.getUserById(Number(trustedUserId));
     if (!user) {
       throw new Response(null, { status: 401, statusText: 'JWT-authenticated user not found.' } as any);
     }
-
-    // Use instanceId if provided (same logic as API-key path below)
     const url = new URL(request.url || '', 'http://localhost');
     const instanceId = url.searchParams.get('instanceId') || undefined;
-
-    if (instanceId) {
-      const connection = await deps.getMcpConnectionByInstanceId(instanceId);
-      if (!connection) {
-        throw new Response(null, { status: 404, statusText: `Instance not found: ${instanceId}` } as any);
-      }
-      if (connection.userId !== user.id) {
-        throw new Response(null, { status: 403, statusText: 'You do not have access to this instance.' } as any);
-      }
-      if (connection.provider === 'clickup') {
-        return deps.createClickUpSession(user, connection);
-      }
-      const mcp = await deps.getMcpCatalog(connection.mcpSlug);
-      const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
-        ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }
-        : await deps.loadClientCredentials();
-      return deps.createUserSessionFromConnection(user, connection, client_id, client_secret);
-    }
-
-    // Legacy flow: find connection by slug
-    const connection = await deps.getMcpConnection(user.id, mcpSlug);
-    if (connection) {
-      if (connection.provider === 'clickup') {
-        return deps.createClickUpSession(user, connection);
-      }
-      const mcp = await deps.getMcpCatalog(mcpSlug);
-      const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
-        ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }
-        : await deps.loadClientCredentials();
-      return deps.createUserSessionFromConnection(user, connection, client_id, client_secret);
-    }
-
-    // Fall back to user's global tokens
-    if (user.tokens && user.tokens.refresh_token) {
-      const { client_id, client_secret } = await deps.loadClientCredentials();
-      return deps.createUserSession(user, client_id, client_secret);
-    }
-
-    throw new Response(null, {
-      status: 403,
-      statusText: `MCP not connected. Visit the dashboard to connect ${mcpSlug}.`
-    } as any);
+    return resolveSession(user, mcpSlug, instanceId, deps);
   }
 
   // Extract API key from Authorization header or query param
@@ -156,53 +159,7 @@ export async function authenticateRequest(
     throw new Response(null, { status: 403, statusText: 'User ID not found. Please re-register.' } as any);
   }
 
-  if (instanceId) {
-    const connection = await deps.getMcpConnectionByInstanceId(instanceId);
-    if (!connection) {
-      throw new Response(null, { status: 404, statusText: `Instance not found: ${instanceId}` } as any);
-    }
-    if (connection.userId !== user.id) {
-      throw new Response(null, { status: 403, statusText: 'You do not have access to this instance.' } as any);
-    }
-
-    // Branch on provider: ClickUp uses its own session factory
-    if (connection.provider === 'clickup') {
-      return deps.createClickUpSession(user, connection);
-    }
-
-    const mcp = await deps.getMcpCatalog(connection.mcpSlug);
-    const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
-      ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }
-      : await deps.loadClientCredentials();
-
-    return deps.createUserSessionFromConnection(user, connection, client_id, client_secret);
-  }
-
-  // Legacy flow (no instanceId): Always prefer MCP connection tokens
-  const connection = await deps.getMcpConnection(user.id, mcpSlug);
-  if (connection) {
-    // Branch on provider: ClickUp uses its own session factory
-    if (connection.provider === 'clickup') {
-      return deps.createClickUpSession(user, connection);
-    }
-
-    const mcp = await deps.getMcpCatalog(mcpSlug);
-    const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
-      ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }
-      : await deps.loadClientCredentials();
-    return deps.createUserSessionFromConnection(user, connection, client_id, client_secret);
-  }
-
-  // Fall back to user's global tokens
-  if (user.tokens && user.tokens.refresh_token) {
-    const { client_id, client_secret } = await deps.loadClientCredentials();
-    return deps.createUserSession(user, client_id, client_secret);
-  }
-
-  throw new Response(null, {
-    status: 403,
-    statusText: `MCP not connected. Visit the dashboard to connect ${mcpSlug}.`
-  } as any);
+  return resolveSession(user, mcpSlug, instanceId, deps);
 }
 
 /**

@@ -6,7 +6,25 @@ import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { resourceServerMiddleware } from '../auth/resourceServerMiddleware.js';
-import { ALL_SCOPES } from '../auth/scopeMap.js';
+import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
+
+/** Register the RFC 9728 OAuth Protected Resource Metadata endpoint. */
+function registerResourceMetadata(app: express.Express, resource: string, scopes: string[]): void {
+  const auth0Domain = process.env.AUTH0_DOMAIN || '';
+  app.get('/.well-known/oauth-protected-resource', (_req, res) => {
+    if (!auth0Domain) {
+      res.status(503).json({ error: 'AUTH0_DOMAIN not configured' });
+      return;
+    }
+    const issuer = auth0Domain.startsWith('https://') ? auth0Domain : `https://${auth0Domain}`;
+    res.json({
+      resource,
+      authorization_servers: [issuer],
+      scopes_supported: scopes,
+      bearer_methods_supported: ['header'],
+    });
+  });
+}
 import crypto from 'crypto';
 import cookieParser from 'cookie-parser';
 import { loadUsers, createOrUpdateUser, getUserByGoogleId, getUserByApiKey, getUserById, regenerateApiKey, getAllUsers, UserRecord } from '../userStore.js';
@@ -1009,20 +1027,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   });
 
   // RFC 9728: OAuth Protected Resource Metadata
-  const AUTH0_DOMAIN = process.env.AUTH0_DOMAIN || '';
-  app.get('/.well-known/oauth-protected-resource', (_req, res) => {
-    if (!AUTH0_DOMAIN) {
-      res.status(503).json({ error: 'AUTH0_DOMAIN not configured' });
-      return;
-    }
-    const issuer = AUTH0_DOMAIN.startsWith('https://') ? AUTH0_DOMAIN : `https://${AUTH0_DOMAIN}`;
-    res.json({
-      resource: BASE_URL,
-      authorization_servers: [issuer],
-      scopes_supported: ALL_SCOPES,
-      bearer_methods_supported: ['header'],
-    });
-  });
+  registerResourceMetadata(app, BASE_URL, ALL_SCOPES);
 
   // Proxy MCP endpoints to internal FastMCP servers (JWT auth enforced before proxy)
   function addMcpProxy(port: number, prefix?: string) {
@@ -1775,21 +1780,10 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
     res.status(200).json({ status: 'ok' });
   });
 
-  // RFC 9728: OAuth Protected Resource Metadata
-  const AUTH0_DOMAIN = process.env.AUTH0_DOMAIN || '';
-  app.get('/.well-known/oauth-protected-resource', (_req, res) => {
-    if (!AUTH0_DOMAIN) {
-      res.status(503).json({ error: 'AUTH0_DOMAIN not configured' });
-      return;
-    }
-    const issuer = AUTH0_DOMAIN.startsWith('https://') ? AUTH0_DOMAIN : `https://${AUTH0_DOMAIN}`;
-    res.json({
-      resource: BASE_URL,
-      authorization_servers: [issuer],
-      scopes_supported: ALL_SCOPES,
-      bearer_methods_supported: ['header'],
-    });
-  });
+  // RFC 9728: OAuth Protected Resource Metadata (scoped to this MCP service)
+  const mcpSlug = process.env.MCP_SLUG || 'google-docs';
+  const mcpBaseUrl = process.env.MCP_BASE_URL || BASE_URL;
+  registerResourceMetadata(app, mcpBaseUrl, getScopesForSlug(mcpSlug));
 
   // Proxy MCP requests to internal FastMCP server (JWT auth enforced before proxy)
   app.use(['/mcp', '/sse'], resourceServerMiddleware);

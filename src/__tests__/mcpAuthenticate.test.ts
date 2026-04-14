@@ -207,4 +207,55 @@ describe('authenticateRequest', () => {
     await authenticateRequest(makeRequest({ authorization: 'Bearer validkey' }), 'my-slug', deps);
     assert.equal((deps.loadClientCredentials as any).mock.calls.length, 1);
   });
+
+  // --- Trusted header (JWT pre-auth) path ---
+
+  it('uses x-mcp-user-id header from local proxy', async () => {
+    const deps = makeDeps({
+      getUserById: mock.fn(async () => fakeUser),
+      getMcpConnection: mock.fn(async () => fakeConnection),
+    });
+    const req = makeRequest({}) as any;
+    req.headers['x-mcp-user-id'] = 'u1';
+    req.socket = { remoteAddress: '127.0.0.1' };
+    await authenticateRequest(req, 'google-docs', deps);
+    assert.equal((deps.getUserById as any).mock.calls.length, 1);
+  });
+
+  it('ignores x-mcp-user-id header from non-local address', async () => {
+    const deps = makeDeps();
+    const req = makeRequest({ authorization: 'Bearer validkey' }) as any;
+    req.headers['x-mcp-user-id'] = '999';
+    req.socket = { remoteAddress: '10.0.0.1' };
+    // Should fall through to API key path (validkey), not use getUserById
+    await authenticateRequest(req, 'google-docs', deps);
+    assert.equal((deps.getUserById as any).mock.calls.length, 0);
+  });
+
+  it('throws 401 when trusted user ID not found', async () => {
+    const deps = makeDeps({
+      getUserById: mock.fn(async () => null),
+    });
+    const req = makeRequest({}) as any;
+    req.headers['x-mcp-user-id'] = '999';
+    req.socket = { remoteAddress: '::1' };
+    try {
+      await authenticateRequest(req, 'google-docs', deps);
+      assert.fail('expected throw');
+    } catch (e: any) {
+      assert.equal(e.status, 401);
+    }
+  });
+
+  it('accepts x-mcp-user-id from ::ffff:127.0.0.1 (IPv4-mapped IPv6)', async () => {
+    const deps = makeDeps({
+      getUserById: mock.fn(async () => fakeUser),
+      getMcpConnection: mock.fn(async () => fakeConnection),
+    });
+    const req = makeRequest({}) as any;
+    req.headers['x-mcp-user-id'] = 'u1';
+    req.socket = { remoteAddress: '::ffff:127.0.0.1' };
+    await authenticateRequest(req, 'google-docs', deps);
+    assert.equal((deps.getUserById as any).mock.calls.length, 1);
+  });
 });

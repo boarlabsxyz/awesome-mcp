@@ -11,24 +11,31 @@ export interface JwtPayload {
   aud: string;
 }
 
-const AUTH0_DOMAIN = process.env.AUTH0_DOMAIN || '';
-const AUTH0_AUDIENCE = process.env.AUTH0_AUDIENCE || '';
-
 let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+
+function getDomain(): string {
+  const domain = process.env.AUTH0_DOMAIN || '';
+  if (!domain) throw new Error('AUTH0_DOMAIN environment variable is not set');
+  return domain;
+}
+
+/** Normalize domain to https:// base URL. */
+function domainToBaseUrl(domain: string): string {
+  return domain.startsWith('https://') ? domain : `https://${domain}`;
+}
 
 function getJwks() {
   if (!jwks) {
-    if (!AUTH0_DOMAIN) throw new Error('AUTH0_DOMAIN environment variable is not set');
-    const issuer = AUTH0_DOMAIN.startsWith('https://') ? AUTH0_DOMAIN : `https://${AUTH0_DOMAIN}`;
-    jwks = createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks.json`));
+    const base = domainToBaseUrl(getDomain());
+    jwks = createRemoteJWKSet(new URL(`${base}/.well-known/jwks.json`));
   }
   return jwks;
 }
 
 function getIssuer(): string {
-  const domain = AUTH0_DOMAIN.startsWith('https://') ? AUTH0_DOMAIN : `https://${AUTH0_DOMAIN}`;
+  const base = domainToBaseUrl(getDomain());
   // Auth0 issuers always end with a trailing slash
-  return domain.endsWith('/') ? domain : `${domain}/`;
+  return base.endsWith('/') ? base : `${base}/`;
 }
 
 /**
@@ -36,11 +43,12 @@ function getIssuer(): string {
  * Throws on any validation failure.
  */
 export async function validateJwt(token: string): Promise<JwtPayload> {
-  if (!AUTH0_AUDIENCE) throw new Error('AUTH0_AUDIENCE environment variable is not set');
+  const audience = process.env.AUTH0_AUDIENCE || '';
+  if (!audience) throw new Error('AUTH0_AUDIENCE environment variable is not set');
 
   const { payload } = await jwtVerify(token, getJwks(), {
     issuer: getIssuer(),
-    audience: AUTH0_AUDIENCE,
+    audience,
   });
 
   const p = payload as JWTPayload & { scope?: string; email?: string };

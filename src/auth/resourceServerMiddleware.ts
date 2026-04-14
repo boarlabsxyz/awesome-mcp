@@ -6,9 +6,6 @@ import { validateJwt, hasScope } from './jwtValidator.js';
 import { getRequiredScope } from './scopeMap.js';
 import { mapJwtToUser } from './userMapping.js';
 
-const BASE_URL = process.env.BASE_URL || 'http://localhost:8080';
-const DUAL_AUTH_MODE = process.env.DUAL_AUTH_MODE !== 'false'; // default: true (dual mode)
-
 /** Detect whether a bearer token is a JWT (vs an API key). */
 function looksLikeJwt(token: string): boolean {
   return token.startsWith('eyJ') && (token.match(/\./g) || []).length === 2;
@@ -26,13 +23,16 @@ export async function resourceServerMiddleware(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
+  const baseUrl = process.env.BASE_URL || 'http://localhost:8080';
+  const dualAuthMode = process.env.DUAL_AUTH_MODE !== 'false'; // default: true (dual mode)
+
   const authHeader = req.headers.authorization;
-  const wwwAuth = `Bearer resource_metadata="${BASE_URL}/.well-known/oauth-protected-resource"`;
+  const wwwAuth = `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     // Check for apiKey query param in dual mode
     const apiKey = req.query.apiKey as string | undefined;
-    if (apiKey && DUAL_AUTH_MODE) {
+    if (apiKey && dualAuthMode) {
       // Legacy API-key via query param — let it through with deprecation warning
       console.warn(`[auth-migration] API key auth via query param (deprecated) from ${req.ip}`);
       res.setHeader('X-Auth-Migration', 'deprecated');
@@ -51,21 +51,31 @@ export async function resourceServerMiddleware(
 
   if (looksLikeJwt(token)) {
     // --- JWT path ---
+    // Step 1: Validate token and check scopes (401 on failure)
+    let payload;
     try {
-      const payload = await validateJwt(token);
+      payload = await validateJwt(token);
+    } catch (err: any) {
+      console.error('[jwt-auth] Token validation failed:', err.message);
+      res.status(401).setHeader('WWW-Authenticate', wwwAuth).json({
+        error: 'invalid_token',
+        message: 'The provided JWT is invalid or expired.',
+      });
+      return;
+    }
 
-      // Check scope against route
-      const requiredScope = getRequiredScope(req.path);
-      if (requiredScope && !hasScope(payload, requiredScope)) {
-        res.status(403).json({
-          error: 'insufficient_scope',
-          message: `This endpoint requires the "${requiredScope}" scope.`,
-          required_scope: requiredScope,
-        });
-        return;
-      }
+    const requiredScope = getRequiredScope(req.path);
+    if (requiredScope && !hasScope(payload, requiredScope)) {
+      res.status(403).json({
+        error: 'insufficient_scope',
+        message: `This endpoint requires the "${requiredScope}" scope.`,
+        required_scope: requiredScope,
+      });
+      return;
+    }
 
-      // Map JWT subject to internal user
+    // Step 2: Map JWT subject to internal user (5xx on failure)
+    try {
       const user = await mapJwtToUser(payload);
 
       // Forward user identity to downstream FastMCP servers via trusted headers
@@ -75,17 +85,17 @@ export async function resourceServerMiddleware(
 
       next();
     } catch (err: any) {
-      console.error('[jwt-auth] Validation failed:', err.message);
-      res.status(401).setHeader('WWW-Authenticate', wwwAuth).json({
-        error: 'invalid_token',
-        message: 'The provided JWT is invalid or expired.',
+      console.error('[jwt-auth] User mapping failed:', err.message);
+      res.status(503).json({
+        error: 'user_mapping_error',
+        message: 'Failed to resolve user identity. Please try again.',
       });
     }
     return;
   }
 
   // --- API-key path (dual-mode migration) ---
-  if (DUAL_AUTH_MODE) {
+  if (dualAuthMode) {
     console.warn(`[auth-migration] API key auth via Bearer header (deprecated) from ${req.ip}`);
     res.setHeader('X-Auth-Migration', 'deprecated');
     next();

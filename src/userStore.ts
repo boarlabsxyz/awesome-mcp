@@ -35,6 +35,7 @@ export interface UserRecord extends UserProfile {
 
 // In-memory store keyed by apiKey
 let users: Record<string, UserRecord> = {};
+let nextFileUserId = 1;
 let loaded = false;
 
 // Simple mutex to prevent concurrent writes
@@ -50,6 +51,9 @@ async function fileLoadUsers(): Promise<void> {
   try {
     const content = await fs.readFile(USERS_FILE, 'utf-8');
     users = JSON.parse(content);
+    // Restore auto-increment counter from existing user IDs
+    const maxId = Math.max(0, ...Object.values(users).map(u => u.id ?? 0));
+    nextFileUserId = maxId + 1;
     loaded = true;
     console.error(`Loaded ${Object.keys(users).length} user(s) from ${USERS_FILE}`);
   } catch (err: any) {
@@ -99,6 +103,7 @@ async function fileCreateOrUpdateUser(
   }
   const apiKey = generateApiKey();
   const user: UserRecord = {
+    id: nextFileUserId++,
     apiKey,
     email: profile.email,
     googleId: profile.googleId,
@@ -127,138 +132,59 @@ async function fileUpdateTokens(apiKey: string, tokens: Partial<UserTokens>): Pr
 
 // ---------- Database-backed storage ----------
 
-async function dbGetUserByApiKey(apiKey: string): Promise<UserRecord | undefined> {
-  const pool = getPool();
+const DB_USER_COLUMNS = 'id, api_key, email, google_id, auth0_sub, name, auth_method, created_at, updated_at';
+
+/** Load tokens from Redis for a given google_id (returns undefined if none). */
+async function loadTokensFromRedis(googleId: string | null): Promise<UserTokens | undefined> {
+  if (!googleId) return undefined;
   const redis = getRedis();
+  const tokensJson = await redis.get(`tokens:${googleId}`);
+  return tokensJson ? JSON.parse(tokensJson) : undefined;
+}
 
-  const { rows } = await pool.query(
-    'SELECT id, api_key, email, google_id, name, auth_method, created_at, updated_at FROM users WHERE api_key = $1',
-    [apiKey]
-  );
-  if (rows.length === 0) return undefined;
-
-  const row = rows[0];
-
-  // For password-based users, tokens may not exist (they use per-MCP connections)
-  let tokens: UserTokens | undefined;
-  if (row.google_id) {
-    const tokensJson = await redis.get(`tokens:${row.google_id}`);
-    if (tokensJson) {
-      tokens = JSON.parse(tokensJson);
-    }
-  }
-
+/** Map a database row to a UserRecord. */
+function rowToUserRecord(row: any, tokens?: UserTokens): UserRecord {
   return {
     id: row.id,
     apiKey: row.api_key,
     email: row.email,
     googleId: row.google_id,
+    auth0Sub: row.auth0_sub,
     name: row.name,
     authMethod: row.auth_method || 'google',
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     tokens,
   };
+}
+
+/** Query a single user by a WHERE clause and map to UserRecord. */
+async function dbGetUserBy(whereClause: string, params: any[]): Promise<UserRecord | undefined> {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT ${DB_USER_COLUMNS} FROM users WHERE ${whereClause}`,
+    params
+  );
+  if (rows.length === 0) return undefined;
+  const row = rows[0];
+  const tokens = await loadTokensFromRedis(row.google_id);
+  return rowToUserRecord(row, tokens);
+}
+
+async function dbGetUserByApiKey(apiKey: string): Promise<UserRecord | undefined> {
+  return dbGetUserBy('api_key = $1', [apiKey]);
 }
 
 async function dbGetUserByGoogleId(googleId: string): Promise<UserRecord | undefined> {
-  const pool = getPool();
-  const redis = getRedis();
-
-  const { rows } = await pool.query(
-    'SELECT id, api_key, email, google_id, name, auth_method, created_at, updated_at FROM users WHERE google_id = $1',
-    [googleId]
-  );
-  if (rows.length === 0) return undefined;
-
-  const row = rows[0];
-
-  // Tokens may not exist in Redis (e.g., expired or migrated user)
-  // Return user record without tokens - they'll be refreshed on next OAuth
-  let tokens: UserTokens | undefined;
-  const tokensJson = await redis.get(`tokens:${row.google_id}`);
-  if (tokensJson) {
-    tokens = JSON.parse(tokensJson);
-  }
-
-  return {
-    id: row.id,
-    apiKey: row.api_key,
-    email: row.email,
-    googleId: row.google_id,
-    name: row.name,
-    authMethod: row.auth_method || 'google',
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-    tokens,
-  };
+  return dbGetUserBy('google_id = $1', [googleId]);
 }
 
 async function dbGetUserByEmail(email: string): Promise<UserRecord | undefined> {
-  const pool = getPool();
-  const redis = getRedis();
-
-  const { rows } = await pool.query(
-    'SELECT id, api_key, email, google_id, name, auth_method, created_at, updated_at FROM users WHERE email = $1',
-    [email]
-  );
-  if (rows.length === 0) return undefined;
-
-  const row = rows[0];
-
-  // For password-based users, tokens may not exist
-  let tokens: UserTokens | undefined;
-  if (row.google_id) {
-    const tokensJson = await redis.get(`tokens:${row.google_id}`);
-    if (tokensJson) {
-      tokens = JSON.parse(tokensJson);
-    }
-  }
-
-  return {
-    id: row.id,
-    apiKey: row.api_key,
-    email: row.email,
-    googleId: row.google_id,
-    name: row.name,
-    authMethod: row.auth_method || 'google',
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-    tokens,
-  };
+  return dbGetUserBy('email = $1', [email]);
 }
 
 async function dbGetUserById(id: number): Promise<UserRecord | undefined> {
-  const pool = getPool();
-  const redis = getRedis();
-
-  const { rows } = await pool.query(
-    'SELECT id, api_key, email, google_id, name, auth_method, created_at, updated_at FROM users WHERE id = $1',
-    [id]
-  );
-  if (rows.length === 0) return undefined;
-
-  const row = rows[0];
-
-  let tokens: UserTokens | undefined;
-  if (row.google_id) {
-    const tokensJson = await redis.get(`tokens:${row.google_id}`);
-    if (tokensJson) {
-      tokens = JSON.parse(tokensJson);
-    }
-  }
-
-  return {
-    id: row.id,
-    apiKey: row.api_key,
-    email: row.email,
-    googleId: row.google_id,
-    name: row.name,
-    authMethod: row.auth_method || 'google',
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-    tokens,
-  };
+  return dbGetUserBy('id = $1', [id]);
 }
 
 async function dbCreateOrUpdateUser(
@@ -302,17 +228,7 @@ async function dbCreateOrUpdateUser(
   // Store tokens in Redis
   await redis.set(`tokens:${profile.googleId}`, JSON.stringify(tokens));
 
-  return {
-    id: row.id,
-    apiKey: row.api_key,
-    email: row.email,
-    googleId: row.google_id,
-    name: row.name,
-    authMethod: row.auth_method || 'google',
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-    tokens,
-  };
+  return rowToUserRecord(row, tokens);
 }
 
 async function dbUpdateTokens(apiKey: string, tokens: Partial<UserTokens>): Promise<void> {
@@ -348,14 +264,7 @@ async function dbGetAllUsers(): Promise<UserProfile[]> {
     'SELECT id, api_key, email, google_id, name, auth_method, created_at, updated_at FROM users ORDER BY created_at DESC'
   );
   return rows.map((row: any) => ({
-    id: row.id,
-    apiKey: row.api_key,
-    email: row.email,
-    googleId: row.google_id,
-    name: row.name,
-    authMethod: row.auth_method || 'google',
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
+    ...rowToUserRecord(row),
   }));
 }
 
@@ -406,8 +315,8 @@ export async function getUserById(id: number): Promise<UserRecord | undefined> {
   if (isDatabaseAvailable()) {
     return dbGetUserById(id);
   }
-  // File-based storage doesn't have IDs
-  return undefined;
+  await fileLoadUsers();
+  return Object.values(users).find(u => u.id === id);
 }
 
 export async function createOrUpdateUser(
@@ -430,34 +339,7 @@ export async function updateTokens(apiKey: string, tokens: Partial<UserTokens>):
 // ---------- Auth0 Subject Mapping ----------
 
 async function dbGetUserByAuth0Sub(sub: string): Promise<UserRecord | undefined> {
-  const pool = getPool();
-  const redis = getRedis();
-
-  const { rows } = await pool.query(
-    'SELECT id, api_key, email, google_id, auth0_sub, name, auth_method, created_at, updated_at FROM users WHERE auth0_sub = $1',
-    [sub]
-  );
-  if (rows.length === 0) return undefined;
-
-  const row = rows[0];
-  let tokens: UserTokens | undefined;
-  if (row.google_id) {
-    const tokensJson = await redis.get(`tokens:${row.google_id}`);
-    if (tokensJson) tokens = JSON.parse(tokensJson);
-  }
-
-  return {
-    id: row.id,
-    apiKey: row.api_key,
-    email: row.email,
-    googleId: row.google_id,
-    auth0Sub: row.auth0_sub,
-    name: row.name,
-    authMethod: row.auth_method || 'google',
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-    tokens,
-  };
+  return dbGetUserBy('auth0_sub = $1', [sub]);
 }
 
 function fileGetUserByAuth0Sub(sub: string): UserRecord | undefined {
@@ -504,24 +386,14 @@ async function dbCreateUser(profile: { email: string; name: string; auth0Sub?: s
      RETURNING id, api_key, email, google_id, auth0_sub, name, auth_method, created_at, updated_at`,
     [apiKey, profile.email, profile.auth0Sub || null, profile.name]
   );
-  const row = rows[0];
-  return {
-    id: row.id,
-    apiKey: row.api_key,
-    email: row.email,
-    googleId: row.google_id,
-    auth0Sub: row.auth0_sub,
-    name: row.name,
-    authMethod: row.auth_method || 'google',
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-  };
+  return rowToUserRecord(rows[0]);
 }
 
 async function fileCreateUser(profile: { email: string; name: string; auth0Sub?: string }): Promise<UserRecord> {
   await fileLoadUsers();
   const apiKey = generateApiKey();
   const user: UserRecord = {
+    id: nextFileUserId++,
     apiKey,
     email: profile.email,
     googleId: null,
@@ -586,20 +458,10 @@ async function dbRegenerateApiKey(googleId: string): Promise<UserRecord | null> 
   );
 
   const row = rows[0];
-  const tokensJson = await redis.get(`tokens:${googleId}`);
-  if (!tokensJson) return null;
+  const tokens = await loadTokensFromRedis(googleId);
+  if (!tokens) return null;
 
-  return {
-    id: row.id,
-    apiKey: row.api_key,
-    email: row.email,
-    googleId: row.google_id,
-    name: row.name,
-    authMethod: row.auth_method || 'google',
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-    tokens: JSON.parse(tokensJson),
-  };
+  return rowToUserRecord(row, tokens);
 }
 
 export async function regenerateApiKey(googleId: string): Promise<UserRecord | null> {
