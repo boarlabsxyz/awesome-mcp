@@ -458,8 +458,7 @@ async function dbRegenerateApiKey(googleId: string): Promise<UserRecord | null> 
   );
 
   const row = rows[0];
-  const tokens = await loadTokensFromRedis(googleId);
-  if (!tokens) return null;
+  const tokens = await loadTokensFromRedis(row.google_id);
 
   return rowToUserRecord(row, tokens);
 }
