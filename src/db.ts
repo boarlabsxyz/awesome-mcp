@@ -128,6 +128,11 @@ ALTER TABLE mcp_connections
   ADD COLUMN IF NOT EXISTS provider_email VARCHAR(255);
 `;
 
+// Auth0 subject identifier for JWT-based authentication
+const ALTER_USERS_ADD_AUTH0_SUB = `
+ALTER TABLE users ADD COLUMN IF NOT EXISTS auth0_sub VARCHAR(255) UNIQUE;
+`;
+
 // Provider support: add provider, oauth URLs to mcp_catalog
 const ALTER_MCP_CATALOG_ADD_PROVIDER_COLUMNS = `
 ALTER TABLE mcp_catalog
@@ -229,6 +234,10 @@ export async function initDatabase(): Promise<void> {
     // Add unique constraint on instance_id
     await pool.query(ADD_INSTANCE_ID_UNIQUE_CONSTRAINT);
     console.error('MCP connections instance_id unique constraint ensured.');
+
+    // Auth0 subject identifier for JWT-based auth
+    await pool.query(ALTER_USERS_ADD_AUTH0_SUB);
+    console.error('Users auth0_sub column ensured.');
 
     // Provider support: add provider columns to mcp_connections
     await pool.query(ALTER_MCP_CONNECTIONS_ADD_PROVIDER_COLUMNS);
