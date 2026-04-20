@@ -8,9 +8,12 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { resourceServerMiddleware } from '../auth/resourceServerMiddleware.js';
 import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
 
-/** Register the RFC 9728 OAuth Protected Resource Metadata endpoint. */
+/** Register OAuth discovery endpoints (RFC 9728 + RFC 8414). */
 function registerResourceMetadata(app: express.Express, resource: string, scopes: string[]): void {
   const auth0Domain = process.env.AUTH0_DOMAIN || '';
+  const auth0Audience = process.env.AUTH0_AUDIENCE || '';
+
+  // RFC 9728: OAuth Protected Resource Metadata
   app.get('/.well-known/oauth-protected-resource', (_req, res) => {
     if (!auth0Domain) {
       res.status(503).json({ error: 'AUTH0_DOMAIN not configured' });
@@ -23,6 +26,37 @@ function registerResourceMetadata(app: express.Express, resource: string, scopes
       scopes_supported: scopes,
       bearer_methods_supported: ['header'],
     });
+  });
+
+  // RFC 8414: OAuth Authorization Server Metadata
+  // Claude.ai discovers this endpoint on the MCP server URL to start the OAuth flow.
+  // We proxy Auth0's metadata so Claude talks directly to Auth0 for authorize/token.
+  app.get('/.well-known/oauth-authorization-server', async (_req, res) => {
+    if (!auth0Domain) {
+      res.status(503).json({ error: 'AUTH0_DOMAIN not configured' });
+      return;
+    }
+    const issuer = auth0Domain.startsWith('https://') ? auth0Domain : `https://${auth0Domain}`;
+    try {
+      const metadataUrl = `${issuer}/.well-known/oauth-authorization-server`;
+      const response = await fetch(metadataUrl);
+      if (!response.ok) {
+        res.status(502).json({ error: 'Failed to fetch Auth0 metadata' });
+        return;
+      }
+      const metadata = await response.json() as Record<string, unknown>;
+      // Add MCP scopes to the metadata so clients know what scopes to request
+      res.json({
+        ...metadata,
+        scopes_supported: [
+          ...((metadata.scopes_supported as string[]) || []),
+          ...scopes.filter(s => !((metadata.scopes_supported as string[]) || []).includes(s)),
+        ],
+      });
+    } catch (err: any) {
+      console.error('[oauth-metadata] Failed to fetch Auth0 metadata:', err.message);
+      res.status(502).json({ error: 'Failed to fetch Auth0 metadata' });
+    }
   });
 }
 import crypto from 'crypto';
