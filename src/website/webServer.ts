@@ -36,8 +36,11 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
   app.get('/.well-known/oauth-authorization-server', async (_req, res) => {
     const issuer = auth0Issuer();
     if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return; }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
-      const response = await fetch(`${issuer}/.well-known/oauth-authorization-server`);
+      const response = await fetch(`${issuer}/.well-known/oauth-authorization-server`, { signal: controller.signal });
+      clearTimeout(timeout);
       if (!response.ok) { res.status(502).json({ error: 'Failed to fetch Auth0 metadata' }); return; }
       const metadata = await response.json() as Record<string, unknown>;
       // Rewrite endpoints to point to our proxy routes
@@ -53,17 +56,26 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
         ],
       });
     } catch (err: any) {
-      console.error('[oauth-metadata] Failed to fetch Auth0 metadata:', err.message);
+      clearTimeout(timeout);
+      const msg = err.name === 'AbortError' ? 'Auth0 metadata request timed out' : err.message;
+      console.error(`[oauth-metadata] Failed to fetch Auth0 metadata: ${msg}`);
       res.status(502).json({ error: 'Failed to fetch Auth0 metadata' });
     }
   });
 
   // --- OAuth proxy routes: forward Claude's requests to Auth0 ---
 
+  /** Guard that checks AUTH0_DOMAIN is configured, returns issuer or sends 503. */
+  function requireIssuer(res: express.Response): string | null {
+    const issuer = auth0Issuer();
+    if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return null; }
+    return issuer;
+  }
+
   // Dynamic Client Registration proxy
   app.post('/oauth/register', express.json(), async (req, res) => {
-    const issuer = auth0Issuer();
-    if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return; }
+    const issuer = requireIssuer(res);
+    if (!issuer) return;
     try {
       const response = await fetch(`${issuer}/oidc/register`, {
         method: 'POST',
@@ -74,17 +86,14 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
       res.status(response.status).json(data);
     } catch (err: any) {
       console.error('[oauth-proxy] Registration failed:', err.message);
-      res.status(502).json({ error: 'Registration proxy failed' });
+      res.status(502).json({ error: 'OAuth proxy failed' });
     }
   });
 
   // Authorization endpoint proxy (redirect to Auth0)
   app.get('/oauth/authorize', (req, res) => {
-    const issuer = auth0Issuer();
-    if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return; }
-    // Forward all query params to Auth0's authorize endpoint.
-    // Strip 'audience' — DCR-created clients are not pre-authorized for specific
-    // APIs in Auth0. The Default Audience tenant setting applies automatically.
+    const issuer = requireIssuer(res);
+    if (!issuer) return;
     const params = new URLSearchParams(req.query as Record<string, string>);
     params.delete('audience');
     // Ensure openid and email scopes are requested so /userinfo returns identity claims
@@ -98,24 +107,20 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
 
   // Token endpoint proxy — supports both JSON and form-urlencoded from clients
   app.post('/oauth/token', express.urlencoded({ extended: false }), express.json(), async (req, res) => {
-    const issuer = auth0Issuer();
-    if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return; }
+    const issuer = requireIssuer(res);
+    if (!issuer) return;
     try {
       const contentType = req.headers['content-type'] || '';
       let forwardBody: string;
       let forwardContentType: string;
 
       if (contentType.includes('application/json')) {
-        // Claude may send JSON — forward as JSON to Auth0
         forwardBody = JSON.stringify(req.body);
         forwardContentType = 'application/json';
       } else {
-        // Form-urlencoded (standard OAuth) — forward as-is
         forwardBody = new URLSearchParams(req.body).toString();
         forwardContentType = 'application/x-www-form-urlencoded';
       }
-
-      console.error(`[oauth-proxy] Token request: grant_type=${req.body?.grant_type}, has_code=${!!req.body?.code}, content-type=${contentType}`);
 
       const response = await fetch(`${issuer}/oauth/token`, {
         method: 'POST',
@@ -123,17 +128,10 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
         body: forwardBody,
       });
       const data = await response.json() as Record<string, unknown>;
-
-      if (!response.ok) {
-        console.error(`[oauth-proxy] Auth0 token error: ${response.status}`, JSON.stringify(data));
-      } else {
-        console.error(`[oauth-proxy] Token exchange successful, has access_token=${!!data.access_token}`);
-      }
-
       res.status(response.status).json(data);
     } catch (err: any) {
       console.error('[oauth-proxy] Token exchange failed:', err.message);
-      res.status(502).json({ error: 'Token proxy failed' });
+      res.status(502).json({ error: 'OAuth proxy failed' });
     }
   });
 }
@@ -228,6 +226,11 @@ export function mergeReconnectTokens(
  * Includes: auth, dashboard, connect/reconnect OAuth, API endpoints, admin, catalogs.
  */
 function registerSharedRoutes(app: express.Express): void {
+  // Serve config to frontend (BASE_URL, auth mode)
+  app.get('/api/config', (_req, res) => {
+    res.json({ baseUrl: BASE_URL, authMode: process.env.DUAL_AUTH_MODE !== 'false' ? 'dual' : 'jwt' });
+  });
+
   // Redirect to landing page on Vercel
   app.get('/', (_req, res) => {
     res.redirect('/dashboard');
@@ -1133,11 +1136,6 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
     res.status(200).json({ status: 'ok' });
   });
 
-  // Serve BASE_URL to frontend so dashboard uses the canonical domain for MCP URLs
-  app.get('/api/config', (_req, res) => {
-    res.json({ baseUrl: BASE_URL, authMode: process.env.DUAL_AUTH_MODE !== 'false' ? 'dual' : 'jwt' });
-  });
-
   // RFC 9728: OAuth Protected Resource Metadata
   registerOAuthProxy(app, BASE_URL, ALL_SCOPES);
 
@@ -1853,12 +1851,6 @@ export function createWebOnlyApp(): express.Express {
   app.get('/health', (_req, res) => {
     res.status(200).json({ status: 'ok' });
   });
-
-  // Serve BASE_URL to frontend so dashboard uses the canonical domain for MCP URLs
-  app.get('/api/config', (_req, res) => {
-    res.json({ baseUrl: BASE_URL, authMode: process.env.DUAL_AUTH_MODE !== 'false' ? 'dual' : 'jwt' });
-  });
-
 
 
   // NOTE: OAuth routes (registerOAuthRoutes) are NOT registered here.

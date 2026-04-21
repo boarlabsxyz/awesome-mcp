@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it, afterEach } from 'node:test';
-import { hasScope, validateJwt, _resetJwks } from '../../auth/jwtValidator.js';
+import { hasScope, validateJwt, validateOpaqueToken, _resetJwks } from '../../auth/jwtValidator.js';
 
 describe('jwtValidator', () => {
   const originalDomain = process.env.AUTH0_DOMAIN;
@@ -26,9 +26,20 @@ describe('jwtValidator', () => {
       assert.equal(hasScope(payload, 'mcp:sheets'), false);
     });
 
-    it('should return true for empty scope string (opaque tokens)', () => {
+    it('should return false for empty scope without isOpaque flag', () => {
       const payload = { sub: 'u1', scope: '', iss: 'iss', aud: 'aud' };
+      assert.equal(hasScope(payload, 'mcp:docs'), false);
+    });
+
+    it('should return true for opaque tokens (isOpaque flag)', () => {
+      const payload = { sub: 'u1', scope: '', iss: 'iss', aud: 'aud', isOpaque: true };
       assert.ok(hasScope(payload, 'mcp:docs'));
+    });
+
+    it('should still check scopes for JWT tokens with isOpaque=false', () => {
+      const payload = { sub: 'u1', scope: 'mcp:docs', iss: 'iss', aud: 'aud', isOpaque: false };
+      assert.ok(hasScope(payload, 'mcp:docs'));
+      assert.equal(hasScope(payload, 'mcp:sheets'), false);
     });
 
     it('should not match partial scope names', () => {
@@ -61,6 +72,17 @@ describe('jwtValidator', () => {
 
       await assert.rejects(
         () => validateJwt('eyJhbGciOiJSUzI1NiJ9.eyJ0ZXN0IjoxfQ.sig'),
+        { message: /AUTH0_DOMAIN/ }
+      );
+    });
+  });
+
+  describe('validateOpaqueToken', () => {
+    it('should throw when AUTH0_DOMAIN is not set', async () => {
+      delete process.env.AUTH0_DOMAIN;
+
+      await assert.rejects(
+        () => validateOpaqueToken('some-opaque-token'),
         { message: /AUTH0_DOMAIN/ }
       );
     });

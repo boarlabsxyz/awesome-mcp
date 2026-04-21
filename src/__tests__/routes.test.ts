@@ -19,10 +19,11 @@ describe('createWebOnlyApp routes', () => {
     assert.deepEqual(res.body, { status: 'ok' });
   });
 
-  it('GET /api/config returns baseUrl', async () => {
+  it('GET /api/config returns baseUrl and authMode', async () => {
     const res = await request(app).get('/api/config');
     assert.equal(res.status, 200);
     assert.ok(typeof res.body.baseUrl === 'string');
+    assert.ok(['dual', 'jwt'].includes(res.body.authMode));
   });
 
   // --- Redirects ---
@@ -170,10 +171,11 @@ describe('createWebApp routes', () => {
     assert.deepEqual(res.body, { status: 'ok' });
   });
 
-  it('GET /api/config returns baseUrl', async () => {
+  it('GET /api/config returns baseUrl and authMode', async () => {
     const res = await request(app).get('/api/config');
     assert.equal(res.status, 200);
     assert.ok(res.body.baseUrl);
+    assert.ok(['dual', 'jwt'].includes(res.body.authMode));
   });
 
   it('GET / redirects to /dashboard', async () => {

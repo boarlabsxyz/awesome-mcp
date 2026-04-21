@@ -9,6 +9,8 @@ export interface JwtPayload {
   email?: string;
   iss: string;
   aud: string;
+  /** True when validated via opaque /userinfo flow (no scope claims available). */
+  isOpaque?: boolean;
 }
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
@@ -108,6 +110,7 @@ export async function validateOpaqueToken(token: string): Promise<JwtPayload> {
     email: userinfo.email ? String(userinfo.email) : undefined,
     iss: base,
     aud: '',
+    isOpaque: true,
   };
 
   // Cache the result
@@ -121,8 +124,10 @@ export async function validateOpaqueToken(token: string): Promise<JwtPayload> {
 
 /** Check whether a JWT payload contains the required scope. */
 export function hasScope(payload: JwtPayload, requiredScope: string): boolean {
-  // Opaque tokens have empty scope — allow all (Auth0 already authorized the user)
-  if (!payload.scope) return true;
+  // Opaque tokens validated via /userinfo don't carry scopes — Auth0 already
+  // authorized the user during login. Only skip scope check when the token was
+  // explicitly validated via the opaque flow.
+  if (payload.isOpaque) return true;
   const scopes = payload.scope.split(' ');
   return scopes.includes(requiredScope);
 }

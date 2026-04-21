@@ -302,14 +302,7 @@ clickUpServer.addTool({
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
-    let result: any;
-    try {
-      result = await client.getTaskComments(args.taskId);
-    } catch (err: any) {
-      console.error(`[clickup] getTaskComments failed for ${args.taskId}:`, err.message);
-      throw err;
-    }
-    console.error(`[clickup] getTaskComments result keys: ${Object.keys(result || {}).join(', ')}, comments count: ${result?.comments?.length ?? 'null'}`);
+    const result = await client.getTaskComments(args.taskId);
     const comments = result?.comments || [];
     if (comments.length === 0) return 'No comments on this task.';
     return comments.map((c: any) => {

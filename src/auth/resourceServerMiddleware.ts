@@ -53,7 +53,6 @@ export function createResourceServerMiddleware(deps: MiddlewareDeps = defaultDep
     }
 
     const token = authHeader.slice(7);
-    console.error(`[oauth] Token received: isJwt=${looksLikeJwt(token)}, length=${token.length}, prefix=${token.substring(0, 15)}...`);
 
     if (looksLikeJwt(token)) {
       // Step 1: Validate token and check scopes (401 on failure)
@@ -128,8 +127,8 @@ export function createResourceServerMiddleware(deps: MiddlewareDeps = defaultDep
         });
       }
       return;
-    } catch (opaqueErr: any) {
-      console.error(`[oauth] Opaque token validation failed: ${opaqueErr.message}, token prefix: ${token.substring(0, 20)}...`);
+    } catch {
+      // Not a valid opaque token — fall through to API-key / reject
     }
 
     // API-key path (dual-mode migration)
