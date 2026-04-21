@@ -91,19 +91,40 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
     res.redirect(`${issuer}/authorize?${params.toString()}`);
   });
 
-  // Token endpoint proxy
+  // Token endpoint proxy — supports both JSON and form-urlencoded from clients
   app.post('/oauth/token', express.urlencoded({ extended: false }), express.json(), async (req, res) => {
     const issuer = auth0Issuer();
     if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return; }
     try {
-      // Forward the token request to Auth0
-      const body = typeof req.body === 'string' ? req.body : new URLSearchParams(req.body).toString();
+      const contentType = req.headers['content-type'] || '';
+      let forwardBody: string;
+      let forwardContentType: string;
+
+      if (contentType.includes('application/json')) {
+        // Claude may send JSON — forward as JSON to Auth0
+        forwardBody = JSON.stringify(req.body);
+        forwardContentType = 'application/json';
+      } else {
+        // Form-urlencoded (standard OAuth) — forward as-is
+        forwardBody = new URLSearchParams(req.body).toString();
+        forwardContentType = 'application/x-www-form-urlencoded';
+      }
+
+      console.error(`[oauth-proxy] Token request: grant_type=${req.body?.grant_type}, has_code=${!!req.body?.code}, content-type=${contentType}`);
+
       const response = await fetch(`${issuer}/oauth/token`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body,
+        headers: { 'Content-Type': forwardContentType },
+        body: forwardBody,
       });
-      const data = await response.json();
+      const data = await response.json() as Record<string, unknown>;
+
+      if (!response.ok) {
+        console.error(`[oauth-proxy] Auth0 token error: ${response.status}`, JSON.stringify(data));
+      } else {
+        console.error(`[oauth-proxy] Token exchange successful, has access_token=${!!data.access_token}`);
+      }
+
       res.status(response.status).json(data);
     } catch (err: any) {
       console.error('[oauth-proxy] Token exchange failed:', err.message);
