@@ -302,13 +302,19 @@ clickUpServer.addTool({
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
-    const result = await client.getTaskComments(args.taskId);
-    const comments = result.comments || [];
+    let result: any;
+    try {
+      result = await client.getTaskComments(args.taskId);
+    } catch (err: any) {
+      console.error(`[clickup] getTaskComments failed for ${args.taskId}:`, err.message);
+      throw err;
+    }
+    console.error(`[clickup] getTaskComments result keys: ${Object.keys(result || {}).join(', ')}, comments count: ${result?.comments?.length ?? 'null'}`);
+    const comments = result?.comments || [];
     if (comments.length === 0) return 'No comments on this task.';
     return comments.map((c: any) => {
       const author = c.user?.username || c.user?.email || 'unknown';
       const date = c.date ? new Date(parseInt(c.date)).toISOString() : 'unknown date';
-      // comment_text is plain text; comment is structured data with array of parts
       const text = c.comment_text
         || (Array.isArray(c.comment) ? c.comment.map((p: any) => p.text || '').join('') : '')
         || '[empty]';
