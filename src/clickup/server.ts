@@ -305,9 +305,15 @@ clickUpServer.addTool({
     const result = await client.getTaskComments(args.taskId);
     const comments = result.comments || [];
     if (comments.length === 0) return 'No comments on this task.';
-    return comments.map((c: any) =>
-      `Comment by ${c.user?.username || 'unknown'} (${new Date(parseInt(c.date)).toISOString()}):\n  ${c.comment_text?.substring(0, 300) || '[empty]'}`
-    ).join('\n\n');
+    return comments.map((c: any) => {
+      const author = c.user?.username || c.user?.email || 'unknown';
+      const date = c.date ? new Date(parseInt(c.date)).toISOString() : 'unknown date';
+      // comment_text is plain text; comment is structured data with array of parts
+      const text = c.comment_text
+        || (Array.isArray(c.comment) ? c.comment.map((p: any) => p.text || '').join('') : '')
+        || '[empty]';
+      return `Comment by ${author} (${date}):\n  ${text.substring(0, 300)}`;
+    }).join('\n\n');
   },
 });
 
