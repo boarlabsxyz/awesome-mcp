@@ -8,46 +8,45 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { resourceServerMiddleware } from '../auth/resourceServerMiddleware.js';
 import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
 
-/** Register OAuth discovery endpoints (RFC 9728 + RFC 8414). */
-function registerResourceMetadata(app: express.Express, resource: string, scopes: string[]): void {
-  const auth0Domain = process.env.AUTH0_DOMAIN || '';
+/** Normalize Auth0 domain to https:// URL. */
+function auth0Issuer(): string {
+  const domain = process.env.AUTH0_DOMAIN || '';
+  if (!domain) return '';
+  return domain.startsWith('https://') ? domain : `https://${domain}`;
+}
+
+/** Register OAuth discovery + proxy endpoints (RFC 9728 + RFC 8414 + /authorize, /token, /register). */
+function registerOAuthProxy(app: express.Express, resource: string, scopes: string[]): void {
   const auth0Audience = process.env.AUTH0_AUDIENCE || '';
 
   // RFC 9728: OAuth Protected Resource Metadata
   app.get('/.well-known/oauth-protected-resource', (_req, res) => {
-    if (!auth0Domain) {
-      res.status(503).json({ error: 'AUTH0_DOMAIN not configured' });
-      return;
-    }
-    const issuer = auth0Domain.startsWith('https://') ? auth0Domain : `https://${auth0Domain}`;
+    const issuer = auth0Issuer();
+    if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return; }
     res.json({
       resource,
-      authorization_servers: [issuer],
+      authorization_servers: [resource], // Point to ourselves — we proxy OAuth endpoints
       scopes_supported: scopes,
       bearer_methods_supported: ['header'],
     });
   });
 
   // RFC 8414: OAuth Authorization Server Metadata
-  // Claude.ai discovers this endpoint on the MCP server URL to start the OAuth flow.
-  // We proxy Auth0's metadata so Claude talks directly to Auth0 for authorize/token.
+  // Advertise our own URLs for authorize/token/register so Claude talks to us.
   app.get('/.well-known/oauth-authorization-server', async (_req, res) => {
-    if (!auth0Domain) {
-      res.status(503).json({ error: 'AUTH0_DOMAIN not configured' });
-      return;
-    }
-    const issuer = auth0Domain.startsWith('https://') ? auth0Domain : `https://${auth0Domain}`;
+    const issuer = auth0Issuer();
+    if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return; }
     try {
-      const metadataUrl = `${issuer}/.well-known/oauth-authorization-server`;
-      const response = await fetch(metadataUrl);
-      if (!response.ok) {
-        res.status(502).json({ error: 'Failed to fetch Auth0 metadata' });
-        return;
-      }
+      const response = await fetch(`${issuer}/.well-known/oauth-authorization-server`);
+      if (!response.ok) { res.status(502).json({ error: 'Failed to fetch Auth0 metadata' }); return; }
       const metadata = await response.json() as Record<string, unknown>;
-      // Add MCP scopes to the metadata so clients know what scopes to request
+      // Rewrite endpoints to point to our proxy routes
       res.json({
         ...metadata,
+        issuer: resource,
+        authorization_endpoint: `${resource}/oauth/authorize`,
+        token_endpoint: `${resource}/oauth/token`,
+        registration_endpoint: `${resource}/oauth/register`,
         scopes_supported: [
           ...((metadata.scopes_supported as string[]) || []),
           ...scopes.filter(s => !((metadata.scopes_supported as string[]) || []).includes(s)),
@@ -56,6 +55,59 @@ function registerResourceMetadata(app: express.Express, resource: string, scopes
     } catch (err: any) {
       console.error('[oauth-metadata] Failed to fetch Auth0 metadata:', err.message);
       res.status(502).json({ error: 'Failed to fetch Auth0 metadata' });
+    }
+  });
+
+  // --- OAuth proxy routes: forward Claude's requests to Auth0 ---
+
+  // Dynamic Client Registration proxy
+  app.post('/oauth/register', express.json(), async (req, res) => {
+    const issuer = auth0Issuer();
+    if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return; }
+    try {
+      const response = await fetch(`${issuer}/oidc/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req.body),
+      });
+      const data = await response.json();
+      res.status(response.status).json(data);
+    } catch (err: any) {
+      console.error('[oauth-proxy] Registration failed:', err.message);
+      res.status(502).json({ error: 'Registration proxy failed' });
+    }
+  });
+
+  // Authorization endpoint proxy (redirect to Auth0)
+  app.get('/oauth/authorize', (req, res) => {
+    const issuer = auth0Issuer();
+    if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return; }
+    // Forward all query params to Auth0's authorize endpoint
+    const params = new URLSearchParams(req.query as Record<string, string>);
+    // Ensure audience is set so Auth0 returns a JWT access token (not opaque)
+    if (auth0Audience && !params.has('audience')) {
+      params.set('audience', auth0Audience);
+    }
+    res.redirect(`${issuer}/authorize?${params.toString()}`);
+  });
+
+  // Token endpoint proxy
+  app.post('/oauth/token', express.urlencoded({ extended: false }), express.json(), async (req, res) => {
+    const issuer = auth0Issuer();
+    if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return; }
+    try {
+      // Forward the token request to Auth0
+      const body = typeof req.body === 'string' ? req.body : new URLSearchParams(req.body).toString();
+      const response = await fetch(`${issuer}/oauth/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+      });
+      const data = await response.json();
+      res.status(response.status).json(data);
+    } catch (err: any) {
+      console.error('[oauth-proxy] Token exchange failed:', err.message);
+      res.status(502).json({ error: 'Token proxy failed' });
     }
   });
 }
@@ -1061,7 +1113,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   });
 
   // RFC 9728: OAuth Protected Resource Metadata
-  registerResourceMetadata(app, BASE_URL, ALL_SCOPES);
+  registerOAuthProxy(app, BASE_URL, ALL_SCOPES);
 
   // Proxy MCP endpoints to internal FastMCP servers (JWT auth enforced before proxy)
   function addMcpProxy(port: number, prefix?: string) {
@@ -1817,7 +1869,7 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
   // RFC 9728: OAuth Protected Resource Metadata (scoped to this MCP service)
   const mcpSlug = process.env.MCP_SLUG || 'google-docs';
   const mcpBaseUrl = process.env.MCP_BASE_URL || BASE_URL;
-  registerResourceMetadata(app, mcpBaseUrl, getScopesForSlug(mcpSlug));
+  registerOAuthProxy(app, mcpBaseUrl, getScopesForSlug(mcpSlug));
 
   // Proxy MCP requests to internal FastMCP server (JWT auth enforced before proxy)
   app.use(['/mcp', '/sse'], resourceServerMiddleware);
