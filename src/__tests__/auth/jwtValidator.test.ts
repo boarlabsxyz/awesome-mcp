@@ -26,9 +26,9 @@ describe('jwtValidator', () => {
       assert.equal(hasScope(payload, 'mcp:sheets'), false);
     });
 
-    it('should return false for empty scope string', () => {
+    it('should return true for empty scope string (opaque tokens)', () => {
       const payload = { sub: 'u1', scope: '', iss: 'iss', aud: 'aud' };
-      assert.equal(hasScope(payload, 'mcp:docs'), false);
+      assert.ok(hasScope(payload, 'mcp:docs'));
     });
 
     it('should not match partial scope names', () => {

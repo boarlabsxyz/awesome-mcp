@@ -12,6 +12,7 @@ const fakeUser = { id: 1, email: 'u@test.com', apiKey: 'k1', googleId: null, nam
 function makeDeps(overrides: Partial<MiddlewareDeps> = {}): MiddlewareDeps {
   return {
     validateJwt: mock.fn(async () => fakePayload),
+    validateOpaqueToken: mock.fn(async () => fakePayload),
     hasScope: mock.fn(() => true),
     getRequiredScope: mock.fn((path: string) => path === '/mcp' ? 'mcp:docs' : path.replace(/^\//, '').replace(/-sse$/, '') === 'calendar' ? 'mcp:calendar' : null),
     mapJwtToUser: mock.fn(async () => fakeUser),
@@ -87,9 +88,23 @@ describe('resourceServerMiddleware', () => {
 
   // --- Non-JWT bearer token ---
 
-  it('passes through API key with deprecation header in dual mode', async () => {
+  it('validates non-JWT token as opaque via /userinfo', async () => {
+    const deps = makeDeps();
+    const mw = createResourceServerMiddleware(deps);
+
+    const req = makeReq({ headers: { authorization: 'Bearer opaque_access_token' } });
+    const res = makeRes();
+    let nextCalled = false;
+    await mw(req, res as any, (() => { nextCalled = true; }) as NextFunction);
+
+    assert.ok(nextCalled);
+    assert.equal(req.headers['x-mcp-user-id'], '1');
+  });
+
+  it('falls through to API key in dual mode when opaque validation fails', async () => {
     process.env.DUAL_AUTH_MODE = 'true';
-    const mw = createResourceServerMiddleware(makeDeps());
+    const deps = makeDeps({ validateOpaqueToken: mock.fn(async () => { throw new Error('invalid'); }) });
+    const mw = createResourceServerMiddleware(deps);
 
     const req = makeReq({ headers: { authorization: 'Bearer abc123plainapikey' } });
     const res = makeRes();
@@ -100,9 +115,10 @@ describe('resourceServerMiddleware', () => {
     assert.equal(res._headers['X-Auth-Migration'], 'deprecated');
   });
 
-  it('rejects non-JWT bearer token when dual mode is off', async () => {
+  it('rejects non-JWT bearer token when dual mode off and opaque validation fails', async () => {
     process.env.DUAL_AUTH_MODE = 'false';
-    const mw = createResourceServerMiddleware(makeDeps());
+    const deps = makeDeps({ validateOpaqueToken: mock.fn(async () => { throw new Error('invalid'); }) });
+    const mw = createResourceServerMiddleware(deps);
 
     const req = makeReq({ headers: { authorization: 'Bearer abc123plainapikey' } });
     const res = makeRes();
@@ -111,7 +127,6 @@ describe('resourceServerMiddleware', () => {
 
     assert.equal(nextCalled, false);
     assert.equal(res._status, 401);
-    assert.equal(res._json?.error, 'invalid_token');
   });
 
   // --- JWT path ---

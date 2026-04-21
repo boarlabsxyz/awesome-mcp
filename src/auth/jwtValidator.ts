@@ -64,8 +64,37 @@ export async function validateJwt(token: string): Promise<JwtPayload> {
   };
 }
 
+/**
+ * Validate an opaque (non-JWT) access token by calling Auth0's /userinfo endpoint.
+ * Used when Auth0 issues opaque tokens (e.g., for DCR clients without audience).
+ */
+export async function validateOpaqueToken(token: string): Promise<JwtPayload> {
+  const base = domainToBaseUrl(getDomain());
+  const response = await fetch(`${base}/userinfo`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Auth0 /userinfo returned ${response.status}`);
+  }
+
+  const userinfo = await response.json() as Record<string, unknown>;
+
+  if (!userinfo.sub) throw new Error('Auth0 /userinfo missing sub claim');
+
+  return {
+    sub: String(userinfo.sub),
+    scope: '', // opaque tokens don't carry scopes — skip scope checks
+    email: userinfo.email ? String(userinfo.email) : undefined,
+    iss: base,
+    aud: '',
+  };
+}
+
 /** Check whether a JWT payload contains the required scope. */
 export function hasScope(payload: JwtPayload, requiredScope: string): boolean {
+  // Opaque tokens have empty scope — allow all (Auth0 already authorized the user)
+  if (!payload.scope) return true;
   const scopes = payload.scope.split(' ');
   return scopes.includes(requiredScope);
 }
