@@ -82,11 +82,11 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
   app.get('/oauth/authorize', (req, res) => {
     const issuer = auth0Issuer();
     if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return; }
-    // Forward all query params to Auth0's authorize endpoint
+    // Forward all query params to Auth0's authorize endpoint.
+    // Strip 'audience' — DCR-created clients are not pre-authorized for specific
+    // APIs in Auth0. The Default Audience tenant setting applies automatically.
     const params = new URLSearchParams(req.query as Record<string, string>);
-    // Note: audience is set via Auth0's Default Audience tenant setting
-    // rather than injected here, because DCR-created clients are not
-    // pre-authorized for specific APIs.
+    params.delete('audience');
     res.redirect(`${issuer}/authorize?${params.toString()}`);
   });
 
