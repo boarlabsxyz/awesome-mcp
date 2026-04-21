@@ -75,12 +75,14 @@ export async function validateOpaqueToken(token: string): Promise<JwtPayload> {
   });
 
   if (!response.ok) {
-    throw new Error(`Auth0 /userinfo returned ${response.status}`);
+    const body = await response.text();
+    throw new Error(`Auth0 /userinfo returned ${response.status}: ${body}`);
   }
 
   const userinfo = await response.json() as Record<string, unknown>;
+  console.error(`[oauth] /userinfo response keys: ${Object.keys(userinfo).join(', ')}`);
 
-  if (!userinfo.sub) throw new Error('Auth0 /userinfo missing sub claim');
+  if (!userinfo.sub) throw new Error(`Auth0 /userinfo missing sub claim, got: ${JSON.stringify(userinfo)}`);
 
   return {
     sub: String(userinfo.sub),

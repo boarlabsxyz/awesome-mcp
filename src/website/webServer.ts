@@ -87,6 +87,12 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
     // APIs in Auth0. The Default Audience tenant setting applies automatically.
     const params = new URLSearchParams(req.query as Record<string, string>);
     params.delete('audience');
+    // Ensure openid and email scopes are requested so /userinfo returns identity claims
+    const scopes = (params.get('scope') || '').split(' ').filter(Boolean);
+    for (const required of ['openid', 'email']) {
+      if (!scopes.includes(required)) scopes.push(required);
+    }
+    params.set('scope', scopes.join(' '));
     res.redirect(`${issuer}/authorize?${params.toString()}`);
   });
 
