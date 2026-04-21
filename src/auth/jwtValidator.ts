@@ -64,11 +64,30 @@ export async function validateJwt(token: string): Promise<JwtPayload> {
   };
 }
 
+// Cache validated opaque tokens to avoid hitting Auth0 /userinfo on every request.
+// Key: token string, Value: { payload, expiresAt }
+const opaqueTokenCache = new Map<string, { payload: JwtPayload; expiresAt: number }>();
+const OPAQUE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/** Evict expired entries (called lazily). */
+function evictExpiredTokens(): void {
+  const now = Date.now();
+  for (const [key, entry] of opaqueTokenCache) {
+    if (entry.expiresAt <= now) opaqueTokenCache.delete(key);
+  }
+}
+
 /**
  * Validate an opaque (non-JWT) access token by calling Auth0's /userinfo endpoint.
- * Used when Auth0 issues opaque tokens (e.g., for DCR clients without audience).
+ * Results are cached to avoid Auth0 rate limits (429).
  */
 export async function validateOpaqueToken(token: string): Promise<JwtPayload> {
+  // Check cache first
+  const cached = opaqueTokenCache.get(token);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.payload;
+  }
+
   const base = domainToBaseUrl(getDomain());
   const response = await fetch(`${base}/userinfo`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -80,17 +99,24 @@ export async function validateOpaqueToken(token: string): Promise<JwtPayload> {
   }
 
   const userinfo = await response.json() as Record<string, unknown>;
-  console.error(`[oauth] /userinfo response keys: ${Object.keys(userinfo).join(', ')}`);
 
   if (!userinfo.sub) throw new Error(`Auth0 /userinfo missing sub claim, got: ${JSON.stringify(userinfo)}`);
 
-  return {
+  const payload: JwtPayload = {
     sub: String(userinfo.sub),
-    scope: '', // opaque tokens don't carry scopes — skip scope checks
+    scope: '',
     email: userinfo.email ? String(userinfo.email) : undefined,
     iss: base,
     aud: '',
   };
+
+  // Cache the result
+  opaqueTokenCache.set(token, { payload, expiresAt: Date.now() + OPAQUE_CACHE_TTL_MS });
+
+  // Lazily evict expired entries
+  if (opaqueTokenCache.size > 100) evictExpiredTokens();
+
+  return payload;
 }
 
 /** Check whether a JWT payload contains the required scope. */
