@@ -754,6 +754,8 @@
       const url = new URL(mcpFullUrl);
       if (authMode !== 'jwt') {
         url.searchParams.set('apiKey', currentUser.apiKey + '.' + instanceId);
+      } else {
+        url.searchParams.set('instanceId', instanceId);
       }
       return url.toString();
     }
