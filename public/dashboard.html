@@ -693,6 +693,7 @@
     let currentUser = null;
     let catalogs = [];
     let instances = [];
+    let authMode = 'dual'; // 'dual' = apiKey in URL, 'jwt' = bare URL (Auth0)
     let selectedMcpType = null;
 
     function showLoginOverlay() {
@@ -751,7 +752,9 @@
       }
 
       const url = new URL(mcpFullUrl);
-      url.searchParams.set('apiKey', currentUser.apiKey + '.' + instanceId);
+      if (authMode !== 'jwt') {
+        url.searchParams.set('apiKey', currentUser.apiKey + '.' + instanceId);
+      }
       return url.toString();
     }
 
@@ -1041,11 +1044,13 @@
           window.history.replaceState({}, '', '/dashboard');
         }
 
-        // Load user data and catalogs in parallel
-        const [user, catalogList] = await Promise.all([
+        // Load user data, catalogs, and config in parallel
+        const [user, catalogList, config] = await Promise.all([
           loadUserData(),
-          loadCatalogs()
+          loadCatalogs(),
+          fetch('/api/config').then(r => r.json()).catch(() => ({}))
         ]);
+        if (config.authMode) authMode = config.authMode;
 
         if (!user) return; // Redirected to login
 

@@ -1057,7 +1057,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
 
   // Serve BASE_URL to frontend so dashboard uses the canonical domain for MCP URLs
   app.get('/api/config', (_req, res) => {
-    res.json({ baseUrl: BASE_URL });
+    res.json({ baseUrl: BASE_URL, authMode: process.env.DUAL_AUTH_MODE !== 'false' ? 'dual' : 'jwt' });
   });
 
   // RFC 9728: OAuth Protected Resource Metadata
@@ -1778,7 +1778,7 @@ export function createWebOnlyApp(): express.Express {
 
   // Serve BASE_URL to frontend so dashboard uses the canonical domain for MCP URLs
   app.get('/api/config', (_req, res) => {
-    res.json({ baseUrl: BASE_URL });
+    res.json({ baseUrl: BASE_URL, authMode: process.env.DUAL_AUTH_MODE !== 'false' ? 'dual' : 'jwt' });
   });
 
 
