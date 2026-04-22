@@ -7,6 +7,9 @@ import { OAuth2Client } from 'google-auth-library';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { resourceServerMiddleware } from '../auth/resourceServerMiddleware.js';
 import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
+import { validateJwt, validateOpaqueToken } from '../auth/jwtValidator.js';
+import { mapJwtToUser } from '../auth/userMapping.js';
+import { looksLikeJwt } from '../auth/resourceServerMiddleware.js';
 
 /** Normalize Auth0 domain to https:// URL. */
 function auth0Issuer(): string {
@@ -1194,7 +1197,31 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
 
   // === REST API for ChatGPT Integration ===
 
-  // API key authentication middleware for REST endpoints
+  /**
+   * Resolve a Bearer token to a user record.
+   * Tries OAuth (JWT → opaque) first, then falls back to API key lookup.
+   */
+  async function resolveTokenToUser(token: string): Promise<UserRecord | null> {
+    // Try JWT
+    if (looksLikeJwt(token)) {
+      try {
+        const payload = await validateJwt(token);
+        return await mapJwtToUser(payload);
+      } catch { /* not a valid JWT — try next */ }
+    }
+
+    // Try opaque token (Auth0 /userinfo)
+    try {
+      const payload = await validateOpaqueToken(token);
+      return await mapJwtToUser(payload);
+    } catch { /* not a valid opaque token — try API key */ }
+
+    // Try API key
+    await loadUsers();
+    return await getUserByApiKey(token) || null;
+  }
+
+  // Auth middleware for REST endpoints — supports OAuth tokens and API keys
   async function requireApiKey(
     req: ApiAuthenticatedRequest,
     res: Response,
@@ -1202,25 +1229,23 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   ): Promise<void> {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      res.status(401).json({ error: 'Missing or invalid Authorization header. Use: Bearer <apiKey>' });
+      res.status(401).json({ error: 'Missing or invalid Authorization header. Use: Bearer <token>' });
       return;
     }
 
-    const apiKey = authHeader.substring(7); // Remove 'Bearer ' prefix
-    if (!apiKey) {
-      res.status(401).json({ error: 'API key is required' });
+    const token = authHeader.substring(7);
+    if (!token) {
+      res.status(401).json({ error: 'Token is required' });
       return;
     }
 
     try {
-      await loadUsers();
-      const user = await getUserByApiKey(apiKey);
+      const user = await resolveTokenToUser(token);
       if (!user) {
-        res.status(401).json({ error: 'Invalid API key' });
+        res.status(401).json({ error: 'Invalid token' });
         return;
       }
 
-      // Create user session with Google API clients
       const { client_id, client_secret } = await loadClientCredentials();
       const userSession = createUserSession(user, client_id, client_secret);
 
@@ -1228,14 +1253,12 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       req.userSession = userSession;
       next();
     } catch (err: any) {
-      console.error('API key auth error:', err);
+      console.error('REST API auth error:', err);
       res.status(500).json({ error: 'Authentication failed' });
     }
   }
 
-  // API key auth middleware for Calendar REST endpoints.
-  // Uses the google-calendar MCP connection tokens (which have calendar scopes)
-  // instead of the user's global tokens (which only have profile scopes).
+  // Auth middleware for Calendar REST endpoints — uses calendar MCP connection tokens
   async function requireCalendarApiKey(
     req: ApiAuthenticatedRequest,
     res: Response,
@@ -1243,21 +1266,20 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   ): Promise<void> {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      res.status(401).json({ error: 'Missing or invalid Authorization header. Use: Bearer <apiKey>' });
+      res.status(401).json({ error: 'Missing or invalid Authorization header. Use: Bearer <token>' });
       return;
     }
 
-    const apiKey = authHeader.substring(7);
-    if (!apiKey) {
-      res.status(401).json({ error: 'API key is required' });
+    const token = authHeader.substring(7);
+    if (!token) {
+      res.status(401).json({ error: 'Token is required' });
       return;
     }
 
     try {
-      await loadUsers();
-      const user = await getUserByApiKey(apiKey);
+      const user = await resolveTokenToUser(token);
       if (!user) {
-        res.status(401).json({ error: 'Invalid API key' });
+        res.status(401).json({ error: 'Invalid token' });
         return;
       }
       if (!user.id) {
@@ -1266,15 +1288,10 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       }
 
       // Try to find a google-calendar MCP connection for this user
-      // First try legacy single-instance lookup, then scan all connections
       let connection = await getMcpConnection(user.id, 'google-calendar');
       if (!connection) {
-        // Also check all connections in case the slug differs
         const allConnections = await getUserConnectedMcps(user.id);
         connection = allConnections.find(c => c.mcpSlug.includes('calendar')) || null;
-        console.error(`[CalendarAuth] user=${user.email}, getMcpConnection('google-calendar')=null, allConnections=[${allConnections.map(c => `${c.mcpSlug}:${c.instanceId}`).join(', ')}], fallback=${connection?.mcpSlug || 'none'}`);
-      } else {
-        console.error(`[CalendarAuth] user=${user.email}, found connection: slug=${connection.mcpSlug}, instance=${connection.instanceId}, hasRefreshToken=${!!connection.googleTokens?.refresh_token}`);
       }
 
       if (connection) {
@@ -1284,8 +1301,6 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
           : await loadClientCredentials();
         req.userSession = createUserSessionFromConnection(user, connection, client_id, client_secret);
       } else {
-        console.error(`[CalendarAuth] user=${user.email}, no calendar connection found, falling back to global tokens`);
-        // Fall back to global tokens (may lack calendar scopes)
         const { client_id, client_secret } = await loadClientCredentials();
         req.userSession = createUserSession(user, client_id, client_secret);
       }
@@ -1293,7 +1308,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       req.user = user;
       next();
     } catch (err: any) {
-      console.error('Calendar API key auth error:', err);
+      console.error('Calendar REST API auth error:', err);
       res.status(500).json({ error: 'Authentication failed' });
     }
   }
