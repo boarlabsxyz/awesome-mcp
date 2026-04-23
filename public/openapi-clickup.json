@@ -1,0 +1,2175 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "ClickUp MCP REST API",
+    "description": "REST API for managing ClickUp workspaces, tasks, comments, docs, and time tracking. For use with ChatGPT Custom Actions.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://your-server-url.com",
+      "description": "Production server (update with your actual URL)"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/clickup/user": {
+      "get": {
+        "operationId": "getAuthorizedUser",
+        "summary": "Get authorized user",
+        "description": "Gets information about the currently authenticated ClickUp user.",
+        "responses": {
+          "200": {
+            "description": "User retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces": {
+      "get": {
+        "operationId": "listWorkspaces",
+        "summary": "List workspaces",
+        "description": "Lists all workspaces (teams) accessible to the authenticated user.",
+        "responses": {
+          "200": {
+            "description": "Workspaces retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "workspaces": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Workspace"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces/{workspaceId}/spaces": {
+      "get": {
+        "operationId": "listSpaces",
+        "summary": "List spaces",
+        "description": "Lists all spaces in a workspace.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Spaces retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "spaces": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Space"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/spaces/{spaceId}": {
+      "post": {
+        "operationId": "createSpace",
+        "summary": "Create a space",
+        "description": "Creates a new space in the specified workspace.",
+        "parameters": [
+          {
+            "name": "spaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The space ID (used as the parent workspace context)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The name of the space"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Space created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Space"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing required fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/spaces/{spaceId}/folders": {
+      "get": {
+        "operationId": "listFolders",
+        "summary": "List folders",
+        "description": "Lists all folders in a space.",
+        "parameters": [
+          {
+            "name": "spaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The space ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Folders retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "folders": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Folder"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createFolder",
+        "summary": "Create a folder",
+        "description": "Creates a new folder in the specified space.",
+        "parameters": [
+          {
+            "name": "spaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The space ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The name of the folder"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Folder created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Folder"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing required fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/folders/{folderId}/lists": {
+      "get": {
+        "operationId": "listListsInFolder",
+        "summary": "List lists in folder",
+        "description": "Lists all lists within a folder.",
+        "parameters": [
+          {
+            "name": "folderId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The folder ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lists retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "lists": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/List"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createListInFolder",
+        "summary": "Create a list in folder",
+        "description": "Creates a new list inside a folder.",
+        "parameters": [
+          {
+            "name": "folderId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The folder ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The name of the list"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "The description content of the list"
+                  },
+                  "due_date": {
+                    "type": "string",
+                    "description": "The due date of the list in Unix time (milliseconds)"
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "description": "The priority of the list (1=urgent, 2=high, 3=normal, 4=low)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/List"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing required fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/spaces/{spaceId}/lists": {
+      "get": {
+        "operationId": "listFolderlessLists",
+        "summary": "List folderless lists",
+        "description": "Lists all lists in a space that are not inside a folder.",
+        "parameters": [
+          {
+            "name": "spaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The space ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lists retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "lists": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/List"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/lists/{listId}": {
+      "patch": {
+        "operationId": "updateList",
+        "summary": "Update a list",
+        "description": "Updates an existing list. Only provided fields are changed.",
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The list ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "New name for the list"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "New description content for the list"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/List"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteList",
+        "summary": "Delete a list",
+        "description": "Deletes a list.",
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The list ID to delete"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List deleted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/lists/{listId}/tasks": {
+      "get": {
+        "operationId": "listTasks",
+        "summary": "List tasks",
+        "description": "Lists tasks in a list with optional filtering and pagination.",
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The list ID"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0
+            },
+            "description": "Page number (starting from 0)"
+          },
+          {
+            "name": "orderBy",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Field to order results by (e.g., 'created', 'updated', 'due_date')"
+          },
+          {
+            "name": "statuses",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated list of statuses to filter by"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tasks retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tasks": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Task"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createTask",
+        "summary": "Create a task",
+        "description": "Creates a new task in the specified list.",
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The list ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The name of the task"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "The description of the task"
+                  },
+                  "assignees": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    },
+                    "description": "Array of user IDs to assign to the task"
+                  },
+                  "status": {
+                    "type": "string",
+                    "description": "The status of the task"
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "description": "The priority of the task (1=urgent, 2=high, 3=normal, 4=low)"
+                  },
+                  "due_date": {
+                    "type": "string",
+                    "description": "The due date in Unix time (milliseconds)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Task created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing required fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/tasks/{taskId}": {
+      "get": {
+        "operationId": "getTask",
+        "summary": "Get a task",
+        "description": "Gets detailed information about a specific task.",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The task ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateTask",
+        "summary": "Update a task",
+        "description": "Updates an existing task. Only provided fields are changed.",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The task ID to update"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "New name for the task"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "New description for the task"
+                  },
+                  "status": {
+                    "type": "string",
+                    "description": "New status for the task"
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "description": "New priority (1=urgent, 2=high, 3=normal, 4=low)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Task updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteTask",
+        "summary": "Delete a task",
+        "description": "Deletes a task.",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The task ID to delete"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task deleted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/tasks/{taskId}/move": {
+      "post": {
+        "operationId": "moveTask",
+        "summary": "Move a task",
+        "description": "Moves a task to a different list.",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The task ID to move"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["listId"],
+                "properties": {
+                  "listId": {
+                    "type": "string",
+                    "description": "The destination list ID"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Task moved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing required fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/tasks/{taskId}/members": {
+      "get": {
+        "operationId": "getTaskMembers",
+        "summary": "Get task members",
+        "description": "Gets the members assigned to a specific task.",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The task ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Members retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "members": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Member"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces/{workspaceId}/tasks/search": {
+      "get": {
+        "operationId": "searchTasks",
+        "summary": "Search tasks",
+        "description": "Searches for tasks across a workspace.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace ID"
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Search query string"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0
+            },
+            "description": "Page number (starting from 0)"
+          },
+          {
+            "name": "custom_fields",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON-encoded custom field filters"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tasks": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Task"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/tasks/{taskId}/comments": {
+      "get": {
+        "operationId": "getTaskComments",
+        "summary": "Get task comments",
+        "description": "Gets all comments on a task.",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The task ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Comments retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "comments": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Comment"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "addTaskComment",
+        "summary": "Add a comment to a task",
+        "description": "Adds a new comment to a task.",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The task ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["comment_text"],
+                "properties": {
+                  "comment_text": {
+                    "type": "string",
+                    "description": "The text content of the comment"
+                  },
+                  "assignee": {
+                    "type": "integer",
+                    "description": "User ID to assign in the comment"
+                  },
+                  "notify_all": {
+                    "type": "boolean",
+                    "description": "Whether to notify all assignees",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Comment added successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Comment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing required fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces/{workspaceId}/docs": {
+      "get": {
+        "operationId": "listDocs",
+        "summary": "List docs",
+        "description": "Lists all docs in a workspace.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Docs retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "docs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Doc"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces/{workspaceId}/docs/search": {
+      "get": {
+        "operationId": "searchDocs",
+        "summary": "Search docs",
+        "description": "Searches for docs in a workspace.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace ID"
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Search query string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "docs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Doc"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces/{workspaceId}/time": {
+      "get": {
+        "operationId": "getTimeEntries",
+        "summary": "Get time entries",
+        "description": "Gets time tracking entries for a workspace within a date range.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace ID"
+          },
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Start date in Unix time (milliseconds)"
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "End date in Unix time (milliseconds)"
+          },
+          {
+            "name": "assignee",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "User ID to filter time entries by"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Time entries retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/TimeEntry"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces/{workspaceId}/time/start": {
+      "post": {
+        "operationId": "startTimeEntry",
+        "summary": "Start time tracking",
+        "description": "Starts a new time tracking entry.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["tid"],
+                "properties": {
+                  "tid": {
+                    "type": "string",
+                    "description": "The task ID to track time for"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Description of the time entry"
+                  },
+                  "billable": {
+                    "type": "boolean",
+                    "description": "Whether the time entry is billable",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Time tracking started successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeEntry"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing required fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces/{workspaceId}/time/stop": {
+      "post": {
+        "operationId": "stopTimeEntry",
+        "summary": "Stop time tracking",
+        "description": "Stops the currently running time tracking entry.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Time tracking stopped successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeEntry"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key obtained from the registration dashboard"
+      }
+    },
+    "schemas": {
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "The user's ID"
+          },
+          "username": {
+            "type": "string",
+            "description": "The user's username"
+          },
+          "email": {
+            "type": "string",
+            "description": "The user's email address"
+          },
+          "color": {
+            "type": "string",
+            "nullable": true,
+            "description": "The user's profile color"
+          },
+          "profilePicture": {
+            "type": "string",
+            "nullable": true,
+            "description": "URL of the user's profile picture"
+          }
+        }
+      },
+      "Workspace": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The workspace ID"
+          },
+          "name": {
+            "type": "string",
+            "description": "The workspace name"
+          },
+          "color": {
+            "type": "string",
+            "nullable": true,
+            "description": "The workspace color"
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Member"
+            },
+            "description": "Members in the workspace"
+          }
+        }
+      },
+      "Space": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The space ID"
+          },
+          "name": {
+            "type": "string",
+            "description": "The space name"
+          },
+          "private": {
+            "type": "boolean",
+            "description": "Whether the space is private"
+          },
+          "statuses": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Available statuses in the space"
+          }
+        }
+      },
+      "Folder": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The folder ID"
+          },
+          "name": {
+            "type": "string",
+            "description": "The folder name"
+          },
+          "hidden": {
+            "type": "boolean",
+            "description": "Whether the folder is hidden"
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/List"
+            },
+            "description": "Lists inside the folder"
+          }
+        }
+      },
+      "List": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The list ID"
+          },
+          "name": {
+            "type": "string",
+            "description": "The list name"
+          },
+          "content": {
+            "type": "string",
+            "nullable": true,
+            "description": "The list description"
+          },
+          "status": {
+            "type": "object",
+            "nullable": true,
+            "description": "The list status"
+          },
+          "task_count": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Number of tasks in the list"
+          }
+        }
+      },
+      "Task": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The task ID"
+          },
+          "name": {
+            "type": "string",
+            "description": "The task name"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "description": "The task description"
+          },
+          "status": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string"
+              },
+              "color": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "description": "The task status"
+          },
+          "priority": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "string"
+              },
+              "color": {
+                "type": "string"
+              }
+            },
+            "description": "The task priority"
+          },
+          "assignees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Member"
+            },
+            "description": "Users assigned to the task"
+          },
+          "due_date": {
+            "type": "string",
+            "nullable": true,
+            "description": "The due date in Unix time (milliseconds)"
+          },
+          "url": {
+            "type": "string",
+            "nullable": true,
+            "description": "URL to the task in ClickUp"
+          },
+          "list": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "description": "The list the task belongs to"
+          },
+          "date_created": {
+            "type": "string",
+            "nullable": true,
+            "description": "Creation date in Unix time (milliseconds)"
+          },
+          "date_updated": {
+            "type": "string",
+            "nullable": true,
+            "description": "Last update date in Unix time (milliseconds)"
+          }
+        }
+      },
+      "Member": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "The member's user ID"
+          },
+          "username": {
+            "type": "string",
+            "description": "The member's username"
+          },
+          "email": {
+            "type": "string",
+            "description": "The member's email address"
+          },
+          "profilePicture": {
+            "type": "string",
+            "nullable": true,
+            "description": "URL of the member's profile picture"
+          }
+        }
+      },
+      "Comment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The comment ID"
+          },
+          "comment_text": {
+            "type": "string",
+            "description": "The text content of the comment"
+          },
+          "user": {
+            "$ref": "#/components/schemas/Member",
+            "description": "The user who posted the comment"
+          },
+          "date": {
+            "type": "string",
+            "description": "The date the comment was created in Unix time (milliseconds)"
+          }
+        }
+      },
+      "Doc": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The doc ID"
+          },
+          "name": {
+            "type": "string",
+            "description": "The doc name"
+          },
+          "workspace_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "The workspace the doc belongs to"
+          },
+          "date_created": {
+            "type": "string",
+            "nullable": true,
+            "description": "Creation date in Unix time (milliseconds)"
+          }
+        }
+      },
+      "TimeEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The time entry ID"
+          },
+          "task": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "description": "The task associated with this time entry"
+          },
+          "user": {
+            "$ref": "#/components/schemas/Member",
+            "description": "The user who tracked the time"
+          },
+          "billable": {
+            "type": "boolean",
+            "description": "Whether the time entry is billable"
+          },
+          "start": {
+            "type": "string",
+            "description": "Start time in Unix time (milliseconds)"
+          },
+          "end": {
+            "type": "string",
+            "nullable": true,
+            "description": "End time in Unix time (milliseconds)"
+          },
+          "duration": {
+            "type": "string",
+            "nullable": true,
+            "description": "Duration in milliseconds"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "description": "Description of the time entry"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Error message"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,490 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Google Drive MCP REST API",
+    "description": "REST API for managing Google Drive files and folders. For use with ChatGPT Custom Actions.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://your-server-url.com",
+      "description": "Production server (update with your actual URL)"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/drive/files/{fileId}": {
+      "get": {
+        "operationId": "getFileInfo",
+        "summary": "Get file info",
+        "description": "Gets metadata for a specific file in Google Drive.",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The file ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File info retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/File"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteFile",
+        "summary": "Delete a file",
+        "description": "Deletes a file from Google Drive. By default moves to trash unless permanent is true.",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The file ID to delete"
+          },
+          {
+            "name": "permanent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Whether to permanently delete the file instead of moving to trash"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File deleted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/drive/files/{fileId}/copy": {
+      "post": {
+        "operationId": "copyFile",
+        "summary": "Copy a file",
+        "description": "Creates a copy of a file in Google Drive.",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The file ID to copy"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "newName": {
+                    "type": "string",
+                    "description": "Name for the copied file. Defaults to 'Copy of <original name>'."
+                  },
+                  "parentFolderId": {
+                    "type": "string",
+                    "description": "Folder ID to place the copy in. Defaults to the same folder as the original."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File copied successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/File"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/drive/folders/{folderId}/contents": {
+      "get": {
+        "operationId": "listFolderContents",
+        "summary": "List folder contents",
+        "description": "Lists files and subfolders within a specified folder.",
+        "parameters": [
+          {
+            "name": "folderId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The folder ID (use 'root' for the root folder)"
+          },
+          {
+            "name": "maxResults",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "description": "Maximum number of items to return"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Folder contents retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "folderId": {
+                      "type": "string"
+                    },
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/File"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Folder not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/drive/folders": {
+      "post": {
+        "operationId": "createFolder",
+        "summary": "Create a folder",
+        "description": "Creates a new folder in Google Drive.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Name of the new folder"
+                  },
+                  "parentFolderId": {
+                    "type": "string",
+                    "description": "Parent folder ID. Defaults to the root folder."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Folder created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/File"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing required fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key obtained from the registration dashboard"
+      }
+    },
+    "schemas": {
+      "File": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the file"
+          },
+          "name": {
+            "type": "string",
+            "description": "Name of the file"
+          },
+          "mimeType": {
+            "type": "string",
+            "description": "MIME type of the file"
+          },
+          "size": {
+            "type": "string",
+            "nullable": true,
+            "description": "Size of the file in bytes"
+          },
+          "createdTime": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the file was created"
+          },
+          "modifiedTime": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the file was last modified"
+          },
+          "parents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "description": "IDs of parent folders"
+          },
+          "webViewLink": {
+            "type": "string",
+            "nullable": true,
+            "description": "Link to open the file in a browser"
+          },
+          "owners": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "description": "Email addresses of file owners"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Error message"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,686 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Google Gmail MCP REST API",
+    "description": "REST API for managing Gmail messages and drafts. For use with ChatGPT Custom Actions.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://your-server-url.com",
+      "description": "Production server (update with your actual URL)"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/gmail/messages": {
+      "get": {
+        "operationId": "searchEmails",
+        "summary": "Search emails",
+        "description": "Searches for emails matching the specified query using Gmail search syntax.",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Gmail search query (e.g., 'from:user@example.com', 'subject:meeting', 'is:unread')"
+          },
+          {
+            "name": "maxResults",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 1,
+              "maximum": 500
+            },
+            "description": "Maximum number of messages to return"
+          },
+          {
+            "name": "pageToken",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Token for retrieving the next page of results"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Messages retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MessageSummary"
+                      }
+                    },
+                    "nextPageToken": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Token for the next page of results"
+                    },
+                    "resultSizeEstimate": {
+                      "type": "integer",
+                      "description": "Estimated total number of results"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/messages/{messageId}": {
+      "get": {
+        "operationId": "readEmail",
+        "summary": "Read an email",
+        "description": "Gets the full content of a specific email message.",
+        "parameters": [
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The message ID"
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["full", "metadata", "minimal"],
+              "default": "full"
+            },
+            "description": "The format to return the message in"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Message retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "modifyLabels",
+        "summary": "Modify email labels",
+        "description": "Adds or removes labels from a message (e.g., mark as read, archive, star).",
+        "parameters": [
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The message ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "addLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Label IDs to add (e.g., 'STARRED', 'IMPORTANT', 'UNREAD')"
+                  },
+                  "removeLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Label IDs to remove (e.g., 'UNREAD', 'INBOX')"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Labels modified successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "trashEmail",
+        "summary": "Trash an email",
+        "description": "Moves an email message to the trash.",
+        "parameters": [
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The message ID to trash"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Message trashed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/messages/send": {
+      "post": {
+        "operationId": "sendEmail",
+        "summary": "Send an email",
+        "description": "Sends a new email message.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["to", "subject", "body"],
+                "properties": {
+                  "to": {
+                    "type": "string",
+                    "description": "Recipient email address(es), comma-separated for multiple"
+                  },
+                  "subject": {
+                    "type": "string",
+                    "description": "Email subject line"
+                  },
+                  "body": {
+                    "type": "string",
+                    "description": "Email body content"
+                  },
+                  "cc": {
+                    "type": "string",
+                    "description": "CC recipient email address(es), comma-separated for multiple"
+                  },
+                  "bcc": {
+                    "type": "string",
+                    "description": "BCC recipient email address(es), comma-separated for multiple"
+                  },
+                  "isHtml": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Whether the body content is HTML"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Email sent successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "ID of the sent message"
+                    },
+                    "threadId": {
+                      "type": "string",
+                      "description": "Thread ID of the sent message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing required fields or invalid email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/drafts": {
+      "post": {
+        "operationId": "createDraft",
+        "summary": "Create a draft email",
+        "description": "Creates a new draft email message.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["to", "subject", "body"],
+                "properties": {
+                  "to": {
+                    "type": "string",
+                    "description": "Recipient email address(es), comma-separated for multiple"
+                  },
+                  "subject": {
+                    "type": "string",
+                    "description": "Email subject line"
+                  },
+                  "body": {
+                    "type": "string",
+                    "description": "Email body content"
+                  },
+                  "cc": {
+                    "type": "string",
+                    "description": "CC recipient email address(es), comma-separated for multiple"
+                  },
+                  "bcc": {
+                    "type": "string",
+                    "description": "BCC recipient email address(es), comma-separated for multiple"
+                  },
+                  "isHtml": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Whether the body content is HTML"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Draft created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "ID of the created draft"
+                    },
+                    "messageId": {
+                      "type": "string",
+                      "description": "ID of the draft message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing required fields or invalid email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key obtained from the registration dashboard"
+      }
+    },
+    "schemas": {
+      "MessageSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the message"
+          },
+          "threadId": {
+            "type": "string",
+            "description": "Thread ID the message belongs to"
+          },
+          "subject": {
+            "type": "string",
+            "description": "Email subject line"
+          },
+          "from": {
+            "type": "string",
+            "description": "Sender email address"
+          },
+          "date": {
+            "type": "string",
+            "description": "Date the message was sent"
+          },
+          "snippet": {
+            "type": "string",
+            "description": "Short snippet of the message body"
+          },
+          "labelIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Labels applied to the message"
+          }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the message"
+          },
+          "threadId": {
+            "type": "string",
+            "description": "Thread ID the message belongs to"
+          },
+          "subject": {
+            "type": "string",
+            "description": "Email subject line"
+          },
+          "from": {
+            "type": "string",
+            "description": "Sender email address"
+          },
+          "to": {
+            "type": "string",
+            "description": "Recipient email address(es)"
+          },
+          "cc": {
+            "type": "string",
+            "nullable": true,
+            "description": "CC recipient email address(es)"
+          },
+          "bcc": {
+            "type": "string",
+            "nullable": true,
+            "description": "BCC recipient email address(es)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Date the message was sent"
+          },
+          "body": {
+            "type": "string",
+            "description": "Full message body content"
+          },
+          "snippet": {
+            "type": "string",
+            "description": "Short snippet of the message body"
+          },
+          "labelIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Labels applied to the message"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            },
+            "nullable": true,
+            "description": "List of message attachments"
+          }
+        }
+      },
+      "Attachment": {
+        "type": "object",
+        "properties": {
+          "filename": {
+            "type": "string",
+            "description": "Name of the attachment file"
+          },
+          "mimeType": {
+            "type": "string",
+            "description": "MIME type of the attachment"
+          },
+          "size": {
+            "type": "integer",
+            "description": "Size of the attachment in bytes"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Error message"
+          }
+        }
+      }
+    }
+  }
+}
