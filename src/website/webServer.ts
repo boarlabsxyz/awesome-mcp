@@ -58,11 +58,8 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
           ...scopes.filter(s => !((metadata.scopes_supported as string[]) || []).includes(s)),
         ],
       };
-      // If a static client is configured, remove registration_endpoint
-      // so clients use the static client_id instead of DCR
-      if (process.env.AUTH0_CLIENT_ID) {
-        delete asMeta.registration_endpoint;
-      }
+      // registration_endpoint always points to our proxy, which returns
+      // the static client_id (if AUTH0_CLIENT_ID is set) or proxies to Auth0 DCR
       res.json(asMeta);
     } catch (err: any) {
       clearTimeout(timeout);
