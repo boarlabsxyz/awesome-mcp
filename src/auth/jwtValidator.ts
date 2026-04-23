@@ -91,24 +91,33 @@ export async function validateOpaqueToken(token: string): Promise<JwtPayload> {
   }
 
   const base = domainToBaseUrl(getDomain());
-  const response = await fetch(`${base}/userinfo`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5_000);
+  let response: Response;
+  try {
+    response = await fetch(`${base}/userinfo`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    clearTimeout(timeout);
+    throw new Error(err.name === 'AbortError' ? 'Auth0 /userinfo request timed out' : err.message);
+  }
+  clearTimeout(timeout);
 
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Auth0 /userinfo returned ${response.status}: ${body}`);
+    throw new Error(`Auth0 /userinfo returned ${response.status}`);
   }
 
   const userinfo = await response.json() as Record<string, unknown>;
 
-  if (!userinfo.sub) throw new Error(`Auth0 /userinfo missing sub claim, got: ${JSON.stringify(userinfo)}`);
+  if (!userinfo.sub) throw new Error('Auth0 /userinfo response missing sub claim');
 
   const payload: JwtPayload = {
     sub: String(userinfo.sub),
     scope: '',
     email: userinfo.email ? String(userinfo.email) : undefined,
-    iss: base,
+    iss: getIssuer(),
     aud: '',
     isOpaque: true,
   };
