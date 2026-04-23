@@ -120,9 +120,9 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
     if (!issuer) return;
     const params = new URLSearchParams(req.query as Record<string, string>);
     params.delete('audience');
-    // Force login screen so users can pick the correct Google account
+    // Force account selection so users can pick the correct Google account
     // (prevents Auth0 from reusing an SSO session with the wrong account)
-    if (!params.has('prompt')) params.set('prompt', 'login');
+    if (!params.has('prompt')) params.set('prompt', 'select_account');
     // Ensure openid and email scopes are requested so /userinfo returns identity claims
     const scopes = (params.get('scope') || '').split(' ').filter(Boolean);
     for (const required of ['openid', 'email']) {
