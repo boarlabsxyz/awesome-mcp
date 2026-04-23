@@ -119,18 +119,14 @@ describe('authenticateRequest', () => {
     }
   });
 
-  it('throws 403 when user does not own instance', async () => {
+  it('allows access to instance owned by different user (instanceId is the secret)', async () => {
     const deps = makeDeps({
       getUserByApiKey: mock.fn(async (key: string) => key === 'validkey' ? fakeUser : null),
       getMcpConnectionByInstanceId: mock.fn(async () => ({ ...fakeConnection, userId: 'other-user' })),
     });
-    try {
-      await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.inst1' }), 'google-docs', deps);
-      assert.fail('expected throw');
-    } catch (e: any) {
-      assert.equal(e.status, 403);
-      assert.ok(e.statusText.includes('do not have access'));
-    }
+    // Should succeed — instanceId proves access, not userId ownership
+    const session = await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.inst1' }), 'google-docs', deps);
+    assert.ok(session);
   });
 
   it('uses catalog credentials when available for instance flow', async () => {

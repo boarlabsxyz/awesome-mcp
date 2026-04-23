@@ -54,9 +54,9 @@ async function resolveSession(user: any, mcpSlug: string, instanceId: string | u
     if (!connection) {
       throw new Response(null, { status: 404, statusText: `Instance not found: ${instanceId}` } as any);
     }
-    if (connection.userId !== user.id) {
-      throw new Response(null, { status: 403, statusText: 'You do not have access to this instance.' } as any);
-    }
+    // instanceId is a random secret (nanoid) — knowing it proves access to
+    // this connection. Skip userId ownership check to support multi-account
+    // setups where Auth0 identity differs from the dashboard account.
     return sessionFromConnection(user, connection, deps);
   }
 

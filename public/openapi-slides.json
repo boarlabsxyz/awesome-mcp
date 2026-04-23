@@ -1,0 +1,414 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Google Slides MCP REST API",
+    "description": "REST API for managing Google Slides presentations. For use with ChatGPT Custom Actions.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://your-server-url.com",
+      "description": "Production server (update with your actual URL)"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/slides": {
+      "post": {
+        "operationId": "createPresentation",
+        "summary": "Create a new presentation",
+        "description": "Creates a new Google Slides presentation with the specified title.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["title"],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "description": "The title of the new presentation"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Presentation created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Presentation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing required fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/slides/{presentationId}": {
+      "get": {
+        "operationId": "getPresentation",
+        "summary": "Get a presentation",
+        "description": "Gets detailed information about a Google Slides presentation, including its slides.",
+        "parameters": [
+          {
+            "name": "presentationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The ID of the presentation to retrieve"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Presentation retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Presentation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Presentation not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/slides/{presentationId}/pages/{pageObjectId}": {
+      "get": {
+        "operationId": "getPage",
+        "summary": "Get page details",
+        "description": "Gets detailed information about a specific page (slide) in a presentation.",
+        "parameters": [
+          {
+            "name": "presentationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The ID of the presentation"
+          },
+          {
+            "name": "pageObjectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The object ID of the page (slide) to retrieve"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Page not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/slides/{presentationId}/batchUpdate": {
+      "post": {
+        "operationId": "batchUpdatePresentation",
+        "summary": "Batch update a presentation",
+        "description": "Applies one or more updates to a presentation. Each request is validated before being applied. If any request is not valid, the entire request will fail.",
+        "parameters": [
+          {
+            "name": "presentationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The ID of the presentation to update"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["requests"],
+                "properties": {
+                  "requests": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "A single update request (e.g., createSlide, insertText, deleteObject, replaceAllText)"
+                    },
+                    "description": "A list of updates to apply to the presentation"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Batch update applied successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "presentationId": {
+                      "type": "string",
+                      "description": "The ID of the updated presentation"
+                    },
+                    "replies": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "The reply of each request in the same order"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid update requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key obtained from the registration dashboard"
+      }
+    },
+    "schemas": {
+      "Presentation": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the presentation"
+          },
+          "title": {
+            "type": "string",
+            "description": "The title of the presentation"
+          },
+          "slides": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Page"
+            },
+            "description": "The slides in the presentation"
+          },
+          "locale": {
+            "type": "string",
+            "nullable": true,
+            "description": "The locale of the presentation"
+          },
+          "revisionId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The revision ID of the presentation"
+          }
+        }
+      },
+      "Page": {
+        "type": "object",
+        "properties": {
+          "objectId": {
+            "type": "string",
+            "description": "The object ID of the page"
+          },
+          "pageType": {
+            "type": "string",
+            "description": "The type of the page (SLIDE, MASTER, LAYOUT)"
+          },
+          "pageElements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PageElement"
+            },
+            "description": "The page elements on this page"
+          }
+        }
+      },
+      "PageElement": {
+        "type": "object",
+        "properties": {
+          "objectId": {
+            "type": "string",
+            "description": "The object ID of the page element"
+          },
+          "size": {
+            "type": "object",
+            "nullable": true,
+            "description": "The size of the page element"
+          },
+          "transform": {
+            "type": "object",
+            "nullable": true,
+            "description": "The transform of the page element"
+          },
+          "shape": {
+            "type": "object",
+            "nullable": true,
+            "description": "A shape page element"
+          },
+          "image": {
+            "type": "object",
+            "nullable": true,
+            "description": "An image page element"
+          },
+          "table": {
+            "type": "object",
+            "nullable": true,
+            "description": "A table page element"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Error message"
+          }
+        }
+      }
+    }
+  }
+}

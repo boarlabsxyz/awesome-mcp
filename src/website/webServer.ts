@@ -7,22 +7,164 @@ import { OAuth2Client } from 'google-auth-library';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { resourceServerMiddleware } from '../auth/resourceServerMiddleware.js';
 import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
+import { validateJwt, validateOpaqueToken } from '../auth/jwtValidator.js';
+import { mapJwtToUser } from '../auth/userMapping.js';
+import { looksLikeJwt } from '../auth/resourceServerMiddleware.js';
 
-/** Register the RFC 9728 OAuth Protected Resource Metadata endpoint. */
-function registerResourceMetadata(app: express.Express, resource: string, scopes: string[]): void {
-  const auth0Domain = process.env.AUTH0_DOMAIN || '';
+/** Normalize Auth0 domain to https:// URL. */
+function auth0Issuer(): string {
+  const domain = process.env.AUTH0_DOMAIN || '';
+  if (!domain) return '';
+  return domain.startsWith('https://') ? domain : `https://${domain}`;
+}
+
+/** Register OAuth discovery + proxy endpoints (RFC 9728 + RFC 8414 + /authorize, /token, /register). */
+function registerOAuthProxy(app: express.Express, resource: string, scopes: string[]): void {
+  const auth0Audience = process.env.AUTH0_AUDIENCE || '';
+
+  // RFC 9728: OAuth Protected Resource Metadata
   app.get('/.well-known/oauth-protected-resource', (_req, res) => {
-    if (!auth0Domain) {
-      res.status(503).json({ error: 'AUTH0_DOMAIN not configured' });
-      return;
-    }
-    const issuer = auth0Domain.startsWith('https://') ? auth0Domain : `https://${auth0Domain}`;
+    const issuer = auth0Issuer();
+    if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return; }
     res.json({
       resource,
-      authorization_servers: [issuer],
+      authorization_servers: [resource], // Point to ourselves — we proxy OAuth endpoints
       scopes_supported: scopes,
       bearer_methods_supported: ['header'],
     });
+  });
+
+  // RFC 8414: OAuth Authorization Server Metadata
+  // Advertise our own URLs for authorize/token/register so Claude talks to us.
+  app.get('/.well-known/oauth-authorization-server', async (_req, res) => {
+    const issuer = auth0Issuer();
+    if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return; }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await fetch(`${issuer}/.well-known/oauth-authorization-server`, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!response.ok) { res.status(502).json({ error: 'Failed to fetch Auth0 metadata' }); return; }
+      const metadata = await response.json() as Record<string, unknown>;
+      // Rewrite endpoints to point to our proxy routes
+      const asMeta: Record<string, unknown> = {
+        ...metadata,
+        issuer: resource,
+        authorization_endpoint: `${resource}/oauth/authorize`,
+        token_endpoint: `${resource}/oauth/token`,
+        registration_endpoint: `${resource}/oauth/register`,
+        scopes_supported: [
+          ...((metadata.scopes_supported as string[]) || []),
+          ...scopes.filter(s => !((metadata.scopes_supported as string[]) || []).includes(s)),
+        ],
+      };
+      // registration_endpoint always points to our proxy, which returns
+      // the static client_id (if AUTH0_CLIENT_ID is set) or proxies to Auth0 DCR
+      res.json(asMeta);
+    } catch (err: any) {
+      clearTimeout(timeout);
+      const msg = err.name === 'AbortError' ? 'Auth0 metadata request timed out' : err.message;
+      console.error(`[oauth-metadata] Failed to fetch Auth0 metadata: ${msg}`);
+      res.status(502).json({ error: 'Failed to fetch Auth0 metadata' });
+    }
+  });
+
+  // --- OAuth proxy routes: forward Claude's requests to Auth0 ---
+
+  /** Guard that checks AUTH0_DOMAIN is configured, returns issuer or sends 503. */
+  function requireIssuer(res: express.Response): string | null {
+    const issuer = auth0Issuer();
+    if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return null; }
+    return issuer;
+  }
+
+  // Client Registration — returns static client or proxies to Auth0 DCR
+  app.post('/oauth/register', express.json(), async (req, res) => {
+    // If a static client is configured, return it directly (no DCR needed)
+    const staticClientId = process.env.AUTH0_CLIENT_ID;
+    if (staticClientId) {
+      res.status(200).json({
+        client_id: staticClientId,
+        client_name: req.body?.client_name || 'MCP Client',
+        redirect_uris: req.body?.redirect_uris || [],
+        token_endpoint_auth_method: 'none',
+      });
+      return;
+    }
+
+    // Fallback: proxy to Auth0 DCR
+    const issuer = requireIssuer(res);
+    if (!issuer) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await fetch(`${issuer}/oidc/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req.body),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      const data = await response.json();
+      res.status(response.status).json(data);
+    } catch (err: any) {
+      clearTimeout(timeout);
+      console.error('[oauth-proxy] Registration failed:', err.message);
+      res.status(502).json({ error: 'OAuth proxy failed' });
+    }
+  });
+
+  // Authorization endpoint proxy (redirect to Auth0)
+  app.get('/oauth/authorize', (req, res) => {
+    const issuer = requireIssuer(res);
+    if (!issuer) return;
+    const params = new URLSearchParams(req.query as Record<string, string>);
+    params.delete('audience');
+    // Force re-authentication so Auth0 doesn't reuse its SSO session.
+    // Combined with upstream_params.prompt=select_account on the Google connection,
+    // this ensures Google shows the account picker every time.
+    if (!params.has('prompt')) params.set('prompt', 'login');
+    // Ensure openid and email scopes are requested so /userinfo returns identity claims
+    const scopes = (params.get('scope') || '').split(' ').filter(Boolean);
+    for (const required of ['openid', 'email']) {
+      if (!scopes.includes(required)) scopes.push(required);
+    }
+    params.set('scope', scopes.join(' '));
+    res.redirect(`${issuer}/authorize?${params.toString()}`);
+  });
+
+  // Token endpoint proxy — supports both JSON and form-urlencoded from clients
+  app.post('/oauth/token', express.urlencoded({ extended: false }), express.json(), async (req, res) => {
+    const issuer = requireIssuer(res);
+    if (!issuer) return;
+    try {
+      const contentType = req.headers['content-type'] || '';
+      let forwardBody: string;
+      let forwardContentType: string;
+
+      if (contentType.includes('application/json')) {
+        forwardBody = JSON.stringify(req.body);
+        forwardContentType = 'application/json';
+      } else {
+        forwardBody = new URLSearchParams(req.body).toString();
+        forwardContentType = 'application/x-www-form-urlencoded';
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
+      const response = await fetch(`${issuer}/oauth/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': forwardContentType },
+        body: forwardBody,
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      const data = await response.json() as Record<string, unknown>;
+      res.status(response.status).json(data);
+    } catch (err: any) {
+      console.error('[oauth-proxy] Token exchange failed:', err.message);
+      res.status(502).json({ error: 'OAuth proxy failed' });
+    }
   });
 }
 import crypto from 'crypto';
@@ -116,6 +258,11 @@ export function mergeReconnectTokens(
  * Includes: auth, dashboard, connect/reconnect OAuth, API endpoints, admin, catalogs.
  */
 function registerSharedRoutes(app: express.Express): void {
+  // Serve config to frontend (BASE_URL, auth mode)
+  app.get('/api/config', (_req, res) => {
+    res.json({ baseUrl: BASE_URL, authMode: process.env.DUAL_AUTH_MODE !== 'false' ? 'dual' : 'jwt' });
+  });
+
   // Redirect to landing page on Vercel
   app.get('/', (_req, res) => {
     res.redirect('/dashboard');
@@ -1021,13 +1168,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
     res.status(200).json({ status: 'ok' });
   });
 
-  // Serve BASE_URL to frontend so dashboard uses the canonical domain for MCP URLs
-  app.get('/api/config', (_req, res) => {
-    res.json({ baseUrl: BASE_URL });
-  });
-
   // RFC 9728: OAuth Protected Resource Metadata
-  registerResourceMetadata(app, BASE_URL, ALL_SCOPES);
+  registerOAuthProxy(app, BASE_URL, ALL_SCOPES);
 
   // Proxy MCP endpoints to internal FastMCP servers (JWT auth enforced before proxy)
   function addMcpProxy(port: number, prefix?: string) {
@@ -1084,119 +1226,101 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
 
   // === REST API for ChatGPT Integration ===
 
-  // API key authentication middleware for REST endpoints
-  async function requireApiKey(
-    req: ApiAuthenticatedRequest,
-    res: Response,
-    next: NextFunction
-  ): Promise<void> {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      res.status(401).json({ error: 'Missing or invalid Authorization header. Use: Bearer <apiKey>' });
-      return;
+  /**
+   * Resolve a Bearer token to a user record.
+   * Tries JWT → API key (cheap local lookup) → opaque token (Auth0 /userinfo).
+   */
+  async function resolveTokenToUser(token: string): Promise<UserRecord | null> {
+    // Try JWT
+    if (looksLikeJwt(token)) {
+      try {
+        const payload = await validateJwt(token);
+        return await mapJwtToUser(payload);
+      } catch { /* not a valid JWT — try next */ }
     }
 
-    const apiKey = authHeader.substring(7); // Remove 'Bearer ' prefix
-    if (!apiKey) {
-      res.status(401).json({ error: 'API key is required' });
-      return;
-    }
+    // Try API key (cheap local lookup before hitting Auth0)
+    await loadUsers();
+    const apiKeyUser = await getUserByApiKey(token);
+    if (apiKeyUser) return apiKeyUser;
 
+    // Try opaque token (Auth0 /userinfo — last resort, network call)
     try {
-      await loadUsers();
-      const user = await getUserByApiKey(apiKey);
-      if (!user) {
-        res.status(401).json({ error: 'Invalid API key' });
-        return;
-      }
+      const payload = await validateOpaqueToken(token);
+      return await mapJwtToUser(payload);
+    } catch { /* not a valid opaque token either */ }
 
-      // Create user session with Google API clients
-      const { client_id, client_secret } = await loadClientCredentials();
-      const userSession = createUserSession(user, client_id, client_secret);
-
-      req.user = user;
-      req.userSession = userSession;
-      next();
-    } catch (err: any) {
-      console.error('API key auth error:', err);
-      res.status(500).json({ error: 'Authentication failed' });
-    }
+    return null;
   }
 
-  // API key auth middleware for Calendar REST endpoints.
-  // Uses the google-calendar MCP connection tokens (which have calendar scopes)
-  // instead of the user's global tokens (which only have profile scopes).
-  async function requireCalendarApiKey(
-    req: ApiAuthenticatedRequest,
-    res: Response,
-    next: NextFunction
-  ): Promise<void> {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      res.status(401).json({ error: 'Missing or invalid Authorization header. Use: Bearer <apiKey>' });
-      return;
-    }
-
-    const apiKey = authHeader.substring(7);
-    if (!apiKey) {
-      res.status(401).json({ error: 'API key is required' });
-      return;
-    }
-
-    try {
-      await loadUsers();
-      const user = await getUserByApiKey(apiKey);
-      if (!user) {
-        res.status(401).json({ error: 'Invalid API key' });
+  /**
+   * Factory for service-specific REST auth middleware.
+   * Resolves token → user → finds MCP connection for the service → creates session.
+   */
+  function createServiceAuth(primarySlug: string, fallbackSubstring: string) {
+    return async (req: ApiAuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        res.status(401).json({ error: 'Missing or invalid Authorization header. Use: Bearer <token>' });
         return;
       }
-      if (!user.id) {
-        res.status(403).json({ error: 'User ID not found. Please re-register.' });
-        return;
-      }
+      const token = authHeader.substring(7);
+      if (!token) { res.status(401).json({ error: 'Token is required' }); return; }
 
-      // Try to find a google-calendar MCP connection for this user
-      // First try legacy single-instance lookup, then scan all connections
-      let connection = await getMcpConnection(user.id, 'google-calendar');
-      if (!connection) {
-        // Also check all connections in case the slug differs
-        const allConnections = await getUserConnectedMcps(user.id);
-        connection = allConnections.find(c => c.mcpSlug.includes('calendar')) || null;
-        console.error(`[CalendarAuth] user=${user.email}, getMcpConnection('google-calendar')=null, allConnections=[${allConnections.map(c => `${c.mcpSlug}:${c.instanceId}`).join(', ')}], fallback=${connection?.mcpSlug || 'none'}`);
-      } else {
-        console.error(`[CalendarAuth] user=${user.email}, found connection: slug=${connection.mcpSlug}, instance=${connection.instanceId}, hasRefreshToken=${!!connection.googleTokens?.refresh_token}`);
-      }
+      try {
+        const user = await resolveTokenToUser(token);
+        if (!user) { res.status(401).json({ error: 'Invalid token' }); return; }
+        if (!user.id) { res.status(403).json({ error: 'User ID not found.' }); return; }
 
-      if (connection) {
-        const mcp = await getMcpCatalog(connection.mcpSlug);
-        const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
-          ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }
-          : await loadClientCredentials();
-        req.userSession = createUserSessionFromConnection(user, connection, client_id, client_secret);
-      } else {
-        console.error(`[CalendarAuth] user=${user.email}, no calendar connection found, falling back to global tokens`);
-        // Fall back to global tokens (may lack calendar scopes)
-        const { client_id, client_secret } = await loadClientCredentials();
-        req.userSession = createUserSession(user, client_id, client_secret);
-      }
+        // Find service-specific MCP connection for proper OAuth tokens
+        let connection = await getMcpConnection(user.id, primarySlug);
+        if (!connection) {
+          const allConnections = await getUserConnectedMcps(user.id);
+          connection = allConnections.find(c => c.mcpSlug.includes(fallbackSubstring)) || null;
+        }
 
-      req.user = user;
-      next();
-    } catch (err: any) {
-      console.error('Calendar API key auth error:', err);
-      res.status(500).json({ error: 'Authentication failed' });
-    }
+        if (connection) {
+          if (connection.provider === 'clickup') {
+            // ClickUp uses its own session with clickUpAccessToken
+            const { createClickUpSession } = await import('../userSession.js');
+            req.userSession = createClickUpSession(user, connection);
+          } else {
+            const mcp = await getMcpCatalog(connection.mcpSlug);
+            const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
+              ? { client_id: mcp.googleClientId, client_secret: mcp.googleClientSecret }
+              : await loadClientCredentials();
+            req.userSession = createUserSessionFromConnection(user, connection, client_id, client_secret);
+          }
+        } else {
+          const { client_id, client_secret } = await loadClientCredentials();
+          req.userSession = createUserSession(user, client_id, client_secret);
+        }
+
+        req.user = user;
+        next();
+      } catch (err: any) {
+        console.error(`[${primarySlug}] REST API auth error:`, err.message);
+        res.status(500).json({ error: 'Authentication failed' });
+      }
+    };
   }
+
+  const requireApiKey = createServiceAuth('google-docs', 'docs');
+  const requireCalendarApiKey = createServiceAuth('google-calendar', 'calendar');
+  const requireSheetsApiKey = createServiceAuth('google-sheets', 'sheets');
+  const requireDriveApiKey = createServiceAuth('google-drive', 'drive');
+  const requireGmailApiKey = createServiceAuth('google-gmail', 'gmail');
+  const requireSlidesApiKey = createServiceAuth('google-slides', 'slides');
+  const requireClickUpApiKey = createServiceAuth('clickup', 'clickup');
 
   // JSON body parser already added above for auth routes
 
   // Serve OpenAPI specs
-  app.get('/openapi.json', (_req, res) => {
-    res.sendFile(path.join(publicDir, 'openapi.json'));
-  });
-  app.get('/openapi-calendar.json', (_req, res) => {
-    res.sendFile(path.join(publicDir, 'openapi-calendar.json'));
-  });
+  for (const spec of ['openapi', 'openapi-calendar', 'openapi-sheets', 'openapi-drive', 'openapi-gmail', 'openapi-slides', 'openapi-clickup']) {
+    app.get(`/${spec}.json`, (_req, res) => {
+      res.sendFile(path.join(publicDir, `${spec}.json`));
+    });
+  }
 
   // POST /api/v1/docs/read - Read a Google Doc
   app.post('/api/v1/docs/read', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
@@ -1700,6 +1824,677 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
     }
   });
 
+  // === Google Sheets REST API ===
+
+  // GET /api/v1/sheets - List spreadsheets
+  app.get('/api/v1/sheets', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const maxResults = parseInt(req.query.maxResults as string) || 20;
+      const query = req.query.query as string || '';
+      const q = query
+        ? `mimeType='application/vnd.google-apps.spreadsheet' and name contains '${query.replace(/'/g, "\\'")}'`
+        : "mimeType='application/vnd.google-apps.spreadsheet'";
+      const result = await drive.files.list({
+        q, pageSize: maxResults, orderBy: 'modifiedTime desc',
+        fields: 'files(id,name,modifiedTime,owners,webViewLink)',
+        supportsAllDrives: true, includeItemsFromAllDrives: true,
+      });
+      res.json({ spreadsheets: result.data.files || [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to list spreadsheets' });
+    }
+  });
+
+  // GET /api/v1/sheets/:spreadsheetId - Get spreadsheet info
+  app.get('/api/v1/sheets/:spreadsheetId', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const sheets = req.userSession!.googleSheets;
+      const result = await sheets.spreadsheets.get({
+        spreadsheetId: req.params.spreadsheetId as string, includeGridData: false,
+      });
+      res.json(result.data);
+    } catch (err: any) {
+      res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to get spreadsheet' });
+    }
+  });
+
+  // POST /api/v1/sheets/:spreadsheetId/read - Read a range
+  app.post('/api/v1/sheets/:spreadsheetId/read', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { range } = req.body;
+      if (!range) { res.status(400).json({ error: 'range is required' }); return; }
+      const sheets = req.userSession!.googleSheets;
+      const result = await sheets.spreadsheets.values.get({
+        spreadsheetId: req.params.spreadsheetId as string, range,
+      });
+      res.json({ range: result.data.range, values: result.data.values || [] });
+    } catch (err: any) {
+      res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to read range' });
+    }
+  });
+
+  // POST /api/v1/sheets/:spreadsheetId/write - Write to a range
+  app.post('/api/v1/sheets/:spreadsheetId/write', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { range, values, valueInputOption = 'USER_ENTERED' } = req.body;
+      if (!range || !values) { res.status(400).json({ error: 'range and values are required' }); return; }
+      const sheets = req.userSession!.googleSheets;
+      const result = await sheets.spreadsheets.values.update({
+        spreadsheetId: req.params.spreadsheetId as string, range,
+        valueInputOption,
+        requestBody: { values },
+      });
+      res.json({ updatedCells: result.data.updatedCells, updatedRows: result.data.updatedRows, updatedRange: result.data.updatedRange });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to write to range' });
+    }
+  });
+
+  // POST /api/v1/sheets/:spreadsheetId/append - Append rows
+  app.post('/api/v1/sheets/:spreadsheetId/append', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { range, values, valueInputOption = 'USER_ENTERED' } = req.body;
+      if (!range || !values) { res.status(400).json({ error: 'range and values are required' }); return; }
+      const sheets = req.userSession!.googleSheets;
+      const result = await sheets.spreadsheets.values.append({
+        spreadsheetId: req.params.spreadsheetId as string, range,
+        valueInputOption, insertDataOption: 'INSERT_ROWS',
+        requestBody: { values },
+      });
+      res.json({ updates: result.data.updates });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to append rows' });
+    }
+  });
+
+  // === Google Drive REST API ===
+
+  // GET /api/v1/drive/files/:fileId - Get file info
+  app.get('/api/v1/drive/files/:fileId', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const result = await drive.files.get({
+        fileId: req.params.fileId as string, supportsAllDrives: true,
+        fields: 'id,name,mimeType,description,size,createdTime,modifiedTime,owners,shared,parents,webViewLink,driveId',
+      });
+      res.json(result.data);
+    } catch (err: any) {
+      res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to get file info' });
+    }
+  });
+
+  // GET /api/v1/drive/folders/:folderId/contents - List folder contents
+  app.get('/api/v1/drive/folders/:folderId/contents', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const maxResults = parseInt(req.query.maxResults as string) || 50;
+      const q = `'${req.params.folderId}' in parents and trashed = false`;
+      const result = await drive.files.list({
+        q, pageSize: maxResults, orderBy: 'folder,name',
+        fields: 'files(id,name,mimeType,size,modifiedTime,owners)',
+        supportsAllDrives: true, includeItemsFromAllDrives: true,
+      });
+      res.json({ items: result.data.files || [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to list folder contents' });
+    }
+  });
+
+  // POST /api/v1/drive/folders - Create folder
+  app.post('/api/v1/drive/folders', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { name, parentFolderId } = req.body;
+      if (!name) { res.status(400).json({ error: 'name is required' }); return; }
+      const drive = req.userSession!.googleDrive;
+      const result = await drive.files.create({
+        requestBody: {
+          name, mimeType: 'application/vnd.google-apps.folder',
+          parents: parentFolderId ? [parentFolderId] : undefined,
+        },
+        supportsAllDrives: true,
+        fields: 'id,name,parents,webViewLink',
+      });
+      res.json(result.data);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to create folder' });
+    }
+  });
+
+  // POST /api/v1/drive/files/:fileId/copy - Copy a file
+  app.post('/api/v1/drive/files/:fileId/copy', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { newName, parentFolderId } = req.body;
+      const drive = req.userSession!.googleDrive;
+      const result = await drive.files.copy({
+        fileId: req.params.fileId as string,
+        requestBody: {
+          name: newName || undefined,
+          parents: parentFolderId ? [parentFolderId] : undefined,
+        },
+        supportsAllDrives: true,
+        fields: 'id,name,webViewLink',
+      });
+      res.json(result.data);
+    } catch (err: any) {
+      res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to copy file' });
+    }
+  });
+
+  // DELETE /api/v1/drive/files/:fileId - Delete file
+  app.delete('/api/v1/drive/files/:fileId', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const permanent = req.query.permanent === 'true';
+      if (permanent) {
+        await drive.files.delete({ fileId: req.params.fileId as string, supportsAllDrives: true });
+      } else {
+        await drive.files.update({ fileId: req.params.fileId as string, requestBody: { trashed: true }, supportsAllDrives: true });
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to delete file' });
+    }
+  });
+
+  // === Google Gmail REST API ===
+
+  // GET /api/v1/gmail/messages - Search emails
+  app.get('/api/v1/gmail/messages', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const gmail = req.userSession!.googleGmail;
+      const query = req.query.query as string || '';
+      const maxResults = parseInt(req.query.maxResults as string) || 10;
+      const pageToken = req.query.pageToken as string || undefined;
+      const listResult = await gmail.users.messages.list({
+        userId: 'me', q: query, maxResults, pageToken,
+      });
+      const messages = [];
+      for (const msg of listResult.data.messages || []) {
+        const detail = await gmail.users.messages.get({ userId: 'me', id: msg.id!, format: 'metadata', metadataHeaders: ['Subject', 'From', 'To', 'Date'] });
+        const headers = detail.data.payload?.headers || [];
+        messages.push({
+          id: msg.id, threadId: msg.threadId,
+          subject: headers.find(h => h.name === 'Subject')?.value,
+          from: headers.find(h => h.name === 'From')?.value,
+          to: headers.find(h => h.name === 'To')?.value,
+          date: headers.find(h => h.name === 'Date')?.value,
+          labelIds: detail.data.labelIds,
+          snippet: detail.data.snippet,
+        });
+      }
+      res.json({ messages, nextPageToken: listResult.data.nextPageToken });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to search emails' });
+    }
+  });
+
+  // GET /api/v1/gmail/messages/:messageId - Read email
+  app.get('/api/v1/gmail/messages/:messageId', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const gmail = req.userSession!.googleGmail;
+      const format = (req.query.format as string) || 'full';
+      const result = await gmail.users.messages.get({
+        userId: 'me', id: req.params.messageId as string, format: format as 'full' | 'metadata' | 'minimal',
+      });
+      res.json(result.data);
+    } catch (err: any) {
+      res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to read email' });
+    }
+  });
+
+  // POST /api/v1/gmail/messages/send - Send email
+  app.post('/api/v1/gmail/messages/send', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { to, subject, body, cc, bcc, isHtml } = req.body;
+      if (!to || !subject || !body) { res.status(400).json({ error: 'to, subject, and body are required' }); return; }
+      const gmail = req.userSession!.googleGmail;
+      const mimeLines = [
+        `To: ${to}`, `Subject: ${subject}`,
+        ...(cc ? [`Cc: ${cc}`] : []),
+        ...(bcc ? [`Bcc: ${bcc}`] : []),
+        `Content-Type: ${isHtml ? 'text/html' : 'text/plain'}; charset=utf-8`,
+        '', body,
+      ];
+      const raw = Buffer.from(mimeLines.join('\r\n')).toString('base64url');
+      const result = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+      res.json({ id: result.data.id, threadId: result.data.threadId });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to send email' });
+    }
+  });
+
+  // POST /api/v1/gmail/drafts - Create draft
+  app.post('/api/v1/gmail/drafts', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { to, subject, body, cc, bcc, isHtml } = req.body;
+      if (!to || !subject || !body) { res.status(400).json({ error: 'to, subject, and body are required' }); return; }
+      const gmail = req.userSession!.googleGmail;
+      const mimeLines = [
+        `To: ${to}`, `Subject: ${subject}`,
+        ...(cc ? [`Cc: ${cc}`] : []),
+        ...(bcc ? [`Bcc: ${bcc}`] : []),
+        `Content-Type: ${isHtml ? 'text/html' : 'text/plain'}; charset=utf-8`,
+        '', body,
+      ];
+      const raw = Buffer.from(mimeLines.join('\r\n')).toString('base64url');
+      const result = await gmail.users.drafts.create({ userId: 'me', requestBody: { message: { raw } } });
+      res.json({ id: result.data.id, messageId: result.data.message?.id });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to create draft' });
+    }
+  });
+
+  // PATCH /api/v1/gmail/messages/:messageId - Modify labels
+  app.patch('/api/v1/gmail/messages/:messageId', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { addLabelIds, removeLabelIds } = req.body;
+      const gmail = req.userSession!.googleGmail;
+      const result = await gmail.users.messages.modify({
+        userId: 'me', id: req.params.messageId as string,
+        requestBody: { addLabelIds, removeLabelIds },
+      });
+      res.json({ id: result.data.id, labelIds: result.data.labelIds });
+    } catch (err: any) {
+      res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to modify email' });
+    }
+  });
+
+  // DELETE /api/v1/gmail/messages/:messageId - Trash email
+  app.delete('/api/v1/gmail/messages/:messageId', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const gmail = req.userSession!.googleGmail;
+      await gmail.users.messages.trash({ userId: 'me', id: req.params.messageId as string });
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to trash email' });
+    }
+  });
+
+  // === Google Slides REST API ===
+
+  // POST /api/v1/slides - Create presentation
+  app.post('/api/v1/slides', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { title } = req.body;
+      if (!title) { res.status(400).json({ error: 'title is required' }); return; }
+      const slides = req.userSession!.googleSlides;
+      const result = await slides.presentations.create({ requestBody: { title } });
+      res.json({ presentationId: result.data.presentationId, title: result.data.title });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to create presentation' });
+    }
+  });
+
+  // GET /api/v1/slides/:presentationId - Get presentation
+  app.get('/api/v1/slides/:presentationId', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const slides = req.userSession!.googleSlides;
+      const result = await slides.presentations.get({ presentationId: req.params.presentationId as string });
+      res.json(result.data);
+    } catch (err: any) {
+      res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to get presentation' });
+    }
+  });
+
+  // GET /api/v1/slides/:presentationId/pages/:pageObjectId - Get page details
+  app.get('/api/v1/slides/:presentationId/pages/:pageObjectId', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const slides = req.userSession!.googleSlides;
+      const result = await slides.presentations.pages.get({
+        presentationId: req.params.presentationId as string,
+        pageObjectId: req.params.pageObjectId as string,
+      });
+      res.json(result.data);
+    } catch (err: any) {
+      res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to get page' });
+    }
+  });
+
+  // POST /api/v1/slides/:presentationId/batchUpdate - Batch update
+  app.post('/api/v1/slides/:presentationId/batchUpdate', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { requests } = req.body;
+      if (!requests || !Array.isArray(requests)) { res.status(400).json({ error: 'requests array is required' }); return; }
+      const slides = req.userSession!.googleSlides;
+      const result = await slides.presentations.batchUpdate({
+        presentationId: req.params.presentationId as string,
+        requestBody: { requests },
+      });
+      res.json({ replies: result.data.replies });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to batch update presentation' });
+    }
+  });
+
+  // === ClickUp REST API ===
+
+  // GET /api/v1/clickup/user - Get authorized user
+  app.get('/api/v1/clickup/user', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.getAuthorizedUser();
+      res.json(result.user);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to get user' });
+    }
+  });
+
+  // GET /api/v1/clickup/workspaces - List workspaces
+  app.get('/api/v1/clickup/workspaces', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.getWorkspaces();
+      res.json({ teams: result.teams || [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to list workspaces' });
+    }
+  });
+
+  // GET /api/v1/clickup/workspaces/:workspaceId/spaces - List spaces
+  app.get('/api/v1/clickup/workspaces/:workspaceId/spaces', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.getSpaces(req.params.workspaceId as string);
+      res.json({ spaces: result.spaces || [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to list spaces' });
+    }
+  });
+
+  // POST /api/v1/clickup/spaces/:spaceId - Create space
+  app.post('/api/v1/clickup/spaces/:spaceId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.createSpace(req.params.spaceId as string, req.body);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to create space' });
+    }
+  });
+
+  // GET /api/v1/clickup/spaces/:spaceId/folders - List folders
+  app.get('/api/v1/clickup/spaces/:spaceId/folders', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.getFolders(req.params.spaceId as string);
+      res.json({ folders: result.folders || [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to list folders' });
+    }
+  });
+
+  // POST /api/v1/clickup/spaces/:spaceId/folders - Create folder
+  app.post('/api/v1/clickup/spaces/:spaceId/folders', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.createFolder(req.params.spaceId as string, req.body);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to create folder' });
+    }
+  });
+
+  // GET /api/v1/clickup/folders/:folderId/lists - List lists in folder
+  app.get('/api/v1/clickup/folders/:folderId/lists', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.getListsInFolder(req.params.folderId as string);
+      res.json({ lists: result.lists || [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to list lists' });
+    }
+  });
+
+  // GET /api/v1/clickup/spaces/:spaceId/lists - List lists in space (folderless)
+  app.get('/api/v1/clickup/spaces/:spaceId/lists', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.getFolderlessLists(req.params.spaceId as string);
+      res.json({ lists: result.lists || [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to list lists' });
+    }
+  });
+
+  // POST /api/v1/clickup/folders/:folderId/lists - Create list in folder
+  app.post('/api/v1/clickup/folders/:folderId/lists', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.createList(req.params.folderId as string, req.body);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to create list' });
+    }
+  });
+
+  // PATCH /api/v1/clickup/lists/:listId - Update list
+  app.patch('/api/v1/clickup/lists/:listId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.updateList(req.params.listId as string, req.body);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to update list' });
+    }
+  });
+
+  // DELETE /api/v1/clickup/lists/:listId - Delete list
+  app.delete('/api/v1/clickup/lists/:listId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      await client.deleteList(req.params.listId as string);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to delete list' });
+    }
+  });
+
+  // GET /api/v1/clickup/lists/:listId/tasks - List tasks
+  app.get('/api/v1/clickup/lists/:listId/tasks', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const params: any = {};
+      if (req.query.page) params.page = parseInt(req.query.page as string);
+      if (req.query.orderBy) params.order_by = req.query.orderBy;
+      if (req.query.statuses) params.statuses = Array.isArray(req.query.statuses) ? req.query.statuses : [req.query.statuses];
+      const result = await client.getTasks(req.params.listId as string, params);
+      res.json({ tasks: result.tasks || [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to list tasks' });
+    }
+  });
+
+  // GET /api/v1/clickup/tasks/:taskId - Get task
+  app.get('/api/v1/clickup/tasks/:taskId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.getTask(req.params.taskId as string);
+      res.json(result);
+    } catch (err: any) {
+      res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to get task' });
+    }
+  });
+
+  // POST /api/v1/clickup/lists/:listId/tasks - Create task
+  app.post('/api/v1/clickup/lists/:listId/tasks', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.createTask(req.params.listId as string, req.body);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to create task' });
+    }
+  });
+
+  // PATCH /api/v1/clickup/tasks/:taskId - Update task
+  app.patch('/api/v1/clickup/tasks/:taskId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.updateTask(req.params.taskId as string, req.body);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to update task' });
+    }
+  });
+
+  // DELETE /api/v1/clickup/tasks/:taskId - Delete task
+  app.delete('/api/v1/clickup/tasks/:taskId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      await client.deleteTask(req.params.taskId as string);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to delete task' });
+    }
+  });
+
+  // POST /api/v1/clickup/tasks/:taskId/move - Move task
+  app.post('/api/v1/clickup/tasks/:taskId/move', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { listId } = req.body;
+      if (!listId) { res.status(400).json({ error: 'listId is required' }); return; }
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.moveTask(req.params.taskId as string, listId);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to move task' });
+    }
+  });
+
+  // GET /api/v1/clickup/tasks/:taskId/members - Get task members
+  app.get('/api/v1/clickup/tasks/:taskId/members', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.getTaskMembers(req.params.taskId as string);
+      res.json({ members: result.members || [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to get task members' });
+    }
+  });
+
+  // GET /api/v1/clickup/workspaces/:workspaceId/tasks/search - Search tasks
+  app.get('/api/v1/clickup/workspaces/:workspaceId/tasks/search', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const query = req.query.query as string || '';
+      const page = req.query.page ? parseInt(req.query.page as string) : undefined;
+      const customFields = req.query.custom_fields ? JSON.parse(req.query.custom_fields as string) : undefined;
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.searchTasks(req.params.workspaceId as string, query, page, customFields);
+      res.json({ tasks: result.tasks || [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to search tasks' });
+    }
+  });
+
+  // GET /api/v1/clickup/tasks/:taskId/comments - Get comments
+  app.get('/api/v1/clickup/tasks/:taskId/comments', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.getTaskComments(req.params.taskId as string);
+      res.json({ comments: result.comments || [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to get comments' });
+    }
+  });
+
+  // POST /api/v1/clickup/tasks/:taskId/comments - Add comment
+  app.post('/api/v1/clickup/tasks/:taskId/comments', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.addTaskComment(req.params.taskId as string, req.body);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to add comment' });
+    }
+  });
+
+  // GET /api/v1/clickup/workspaces/:workspaceId/docs - List docs
+  app.get('/api/v1/clickup/workspaces/:workspaceId/docs', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.listDocs(req.params.workspaceId as string);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to list docs' });
+    }
+  });
+
+  // GET /api/v1/clickup/workspaces/:workspaceId/docs/search - Search docs
+  app.get('/api/v1/clickup/workspaces/:workspaceId/docs/search', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const query = req.query.query as string || '';
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.searchDocs(req.params.workspaceId as string, query);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to search docs' });
+    }
+  });
+
+  // GET /api/v1/clickup/workspaces/:workspaceId/time - Get time entries
+  app.get('/api/v1/clickup/workspaces/:workspaceId/time', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const params: any = {};
+      if (req.query.start_date) params.start_date = req.query.start_date;
+      if (req.query.end_date) params.end_date = req.query.end_date;
+      if (req.query.assignee) params.assignee = req.query.assignee;
+      const result = await client.getTimeEntries(req.params.workspaceId as string, params);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to get time entries' });
+    }
+  });
+
+  // POST /api/v1/clickup/workspaces/:workspaceId/time/start - Start time entry
+  app.post('/api/v1/clickup/workspaces/:workspaceId/time/start', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.startTimeEntry(req.params.workspaceId as string, req.body);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to start time entry' });
+    }
+  });
+
+  // POST /api/v1/clickup/workspaces/:workspaceId/time/stop - Stop time entry
+  app.post('/api/v1/clickup/workspaces/:workspaceId/time/stop', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.stopTimeEntry(req.params.workspaceId as string);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to stop time entry' });
+    }
+  });
+
   return app;
 }
 
@@ -1742,12 +2537,6 @@ export function createWebOnlyApp(): express.Express {
     res.status(200).json({ status: 'ok' });
   });
 
-  // Serve BASE_URL to frontend so dashboard uses the canonical domain for MCP URLs
-  app.get('/api/config', (_req, res) => {
-    res.json({ baseUrl: BASE_URL });
-  });
-
-
 
   // NOTE: OAuth routes (registerOAuthRoutes) are NOT registered here.
   // In multi-service mode, MCP URLs include apiKey directly (from dashboard).
@@ -1783,7 +2572,7 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
   // RFC 9728: OAuth Protected Resource Metadata (scoped to this MCP service)
   const mcpSlug = process.env.MCP_SLUG || 'google-docs';
   const mcpBaseUrl = process.env.MCP_BASE_URL || BASE_URL;
-  registerResourceMetadata(app, mcpBaseUrl, getScopesForSlug(mcpSlug));
+  registerOAuthProxy(app, mcpBaseUrl, getScopesForSlug(mcpSlug));
 
   // Proxy MCP requests to internal FastMCP server (JWT auth enforced before proxy)
   app.use(['/mcp', '/sse'], resourceServerMiddleware);

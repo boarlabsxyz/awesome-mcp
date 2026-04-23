@@ -2,7 +2,7 @@
 // Express middleware that enforces OAuth 2.1 JWT auth on MCP proxy routes.
 
 import type { Request, Response, NextFunction } from 'express';
-import { validateJwt, hasScope, type JwtPayload } from './jwtValidator.js';
+import { validateJwt, validateOpaqueToken, hasScope, type JwtPayload } from './jwtValidator.js';
 import { getRequiredScope } from './scopeMap.js';
 import { mapJwtToUser } from './userMapping.js';
 import type { UserRecord } from '../userStore.js';
@@ -10,12 +10,13 @@ import type { UserRecord } from '../userStore.js';
 /** Dependencies for the middleware, injectable for testing. */
 export interface MiddlewareDeps {
   validateJwt: (token: string) => Promise<JwtPayload>;
+  validateOpaqueToken: (token: string) => Promise<JwtPayload>;
   hasScope: (payload: JwtPayload, scope: string) => boolean;
   getRequiredScope: (path: string) => string | null;
   mapJwtToUser: (payload: JwtPayload) => Promise<UserRecord>;
 }
 
-const defaultDeps: MiddlewareDeps = { validateJwt, hasScope, getRequiredScope, mapJwtToUser };
+const defaultDeps: MiddlewareDeps = { validateJwt, validateOpaqueToken, hasScope, getRequiredScope, mapJwtToUser };
 
 /** Detect whether a bearer token is a JWT (vs an API key). */
 export function looksLikeJwt(token: string): boolean {
@@ -96,6 +97,46 @@ export function createResourceServerMiddleware(deps: MiddlewareDeps = defaultDep
       return;
     }
 
+    // --- Opaque token path (Auth0 JWE/opaque tokens) ---
+    // Auth0 opaque tokens start with "eyJ" (JWE) and are 400+ chars.
+    // Plain API keys are hex strings (64 chars) or compound (apiKey.instanceId).
+    // Only probe /userinfo for tokens that look like Auth0 tokens.
+    const looksLikeAuth0Token = token.startsWith('eyJ') && token.length > 200;
+
+    if (looksLikeAuth0Token) {
+      try {
+        const payload = await deps.validateOpaqueToken(token);
+
+        const requiredScope = deps.getRequiredScope(req.path);
+        if (requiredScope && !deps.hasScope(payload, requiredScope)) {
+          res.status(403).json({
+            error: 'insufficient_scope',
+            message: `This endpoint requires the "${requiredScope}" scope.`,
+            required_scope: requiredScope,
+          });
+          return;
+        }
+
+        try {
+          const user = await deps.mapJwtToUser(payload);
+          req.headers['x-mcp-user-id'] = String(user.id);
+          req.headers['x-mcp-user-sub'] = payload.sub;
+          if (user.email) req.headers['x-mcp-user-email'] = user.email;
+          next();
+        } catch (err: any) {
+          console.error('[oauth] User mapping failed:', err.message);
+          res.status(503).json({
+            error: 'user_mapping_error',
+            message: 'Failed to resolve user identity. Please try again.',
+          });
+        }
+        return;
+      } catch (err: any) {
+        console.warn('[oauth] Opaque token validation failed:', err.message);
+        // Fall through to API-key / reject
+      }
+    }
+
     // API-key path (dual-mode migration)
     if (dualAuthMode) {
       console.warn(`[auth-migration] API key auth via Bearer header (deprecated) from ${req.ip}`);
@@ -104,10 +145,10 @@ export function createResourceServerMiddleware(deps: MiddlewareDeps = defaultDep
       return;
     }
 
-    // JWT-only mode: reject non-JWT tokens
+    // No valid token
     res.status(401).setHeader('WWW-Authenticate', wwwAuth).json({
       error: 'invalid_token',
-      message: 'API key authentication has been deprecated. Use OAuth 2.1 Bearer tokens.',
+      message: 'The provided token is invalid.',
     });
   };
 }
