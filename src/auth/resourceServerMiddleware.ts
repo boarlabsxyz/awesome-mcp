@@ -97,38 +97,44 @@ export function createResourceServerMiddleware(deps: MiddlewareDeps = defaultDep
       return;
     }
 
-    // --- Opaque token path (Auth0 DCR clients without audience) ---
-    // Try validating via Auth0's /userinfo endpoint before falling back to API-key
-    try {
-      const payload = await deps.validateOpaqueToken(token);
-      console.error(`[oauth] Opaque token validated for sub=${payload.sub}`);
+    // --- Opaque token path (Auth0 JWE/opaque tokens) ---
+    // Auth0 opaque tokens start with "eyJ" (JWE) and are 400+ chars.
+    // Plain API keys are hex strings (64 chars) or compound (apiKey.instanceId).
+    // Only probe /userinfo for tokens that look like Auth0 tokens.
+    const looksLikeAuth0Token = token.startsWith('eyJ') && token.length > 200;
 
-      const requiredScope = deps.getRequiredScope(req.path);
-      if (requiredScope && !deps.hasScope(payload, requiredScope)) {
-        res.status(403).json({
-          error: 'insufficient_scope',
-          message: `This endpoint requires the "${requiredScope}" scope.`,
-          required_scope: requiredScope,
-        });
-        return;
-      }
-
+    if (looksLikeAuth0Token) {
       try {
-        const user = await deps.mapJwtToUser(payload);
-        req.headers['x-mcp-user-id'] = String(user.id);
-        req.headers['x-mcp-user-sub'] = payload.sub;
-        if (user.email) req.headers['x-mcp-user-email'] = user.email;
-        next();
+        const payload = await deps.validateOpaqueToken(token);
+
+        const requiredScope = deps.getRequiredScope(req.path);
+        if (requiredScope && !deps.hasScope(payload, requiredScope)) {
+          res.status(403).json({
+            error: 'insufficient_scope',
+            message: `This endpoint requires the "${requiredScope}" scope.`,
+            required_scope: requiredScope,
+          });
+          return;
+        }
+
+        try {
+          const user = await deps.mapJwtToUser(payload);
+          req.headers['x-mcp-user-id'] = String(user.id);
+          req.headers['x-mcp-user-sub'] = payload.sub;
+          if (user.email) req.headers['x-mcp-user-email'] = user.email;
+          next();
+        } catch (err: any) {
+          console.error('[oauth] User mapping failed:', err.message);
+          res.status(503).json({
+            error: 'user_mapping_error',
+            message: 'Failed to resolve user identity. Please try again.',
+          });
+        }
+        return;
       } catch (err: any) {
-        console.error('[oauth] User mapping failed:', err.message);
-        res.status(503).json({
-          error: 'user_mapping_error',
-          message: 'Failed to resolve user identity. Please try again.',
-        });
+        console.warn('[oauth] Opaque token validation failed:', err.message);
+        // Fall through to API-key / reject
       }
-      return;
-    } catch {
-      // Not a valid opaque token — fall through to API-key / reject
     }
 
     // API-key path (dual-mode migration)

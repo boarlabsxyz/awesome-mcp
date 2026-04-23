@@ -95,15 +95,20 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
     // Fallback: proxy to Auth0 DCR
     const issuer = requireIssuer(res);
     if (!issuer) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
       const response = await fetch(`${issuer}/oidc/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req.body),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
       const data = await response.json();
       res.status(response.status).json(data);
     } catch (err: any) {
+      clearTimeout(timeout);
       console.error('[oauth-proxy] Registration failed:', err.message);
       res.status(502).json({ error: 'OAuth proxy failed' });
     }
@@ -141,11 +146,15 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
         forwardContentType = 'application/x-www-form-urlencoded';
       }
 
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
       const response = await fetch(`${issuer}/oauth/token`, {
         method: 'POST',
         headers: { 'Content-Type': forwardContentType },
         body: forwardBody,
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
       const data = await response.json() as Record<string, unknown>;
       res.status(response.status).json(data);
     } catch (err: any) {
@@ -1215,7 +1224,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
 
   /**
    * Resolve a Bearer token to a user record.
-   * Tries OAuth (JWT → opaque) first, then falls back to API key lookup.
+   * Tries JWT → API key (cheap local lookup) → opaque token (Auth0 /userinfo).
    */
   async function resolveTokenToUser(token: string): Promise<UserRecord | null> {
     // Try JWT
@@ -1226,15 +1235,18 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       } catch { /* not a valid JWT — try next */ }
     }
 
-    // Try opaque token (Auth0 /userinfo)
+    // Try API key (cheap local lookup before hitting Auth0)
+    await loadUsers();
+    const apiKeyUser = await getUserByApiKey(token);
+    if (apiKeyUser) return apiKeyUser;
+
+    // Try opaque token (Auth0 /userinfo — last resort, network call)
     try {
       const payload = await validateOpaqueToken(token);
       return await mapJwtToUser(payload);
-    } catch { /* not a valid opaque token — try API key */ }
+    } catch { /* not a valid opaque token either */ }
 
-    // Try API key
-    await loadUsers();
-    return await getUserByApiKey(token) || null;
+    return null;
   }
 
   // Auth middleware for REST endpoints — supports OAuth tokens and API keys

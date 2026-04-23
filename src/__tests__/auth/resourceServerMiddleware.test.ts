@@ -8,6 +8,8 @@ const originalBaseUrl = process.env.BASE_URL;
 
 const fakePayload = { sub: 'auth0|123', scope: 'mcp:docs mcp:sheets', email: 'u@test.com', iss: 'iss', aud: 'aud' };
 const fakeUser = { id: 1, email: 'u@test.com', apiKey: 'k1', googleId: null, name: 'Test', authMethod: 'google' as const, createdAt: '', updatedAt: '' };
+// Auth0 opaque tokens are JWE: start with eyJ, 400+ chars
+const fakeOpaqueToken = 'eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwiaXNzIjoiaHR0cHM6Ly90ZXN0LmF1dGgwLmNvbS8ifQ' + '.'.repeat(3) + 'x'.repeat(300);
 
 function makeDeps(overrides: Partial<MiddlewareDeps> = {}): MiddlewareDeps {
   return {
@@ -92,7 +94,7 @@ describe('resourceServerMiddleware', () => {
     const deps = makeDeps();
     const mw = createResourceServerMiddleware(deps);
 
-    const req = makeReq({ headers: { authorization: 'Bearer opaque_access_token' } });
+    const req = makeReq({ headers: { authorization: `Bearer ${fakeOpaqueToken}` } });
     const res = makeRes();
     let nextCalled = false;
     await mw(req, res as any, (() => { nextCalled = true; }) as NextFunction);
@@ -233,7 +235,7 @@ describe('resourceServerMiddleware', () => {
     });
     const mw = createResourceServerMiddleware(deps);
 
-    const req = makeReq({ headers: { authorization: 'Bearer opaque_token_here' } });
+    const req = makeReq({ headers: { authorization: `Bearer ${fakeOpaqueToken}` } });
     const res = makeRes();
     let nextCalled = false;
     await mw(req, res as any, (() => { nextCalled = true; }) as NextFunction);
@@ -249,7 +251,7 @@ describe('resourceServerMiddleware', () => {
     });
     const mw = createResourceServerMiddleware(deps);
 
-    const req = makeReq({ headers: { authorization: 'Bearer opaque_token' }, path: '/calendar' });
+    const req = makeReq({ headers: { authorization: `Bearer ${fakeOpaqueToken}` }, path: '/calendar' });
     const res = makeRes();
     let nextCalled = false;
     await mw(req, res as any, (() => { nextCalled = true; }) as NextFunction);
