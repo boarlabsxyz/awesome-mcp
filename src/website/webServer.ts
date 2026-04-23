@@ -47,7 +47,7 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
       if (!response.ok) { res.status(502).json({ error: 'Failed to fetch Auth0 metadata' }); return; }
       const metadata = await response.json() as Record<string, unknown>;
       // Rewrite endpoints to point to our proxy routes
-      res.json({
+      const asMeta: Record<string, unknown> = {
         ...metadata,
         issuer: resource,
         authorization_endpoint: `${resource}/oauth/authorize`,
@@ -57,7 +57,13 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
           ...((metadata.scopes_supported as string[]) || []),
           ...scopes.filter(s => !((metadata.scopes_supported as string[]) || []).includes(s)),
         ],
-      });
+      };
+      // If a static client is configured, remove registration_endpoint
+      // so clients use the static client_id instead of DCR
+      if (process.env.AUTH0_CLIENT_ID) {
+        delete asMeta.registration_endpoint;
+      }
+      res.json(asMeta);
     } catch (err: any) {
       clearTimeout(timeout);
       const msg = err.name === 'AbortError' ? 'Auth0 metadata request timed out' : err.message;
@@ -75,8 +81,21 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
     return issuer;
   }
 
-  // Dynamic Client Registration proxy
+  // Client Registration — returns static client or proxies to Auth0 DCR
   app.post('/oauth/register', express.json(), async (req, res) => {
+    // If a static client is configured, return it directly (no DCR needed)
+    const staticClientId = process.env.AUTH0_CLIENT_ID;
+    if (staticClientId) {
+      res.status(200).json({
+        client_id: staticClientId,
+        client_name: req.body?.client_name || 'MCP Client',
+        redirect_uris: req.body?.redirect_uris || [],
+        token_endpoint_auth_method: 'none',
+      });
+      return;
+    }
+
+    // Fallback: proxy to Auth0 DCR
     const issuer = requireIssuer(res);
     if (!issuer) return;
     try {
