@@ -31,11 +31,15 @@ export function isUniqueViolation(err: unknown): boolean {
 export async function mapJwtToUser(payload: JwtPayload, deps: UserMappingDeps = defaultDeps): Promise<UserRecord> {
   // 1. Direct lookup by Auth0 subject
   const bySubject = await deps.getUserByAuth0Sub(payload.sub);
-  if (bySubject) return bySubject;
+  if (bySubject) {
+    console.error(`[user-mapping] Found user by sub: id=${bySubject.id}, email=${bySubject.email}`);
+    return bySubject;
+  }
 
   // 2. Email-based fallback — link existing user to their Auth0 subject
   if (payload.email) {
     const byEmail = await deps.getUserByEmail(payload.email);
+    console.error(`[user-mapping] Email lookup for ${payload.email}: ${byEmail ? `found id=${byEmail.id}` : 'not found'}`);
     if (byEmail) {
       try {
         await deps.setAuth0Sub(byEmail.id!, payload.sub);
@@ -52,6 +56,7 @@ export async function mapJwtToUser(payload: JwtPayload, deps: UserMappingDeps = 
   }
 
   // 3. Brand-new user — create with minimal profile (no Google tokens)
+  console.error(`[user-mapping] Creating new user for sub=${payload.sub}, email=${payload.email}`);
   try {
     const newUser = await deps.createUser({
       email: payload.email || `${payload.sub}@auth0`,

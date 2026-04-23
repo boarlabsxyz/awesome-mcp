@@ -55,6 +55,7 @@ async function resolveSession(user: any, mcpSlug: string, instanceId: string | u
       throw new Response(null, { status: 404, statusText: `Instance not found: ${instanceId}` } as any);
     }
     if (connection.userId !== user.id) {
+      console.error(`[mcp-auth] Instance ${instanceId} belongs to userId=${connection.userId}, but authenticated userId=${user.id} (email=${user.email})`);
       throw new Response(null, { status: 403, statusText: 'You do not have access to this instance.' } as any);
     }
     return sessionFromConnection(user, connection, deps);
