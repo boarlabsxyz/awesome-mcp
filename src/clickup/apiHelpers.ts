@@ -181,6 +181,20 @@ export class ClickUpClient {
     return this.request('POST', `/task/${taskId}`, { list_id: listId });
   }
 
+  // === Custom Fields ===
+
+  async getAccessibleCustomFields(listId: string): Promise<any> {
+    return this.request('GET', `/list/${listId}/field`);
+  }
+
+  async setCustomFieldValue(taskId: string, fieldId: string, value: any): Promise<any> {
+    return this.request('POST', `/task/${taskId}/field/${fieldId}`, { value });
+  }
+
+  async removeCustomFieldValue(taskId: string, fieldId: string): Promise<any> {
+    return this.request('DELETE', `/task/${taskId}/field/${fieldId}`);
+  }
+
   // === Search ===
 
   async searchTasks(teamId: string, query: string, page?: number, customFields?: Array<{ field_id: string; operator: string; value?: any }>): Promise<any> {

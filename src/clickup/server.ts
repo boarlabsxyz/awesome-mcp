@@ -341,6 +341,52 @@ clickUpServer.addTool({
 });
 
 clickUpServer.addTool({
+  name: 'getAccessibleCustomFields',
+  description: 'List all custom fields available on a ClickUp list. Use this to discover field IDs for filtering or setting values.',
+  parameters: z.object({
+    listId: z.string().describe('The list ID to get custom fields for.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    const result = await client.getAccessibleCustomFields(args.listId);
+    const fields = result.fields || [];
+    if (fields.length === 0) return 'No custom fields found on this list.';
+    return `Found ${fields.length} custom field(s):\n\n` + fields.map((f: any) =>
+      `Field: ${f.name}\n  ID: ${f.id}\n  Type: ${f.type}${f.type_config?.options ? `\n  Options: ${f.type_config.options.map((o: any) => o.name || o.label).join(', ')}` : ''}`
+    ).join('\n\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'setCustomFieldValue',
+  description: 'Set a custom field value on a ClickUp task. Use getAccessibleCustomFields first to find the field ID and type.',
+  parameters: z.object({
+    taskId: z.string().describe('The task ID.'),
+    fieldId: z.string().describe('The custom field ID (from getAccessibleCustomFields).'),
+    value: z.any().describe('The value to set. Format depends on field type: text=string, number=number, dropdown=option index or orderindex, users=array of user IDs, checkbox=boolean, date=unix timestamp ms, labels=array of label UUIDs.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    await client.setCustomFieldValue(args.taskId, args.fieldId, args.value);
+    return `Custom field ${args.fieldId} updated on task ${args.taskId}.`;
+  },
+});
+
+clickUpServer.addTool({
+  name: 'removeCustomFieldValue',
+  description: 'Remove/clear a custom field value from a ClickUp task.',
+  parameters: z.object({
+    taskId: z.string().describe('The task ID.'),
+    fieldId: z.string().describe('The custom field ID.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    await client.removeCustomFieldValue(args.taskId, args.fieldId);
+    return `Custom field ${args.fieldId} removed from task ${args.taskId}.`;
+  },
+});
+
+clickUpServer.addTool({
   name: 'getTaskMembers',
   description: 'List all members assigned to a ClickUp task.',
   parameters: z.object({
