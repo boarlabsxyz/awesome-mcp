@@ -137,11 +137,29 @@ describe('ClickUpClient', () => {
   });
 
   describe('searchTasks', () => {
-    it('should call /team/:id/task with name query', async () => {
+    it('should call /team/:id/task and filter results by name client-side', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { tasks: [
+        { name: 'Bug fix urgent' }, { name: 'Feature request' }, { name: 'bug fix minor' }
+      ] } }]);
+      const client = new ClickUpClient('token');
+      const result = await client.searchTasks('team1', 'bug fix');
+      assert.ok(calls[0].url.includes('/team/team1/task'));
+      // Name filter is client-side — should only return matching tasks
+      assert.equal(result.tasks.length, 2);
+    });
+
+    it('should return all tasks when query is empty', async () => {
+      mockFetch([{ status: 200, body: { tasks: [{ name: 'A' }, { name: 'B' }] } }]);
+      const client = new ClickUpClient('token');
+      const result = await client.searchTasks('team1', '');
+      assert.equal(result.tasks.length, 2);
+    });
+
+    it('should pass include_closed param', async () => {
       const { calls } = mockFetch([{ status: 200, body: { tasks: [] } }]);
       const client = new ClickUpClient('token');
-      await client.searchTasks('team1', 'bug fix');
-      assert.ok(calls[0].url.includes('name=bug+fix') || calls[0].url.includes('name=bug%20fix'));
+      await client.searchTasks('team1', '', undefined, undefined, true);
+      assert.ok(calls[0].url.includes('include_closed=true'));
     });
   });
 

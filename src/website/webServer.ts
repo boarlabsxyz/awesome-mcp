@@ -2379,6 +2379,42 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
     }
   });
 
+  // GET /api/v1/clickup/lists/:listId/fields - Get custom fields
+  app.get('/api/v1/clickup/lists/:listId/fields', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.getAccessibleCustomFields(req.params.listId as string);
+      res.json({ fields: result.fields || [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to get custom fields' });
+    }
+  });
+
+  // POST /api/v1/clickup/tasks/:taskId/fields/:fieldId - Set custom field value
+  app.post('/api/v1/clickup/tasks/:taskId/fields/:fieldId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      await client.setCustomFieldValue(req.params.taskId as string, req.params.fieldId as string, req.body.value);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to set custom field' });
+    }
+  });
+
+  // DELETE /api/v1/clickup/tasks/:taskId/fields/:fieldId - Remove custom field value
+  app.delete('/api/v1/clickup/tasks/:taskId/fields/:fieldId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      await client.removeCustomFieldValue(req.params.taskId as string, req.params.fieldId as string);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to remove custom field' });
+    }
+  });
+
   // GET /api/v1/clickup/tasks/:taskId/members - Get task members
   app.get('/api/v1/clickup/tasks/:taskId/members', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {

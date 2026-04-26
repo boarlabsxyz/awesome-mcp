@@ -18,6 +18,28 @@ function getClickUpClient(session?: UserSession): ClickUpClient {
   return new ClickUpClient(session.clickUpAccessToken);
 }
 
+function formatCustomFieldValue(cf: any): string {
+  if (cf.value === null || cf.value === undefined) return '[empty]';
+  // Dropdown: value is the option orderindex, type_config.options has the labels
+  if (cf.type === 'drop_down' && cf.type_config?.options) {
+    const opt = cf.type_config.options.find((o: any) => String(o.orderindex) === String(cf.value));
+    return opt ? `${opt.name} (id: ${opt.id})` : String(cf.value);
+  }
+  // Labels: value is array of label UUIDs
+  if (cf.type === 'labels' && Array.isArray(cf.value) && cf.type_config?.options) {
+    return cf.value.map((uuid: string) => {
+      const opt = cf.type_config.options.find((o: any) => o.id === uuid);
+      return opt ? opt.label : uuid;
+    }).join(', ');
+  }
+  // Users: value is array of user objects
+  if (cf.type === 'users' && Array.isArray(cf.value)) {
+    return cf.value.map((u: any) => u.username || u.email || u.id).join(', ');
+  }
+  if (typeof cf.value === 'object') return JSON.stringify(cf.value);
+  return String(cf.value);
+}
+
 function formatTask(task: any): string {
   const parts = [
     `Task: ${task.name}`,
@@ -31,6 +53,12 @@ function formatTask(task: any): string {
   if (task.url) parts.push(`  URL: ${task.url}`);
   if (task.list) parts.push(`  List: ${task.list.name} (${task.list.id})`);
   if (task.tags?.length) parts.push(`  Tags: ${task.tags.map((t: any) => t.name).join(', ')}`);
+  if (task.custom_fields?.length) {
+    const cfParts = task.custom_fields
+      .filter((cf: any) => cf.value !== null && cf.value !== undefined)
+      .map((cf: any) => `    ${cf.name}: ${formatCustomFieldValue(cf)}`);
+    if (cfParts.length) parts.push(`  Custom Fields:\n${cfParts.join('\n')}`);
+  }
   return parts.join('\n');
 }
 
@@ -320,23 +348,78 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'searchTasks',
-  description: 'Search for tasks across a ClickUp workspace. Supports filtering by name and custom fields (e.g. Participants).',
+  description: 'Search for tasks across a ClickUp workspace. Supports filtering by name (client-side substring match) and/or custom fields. By default excludes closed/completed tasks — set includeClosed=true to include them.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID to search in.'),
-    query: z.string().min(1).describe('Search query string.'),
-    page: z.number().int().min(0).optional().describe('Page number (0-based).'),
+    query: z.string().describe('Filter by task name (case-insensitive substring match). Use empty string to skip name filtering.'),
+    page: z.number().int().min(0).optional().describe('Page number (0-based). Results limited to 100 per page.'),
+    includeClosed: z.boolean().optional().default(false).describe('Include closed/completed tasks in results.'),
     custom_fields: z.array(z.object({
       field_id: z.string().describe('The custom field ID.'),
       operator: z.enum(['=', '<', '>', '>=', '<=', '!=', 'IS NULL', 'IS NOT NULL', 'RANGE', 'ANY', 'ALL', 'NOT ANY', 'NOT ALL']).describe('Comparison operator.'),
-      value: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional().describe('Value to compare against. Use an array for ANY/ALL operators.'),
+      value: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional().describe('Value to compare against. Use an array for ANY/ALL operators. For dropdown fields, use the option UUID (id from getAccessibleCustomFields), not orderindex or label.'),
     })).optional().describe('Filter by custom fields. Each entry needs field_id, operator, and optionally value.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
-    const result = await client.searchTasks(args.workspaceId, args.query, args.page, args.custom_fields);
+    const result = await client.searchTasks(args.workspaceId, args.query, args.page, args.custom_fields, args.includeClosed);
     const tasks = result.tasks || [];
-    if (tasks.length === 0) return `No tasks found matching "${args.query}".`;
+    if (tasks.length === 0) return `No tasks found${args.query ? ` matching "${args.query}"` : ''}.`;
     return `Found ${tasks.length} task(s):\n\n` + tasks.map(formatTask).join('\n\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'getAccessibleCustomFields',
+  description: 'List all custom fields available on a ClickUp list. Use this to discover field IDs for filtering or setting values.',
+  parameters: z.object({
+    listId: z.string().describe('The list ID to get custom fields for.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    const result = await client.getAccessibleCustomFields(args.listId);
+    const fields = result.fields || [];
+    if (fields.length === 0) return 'No custom fields found on this list.';
+    return `Found ${fields.length} custom field(s):\n\n` + fields.map((f: any) => {
+      const parts = [`Field: ${f.name}`, `  ID: ${f.id}`, `  Type: ${f.type}`];
+      if (f.type_config?.options) {
+        parts.push('  Options:');
+        f.type_config.options.forEach((o: any) => {
+          parts.push(`    - ${o.name || o.label} (id: ${o.id}, orderindex: ${o.orderindex}${o.color ? `, color: ${o.color}` : ''})`);
+        });
+        parts.push('  Note: For searchTasks custom_fields filter with ANY/ALL operators, use the option "id" (UUID), not orderindex or label.');
+      }
+      return parts.join('\n');
+    }).join('\n\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'setCustomFieldValue',
+  description: 'Set a custom field value on a ClickUp task. Use getAccessibleCustomFields first to find the field ID and type.',
+  parameters: z.object({
+    taskId: z.string().describe('The task ID.'),
+    fieldId: z.string().describe('The custom field ID (from getAccessibleCustomFields).'),
+    value: z.any().describe('The value to set. Format depends on field type: text=string, number=number, dropdown=orderindex (integer), users=array of user IDs, checkbox=boolean, date=unix timestamp ms, labels=array of label UUIDs. NOTE: For dropdowns, setCustomFieldValue uses orderindex but searchTasks custom_fields filter uses the option UUID (id) — use getAccessibleCustomFields to get both.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    await client.setCustomFieldValue(args.taskId, args.fieldId, args.value);
+    return `Custom field ${args.fieldId} updated on task ${args.taskId}.`;
+  },
+});
+
+clickUpServer.addTool({
+  name: 'removeCustomFieldValue',
+  description: 'Remove/clear a custom field value from a ClickUp task.',
+  parameters: z.object({
+    taskId: z.string().describe('The task ID.'),
+    fieldId: z.string().describe('The custom field ID.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    await client.removeCustomFieldValue(args.taskId, args.fieldId);
+    return `Custom field ${args.fieldId} removed from task ${args.taskId}.`;
   },
 });
 

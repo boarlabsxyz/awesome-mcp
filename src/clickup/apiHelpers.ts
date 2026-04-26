@@ -181,14 +181,35 @@ export class ClickUpClient {
     return this.request('POST', `/task/${taskId}`, { list_id: listId });
   }
 
+  // === Custom Fields ===
+
+  async getAccessibleCustomFields(listId: string): Promise<any> {
+    return this.request('GET', `/list/${listId}/field`);
+  }
+
+  async setCustomFieldValue(taskId: string, fieldId: string, value: any): Promise<any> {
+    return this.request('POST', `/task/${taskId}/field/${fieldId}`, { value });
+  }
+
+  async removeCustomFieldValue(taskId: string, fieldId: string): Promise<any> {
+    return this.request('DELETE', `/task/${taskId}/field/${fieldId}`);
+  }
+
   // === Search ===
 
-  async searchTasks(teamId: string, query: string, page?: number, customFields?: Array<{ field_id: string; operator: string; value?: any }>): Promise<any> {
+  async searchTasks(teamId: string, query: string, page?: number, customFields?: Array<{ field_id: string; operator: string; value?: any }>, includeClosed?: boolean): Promise<any> {
     const params = new URLSearchParams();
-    params.set('name', query);
     if (page !== undefined) params.set('page', String(page));
+    if (includeClosed) params.set('include_closed', 'true');
     if (customFields?.length) params.set('custom_fields', JSON.stringify(customFields));
-    return this.request('GET', `/team/${teamId}/task?${params.toString()}`);
+    const result = await this.request<any>('GET', `/team/${teamId}/task?${params.toString()}`);
+    // ClickUp's filtered team tasks endpoint doesn't support name filtering server-side.
+    // Apply client-side case-insensitive substring match when query is provided.
+    if (query && result.tasks) {
+      const q = query.toLowerCase();
+      result.tasks = result.tasks.filter((t: any) => t.name?.toLowerCase().includes(q));
+    }
+    return result;
   }
 
   // === Comments ===
