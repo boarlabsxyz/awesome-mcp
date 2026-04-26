@@ -348,22 +348,23 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'searchTasks',
-  description: 'Search for tasks across a ClickUp workspace. Supports filtering by name and/or custom fields (e.g. Participants). Pass empty query with custom_fields to filter by custom fields only.',
+  description: 'Search for tasks across a ClickUp workspace. Supports filtering by name (client-side substring match) and/or custom fields. By default excludes closed/completed tasks — set includeClosed=true to include them.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID to search in.'),
-    query: z.string().describe('Search query string to filter by task name. Use empty string to search by custom_fields only.'),
-    page: z.number().int().min(0).optional().describe('Page number (0-based).'),
+    query: z.string().describe('Filter by task name (case-insensitive substring match). Use empty string to skip name filtering.'),
+    page: z.number().int().min(0).optional().describe('Page number (0-based). Results limited to 100 per page.'),
+    includeClosed: z.boolean().optional().default(false).describe('Include closed/completed tasks in results.'),
     custom_fields: z.array(z.object({
       field_id: z.string().describe('The custom field ID.'),
       operator: z.enum(['=', '<', '>', '>=', '<=', '!=', 'IS NULL', 'IS NOT NULL', 'RANGE', 'ANY', 'ALL', 'NOT ANY', 'NOT ALL']).describe('Comparison operator.'),
-      value: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional().describe('Value to compare against. Use an array for ANY/ALL operators.'),
+      value: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional().describe('Value to compare against. Use an array for ANY/ALL operators. For dropdown fields, use the option UUID (id from getAccessibleCustomFields), not orderindex or label.'),
     })).optional().describe('Filter by custom fields. Each entry needs field_id, operator, and optionally value.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
-    const result = await client.searchTasks(args.workspaceId, args.query, args.page, args.custom_fields);
+    const result = await client.searchTasks(args.workspaceId, args.query, args.page, args.custom_fields, args.includeClosed);
     const tasks = result.tasks || [];
-    if (tasks.length === 0) return `No tasks found matching "${args.query}".`;
+    if (tasks.length === 0) return `No tasks found${args.query ? ` matching "${args.query}"` : ''}.`;
     return `Found ${tasks.length} task(s):\n\n` + tasks.map(formatTask).join('\n\n');
   },
 });

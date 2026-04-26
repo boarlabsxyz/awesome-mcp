@@ -197,13 +197,19 @@ export class ClickUpClient {
 
   // === Search ===
 
-  async searchTasks(teamId: string, query: string, page?: number, customFields?: Array<{ field_id: string; operator: string; value?: any }>): Promise<any> {
+  async searchTasks(teamId: string, query: string, page?: number, customFields?: Array<{ field_id: string; operator: string; value?: any }>, includeClosed?: boolean): Promise<any> {
     const params = new URLSearchParams();
-    // Only set name filter when non-empty — ClickUp ignores it otherwise and returns all tasks
-    if (query) params.set('name', query);
     if (page !== undefined) params.set('page', String(page));
+    if (includeClosed) params.set('include_closed', 'true');
     if (customFields?.length) params.set('custom_fields', JSON.stringify(customFields));
-    return this.request('GET', `/team/${teamId}/task?${params.toString()}`);
+    const result = await this.request<any>('GET', `/team/${teamId}/task?${params.toString()}`);
+    // ClickUp's filtered team tasks endpoint doesn't support name filtering server-side.
+    // Apply client-side case-insensitive substring match when query is provided.
+    if (query && result.tasks) {
+      const q = query.toLowerCase();
+      result.tasks = result.tasks.filter((t: any) => t.name?.toLowerCase().includes(q));
+    }
+    return result;
   }
 
   // === Comments ===
