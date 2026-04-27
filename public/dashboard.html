@@ -669,10 +669,23 @@
         <div class="name-input-section">
           <label for="instanceNameInput">Name this instance</label>
           <input type="text" id="instanceNameInput" placeholder="e.g., Work Account, Personal" />
-          <p class="name-suggestion">Tip: Use a name that helps you identify which Google account this is for.</p>
+          <p class="name-suggestion" id="nameSuggestion">Tip: Use a name that helps you identify which Google account this is for.</p>
         </div>
+
+        <!-- Token input for direct-token providers (e.g., Slack) -->
+        <div id="tokenInputSection" class="name-input-section" style="display:none;">
+          <label for="tokenInput">Bot Token</label>
+          <input type="password" id="tokenInput" placeholder="xoxb-..." />
+          <p class="name-suggestion" id="tokenHint">
+            Create a Slack App, add bot scopes (channels:history, channels:read, groups:history, groups:read, chat:write, users:read), install to workspace, then paste the Bot User OAuth Token here. The bot only sees channels where it's been /invited.
+          </p>
+        </div>
+
         <button class="btn-connect-google" id="connectGoogleBtn" onclick="startOAuth()">
           Connect with Google
+        </button>
+        <button class="btn-connect-google" id="connectTokenBtn" onclick="connectWithToken()" style="display:none;">
+          Connect
         </button>
       </div>
     </div>
@@ -891,6 +904,19 @@
         document.getElementById('instanceNameInput').value = `${selectedMcpType.name} ${existingCount + 1}`;
       }
 
+      // Toggle between OAuth button and direct token input based on provider
+      const isTokenProvider = selectedMcpType.provider === 'slack';
+      document.getElementById('connectGoogleBtn').style.display = isTokenProvider ? 'none' : '';
+      document.getElementById('connectTokenBtn').style.display = isTokenProvider ? '' : 'none';
+      document.getElementById('tokenInputSection').style.display = isTokenProvider ? '' : 'none';
+      document.getElementById('tokenInput').value = '';
+
+      if (isTokenProvider) {
+        document.getElementById('nameSuggestion').textContent = 'Tip: Use a name like "Engineering" or "My Startup" to identify the workspace.';
+      } else {
+        document.getElementById('nameSuggestion').textContent = 'Tip: Use a name that helps you identify which Google account this is for.';
+      }
+
       document.getElementById('instanceNameInput').focus();
     }
 
@@ -907,6 +933,39 @@
 
       // Redirect to OAuth flow with instance name
       window.location.href = `/connect/${selectedMcpType.slug}?name=${encodeURIComponent(name)}`;
+    }
+
+    async function connectWithToken() {
+      const name = document.getElementById('instanceNameInput').value.trim();
+      if (!name) { alert('Please enter a name for this instance'); return; }
+      if (!selectedMcpType) { alert('Please select an MCP type'); return; }
+      const token = document.getElementById('tokenInput').value.trim();
+      if (!token) { alert('Please enter a bot token'); return; }
+
+      const btn = document.getElementById('connectTokenBtn');
+      btn.disabled = true;
+      btn.textContent = 'Connecting...';
+
+      try {
+        const response = await fetch('/api/connect-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ mcpSlug: selectedMcpType.slug, token, instanceName: name }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          alert(data.error || 'Failed to connect');
+          return;
+        }
+        closeAddToolModal();
+        await loadDashboard();
+      } catch (err) {
+        alert('Connection failed: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Connect';
+      }
     }
 
     function copyUrl(instanceId, btn) {

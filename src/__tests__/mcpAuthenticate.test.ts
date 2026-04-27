@@ -20,6 +20,7 @@ function makeDeps(overrides: Partial<AuthDeps> = {}): AuthDeps {
     createUserSession: mock.fn(async () => fakeSession),
     createUserSessionFromConnection: mock.fn(async () => fakeSession),
     createClickUpSession: mock.fn(() => fakeSession),
+    createSlackSession: mock.fn(() => fakeSession),
     ...overrides,
   };
 }

@@ -439,5 +439,23 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
+  // Slack MCP (bot-token provider — no OAuth, user pastes xoxb- token)
+  const slackMcpUrl = normalizeUrl(process.env.SLACK_MCP_URL, '/slack');
+
+  await createMcpCatalog({
+    slug: 'slack',
+    name: 'Slack MCP',
+    description: 'Read channels and post messages in Slack workspaces via bot token',
+    iconUrl: 'https://a.slack-edge.com/80588/marketing/img/icons/icon_slack_hash_colored.png',
+    mcpUrl: slackMcpUrl,
+    provider: 'slack',
+    scopes: [],
+    googleClientId: null,
+    googleClientSecret: null,
+    oauthScopes: [],
+    isLocal: !process.env.SLACK_MCP_URL,
+    isActive: true,
+  });
+
   console.error('Default MCP catalog entries seeded.');
 }
