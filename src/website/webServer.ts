@@ -1190,6 +1190,7 @@ function registerSharedRoutes(app: express.Express): void {
           description: c.description,
           iconUrl: c.iconUrl,
           mcpUrl: c.mcpUrl,
+          provider: c.provider || 'google',
         })),
       });
     } catch (err: any) {
@@ -1212,6 +1213,7 @@ function registerSharedRoutes(app: express.Express): void {
         description: catalog.description,
         iconUrl: catalog.iconUrl,
         mcpUrl: catalog.mcpUrl,
+        provider: catalog.provider || 'google',
       });
     } catch (err: any) {
       console.error('Error getting catalog:', err);
