@@ -66,7 +66,9 @@ export class SlackClient {
     }>;
     response_metadata?: { next_cursor?: string };
   }> {
-    return this.request('conversations.list', {
+    // users.conversations returns only channels the bot is a member of,
+    // unlike conversations.list which returns all visible channels.
+    return this.request('users.conversations', {
       types: 'public_channel,private_channel',
       exclude_archived: true,
       limit: 200,

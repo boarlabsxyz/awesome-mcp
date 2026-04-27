@@ -48,7 +48,7 @@ function formatMessage(msg: any, userNames: Map<string, string>): string {
   const who = msg.user ? (userNames.get(msg.user) || msg.user) : 'unknown';
   const time = formatTimestamp(msg.ts);
   const thread = msg.reply_count ? ` [${msg.reply_count} replies]` : '';
-  return `[${time}] ${who}: ${msg.text}${thread}`;
+  return `[${time}] (ts: ${msg.ts}) ${who}: ${msg.text}${thread}`;
 }
 
 // === Tools ===
