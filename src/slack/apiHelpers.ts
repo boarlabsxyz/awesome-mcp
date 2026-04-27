@@ -11,15 +11,24 @@ export class SlackClient {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
 
+    // Some Slack API methods (conversations.replies, conversations.history, etc.)
+    // don't reliably accept JSON bodies. Use form-urlencoded for compatibility.
+    const formBody = body
+      ? Object.entries(body)
+          .filter(([, v]) => v !== undefined && v !== null)
+          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+          .join('&')
+      : undefined;
+
     let res: Response;
     try {
       res = await fetch(url, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.botToken}`,
-          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body: body ? JSON.stringify(body) : undefined,
+        body: formBody,
         signal: controller.signal,
       });
     } catch (err: any) {
