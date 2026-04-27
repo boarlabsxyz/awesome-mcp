@@ -959,7 +959,13 @@
           return;
         }
         closeAddToolModal();
-        await loadDashboard();
+        // Reload user data to pick up the new connection
+        const user = await loadUserData();
+        if (user) {
+          currentUser = user;
+          instances = user.connections || [];
+          renderInstances();
+        }
       } catch (err) {
         alert('Connection failed: ' + err.message);
       } finally {
