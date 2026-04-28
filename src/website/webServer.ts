@@ -924,23 +924,45 @@ function registerSharedRoutes(app: express.Express): void {
       const { SlackClient } = await import('../slack/apiHelpers.js');
       const client = new SlackClient(accessToken);
 
-      // Paginate through all channels
-      const allChannels: Array<{ id: string; name: string; is_private: boolean; is_external: boolean; topic?: string; num_members?: number }> = [];
+      // Paginate through all channels, including DMs
+      const allChannels: Array<{ id: string; name: string; is_private: boolean; is_external: boolean; is_dm: boolean; topic?: string; num_members?: number }> = [];
+      const dmUserIds: string[] = [];
       let cursor: string | undefined;
       do {
-        const result = await client.conversationsList(cursor);
+        const result = await client.conversationsList(cursor, 'public_channel,private_channel,im,mpim');
         for (const ch of result.channels) {
+          const isDm = !!(ch as any).is_im;
+          const isMpim = !!(ch as any).is_mpim;
+          if (isDm && (ch as any).user) dmUserIds.push((ch as any).user);
           allChannels.push({
             id: ch.id,
-            name: ch.name,
-            is_private: ch.is_private,
+            name: isDm ? (ch as any).user || ch.id : ch.name, // DMs don't have names, use user ID for now
+            is_private: ch.is_private || isDm || isMpim,
             is_external: !!(ch as any).is_ext_shared || !!(ch as any).is_org_shared,
+            is_dm: isDm || isMpim,
             topic: ch.topic?.value || undefined,
             num_members: ch.num_members,
           });
         }
         cursor = result.response_metadata?.next_cursor || undefined;
       } while (cursor);
+
+      // Resolve DM user IDs to display names
+      if (dmUserIds.length > 0) {
+        const uniqueIds = [...new Set(dmUserIds)];
+        const nameMap = new Map<string, string>();
+        await Promise.all(uniqueIds.slice(0, 50).map(async (uid) => {
+          try {
+            const { user } = await client.usersInfo(uid);
+            nameMap.set(uid, user.profile?.display_name || user.real_name || user.name);
+          } catch { /* skip */ }
+        }));
+        for (const ch of allChannels) {
+          if (ch.is_dm && nameMap.has(ch.name)) {
+            ch.name = nameMap.get(ch.name)!;
+          }
+        }
+      }
 
       const currentAllowed = (connection.providerTokens as any)?.allowedChannels || [];
       res.json({ channels: allChannels, currentAllowed });

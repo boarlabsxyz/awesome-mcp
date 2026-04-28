@@ -692,14 +692,14 @@
   </div>
 
   <!-- Channel Picker Modal (for Slack user OAuth) -->
-  <div id="channelPickerModal" class="modal hidden">
-    <div class="modal-content">
+  <div id="channelPickerModal" class="modal-overlay hidden">
+    <div class="modal">
       <div class="modal-header">
         <h3 id="channelPickerTitle">Select Channels</h3>
         <button class="modal-close" onclick="closeChannelPicker()">&times;</button>
       </div>
-      <p style="margin: 0 0 12px; color: #999; font-size: 14px;">Choose which channels this MCP can read and write. External/shared channels are shown but disabled.</p>
-      <div id="channelList" style="max-height: 400px; overflow-y: auto; border: 1px solid #444; border-radius: 8px; padding: 8px;">
+      <p style="margin: 0 0 12px; color: #999; font-size: 14px;">Choose which channels and DMs this MCP can access. External channels are separated below.</p>
+      <div id="channelList" style="max-height: 50vh; overflow-y: auto; border: 1px solid #444; border-radius: 8px; padding: 8px;">
         <p>Loading channels...</p>
       </div>
       <div style="margin-top: 12px; display: flex; gap: 8px;">
@@ -1013,27 +1013,36 @@
         }
 
         const allowedSet = new Set(currentAllowed || []);
-        const html = channels
-          .sort((a, b) => {
-            // Non-external first, then alphabetical
-            if (a.is_external !== b.is_external) return a.is_external ? 1 : -1;
-            return a.name.localeCompare(b.name);
-          })
-          .map(ch => {
-            const isExt = ch.is_external;
-            const disabled = isExt ? 'disabled' : '';
-            const checked = !isExt && allowedSet.has(ch.id) ? 'checked' : '';
-            const opacity = isExt ? 'opacity: 0.5;' : '';
-            const badge = isExt ? '<span style="color: #f59e0b; font-size: 11px; margin-left: 4px;">external</span>'
-              : ch.is_private ? '<span style="color: #999; font-size: 11px; margin-left: 4px;">private</span>' : '';
-            return `
-              <label style="display: flex; align-items: center; padding: 6px 8px; gap: 8px; cursor: ${isExt ? 'not-allowed' : 'pointer'}; ${opacity}">
-                <input type="checkbox" value="${ch.id}" ${checked} ${disabled} style="width: 16px; height: 16px; accent-color: #4f8df7;" />
-                <span style="flex: 1;">#${ch.name}${badge}</span>
-                ${ch.num_members !== undefined ? `<span style="color: #999; font-size: 12px;">${ch.num_members} members</span>` : ''}
-              </label>
-            `;
-          }).join('');
+
+        function renderChannelItem(ch) {
+          const checked = allowedSet.has(ch.id) ? 'checked' : '';
+          const isDm = ch.is_dm;
+          const prefix = isDm ? '' : '#';
+          const badge = isDm ? '<span style="color: #a78bfa; font-size: 11px; margin-left: 4px;">DM</span>'
+            : ch.is_private ? '<span style="color: #999; font-size: 11px; margin-left: 4px;">private</span>' : '';
+          return `
+            <label style="display: flex; align-items: center; padding: 6px 8px; gap: 8px; cursor: pointer;">
+              <input type="checkbox" value="${ch.id}" ${checked} style="width: 16px; height: 16px; accent-color: #4f8df7;" />
+              <span style="flex: 1;">${prefix}${ch.name}${badge}</span>
+              ${ch.num_members !== undefined ? `<span style="color: #999; font-size: 12px;">${ch.num_members} members</span>` : ''}
+            </label>
+          `;
+        }
+
+        const regular = channels.filter(ch => !ch.is_external).sort((a, b) => a.name.localeCompare(b.name));
+        const external = channels.filter(ch => ch.is_external).sort((a, b) => a.name.localeCompare(b.name));
+
+        let html = regular.map(renderChannelItem).join('');
+
+        if (external.length > 0) {
+          html += `
+            <div style="margin: 12px 0 8px; padding-top: 8px; border-top: 1px solid #444;">
+              <span style="color: #f59e0b; font-size: 12px; font-weight: 600;">External / Shared Channels</span>
+            </div>
+          `;
+          html += external.map(renderChannelItem).join('');
+        }
+
         document.getElementById('channelList').innerHTML = html;
       } catch (err) {
         document.getElementById('channelList').innerHTML = `<p style="color: red;">Error: ${err.message}</p>`;

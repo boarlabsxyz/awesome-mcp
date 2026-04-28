@@ -68,18 +68,19 @@ export class SlackClient {
 
   // === Conversations ===
 
-  async conversationsList(cursor?: string): Promise<{
+  async conversationsList(cursor?: string, types?: string): Promise<{
     channels: Array<{
       id: string; name: string; is_private: boolean; is_archived: boolean;
-      is_ext_shared?: boolean; is_org_shared?: boolean;
+      is_ext_shared?: boolean; is_org_shared?: boolean; is_im?: boolean; is_mpim?: boolean;
+      user?: string; // DM partner user ID (for im type)
       topic?: { value: string }; purpose?: { value: string }; num_members?: number;
     }>;
     response_metadata?: { next_cursor?: string };
   }> {
-    // users.conversations returns only channels the bot is a member of,
+    // users.conversations returns only channels the bot/user is a member of,
     // unlike conversations.list which returns all visible channels.
     return this.request('users.conversations', {
-      types: 'public_channel,private_channel',
+      types: types || 'public_channel,private_channel',
       exclude_archived: true,
       limit: 200,
       ...(cursor ? { cursor } : {}),
