@@ -947,7 +947,7 @@ function registerSharedRoutes(app: express.Express): void {
         cursor = result.response_metadata?.next_cursor || undefined;
       } while (cursor);
 
-      // Resolve DM user IDs to display names
+      // Resolve DM user IDs to display names + clean up group DM names
       if (dmUserIds.length > 0) {
         const uniqueIds = [...new Set(dmUserIds)];
         const nameMap = new Map<string, string>();
@@ -961,6 +961,17 @@ function registerSharedRoutes(app: express.Express): void {
           if (ch.is_dm && nameMap.has(ch.name)) {
             ch.name = nameMap.get(ch.name)!;
           }
+        }
+      }
+
+      // Clean up group DM (mpim) names: "mpdm-user1--user2--user3-1" → "User1, User2, User3"
+      for (const ch of allChannels) {
+        if (ch.is_dm && ch.name.startsWith('mpdm-')) {
+          const raw = ch.name.replace(/^mpdm-/, '').replace(/-\d+$/, '');
+          const usernames = raw.split('--').filter(Boolean);
+          ch.name = usernames
+            .map(u => u.split('.').map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' '))
+            .join(', ');
         }
       }
 
