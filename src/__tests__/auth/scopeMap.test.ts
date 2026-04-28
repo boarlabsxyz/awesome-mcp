@@ -48,6 +48,14 @@ describe('scopeMap', () => {
       assert.equal(getRequiredScope('/clickup-sse'), 'mcp:clickup');
     });
 
+    it('should return mcp:slack-bot for /slack-bot', () => {
+      assert.equal(getRequiredScope('/slack-bot'), 'mcp:slack-bot');
+    });
+
+    it('should return mcp:slack-bot for /slack-bot-sse', () => {
+      assert.equal(getRequiredScope('/slack-bot-sse'), 'mcp:slack-bot');
+    });
+
     it('should return mcp:slack for /slack', () => {
       assert.equal(getRequiredScope('/slack'), 'mcp:slack');
     });
@@ -69,8 +77,8 @@ describe('scopeMap', () => {
   });
 
   describe('ALL_SCOPES', () => {
-    it('should contain all 8 scopes', () => {
-      assert.equal(ALL_SCOPES.length, 8);
+    it('should contain all 9 scopes', () => {
+      assert.equal(ALL_SCOPES.length, 9);
       assert.ok(ALL_SCOPES.includes('mcp:docs'));
       assert.ok(ALL_SCOPES.includes('mcp:calendar'));
       assert.ok(ALL_SCOPES.includes('mcp:sheets'));
@@ -78,6 +86,7 @@ describe('scopeMap', () => {
       assert.ok(ALL_SCOPES.includes('mcp:slides'));
       assert.ok(ALL_SCOPES.includes('mcp:drive'));
       assert.ok(ALL_SCOPES.includes('mcp:clickup'));
+      assert.ok(ALL_SCOPES.includes('mcp:slack-bot'));
       assert.ok(ALL_SCOPES.includes('mcp:slack'));
     });
   });
@@ -91,6 +100,7 @@ describe('scopeMap', () => {
       assert.deepEqual(getScopesForSlug('google-slides'), ['mcp:slides']);
       assert.deepEqual(getScopesForSlug('google-drive'), ['mcp:drive']);
       assert.deepEqual(getScopesForSlug('clickup'), ['mcp:clickup']);
+      assert.deepEqual(getScopesForSlug('slack-bot'), ['mcp:slack-bot']);
       assert.deepEqual(getScopesForSlug('slack'), ['mcp:slack']);
     });
 

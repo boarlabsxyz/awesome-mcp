@@ -19,7 +19,12 @@ export interface ClickUpTokens {
   access_token: string;
 }
 
-export type ProviderTokens = GoogleTokens | ClickUpTokens;
+export interface SlackUserTokens {
+  access_token: string;
+  allowedChannels: string[];
+}
+
+export type ProviderTokens = GoogleTokens | ClickUpTokens | SlackUserTokens;
 
 export interface McpConnection {
   id: number;
@@ -704,6 +709,28 @@ export async function updateMcpInstanceTokens(
   const connection = await fileGetMcpConnectionByInstanceId(instanceId);
   if (connection) {
     await fileUpdateMcpTokens(connection.userId, connection.mcpSlug, tokens);
+  }
+}
+
+export async function updateMcpInstanceProviderTokens(
+  instanceId: string,
+  providerTokens: ProviderTokens
+): Promise<void> {
+  if (isDatabaseAvailable()) {
+    const pool = getPool();
+    await pool.query(
+      `UPDATE mcp_connections SET provider_tokens = $1::jsonb, updated_at = NOW() WHERE instance_id = $2`,
+      [JSON.stringify(providerTokens), instanceId]
+    );
+  } else {
+    // File-based: find and update by instanceId
+    await fileLoadConnections();
+    const connection = connections.find(c => c.instanceId === instanceId);
+    if (connection) {
+      connection.providerTokens = providerTokens;
+      connection.updatedAt = new Date().toISOString();
+      await saveConnections();
+    }
   }
 }
 

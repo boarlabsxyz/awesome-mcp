@@ -691,6 +691,23 @@
     </div>
   </div>
 
+  <!-- Channel Picker Modal (for Slack user OAuth) -->
+  <div id="channelPickerModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="channelPickerTitle">Select Channels</h3>
+        <button class="modal-close" onclick="closeChannelPicker()">&times;</button>
+      </div>
+      <p style="margin: 0 0 12px; color: #666; font-size: 14px;">Choose which channels this MCP can read and write. Only non-external channels are shown.</p>
+      <div id="channelList" style="max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 8px; padding: 8px;">
+        <p>Loading channels...</p>
+      </div>
+      <div style="margin-top: 12px; display: flex; gap: 8px;">
+        <button class="btn-connect-google" id="saveChannelsBtn" onclick="saveChannels()">Save Channels</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Login Overlay (shown when not authenticated) -->
   <div id="loginOverlay" class="login-overlay hidden">
     <div class="login-card">
@@ -749,6 +766,7 @@
         'google-calendar': '\u{1F4C5}',  // 📅
         'clickup': '\u2705',             // ✅
         'github': '\u{1F419}',           // 🐙
+        'slack-bot': '\u{1F916}',        // 🤖
         'slack': '\u{1F4AC}',            // 💬
         'notion': '\u{1F4D3}',           // 📓
       };
@@ -829,6 +847,7 @@
             ${showReconnect
               ? `<button class="btn-reconnect" onclick="reconnectInstance('${eid}', '${eslug}')">Reconnect</button>`
               : `<button class="btn-copy" onclick="copyUrl('${eid}', this)">Copy URL</button>`}
+            ${instance.provider === 'slack' ? `<button class="btn-rename" onclick="openChannelPicker('${eid}')">Channels</button>` : ''}
             <button class="btn-rename" onclick="renameInstance('${eid}')">Rename</button>
             <button class="btn-delete" onclick="deleteInstance('${eid}', '${ename}')">Delete</button>
           </div>
@@ -905,7 +924,7 @@
       }
 
       // Toggle between OAuth button and direct token input based on provider
-      const isTokenProvider = selectedMcpType.provider === 'slack';
+      const isTokenProvider = selectedMcpType.provider === 'slack-bot';
       document.getElementById('connectGoogleBtn').style.display = isTokenProvider ? 'none' : '';
       document.getElementById('connectTokenBtn').style.display = isTokenProvider ? '' : 'none';
       document.getElementById('tokenInputSection').style.display = isTokenProvider ? '' : 'none';
@@ -971,6 +990,79 @@
       } finally {
         btn.disabled = false;
         btn.textContent = 'Connect';
+      }
+    }
+
+    // === Channel Picker ===
+    let channelPickerInstanceId = null;
+
+    async function openChannelPicker(instanceId) {
+      channelPickerInstanceId = instanceId;
+      document.getElementById('channelPickerModal').classList.remove('hidden');
+      document.getElementById('channelList').innerHTML = '<p>Loading channels...</p>';
+
+      try {
+        const response = await fetch(`/api/instances/${instanceId}/channels`, { credentials: 'include' });
+        if (!response.ok) throw new Error('Failed to load channels');
+        const data = await response.json();
+        const { channels, currentAllowed } = data;
+
+        if (channels.length === 0) {
+          document.getElementById('channelList').innerHTML = '<p>No channels found.</p>';
+          return;
+        }
+
+        const allowedSet = new Set(currentAllowed || []);
+        const html = channels
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map(ch => `
+            <label style="display: flex; align-items: center; padding: 6px 8px; gap: 8px; cursor: pointer;">
+              <input type="checkbox" value="${ch.id}" ${allowedSet.has(ch.id) ? 'checked' : ''} />
+              <span style="flex: 1;">#${ch.name} ${ch.is_private ? '(private)' : ''}</span>
+              ${ch.num_members !== undefined ? `<span style="color: #999; font-size: 12px;">${ch.num_members} members</span>` : ''}
+            </label>
+          `).join('');
+        document.getElementById('channelList').innerHTML = html;
+      } catch (err) {
+        document.getElementById('channelList').innerHTML = `<p style="color: red;">Error: ${err.message}</p>`;
+      }
+    }
+
+    function closeChannelPicker() {
+      document.getElementById('channelPickerModal').classList.add('hidden');
+      channelPickerInstanceId = null;
+    }
+
+    async function saveChannels() {
+      if (!channelPickerInstanceId) return;
+      const checkboxes = document.querySelectorAll('#channelList input[type="checkbox"]:checked');
+      const channelIds = Array.from(checkboxes).map(cb => cb.value);
+      if (channelIds.length === 0) {
+        alert('Please select at least one channel.');
+        return;
+      }
+
+      const btn = document.getElementById('saveChannelsBtn');
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+
+      try {
+        const response = await fetch(`/api/instances/${channelPickerInstanceId}/channels`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ channelIds }),
+        });
+        if (!response.ok) throw new Error('Failed to save');
+        closeChannelPicker();
+        // Reload to reflect changes
+        const user = await loadUserData();
+        if (user) { currentUser = user; instances = user.connections || []; renderInstances(); }
+      } catch (err) {
+        alert('Failed to save channels: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save Channels';
       }
     }
 
@@ -1137,6 +1229,13 @@
           showSuccess(`Successfully connected "${decodeURIComponent(connectedInstance)}"!`);
         } else if (reconnectedInstance) {
           showSuccess(`Successfully reconnected "${decodeURIComponent(reconnectedInstance)}"!`);
+        }
+
+        // Auto-open channel picker if redirected from Slack OAuth
+        const channelSetupId = new URLSearchParams(window.location.search).get('channelSetup');
+        if (channelSetupId) {
+          window.history.replaceState({}, '', '/dashboard');
+          openChannelPicker(channelSetupId);
         }
 
         document.getElementById('loading').classList.add('hidden');

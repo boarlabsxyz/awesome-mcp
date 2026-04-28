@@ -439,21 +439,43 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
-  // Slack MCP (bot-token provider — no OAuth, user pastes xoxb- token)
-  const slackMcpUrl = normalizeUrl(process.env.SLACK_MCP_URL, '/slack');
+  // Slack Bot MCP (bot-token provider — no OAuth, user pastes xoxb- token)
+  const slackBotMcpUrl = normalizeUrl(process.env.SLACK_BOT_MCP_URL, '/slack-bot');
 
   await createMcpCatalog({
-    slug: 'slack',
-    name: 'Slack MCP',
+    slug: 'slack-bot',
+    name: 'Slack Bot MCP',
     description: 'Read channels and post messages in Slack workspaces via bot token',
     iconUrl: 'https://a.slack-edge.com/80588/marketing/img/icons/icon_slack_hash_colored.png',
-    mcpUrl: slackMcpUrl,
-    provider: 'slack',
+    mcpUrl: slackBotMcpUrl,
+    provider: 'slack-bot',
     scopes: [],
     googleClientId: null,
     googleClientSecret: null,
     oauthScopes: [],
-    isLocal: !process.env.SLACK_MCP_URL,
+    isLocal: !process.env.SLACK_BOT_MCP_URL,
+    isActive: true,
+  });
+
+  // Slack User MCP (OAuth-based with channel allowlist)
+  const slackClientId = process.env.SLACK_CLIENT_ID || null;
+  const slackClientSecret = process.env.SLACK_CLIENT_SECRET || null;
+  const slackUserMcpUrl = normalizeUrl(process.env.SLACK_USER_MCP_URL, '/slack');
+
+  await createMcpCatalog({
+    slug: 'slack',
+    name: 'Slack MCP',
+    description: 'Read and write Slack channels with per-channel access control',
+    iconUrl: 'https://a.slack-edge.com/80588/marketing/img/icons/icon_slack_hash_colored.png',
+    mcpUrl: slackUserMcpUrl,
+    provider: 'slack',
+    scopes: [],
+    googleClientId: slackClientId,
+    googleClientSecret: slackClientSecret,
+    oauthAuthorizationUrl: 'https://slack.com/oauth/v2/authorize',
+    oauthTokenUrl: 'https://slack.com/api/oauth.v2.access',
+    oauthScopes: ['channels:history', 'channels:read', 'groups:history', 'groups:read', 'chat:write', 'users:read'],
+    isLocal: !process.env.SLACK_USER_MCP_URL,
     isActive: true,
   });
 
