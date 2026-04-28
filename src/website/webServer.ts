@@ -5,9 +5,9 @@ import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { createProxyMiddleware } from 'http-proxy-middleware';
-import { resourceServerMiddleware } from '../auth/resourceServerMiddleware.js';
+import { resourceServerMiddleware, createResourceServerMiddleware } from '../auth/resourceServerMiddleware.js';
 import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
-import { validateJwt, validateOpaqueToken } from '../auth/jwtValidator.js';
+import { validateJwt, validateOpaqueToken, hasScope } from '../auth/jwtValidator.js';
 import { mapJwtToUser } from '../auth/userMapping.js';
 import { looksLikeJwt } from '../auth/resourceServerMiddleware.js';
 
@@ -2890,7 +2890,16 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
   registerOAuthProxy(app, mcpBaseUrl, getScopesForSlug(mcpSlug));
 
   // Proxy MCP requests to internal FastMCP server (JWT auth enforced before proxy)
-  app.use(['/mcp', '/sse'], resourceServerMiddleware);
+  // In MCP-only mode, /mcp path should require this service's scope, not mcp:docs
+  const mcpScopeForSlug = getScopesForSlug(mcpSlug)[0] || null;
+  const mcpOnlyMiddleware = createResourceServerMiddleware({
+    validateJwt,
+    validateOpaqueToken,
+    hasScope,
+    getRequiredScope: () => mcpScopeForSlug,
+    mapJwtToUser,
+  });
+  app.use(['/mcp', '/sse'], mcpOnlyMiddleware);
   const mcpProxy = createProxyMiddleware({
     target: `http://127.0.0.1:${internalMcpPort}`,
     changeOrigin: true,
