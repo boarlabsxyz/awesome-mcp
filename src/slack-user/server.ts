@@ -43,16 +43,28 @@ slackUserServer.addTool({
     const allowed = (session!.slackAllowedChannels as string[]) || [];
     if (allowed.length === 0) return 'No channels configured. Visit the dashboard to select allowed channels.';
 
-    const result = await client.conversationsList(args.cursor);
+    const result = await client.conversationsList(args.cursor, 'public_channel,private_channel,im,mpim');
     // Filter to only allowed channels
     const channels = result.channels.filter(ch => allowed.includes(ch.id));
 
     if (channels.length === 0) return 'No allowed channels found in this page. Try the next cursor or check your channel configuration.';
 
+    // Resolve DM user names
+    const dmUserIds = channels.filter(ch => (ch as any).is_im && ch.user).map(ch => ch.user!);
+    const userNames = dmUserIds.length > 0 ? await resolveUsers(client, dmUserIds, session!.slackUserToken as string) : new Map<string, string>();
+
     const lines = channels.map(ch => {
+      const isDm = !!(ch as any).is_im;
+      const isMpim = !!(ch as any).is_mpim;
+      const type = isDm ? 'im' : isMpim ? 'mpim' : ch.is_private ? 'private' : 'public';
+      let displayName = ch.name;
+      if (isDm && ch.user && userNames.has(ch.user)) {
+        displayName = userNames.get(ch.user)!;
+      }
+      const prefix = isDm || isMpim ? '' : '#';
       const parts = [
-        `#${ch.name} (${ch.id})`,
-        ch.is_private ? '  Type: private' : '  Type: public',
+        `${prefix}${displayName} (${ch.id})`,
+        `  Type: ${type}`,
       ];
       if (ch.topic?.value) parts.push(`  Topic: ${ch.topic.value}`);
       if (ch.purpose?.value) parts.push(`  Purpose: ${ch.purpose.value}`);
