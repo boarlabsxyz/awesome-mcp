@@ -24,19 +24,51 @@ function assertWritesEnabled(): void {
   }
 }
 
-/** Resolve Slack user IDs to display names, with per-call caching. */
-async function resolveUsers(client: SlackClient, userIds: string[]): Promise<Map<string, string>> {
-  const cache = new Map<string, string>();
-  const unique = [...new Set(userIds.filter(Boolean))];
-  await Promise.all(unique.map(async (uid) => {
-    try {
-      const { user } = await client.usersInfo(uid);
-      cache.set(uid, user.profile?.display_name || user.real_name || user.name);
-    } catch {
-      cache.set(uid, uid); // fall back to raw ID
+/** Module-level user name cache: key = "botToken:userId", value = { name, expiresAt }. */
+const userNameCache = new Map<string, { name: string; expiresAt: number }>();
+const USER_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const USER_LOOKUP_CONCURRENCY = 5;
+
+/** Resolve Slack user IDs to display names with cross-request caching and bounded concurrency. */
+async function resolveUsers(client: SlackClient, userIds: string[], botToken?: string): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  const tokenPrefix = botToken || 'default';
+  const now = Date.now();
+  const toFetch: string[] = [];
+
+  // Check cache first
+  for (const uid of new Set(userIds.filter(Boolean))) {
+    const cached = userNameCache.get(`${tokenPrefix}:${uid}`);
+    if (cached && cached.expiresAt > now) {
+      result.set(uid, cached.name);
+    } else {
+      toFetch.push(uid);
     }
-  }));
-  return cache;
+  }
+
+  // Fetch missing/expired entries with bounded concurrency
+  if (toFetch.length > 0) {
+    let i = 0;
+    while (i < toFetch.length) {
+      const batch = toFetch.slice(i, i + USER_LOOKUP_CONCURRENCY);
+      await Promise.all(batch.map(async (uid) => {
+        const cacheKey = `${tokenPrefix}:${uid}`;
+        try {
+          const { user } = await client.usersInfo(uid);
+          const name = user.profile?.display_name || user.real_name || user.name;
+          result.set(uid, name);
+          userNameCache.set(cacheKey, { name, expiresAt: now + USER_CACHE_TTL_MS });
+        } catch {
+          result.set(uid, uid); // fall back to raw ID
+          // Cache failures briefly (1 min) to avoid hammering on persistent errors
+          userNameCache.set(cacheKey, { name: uid, expiresAt: now + 60_000 });
+        }
+      }));
+      i += USER_LOOKUP_CONCURRENCY;
+    }
+  }
+
+  return result;
 }
 
 function formatTimestamp(ts: string): string {
@@ -136,7 +168,7 @@ slackServer.addTool({
 
     // Resolve user IDs to names
     const userIds = messages.map(m => m.user).filter(Boolean) as string[];
-    const userNames = await resolveUsers(client, userIds);
+    const userNames = await resolveUsers(client, userIds, session!.slackBotToken as string);
 
     // Messages come newest-first from Slack; reverse for chronological order
     const lines = messages.reverse().map(msg => formatMessage(msg, userNames, args.channelId, wsUrl));
@@ -172,7 +204,7 @@ slackServer.addTool({
     if (messages.length === 0) return 'No replies found in this thread.';
 
     const userIds = messages.map(m => m.user).filter(Boolean) as string[];
-    const userNames = await resolveUsers(client, userIds);
+    const userNames = await resolveUsers(client, userIds, session!.slackBotToken as string);
 
     const lines = messages.map(msg => formatMessage(msg, userNames, args.channelId, wsUrl));
 
