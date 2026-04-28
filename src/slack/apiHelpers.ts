@@ -71,6 +71,7 @@ export class SlackClient {
   async conversationsList(cursor?: string): Promise<{
     channels: Array<{
       id: string; name: string; is_private: boolean; is_archived: boolean;
+      is_ext_shared?: boolean; is_org_shared?: boolean;
       topic?: { value: string }; purpose?: { value: string }; num_members?: number;
     }>;
     response_metadata?: { next_cursor?: string };

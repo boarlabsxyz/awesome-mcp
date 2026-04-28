@@ -925,17 +925,16 @@ function registerSharedRoutes(app: express.Express): void {
       const client = new SlackClient(accessToken);
 
       // Paginate through all channels
-      const allChannels: Array<{ id: string; name: string; is_private: boolean; topic?: string; num_members?: number }> = [];
+      const allChannels: Array<{ id: string; name: string; is_private: boolean; is_external: boolean; topic?: string; num_members?: number }> = [];
       let cursor: string | undefined;
       do {
         const result = await client.conversationsList(cursor);
         for (const ch of result.channels) {
-          // Filter out external/shared channels
-          if ((ch as any).is_ext_shared || (ch as any).is_org_shared) continue;
           allChannels.push({
             id: ch.id,
             name: ch.name,
             is_private: ch.is_private,
+            is_external: !!(ch as any).is_ext_shared || !!(ch as any).is_org_shared,
             topic: ch.topic?.value || undefined,
             num_members: ch.num_members,
           });
