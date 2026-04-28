@@ -1029,11 +1029,23 @@
           `;
         }
 
-        const regular = channels.filter(ch => !ch.is_external).sort((a, b) => a.name.localeCompare(b.name));
-        const external = channels.filter(ch => ch.is_external).sort((a, b) => a.name.localeCompare(b.name));
+        // Sort by latest usage (updated timestamp, descending)
+        const byRecent = (a, b) => (b.updated || 0) - (a.updated || 0);
 
-        let html = regular.map(renderChannelItem).join('');
+        // Split into sections: DMs, channels, external
+        const dms = channels.filter(ch => ch.is_dm && !ch.is_external).sort(byRecent);
+        const regularChannels = channels.filter(ch => !ch.is_dm && !ch.is_external).sort(byRecent);
+        const external = channels.filter(ch => ch.is_external).sort(byRecent);
 
+        let html = '';
+        if (dms.length > 0) {
+          html += `<div style="margin: 0 0 8px;"><span style="color: #a78bfa; font-size: 12px; font-weight: 600;">Direct Messages</span></div>`;
+          html += dms.map(renderChannelItem).join('');
+        }
+        if (regularChannels.length > 0) {
+          html += `<div style="margin: 12px 0 8px; padding-top: 8px; border-top: 1px solid #444;"><span style="color: #999; font-size: 12px; font-weight: 600;">Channels</span></div>`;
+          html += regularChannels.map(renderChannelItem).join('');
+        }
         if (external.length > 0) {
           html += `
             <div style="margin: 12px 0 8px; padding-top: 8px; border-top: 1px solid #444;">

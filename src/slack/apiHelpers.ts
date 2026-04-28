@@ -133,7 +133,7 @@ export class SlackClient {
   // === Users ===
 
   async usersInfo(userId: string): Promise<{
-    user: { id: string; name: string; real_name: string; profile?: { display_name?: string } };
+    user: { id: string; name: string; real_name: string; is_bot?: boolean; is_app_user?: boolean; profile?: { display_name?: string } };
   }> {
     return this.request('users.info', { user: userId });
   }

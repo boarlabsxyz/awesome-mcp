@@ -925,21 +925,21 @@ function registerSharedRoutes(app: express.Express): void {
       const client = new SlackClient(accessToken);
 
       // Paginate through all channels, including DMs
-      const allChannels: Array<{ id: string; name: string; is_private: boolean; is_external: boolean; is_dm: boolean; topic?: string; num_members?: number }> = [];
-      const dmUserIds: string[] = [];
+      const allChannels: Array<{ id: string; name: string; is_private: boolean; is_external: boolean; is_dm: boolean; updated: number; dmUserId?: string; topic?: string; num_members?: number }> = [];
       let cursor: string | undefined;
       do {
         const result = await client.conversationsList(cursor, 'public_channel,private_channel,im,mpim');
         for (const ch of result.channels) {
           const isDm = !!(ch as any).is_im;
           const isMpim = !!(ch as any).is_mpim;
-          if (isDm && (ch as any).user) dmUserIds.push((ch as any).user);
           allChannels.push({
             id: ch.id,
-            name: isDm ? (ch as any).user || ch.id : ch.name, // DMs don't have names, use user ID for now
+            name: isDm ? (ch as any).user || ch.id : ch.name,
             is_private: ch.is_private || isDm || isMpim,
             is_external: !!(ch as any).is_ext_shared || !!(ch as any).is_org_shared,
             is_dm: isDm || isMpim,
+            updated: (ch as any).updated || 0,
+            dmUserId: isDm ? (ch as any).user : undefined,
             topic: ch.topic?.value || undefined,
             num_members: ch.num_members,
           });
@@ -947,25 +947,36 @@ function registerSharedRoutes(app: express.Express): void {
         cursor = result.response_metadata?.next_cursor || undefined;
       } while (cursor);
 
-      // Resolve DM user IDs to display names + clean up group DM names
+      // Resolve DM user IDs to display names, detect bots/apps
+      const dmUserIds = allChannels.filter(ch => ch.dmUserId).map(ch => ch.dmUserId!);
+      const botIds = new Set<string>();
       if (dmUserIds.length > 0) {
         const uniqueIds = [...new Set(dmUserIds)];
         const nameMap = new Map<string, string>();
         await Promise.all(uniqueIds.slice(0, 50).map(async (uid) => {
           try {
             const { user } = await client.usersInfo(uid);
+            if (user.is_bot || (user as any).is_app_user) {
+              botIds.add(uid);
+            }
             nameMap.set(uid, user.profile?.display_name || user.real_name || user.name);
           } catch { /* skip */ }
         }));
         for (const ch of allChannels) {
-          if (ch.is_dm && nameMap.has(ch.name)) {
-            ch.name = nameMap.get(ch.name)!;
+          if (ch.is_dm && ch.dmUserId && nameMap.has(ch.dmUserId)) {
+            ch.name = nameMap.get(ch.dmUserId)!;
           }
         }
       }
 
+      // Remove DMs with bots/apps
+      const filtered = allChannels.filter(ch => {
+        if (!ch.dmUserId) return true; // channels and group DMs pass through
+        return !botIds.has(ch.dmUserId);
+      });
+
       // Clean up group DM (mpim) names: "mpdm-user1--user2--user3-1" → "User1, User2, User3"
-      for (const ch of allChannels) {
+      for (const ch of filtered) {
         if (ch.is_dm && ch.name.startsWith('mpdm-')) {
           const raw = ch.name.replace(/^mpdm-/, '').replace(/-\d+$/, '');
           const usernames = raw.split('--').filter(Boolean);
@@ -975,8 +986,12 @@ function registerSharedRoutes(app: express.Express): void {
         }
       }
 
+      // Strip internal dmUserId field before sending to client
       const currentAllowed = (connection.providerTokens as any)?.allowedChannels || [];
-      res.json({ channels: allChannels, currentAllowed });
+      res.json({
+        channels: filtered.map(({ dmUserId, ...ch }) => ch),
+        currentAllowed,
+      });
     } catch (err) {
       console.error('[channels] error:', err);
       res.status(500).json({ error: 'Failed to list channels' });
