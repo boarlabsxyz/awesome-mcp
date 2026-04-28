@@ -44,11 +44,35 @@ function formatTimestamp(ts: string): string {
   return date.toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
 }
 
-function formatMessage(msg: any, userNames: Map<string, string>): string {
+/** Build a Slack message permalink from workspace URL, channel ID, and ts. */
+function buildPermalink(workspaceUrl: string, channelId: string, ts: string): string {
+  // Slack permalink format: https://workspace.slack.com/archives/CHANNEL/pTIMESTAMP
+  // ts "1777282941.123456" → "p1777282941123456" (remove the dot)
+  const pTs = 'p' + ts.replace('.', '');
+  return `${workspaceUrl.replace(/\/$/, '')}/archives/${channelId}/${pTs}`;
+}
+
+/** Cache workspace URL per bot token to avoid repeated auth.test calls. */
+const workspaceUrlCache = new Map<string, string>();
+
+async function getWorkspaceUrl(client: SlackClient, token: string): Promise<string> {
+  const cached = workspaceUrlCache.get(token);
+  if (cached) return cached;
+  try {
+    const { url } = await client.authTest();
+    workspaceUrlCache.set(token, url);
+    return url;
+  } catch {
+    return ''; // graceful fallback — permalinks will be omitted
+  }
+}
+
+function formatMessage(msg: any, userNames: Map<string, string>, channelId?: string, workspaceUrl?: string): string {
   const who = msg.user ? (userNames.get(msg.user) || msg.user) : 'unknown';
   const time = formatTimestamp(msg.ts);
   const thread = msg.reply_count ? ` [${msg.reply_count} replies]` : '';
-  return `[${time}] (ts: ${msg.ts}) ${who}: ${msg.text}${thread}`;
+  const link = workspaceUrl && channelId ? ` ${buildPermalink(workspaceUrl, channelId, msg.ts)}` : '';
+  return `[${time}] (ts: ${msg.ts}) ${who}: ${msg.text}${thread}${link}`;
 }
 
 // === Tools ===
@@ -99,6 +123,7 @@ slackServer.addTool({
   execute: async (args, { session }) => {
     const client = getSlackClient(session);
     const limit = Math.min(Math.max(args.limit, 1), 100);
+    const wsUrl = await getWorkspaceUrl(client, session!.slackBotToken as string);
     const result = await client.conversationsHistory(args.channelId, {
       limit,
       oldest: args.oldest,
@@ -114,7 +139,7 @@ slackServer.addTool({
     const userNames = await resolveUsers(client, userIds);
 
     // Messages come newest-first from Slack; reverse for chronological order
-    const lines = messages.reverse().map(msg => formatMessage(msg, userNames));
+    const lines = messages.reverse().map(msg => formatMessage(msg, userNames, args.channelId, wsUrl));
 
     let output = lines.join('\n');
     const nextCursor = result.response_metadata?.next_cursor;
@@ -137,6 +162,7 @@ slackServer.addTool({
   execute: async (args, { session }) => {
     const client = getSlackClient(session);
     const limit = Math.min(Math.max(args.limit, 1), 200);
+    const wsUrl = await getWorkspaceUrl(client, session!.slackBotToken as string);
     const result = await client.conversationsReplies(args.channelId, args.threadTs, {
       limit,
       cursor: args.cursor,
@@ -148,7 +174,7 @@ slackServer.addTool({
     const userIds = messages.map(m => m.user).filter(Boolean) as string[];
     const userNames = await resolveUsers(client, userIds);
 
-    const lines = messages.map(msg => formatMessage(msg, userNames));
+    const lines = messages.map(msg => formatMessage(msg, userNames, args.channelId, wsUrl));
 
     let output = lines.join('\n');
     const nextCursor = result.response_metadata?.next_cursor;
