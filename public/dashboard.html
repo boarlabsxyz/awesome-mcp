@@ -1014,11 +1014,14 @@
 
         const allowedSet = new Set(currentAllowed || []);
 
+        let sectionCounter = 0;
+
         function renderChannelItem(ch) {
           const checked = allowedSet.has(ch.id) ? 'checked' : '';
           const isDm = ch.is_dm;
           const prefix = isDm ? '' : '#';
-          const badge = isDm ? '<span style="color: #a78bfa; font-size: 11px; margin-left: 4px;">DM</span>'
+          const badge = ch.is_bot ? '<span style="color: #6ee7b7; font-size: 11px; margin-left: 4px;">bot</span>'
+            : isDm ? '<span style="color: #a78bfa; font-size: 11px; margin-left: 4px;">DM</span>'
             : ch.is_private ? '<span style="color: #999; font-size: 11px; margin-left: 4px;">private</span>' : '';
           return `
             <label style="display: flex; align-items: center; padding: 6px 8px; gap: 8px; cursor: pointer;">
@@ -1029,31 +1032,39 @@
           `;
         }
 
+        function renderSection(label, color, items, collapsed) {
+          if (items.length === 0) return '';
+          const id = 'chSec' + (sectionCounter++);
+          const border = sectionCounter > 1 ? 'border-top: 1px solid #444; padding-top: 8px;' : '';
+          return `
+            <div style="margin: ${sectionCounter > 1 ? '12px' : '0'} 0 4px; ${border}">
+              <div onclick="document.getElementById('${id}').classList.toggle('hidden'); this.querySelector('.arrow').textContent = document.getElementById('${id}').classList.contains('hidden') ? '\u25B6' : '\u25BC';"
+                   style="cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none;">
+                <span class="arrow" style="font-size: 10px; color: #666;">${collapsed ? '\u25B6' : '\u25BC'}</span>
+                <span style="color: ${color}; font-size: 12px; font-weight: 600;">${label}</span>
+                <span style="color: #666; font-size: 11px;">(${items.length})</span>
+              </div>
+            </div>
+            <div id="${id}" class="${collapsed ? 'hidden' : ''}">
+              ${items.map(renderChannelItem).join('')}
+            </div>
+          `;
+        }
+
         // Sort by latest usage (updated timestamp, descending)
         const byRecent = (a, b) => (b.updated || 0) - (a.updated || 0);
 
-        // Split into sections: DMs, channels, external
-        const dms = channels.filter(ch => ch.is_dm && !ch.is_external).sort(byRecent);
-        const regularChannels = channels.filter(ch => !ch.is_dm && !ch.is_external).sort(byRecent);
-        const external = channels.filter(ch => ch.is_external).sort(byRecent);
+        // Split into sections
+        const dms = channels.filter(ch => ch.is_dm && !ch.is_external && !ch.is_bot).sort(byRecent);
+        const regularChannels = channels.filter(ch => !ch.is_dm && !ch.is_external && !ch.is_bot).sort(byRecent);
+        const bots = channels.filter(ch => ch.is_bot).sort(byRecent);
+        const external = channels.filter(ch => ch.is_external && !ch.is_bot).sort(byRecent);
 
         let html = '';
-        if (dms.length > 0) {
-          html += `<div style="margin: 0 0 8px;"><span style="color: #a78bfa; font-size: 12px; font-weight: 600;">Direct Messages</span></div>`;
-          html += dms.map(renderChannelItem).join('');
-        }
-        if (regularChannels.length > 0) {
-          html += `<div style="margin: 12px 0 8px; padding-top: 8px; border-top: 1px solid #444;"><span style="color: #999; font-size: 12px; font-weight: 600;">Channels</span></div>`;
-          html += regularChannels.map(renderChannelItem).join('');
-        }
-        if (external.length > 0) {
-          html += `
-            <div style="margin: 12px 0 8px; padding-top: 8px; border-top: 1px solid #444;">
-              <span style="color: #f59e0b; font-size: 12px; font-weight: 600;">External / Shared Channels</span>
-            </div>
-          `;
-          html += external.map(renderChannelItem).join('');
-        }
+        html += renderSection('Direct Messages', '#a78bfa', dms, false);
+        html += renderSection('Channels', '#999', regularChannels, false);
+        html += renderSection('Bots & Apps', '#6ee7b7', bots, true);
+        html += renderSection('External / Shared', '#f59e0b', external, true);
 
         document.getElementById('channelList').innerHTML = html;
       } catch (err) {
