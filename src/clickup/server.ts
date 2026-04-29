@@ -569,6 +569,48 @@ clickUpServer.addTool({
 });
 
 clickUpServer.addTool({
+  name: 'createDoc',
+  description: 'Create a new ClickUp Doc in a workspace. Optionally place it inside a Space, Folder, or List by providing parent ID and type.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+    name: z.string().min(1).describe('Title of the new doc.'),
+    content: z.string().optional().describe('Initial content of the doc (markdown supported).'),
+    parentId: z.string().optional().describe('ID of the parent (Space, Folder, or List) to place the doc in.'),
+    parentType: z.number().optional().describe('Type of parent: 4 = Space, 5 = Folder, 6 = List. Required if parentId is provided.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    const data: any = { name: args.name };
+    if (args.content) data.content = args.content;
+    if (args.parentId && args.parentType !== undefined) {
+      data.parent = { id: args.parentId, type: args.parentType };
+    }
+    const result = await client.createDoc(args.workspaceId, data);
+    return `Doc created: ${result.name || result.title || args.name}\n  ID: ${result.id}`;
+  },
+});
+
+clickUpServer.addTool({
+  name: 'listWorkspaceMembers',
+  description: 'List all members of a ClickUp workspace. Useful for looking up user IDs by name when assigning tasks.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    const result = await client.getWorkspaces();
+    const team = (result.teams || []).find((t: any) => String(t.id) === String(args.workspaceId));
+    if (!team) return `Workspace ${args.workspaceId} not found.`;
+    const members = team.members || [];
+    if (members.length === 0) return 'No members found in this workspace.';
+    return members.map((m: any) => {
+      const u = m.user || m;
+      return `${u.username || u.email}\n  ID: ${u.id}\n  Email: ${u.email || 'N/A'}\n  Role: ${m.role || 'member'}`;
+    }).join('\n\n');
+  },
+});
+
+clickUpServer.addTool({
   name: 'startTimeEntry',
   description: 'Start a time tracking entry for a task in ClickUp.',
   parameters: z.object({
