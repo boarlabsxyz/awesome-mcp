@@ -133,8 +133,60 @@ export class SlackClient {
   // === Users ===
 
   async usersInfo(userId: string): Promise<{
-    user: { id: string; name: string; real_name: string; is_bot?: boolean; is_app_user?: boolean; profile?: { display_name?: string } };
+    user: { id: string; name: string; real_name: string; is_bot?: boolean; is_app_user?: boolean; team_id?: string; profile?: { display_name?: string; image_48?: string } };
   }> {
     return this.request('users.info', { user: userId });
+  }
+
+  // === Team ===
+
+  async teamInfo(): Promise<{
+    team: { id: string; name: string; domain: string };
+  }> {
+    return this.request('team.info');
+  }
+
+  // === Conversations (extended) ===
+
+  async conversationsInfo(channel: string): Promise<{
+    channel: {
+      id: string; name: string; is_private: boolean;
+      is_shared: boolean; is_ext_shared: boolean; is_org_shared: boolean;
+      is_im: boolean; is_mpim: boolean;
+      user?: string;
+      shared_team_ids?: string[];
+      topic?: { value: string }; purpose?: { value: string };
+      num_members?: number;
+    };
+  }> {
+    return this.request('conversations.info', { channel });
+  }
+
+  async conversationsMembers(channel: string, cursor?: string): Promise<{
+    members: string[];
+    response_metadata?: { next_cursor?: string };
+  }> {
+    return this.request('conversations.members', {
+      channel,
+      limit: 200,
+      ...(cursor ? { cursor } : {}),
+    });
+  }
+
+  // === Users (list) ===
+
+  async usersList(cursor?: string, limit?: number): Promise<{
+    members: Array<{
+      id: string; name: string; real_name: string;
+      team_id: string; is_bot: boolean;
+      deleted?: boolean;
+      profile?: { display_name?: string; image_48?: string };
+    }>;
+    response_metadata?: { next_cursor?: string };
+  }> {
+    return this.request('users.list', {
+      limit: limit ?? 200,
+      ...(cursor ? { cursor } : {}),
+    });
   }
 }

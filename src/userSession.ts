@@ -20,7 +20,7 @@ export interface UserSession {
   clickUpAccessToken?: string;
   slackBotToken?: string;
   slackUserToken?: string;
-  slackAllowedChannels?: string[];
+  slackAccessRules?: import('./mcpConnectionStore.js').SlackAccessRules;
 }
 
 // Cache sessions to avoid recreating clients per request
@@ -212,7 +212,15 @@ export function createSlackUserSession(
   const cached = mcpSessionCache.get(cacheKey);
   if (cached) return cached;
 
-  const allowedChannels = (connection.providerTokens as any)?.allowedChannels || [];
+  // Migrate old format if needed
+  const tokens = connection.providerTokens as any;
+  const accessRules = tokens?.accessRules || {
+    allowedOrgs: [],
+    blacklistUsers: [],
+    whitelistChannels: [],
+    blacklistChannels: [],
+    allowPublicOnly: false,
+  };
 
   const session: UserSession = {
     userId: user.id,
@@ -220,7 +228,7 @@ export function createSlackUserSession(
     email: user.email,
     mcpSlug: connection.mcpSlug,
     slackUserToken: accessToken,
-    slackAllowedChannels: allowedChannels,
+    slackAccessRules: accessRules,
     // Null placeholders for Google clients (Slack MCP won't use them)
     googleDocs: null as any,
     googleDrive: null as any,

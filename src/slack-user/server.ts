@@ -1,11 +1,13 @@
 // src/slack-user/server.ts
-// Slack MCP using user OAuth tokens (xoxp-) with channel allowlist enforcement.
+// Slack MCP using user OAuth tokens (xoxp-) with rule-based access control.
 import { FastMCP, UserError } from 'fastmcp';
 import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { SlackClient } from '../slack/apiHelpers.js';
 import { resolveUsers, getWorkspaceUrl, formatMessage, assertWritesEnabled } from '../slack/helpers.js';
+import { assertAccess, fetchChannelMeta, filterChannelList } from './accessControl.js';
+import type { SlackAccessRules } from '../mcpConnectionStore.js';
 
 export const slackUserServer = new FastMCP<UserSession>({
   name: 'Slack MCP Server',
@@ -20,34 +22,37 @@ function getSlackUserClient(session?: UserSession): SlackClient {
   return new SlackClient(session.slackUserToken as string);
 }
 
-function assertChannelAllowed(session: UserSession, channelId: string): void {
-  const allowed = session.slackAllowedChannels as string[] | undefined;
-  if (!allowed || allowed.length === 0) {
-    throw new UserError('No channels configured. Visit the dashboard to select allowed channels.');
+function getRules(session: UserSession): SlackAccessRules {
+  const rules = session.slackAccessRules as SlackAccessRules | undefined;
+  if (!rules) {
+    throw new UserError('No access rules configured. Visit the dashboard to configure access rules.');
   }
-  if (!allowed.includes(channelId)) {
-    throw new UserError(`Channel ${channelId} is not in your allowed list. Update channel permissions in the dashboard.`);
-  }
+  return rules;
+}
+
+/** Enforce access rules for a channel, fetching metadata as needed. */
+async function enforceAccess(client: SlackClient, session: UserSession, channelId: string): Promise<void> {
+  const rules = getRules(session);
+  const meta = await fetchChannelMeta(client, channelId, session.slackUserToken as string);
+  assertAccess(rules, meta);
 }
 
 // === Tools ===
 
 slackUserServer.addTool({
   name: 'listChannels',
-  description: 'List Slack channels you have access to. Only channels selected in the dashboard are shown.',
+  description: 'List Slack channels and DMs you have access to, filtered by your access rules.',
   parameters: z.object({
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
   }),
   execute: async (args, { session }) => {
     const client = getSlackUserClient(session);
-    const allowed = (session!.slackAllowedChannels as string[]) || [];
-    if (allowed.length === 0) return 'No channels configured. Visit the dashboard to select allowed channels.';
+    const rules = getRules(session!);
 
     const result = await client.conversationsList(args.cursor, 'public_channel,private_channel,im,mpim');
-    // Filter to only allowed channels
-    const channels = result.channels.filter(ch => allowed.includes(ch.id));
+    const channels = filterChannelList(rules, result.channels) as typeof result.channels;
 
-    if (channels.length === 0) return 'No allowed channels found in this page. Try the next cursor or check your channel configuration.';
+    if (channels.length === 0) return 'No channels match your access rules. Check your configuration in the dashboard.';
 
     // Resolve DM user names
     const dmUserIds = channels.filter(ch => (ch as any).is_im && ch.user).map(ch => ch.user!);
@@ -83,7 +88,7 @@ slackUserServer.addTool({
 
 slackUserServer.addTool({
   name: 'readChannelHistory',
-  description: 'Read recent messages from a Slack channel. Only allowed channels can be read.',
+  description: 'Read recent messages from a Slack channel. Access rules are enforced.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID (e.g., C01234ABCDE).'),
     limit: z.number().optional().default(20).describe('Number of messages to return (1-100, default 20).'),
@@ -92,8 +97,8 @@ slackUserServer.addTool({
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
   }),
   execute: async (args, { session }) => {
-    assertChannelAllowed(session!, args.channelId);
     const client = getSlackUserClient(session);
+    await enforceAccess(client, session!, args.channelId);
     const limit = Math.min(Math.max(args.limit, 1), 100);
     const wsUrl = await getWorkspaceUrl(client, session!.slackUserToken as string);
     const result = await client.conversationsHistory(args.channelId, {
@@ -122,7 +127,7 @@ slackUserServer.addTool({
 
 slackUserServer.addTool({
   name: 'readThreadReplies',
-  description: 'Read replies in a Slack thread. Only allowed channels can be read.',
+  description: 'Read replies in a Slack thread. Access rules are enforced.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID containing the thread.'),
     threadTs: z.string().describe('The timestamp of the parent message (thread_ts).'),
@@ -130,8 +135,8 @@ slackUserServer.addTool({
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
   }),
   execute: async (args, { session }) => {
-    assertChannelAllowed(session!, args.channelId);
     const client = getSlackUserClient(session);
+    await enforceAccess(client, session!, args.channelId);
     const limit = Math.min(Math.max(args.limit, 1), 200);
     const wsUrl = await getWorkspaceUrl(client, session!.slackUserToken as string);
     const result = await client.conversationsReplies(args.channelId, args.threadTs, {
@@ -158,15 +163,15 @@ slackUserServer.addTool({
 
 slackUserServer.addTool({
   name: 'postMessage',
-  description: 'Post a message to a Slack channel. Requires SLACK_WRITES_ENABLED=true. Only allowed channels.',
+  description: 'Post a message to a Slack channel. Requires SLACK_WRITES_ENABLED=true. Access rules enforced.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID to post to.'),
     text: z.string().describe('Message text (supports Slack markdown/mrkdwn).'),
   }),
   execute: async (args, { session }) => {
     assertWritesEnabled();
-    assertChannelAllowed(session!, args.channelId);
     const client = getSlackUserClient(session);
+    await enforceAccess(client, session!, args.channelId);
     const result = await client.chatPostMessage(args.channelId, args.text);
     return `Message posted to ${result.channel} (ts: ${result.ts})`;
   },
@@ -174,7 +179,7 @@ slackUserServer.addTool({
 
 slackUserServer.addTool({
   name: 'replyInThread',
-  description: 'Reply to a thread in a Slack channel. Requires SLACK_WRITES_ENABLED=true. Only allowed channels.',
+  description: 'Reply to a thread in a Slack channel. Requires SLACK_WRITES_ENABLED=true. Access rules enforced.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID containing the thread.'),
     threadTs: z.string().describe('The timestamp of the parent message to reply to.'),
@@ -182,8 +187,8 @@ slackUserServer.addTool({
   }),
   execute: async (args, { session }) => {
     assertWritesEnabled();
-    assertChannelAllowed(session!, args.channelId);
     const client = getSlackUserClient(session);
+    await enforceAccess(client, session!, args.channelId);
     const result = await client.chatPostMessage(args.channelId, args.text, args.threadTs);
     return `Reply posted to thread ${args.threadTs} in ${result.channel} (ts: ${result.ts})`;
   },

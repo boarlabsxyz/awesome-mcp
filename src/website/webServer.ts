@@ -676,7 +676,16 @@ function registerSharedRoutes(app: express.Express): void {
         }
 
         const slackUserToken = tokenData.authed_user.access_token;
-        const providerTokens = { access_token: slackUserToken, allowedChannels: [] as string[] };
+        const providerTokens = {
+          access_token: slackUserToken,
+          accessRules: {
+            allowedOrgs: [tokenData.team?.id].filter(Boolean) as string[],
+            blacklistUsers: [] as string[],
+            whitelistChannels: [] as string[],
+            blacklistChannels: [] as string[],
+            allowPublicOnly: false,
+          },
+        };
         const providerEmail = null;
         const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
         const instanceName = stateData.instanceName || `Slack - ${tokenData.team?.name || 'workspace'}`;
@@ -903,8 +912,8 @@ function registerSharedRoutes(app: express.Express): void {
     }
   });
 
-  // GET /api/instances/:instanceId/channels - List available Slack channels for allowlist configuration
-  app.get('/api/instances/:instanceId/channels', requireAuth, async (req: AuthenticatedRequest, res) => {
+  // GET /api/instances/:instanceId/access-rules - Get current access rules + org info
+  app.get('/api/instances/:instanceId/access-rules', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const instanceId = req.params.instanceId as string;
       const googleId = (req as any).session?.googleId;
@@ -924,89 +933,82 @@ function registerSharedRoutes(app: express.Express): void {
       const { SlackClient } = await import('../slack/apiHelpers.js');
       const client = new SlackClient(accessToken);
 
-      // Paginate through all channels, including DMs
-      const allChannels: Array<{ id: string; name: string; is_private: boolean; is_external: boolean; is_dm: boolean; updated: number; dmUserId?: string; topic?: string; num_members?: number }> = [];
+      // Get current workspace info
+      let currentOrg = { id: '', name: 'Unknown' };
+      try {
+        const { team } = await client.teamInfo();
+        currentOrg = { id: team.id, name: team.name };
+      } catch { /* skip */ }
+
+      // Discover connected orgs from shared channels
+      const connectedOrgs: Array<{ id: string; name: string }> = [];
+      const seenOrgIds = new Set<string>([currentOrg.id]);
       let cursor: string | undefined;
       do {
-        const result = await client.conversationsList(cursor, 'public_channel,private_channel,im,mpim');
+        const result = await client.conversationsList(cursor, 'public_channel,private_channel');
         for (const ch of result.channels) {
-          const isDm = !!(ch as any).is_im;
-          const isMpim = !!(ch as any).is_mpim;
-          allChannels.push({
-            id: ch.id,
-            name: isDm ? (ch as any).user || ch.id : ch.name,
-            is_private: ch.is_private || isDm || isMpim,
-            is_external: !!(ch as any).is_ext_shared || !!(ch as any).is_org_shared,
-            is_dm: isDm || isMpim,
-            updated: (ch as any).updated || 0,
-            dmUserId: isDm ? (ch as any).user : undefined,
-            topic: ch.topic?.value || undefined,
-            num_members: ch.num_members,
-          });
+          if ((ch.is_ext_shared || ch.is_org_shared) && (ch as any).shared_team_ids) {
+            for (const tid of (ch as any).shared_team_ids) {
+              if (!seenOrgIds.has(tid)) {
+                seenOrgIds.add(tid);
+                connectedOrgs.push({ id: tid, name: tid }); // Name resolved below if possible
+              }
+            }
+          }
         }
         cursor = result.response_metadata?.next_cursor || undefined;
       } while (cursor);
 
-      // Resolve DM user IDs to display names, detect bots/apps
-      const dmUserIds = allChannels.filter(ch => ch.dmUserId).map(ch => ch.dmUserId!);
-      const botIds = new Set<string>();
-      if (dmUserIds.length > 0) {
-        const uniqueIds = [...new Set(dmUserIds)];
-        const nameMap = new Map<string, string>();
-        await Promise.all(uniqueIds.slice(0, 50).map(async (uid) => {
+      // Migrate old format
+      const { migrateSlackTokens } = await import('../mcpConnectionStore.js');
+      const tokens = migrateSlackTokens(connection.providerTokens);
+
+      // Get blacklisted user names for display
+      const blacklistUserDetails: Array<{ id: string; name: string }> = [];
+      if (tokens.accessRules?.blacklistUsers?.length) {
+        await Promise.all(tokens.accessRules.blacklistUsers.slice(0, 50).map(async (uid: string) => {
           try {
-            const { user } = await client.usersInfo(uid);
-            if (user.is_bot || (user as any).is_app_user) {
-              botIds.add(uid);
-            }
-            nameMap.set(uid, user.profile?.display_name || user.real_name || user.name);
-          } catch { /* skip */ }
-        }));
-        for (const ch of allChannels) {
-          if (ch.is_dm && ch.dmUserId && nameMap.has(ch.dmUserId)) {
-            ch.name = nameMap.get(ch.dmUserId)!;
+            const { user: u } = await client.usersInfo(uid);
+            blacklistUserDetails.push({ id: uid, name: u.profile?.display_name || u.real_name || u.name });
+          } catch {
+            blacklistUserDetails.push({ id: uid, name: uid });
           }
-        }
+        }));
       }
 
-      // Tag bot DMs instead of removing them
-      for (const ch of allChannels) {
-        if (ch.dmUserId && botIds.has(ch.dmUserId)) {
-          (ch as any).is_bot = true;
-        }
-      }
-
-      // Clean up group DM (mpim) names: "mpdm-user1--user2--user3-1" → "User1, User2, User3"
-      for (const ch of allChannels) {
-        if (ch.is_dm && ch.name.startsWith('mpdm-')) {
-          const raw = ch.name.replace(/^mpdm-/, '').replace(/-\d+$/, '');
-          const usernames = raw.split('--').filter(Boolean);
-          ch.name = usernames
-            .map(u => u.split('.').map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' '))
-            .join(', ');
-        }
-      }
-
-      // Strip internal dmUserId field before sending to client
-      const currentAllowed = (connection.providerTokens as any)?.allowedChannels || [];
       res.json({
-        channels: allChannels.map(({ dmUserId, ...ch }) => ch),
-        currentAllowed,
+        currentRules: tokens.accessRules,
+        currentOrg,
+        connectedOrgs,
+        blacklistUserDetails,
       });
     } catch (err) {
-      console.error('[channels] error:', err);
-      res.status(500).json({ error: 'Failed to list channels' });
+      console.error('[access-rules] error:', err);
+      res.status(500).json({ error: 'Failed to load access rules' });
     }
   });
 
-  // POST /api/instances/:instanceId/channels - Save allowed channels for Slack connection
-  app.post('/api/instances/:instanceId/channels', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
+  // POST /api/instances/:instanceId/access-rules - Save access rules
+  app.post('/api/instances/:instanceId/access-rules', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
     try {
       const instanceId = req.params.instanceId as string;
-      const { channelIds } = req.body as { channelIds?: string[] };
-      if (!channelIds || !Array.isArray(channelIds)) {
-        res.status(400).json({ error: 'channelIds array is required' });
+      const { accessRules } = req.body as { accessRules?: any };
+      if (!accessRules) {
+        res.status(400).json({ error: 'accessRules object is required' });
         return;
+      }
+
+      // Validate glob patterns
+      const allPatterns = [...(accessRules.whitelistChannels || []), ...(accessRules.blacklistChannels || [])];
+      for (const pattern of allPatterns) {
+        if (typeof pattern !== 'string' || pattern.length === 0 || pattern.length > 100) {
+          res.status(400).json({ error: `Invalid pattern: "${pattern}". Must be 1-100 characters.` });
+          return;
+        }
+        if (/[^a-zA-Z0-9\-_*?]/.test(pattern)) {
+          res.status(400).json({ error: `Invalid pattern: "${pattern}". Only alphanumeric, hyphens, underscores, *, ? allowed.` });
+          return;
+        }
       }
 
       const googleId = (req as any).session?.googleId;
@@ -1023,19 +1025,92 @@ function registerSharedRoutes(app: express.Express): void {
       const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
       const updatedTokens = {
         ...(connection.providerTokens as any),
-        allowedChannels: channelIds,
+        accessRules: {
+          allowedOrgs: accessRules.allowedOrgs || [],
+          blacklistUsers: accessRules.blacklistUsers || [],
+          whitelistChannels: accessRules.whitelistChannels || [],
+          blacklistChannels: accessRules.blacklistChannels || [],
+          allowPublicOnly: !!accessRules.allowPublicOnly,
+        },
       };
       await updateMcpInstanceProviderTokens(instanceId, updatedTokens);
 
-      // Clear session cache so new allowedChannels take effect
+      // Clear session cache so new rules take effect
       const { clearMcpSessionCache } = await import('../userSession.js');
       clearMcpSessionCache(user.apiKey, instanceId);
 
-      console.error(`User ${user.id} updated Slack channels for ${instanceId}: ${channelIds.length} channels`);
-      res.json({ success: true, allowedChannels: channelIds });
+      console.error(`User ${user.id} updated Slack access rules for ${instanceId}`);
+      res.json({ success: true });
     } catch (err) {
-      console.error('[channels] error:', err);
-      res.status(500).json({ error: 'Failed to save channels' });
+      console.error('[access-rules] error:', err);
+      res.status(500).json({ error: 'Failed to save access rules' });
+    }
+  });
+
+  // GET /api/instances/:instanceId/users/search - Search workspace users for blacklist
+  const userListCache = new Map<string, { members: any[]; expiresAt: number }>();
+
+  app.get('/api/instances/:instanceId/users/search', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const instanceId = req.params.instanceId as string;
+      const query = ((req.query.q as string) || '').toLowerCase().trim();
+      if (!query) { res.json({ users: [] }); return; }
+
+      const googleId = (req as any).session?.googleId;
+      if (!googleId) { res.status(401).json({ error: 'Not authenticated' }); return; }
+      const user = await getUserByGoogleId(googleId);
+      if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
+
+      const connection = await getMcpConnectionByInstanceId(instanceId);
+      if (!connection || connection.userId !== user.id || connection.provider !== 'slack') {
+        res.status(404).json({ error: 'Slack connection not found' });
+        return;
+      }
+
+      const accessToken = (connection.providerTokens as any)?.access_token;
+      if (!accessToken) { res.status(400).json({ error: 'No Slack token found' }); return; }
+
+      // Cache full user list per instance (5 min TTL)
+      let allMembers: any[];
+      const cached = userListCache.get(instanceId);
+      if (cached && cached.expiresAt > Date.now()) {
+        allMembers = cached.members;
+      } else {
+        const { SlackClient } = await import('../slack/apiHelpers.js');
+        const client = new SlackClient(accessToken);
+        allMembers = [];
+        let cursor: string | undefined;
+        do {
+          const result = await client.usersList(cursor);
+          for (const m of result.members) {
+            if (m.deleted || m.is_bot) continue;
+            allMembers.push({
+              id: m.id,
+              name: m.name,
+              real_name: m.real_name,
+              team_id: m.team_id,
+              avatar: m.profile?.image_48 || null,
+              display_name: m.profile?.display_name || '',
+            });
+          }
+          cursor = result.response_metadata?.next_cursor || undefined;
+        } while (cursor);
+        userListCache.set(instanceId, { members: allMembers, expiresAt: Date.now() + 5 * 60 * 1000 });
+      }
+
+      // Filter by query
+      const matches = allMembers
+        .filter(m =>
+          m.name.toLowerCase().includes(query) ||
+          m.real_name.toLowerCase().includes(query) ||
+          m.display_name.toLowerCase().includes(query)
+        )
+        .slice(0, 20);
+
+      res.json({ users: matches });
+    } catch (err) {
+      console.error('[users/search] error:', err);
+      res.status(500).json({ error: 'Failed to search users' });
     }
   });
 

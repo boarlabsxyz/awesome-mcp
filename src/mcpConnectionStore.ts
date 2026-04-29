@@ -19,9 +19,34 @@ export interface ClickUpTokens {
   access_token: string;
 }
 
+export interface SlackAccessRules {
+  allowedOrgs: string[];        // Team IDs permitted (current org auto-included)
+  blacklistUsers: string[];     // User IDs to block (DMs with these users forbidden)
+  whitelistChannels: string[];  // Glob patterns for allowed channel names (e.g. "*", "eng-*")
+  blacklistChannels: string[];  // Glob patterns for blocked channel names (e.g. "secret-*")
+  allowPublicOnly: boolean;     // If true, only public channels pass
+}
+
 export interface SlackUserTokens {
   access_token: string;
-  allowedChannels: string[];
+  accessRules?: SlackAccessRules;
+  allowedChannels?: string[];   // Legacy, kept for migration
+}
+
+/** Migrate old SlackUserTokens (allowedChannels) to new accessRules format. */
+export function migrateSlackTokens(tokens: any): SlackUserTokens {
+  if (tokens.accessRules) return tokens;
+  return {
+    access_token: tokens.access_token,
+    accessRules: {
+      allowedOrgs: [],
+      blacklistUsers: [],
+      whitelistChannels: [],
+      blacklistChannels: [],
+      allowPublicOnly: false,
+    },
+    allowedChannels: tokens.allowedChannels || [],
+  };
 }
 
 export type ProviderTokens = GoogleTokens | ClickUpTokens | SlackUserTokens;
