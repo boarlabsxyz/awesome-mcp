@@ -474,7 +474,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
     googleClientSecret: slackClientSecret,
     oauthAuthorizationUrl: 'https://slack.com/oauth/v2/authorize',
     oauthTokenUrl: 'https://slack.com/api/oauth.v2.access',
-    oauthScopes: ['channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'mpim:history', 'mpim:read', 'chat:write', 'users:read'],
+    oauthScopes: ['channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'mpim:history', 'mpim:read', 'chat:write', 'users:read', 'team:read'],
     isLocal: !process.env.SLACK_USER_MCP_URL,
     isActive: true,
   });
