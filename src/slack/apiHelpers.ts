@@ -87,6 +87,24 @@ export class SlackClient {
     });
   }
 
+  /** List ALL channels in the workspace (not just joined). Uses conversations.list. */
+  async conversationsListAll(cursor?: string, types?: string): Promise<{
+    channels: Array<{
+      id: string; name: string; is_private: boolean; is_archived: boolean;
+      is_ext_shared?: boolean; is_org_shared?: boolean; is_im?: boolean; is_mpim?: boolean;
+      user?: string;
+      topic?: { value: string }; purpose?: { value: string }; num_members?: number;
+    }>;
+    response_metadata?: { next_cursor?: string };
+  }> {
+    return this.request('conversations.list', {
+      types: types || 'public_channel,private_channel',
+      exclude_archived: true,
+      limit: 200,
+      ...(cursor ? { cursor } : {}),
+    });
+  }
+
   async conversationsHistory(channel: string, options?: {
     limit?: number; oldest?: string; latest?: string; cursor?: string;
   }): Promise<{

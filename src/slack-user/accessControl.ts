@@ -82,21 +82,13 @@ export function assertAccess(rules: SlackAccessRules, meta: ChannelMeta): void {
     return;
   }
 
-  // Channel access check
+  // Channel access check — just whitelist/blacklist on name, no org check
   // 1. Public-only check
   if (rules.allowPublicOnly && meta.is_private) {
     throw new UserError('Access denied: only public channels are allowed (allowPublicOnly is enabled).');
   }
 
-  // 2. Shared channel org check
-  if (meta.is_shared && rules.allowedOrgs.length > 0 && meta.shared_team_ids) {
-    const hasAllowedOrg = meta.shared_team_ids.some(tid => rules.allowedOrgs.includes(tid));
-    if (!hasAllowedOrg) {
-      throw new UserError('Access denied: this shared channel belongs to an organisation not in your allowed list.');
-    }
-  }
-
-  // 3. Whitelist check (empty whitelist = nothing allowed)
+  // 2. Whitelist check (empty whitelist = nothing allowed)
   if (rules.whitelistChannels.length === 0) {
     throw new UserError('Access denied: no channel whitelist patterns configured. Visit the dashboard to configure access rules.');
   }
@@ -167,14 +159,8 @@ export function filterChannelList(
       return true;
     }
 
-    // Channel checks
+    // Channel checks — just whitelist/blacklist pattern matching on the name
     if (rules.allowPublicOnly && ch.is_private) return false;
-
-    const isShared = !!(ch.is_ext_shared || ch.is_org_shared);
-    if (isShared && rules.allowedOrgs.length > 0 && ch.shared_team_ids) {
-      const hasAllowedOrg = ch.shared_team_ids.some(tid => rules.allowedOrgs.includes(tid));
-      if (!hasAllowedOrg) return false;
-    }
 
     if (rules.whitelistChannels.length === 0) return false;
     if (!matchesAnyPattern(rules.whitelistChannels, ch.name)) return false;

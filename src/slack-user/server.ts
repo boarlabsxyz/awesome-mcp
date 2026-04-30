@@ -62,10 +62,13 @@ slackUserServer.addTool({
     const client = getSlackUserClient(session);
     const rules = getRules(session!);
 
-    const result = await client.conversationsList(args.cursor, 'public_channel,private_channel,im,mpim');
-    let channels = filterChannelList(rules, result.channels) as typeof result.channels;
+    // Use conversations.list (all workspace channels) + users.conversations (DMs)
+    const result = await client.conversationsListAll(args.cursor, 'public_channel,private_channel');
+    const dmResult = !args.cursor ? await client.conversationsList(undefined, 'im,mpim') : { channels: [] };
+    const allConvos = [...result.channels, ...dmResult.channels];
+    let channels = filterChannelList(rules, allConvos) as typeof allConvos;
     // Filter DMs from non-allowed orgs (requires async user lookups)
-    channels = await filterDmsByOrg(client, rules, channels) as typeof result.channels;
+    channels = await filterDmsByOrg(client, rules, channels) as typeof allConvos;
 
     if (channels.length === 0) return 'No channels match your access rules. Check your configuration in the dashboard.';
 
