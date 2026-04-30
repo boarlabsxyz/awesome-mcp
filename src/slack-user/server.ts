@@ -6,7 +6,7 @@ import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { SlackClient } from '../slack/apiHelpers.js';
 import { resolveUsers, getWorkspaceUrl, formatMessage, assertWritesEnabled } from '../slack/helpers.js';
-import { assertAccess, fetchChannelMeta, filterChannelList } from './accessControl.js';
+import { assertAccess, fetchChannelMeta, filterChannelList, filterDmsByOrg } from './accessControl.js';
 import type { SlackAccessRules } from '../mcpConnectionStore.js';
 
 export const slackUserServer = new FastMCP<UserSession>({
@@ -35,6 +35,19 @@ async function enforceAccess(client: SlackClient, session: UserSession, channelI
   const rules = getRules(session);
   const meta = await fetchChannelMeta(client, channelId, session.slackUserToken as string);
   assertAccess(rules, meta);
+
+  // Additional org check for DMs (assertAccess can't do this without user lookup)
+  if ((meta.is_im || meta.is_mpim) && meta.user && rules.allowedOrgs.length > 0) {
+    try {
+      const { user } = await client.usersInfo(meta.user);
+      if (user.team_id && !rules.allowedOrgs.includes(user.team_id)) {
+        throw new UserError('Access denied: this user belongs to an organisation not in your allowed list.');
+      }
+    } catch (err) {
+      if (err instanceof UserError) throw err;
+      // If we can't resolve the user, allow through
+    }
+  }
 }
 
 // === Tools ===
@@ -50,7 +63,9 @@ slackUserServer.addTool({
     const rules = getRules(session!);
 
     const result = await client.conversationsList(args.cursor, 'public_channel,private_channel,im,mpim');
-    const channels = filterChannelList(rules, result.channels) as typeof result.channels;
+    let channels = filterChannelList(rules, result.channels) as typeof result.channels;
+    // Filter DMs from non-allowed orgs (requires async user lookups)
+    channels = await filterDmsByOrg(client, rules, channels) as typeof result.channels;
 
     if (channels.length === 0) return 'No channels match your access rules. Check your configuration in the dashboard.';
 

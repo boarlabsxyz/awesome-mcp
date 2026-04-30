@@ -111,6 +111,38 @@ export function assertAccess(rules: SlackAccessRules, meta: ChannelMeta): void {
 }
 
 /**
+ * Filter DMs by org membership. Requires async user lookups.
+ * Call after filterChannelList to remove DMs with users from non-allowed orgs.
+ */
+export async function filterDmsByOrg(
+  client: SlackClient,
+  rules: SlackAccessRules,
+  channels: Array<{ is_im?: boolean; is_mpim?: boolean; user?: string; [key: string]: any }>,
+): Promise<typeof channels> {
+  if (rules.allowedOrgs.length === 0) return channels; // no org restriction
+
+  const dmChannels = channels.filter(ch => !!(ch.is_im) && ch.user);
+  if (dmChannels.length === 0) return channels;
+
+  // Batch-lookup team_ids for DM counterparts
+  const userIds = [...new Set(dmChannels.map(ch => ch.user!))];
+  const userTeamMap = new Map<string, string>();
+  await Promise.all(userIds.slice(0, 50).map(async (uid) => {
+    try {
+      const { user } = await client.usersInfo(uid);
+      if (user.team_id) userTeamMap.set(uid, user.team_id);
+    } catch { /* skip */ }
+  }));
+
+  return channels.filter(ch => {
+    if (!(ch.is_im) || !ch.user) return true; // non-DMs pass through
+    const teamId = userTeamMap.get(ch.user);
+    if (!teamId) return true; // couldn't resolve, allow through
+    return rules.allowedOrgs.includes(teamId);
+  });
+}
+
+/**
  * Filter a list of channels from conversations.list based on access rules.
  * Synchronous — uses only fields already present in the API response.
  */
@@ -130,6 +162,8 @@ export function filterChannelList(
     if (isDm) {
       // DM: check user blacklist
       if (ch.user && rules.blacklistUsers.includes(ch.user)) return false;
+      // Note: org check for DM counterparts requires async user lookup,
+      // done in filterDmsByOrg() after this synchronous filter.
       return true;
     }
 
@@ -137,9 +171,9 @@ export function filterChannelList(
     if (rules.allowPublicOnly && ch.is_private) return false;
 
     const isShared = !!(ch.is_ext_shared || ch.is_org_shared);
-    if (isShared && rules.allowedOrgs.length > 0) {
-      // For list filtering, we don't have shared_team_ids in the list response
-      // so we allow shared channels through (enforcement happens at read time)
+    if (isShared && rules.allowedOrgs.length > 0 && ch.shared_team_ids) {
+      const hasAllowedOrg = ch.shared_team_ids.some(tid => rules.allowedOrgs.includes(tid));
+      if (!hasAllowedOrg) return false;
     }
 
     if (rules.whitelistChannels.length === 0) return false;
