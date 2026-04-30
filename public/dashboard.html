@@ -702,56 +702,13 @@
       <div style="margin-bottom: 10px;">
         <span onclick="document.getElementById('rulesHelp').classList.toggle('hidden')" style="cursor: pointer; color: #4f8df7; font-size: 13px; user-select: none;">&#9432; How access rules work</span>
         <div id="rulesHelp" class="hidden" style="margin-top: 8px; padding: 12px; background: #111; border: 1px solid #333; border-radius: 8px; font-size: 12px; line-height: 1.6; color: #bbb;">
-          <pre style="font-family: monospace; font-size: 11px; color: #ccc; white-space: pre; overflow-x: auto; margin: 0;">
-<strong style="color: #a78bfa;">DM / Group DM access:</strong>
-
-  User Y
-    |
-    v
-  In Allowed Org? --no--> <span style="color: #f87171;">Blocked</span>
-    |yes
-    v
-  In Blacklist? ----yes--> <span style="color: #f87171;">Blocked</span>
-    |no
-    v
-  <span style="color: #6ee7b7;">Allowed</span>
-
-  Group DMs: if ANY member
-  is blocked, the entire
-  group DM is blocked.
-
-<strong style="color: #6ee7b7;">Channel access:</strong>
-
-  Channel X
-    |
-    v
-  Public Only ON --+private--> <span style="color: #f87171;">Blocked</span>
-    |
-    v
-  Shared channel? --yes-->
-    Any org in ----no--> <span style="color: #f87171;">Blocked</span>
-    Allowed Orgs?
-    |yes
-    v
-  Matches any ----no--> <span style="color: #f87171;">Blocked</span>
-  whitelist pattern?
-    |yes
-    v
-  Matches any ----yes--> <span style="color: #f87171;">Blocked</span>
-  blacklist pattern?
-    |no
-    v
-  <span style="color: #6ee7b7;">Allowed</span></pre>
-          <div style="margin-top: 10px; border-top: 1px solid #333; padding-top: 8px;">
-            <strong style="color: #eee;">Quick guide:</strong>
-            <ul style="margin: 4px 0 0 16px; padding: 0;">
-              <li><strong>Allowed Orgs</strong> &mdash; your org is always included. Check external orgs to see their shared channels and DMs.</li>
-              <li><strong>Blacklist Users</strong> &mdash; search by name. Blocks their DMs and any group DM they're in.</li>
-              <li><strong>Whitelist Patterns</strong> &mdash; glob patterns for channel names. Use <code style="background:#222;padding:1px 4px;border-radius:3px;">*</code> for all, <code style="background:#222;padding:1px 4px;border-radius:3px;">eng-*</code> for prefix match.</li>
-              <li><strong>Blacklist Patterns</strong> &mdash; channels matching these are blocked even if whitelisted.</li>
-              <li><strong>Public Only</strong> &mdash; hides all private channels.</li>
-            </ul>
-          </div>
+          <ul style="margin: 0 0 0 16px; padding: 0;">
+            <li><strong style="color: #a78bfa;">Allowed Orgs</strong> &mdash; your org is always included. Check external orgs to see their shared channels and DMs.</li>
+            <li><strong style="color: #f87171;">Blacklist Users</strong> &mdash; search by name. Blocks their DMs and any group DM they're in.</li>
+            <li><strong style="color: #6ee7b7;">Whitelist Patterns</strong> &mdash; glob patterns for channel names. Use <code style="background:#222;padding:1px 4px;border-radius:3px;">*</code> for all, <code style="background:#222;padding:1px 4px;border-radius:3px;">eng-*</code> for prefix match.</li>
+            <li><strong style="color: #f59e0b;">Blacklist Patterns</strong> &mdash; channels matching these are blocked even if whitelisted.</li>
+            <li><strong>Public Only</strong> &mdash; hides all private channels.</li>
+          </ul>
         </div>
       </div>
       <div id="accessRulesContent" style="max-height: 55vh; overflow-y: auto;">
