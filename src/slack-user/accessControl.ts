@@ -200,16 +200,16 @@ export function filterChannelList(
     // Channel checks
     if (rules.allowPublicOnly && ch.is_private) return false;
 
-    // Org filter: external/shared channels blocked unless their org is allowed
+    // Org filter: external/shared channels — check if org is allowed when data available
     const isShared = !!(ch.is_ext_shared || ch.is_org_shared);
-    if (isShared && rules.allowedOrgs.length > 0) {
-      if (!ch.shared_team_ids || ch.shared_team_ids.length === 0) {
-        // Can't verify org — block by default
-        return false;
-      }
+    if (isShared && rules.allowedOrgs.length > 0 && ch.shared_team_ids && ch.shared_team_ids.length > 0) {
+      // We have org data — enforce it
       const hasAllowedOrg = ch.shared_team_ids.some(tid => rules.allowedOrgs.includes(tid));
       if (!hasAllowedOrg) return false;
     }
+    // If shared but no shared_team_ids available (conversations.list limitation),
+    // let it through to whitelist/blacklist check. Org is enforced at read time
+    // via assertAccess which uses conversations.info (has shared_team_ids).
 
     // Whitelist/blacklist pattern matching on name
     if (rules.whitelistChannels.length === 0) return false;
