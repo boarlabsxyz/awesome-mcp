@@ -81,8 +81,8 @@ describe('ClickUp server tools', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('should have registered all 28 tools', () => {
-    assert.equal(toolMap.size, 28);
+  it('should have registered all 31 tools', () => {
+    assert.equal(toolMap.size, 31);
   });
 
   // === getClickUpClient / auth guard ===
@@ -784,6 +784,80 @@ describe('ClickUp server tools', () => {
       }]);
       const result = await callTool('getTask', { taskId: 't1' });
       assert.ok(result.includes('no-username@x.com'));
+    });
+  });
+
+  // === createDoc ===
+
+  describe('createDoc', () => {
+    it('should create a doc and return its ID', async () => {
+      mockFetch([{ status: 200, body: { id: 'doc123', name: 'My Doc' } }]);
+      const result = await callTool('createDoc', { workspaceId: 'w1', name: 'My Doc' });
+      assert.ok(result.includes('doc123'));
+      assert.ok(result.includes('My Doc'));
+    });
+
+    it('should pass parent when provided', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 'doc456', name: 'Nested' } }]);
+      await callTool('createDoc', { workspaceId: 'w1', name: 'Nested', parentId: 's1', parentType: 4 });
+      const body = JSON.parse(calls[0].body!);
+      assert.deepEqual(body.parent, { id: 's1', type: 4 });
+    });
+  });
+
+  // === getDoc ===
+
+  describe('getDoc', () => {
+    it('should return doc content', async () => {
+      mockFetch([
+        { status: 200, body: { id: 'doc1', name: 'Test Doc', content: 'Hello world', date_created: '1700000000000' } },
+        { status: 200, body: { pages: [] } },
+      ]);
+      const result = await callTool('getDoc', { workspaceId: 'w1', docId: 'doc1' });
+      assert.ok(result.includes('Test Doc'));
+      assert.ok(result.includes('Hello world'));
+      assert.ok(result.includes('doc1'));
+    });
+
+    it('should include pages when available', async () => {
+      mockFetch([
+        { status: 200, body: { id: 'doc1', name: 'Doc' } },
+        { status: 200, body: { pages: [{ id: 'p1', name: 'Page 1', content: 'Page content' }] } },
+      ]);
+      const result = await callTool('getDoc', { workspaceId: 'w1', docId: 'doc1' });
+      assert.ok(result.includes('Page 1'));
+      assert.ok(result.includes('Page content'));
+    });
+  });
+
+  // === listWorkspaceMembers ===
+
+  describe('listWorkspaceMembers', () => {
+    it('should list members of a workspace', async () => {
+      mockFetch([{
+        status: 200,
+        body: {
+          teams: [{
+            id: '123',
+            name: 'My Team',
+            members: [
+              { user: { id: 'u1', username: 'alice', email: 'alice@test.com' }, role: 'admin' },
+              { user: { id: 'u2', username: 'bob', email: 'bob@test.com' }, role: 'member' },
+            ],
+          }],
+        },
+      }]);
+      const result = await callTool('listWorkspaceMembers', { workspaceId: '123' });
+      assert.ok(result.includes('alice'));
+      assert.ok(result.includes('bob'));
+      assert.ok(result.includes('u1'));
+      assert.ok(result.includes('admin'));
+    });
+
+    it('should return not found for unknown workspace', async () => {
+      mockFetch([{ status: 200, body: { teams: [{ id: '999', name: 'Other', members: [] }] } }]);
+      const result = await callTool('listWorkspaceMembers', { workspaceId: '123' });
+      assert.ok(result.includes('not found'));
     });
   });
 });

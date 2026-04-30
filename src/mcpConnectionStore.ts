@@ -19,7 +19,37 @@ export interface ClickUpTokens {
   access_token: string;
 }
 
-export type ProviderTokens = GoogleTokens | ClickUpTokens;
+export interface SlackAccessRules {
+  allowedOrgs: string[];        // Team IDs permitted (current org auto-included)
+  blacklistUsers: string[];     // User IDs to block (DMs with these users forbidden)
+  whitelistChannels: string[];  // Glob patterns for allowed channel names (e.g. "*", "eng-*")
+  blacklistChannels: string[];  // Glob patterns for blocked channel names (e.g. "secret-*")
+  allowPublicOnly: boolean;     // If true, only public channels pass
+}
+
+export interface SlackUserTokens {
+  access_token: string;
+  accessRules?: SlackAccessRules;
+  allowedChannels?: string[];   // Legacy, kept for migration
+}
+
+/** Migrate old SlackUserTokens (allowedChannels) to new accessRules format. */
+export function migrateSlackTokens(tokens: any): SlackUserTokens {
+  if (tokens.accessRules) return tokens;
+  return {
+    access_token: tokens.access_token,
+    accessRules: {
+      allowedOrgs: [],
+      blacklistUsers: [],
+      whitelistChannels: [],
+      blacklistChannels: [],
+      allowPublicOnly: false,
+    },
+    allowedChannels: tokens.allowedChannels || [],
+  };
+}
+
+export type ProviderTokens = GoogleTokens | ClickUpTokens | SlackUserTokens;
 
 export interface McpConnection {
   id: number;
@@ -704,6 +734,28 @@ export async function updateMcpInstanceTokens(
   const connection = await fileGetMcpConnectionByInstanceId(instanceId);
   if (connection) {
     await fileUpdateMcpTokens(connection.userId, connection.mcpSlug, tokens);
+  }
+}
+
+export async function updateMcpInstanceProviderTokens(
+  instanceId: string,
+  providerTokens: ProviderTokens
+): Promise<void> {
+  if (isDatabaseAvailable()) {
+    const pool = getPool();
+    await pool.query(
+      `UPDATE mcp_connections SET provider_tokens = $1::jsonb, updated_at = NOW() WHERE instance_id = $2`,
+      [JSON.stringify(providerTokens), instanceId]
+    );
+  } else {
+    // File-based: find and update by instanceId
+    await fileLoadConnections();
+    const connection = connections.find(c => c.instanceId === instanceId);
+    if (connection) {
+      connection.providerTokens = providerTokens;
+      connection.updatedAt = new Date().toISOString();
+      await saveConnections();
+    }
   }
 }
 

@@ -439,5 +439,45 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
+  // Slack Bot MCP (bot-token provider — no OAuth, user pastes xoxb- token)
+  const slackBotMcpUrl = normalizeUrl(process.env.SLACK_BOT_MCP_URL, '/slack-bot');
+
+  await createMcpCatalog({
+    slug: 'slack-bot',
+    name: 'Slack Bot MCP',
+    description: 'Read channels and post messages in Slack workspaces via bot token',
+    iconUrl: 'https://a.slack-edge.com/80588/marketing/img/icons/icon_slack_hash_colored.png',
+    mcpUrl: slackBotMcpUrl,
+    provider: 'slack-bot',
+    scopes: [],
+    googleClientId: null,
+    googleClientSecret: null,
+    oauthScopes: [],
+    isLocal: !process.env.SLACK_BOT_MCP_URL,
+    isActive: true,
+  });
+
+  // Slack User MCP (OAuth-based with channel allowlist)
+  const slackClientId = process.env.SLACK_CLIENT_ID || null;
+  const slackClientSecret = process.env.SLACK_CLIENT_SECRET || null;
+  const slackUserMcpUrl = normalizeUrl(process.env.SLACK_USER_MCP_URL, '/slack');
+
+  await createMcpCatalog({
+    slug: 'slack',
+    name: 'Slack MCP',
+    description: 'Read and write Slack channels with per-channel access control',
+    iconUrl: 'https://a.slack-edge.com/80588/marketing/img/icons/icon_slack_hash_colored.png',
+    mcpUrl: slackUserMcpUrl,
+    provider: 'slack',
+    scopes: [],
+    googleClientId: slackClientId,
+    googleClientSecret: slackClientSecret,
+    oauthAuthorizationUrl: 'https://slack.com/oauth/v2/authorize',
+    oauthTokenUrl: 'https://slack.com/api/oauth.v2.access',
+    oauthScopes: ['channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'mpim:history', 'mpim:read', 'chat:write', 'users:read', 'team:read'],
+    isLocal: !process.env.SLACK_USER_MCP_URL,
+    isActive: true,
+  });
+
   console.error('Default MCP catalog entries seeded.');
 }

@@ -18,6 +18,9 @@ export interface UserSession {
   googleSlides: slides_v1.Slides;
   oauthClient: OAuth2Client;
   clickUpAccessToken?: string;
+  slackBotToken?: string;
+  slackUserToken?: string;
+  slackAccessRules?: import('./mcpConnectionStore.js').SlackAccessRules;
 }
 
 // Cache sessions to avoid recreating clients per request
@@ -153,6 +156,84 @@ export function createClickUpSession(
 
   mcpSessionCache.set(cacheKey, session);
   return session;
+}
+
+/**
+ * Create a user session for Slack connections.
+ * Slack uses a long-lived bot token, no OAuth2Client needed.
+ */
+export function createSlackBotSession(
+  user: UserRecord,
+  connection: McpConnection,
+): UserSession {
+  const botToken = (connection.providerTokens as any)?.access_token;
+  if (!botToken) {
+    throw new Error(`Slack bot token missing for connection ${connection.instanceId}. Please reconnect.`);
+  }
+
+  const cacheKey = `${user.apiKey}:${connection.instanceId}`;
+  const cached = mcpSessionCache.get(cacheKey);
+  if (cached) return cached;
+
+  const session: UserSession = {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: connection.mcpSlug,
+    slackBotToken: botToken,
+    // Null placeholders for Google clients (Slack MCP won't use them)
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
+  };
+
+  mcpSessionCache.set(cacheKey, session);
+  return session;
+}
+
+/**
+ * Create a user session for Slack user OAuth connections.
+ * Uses a user token (xoxp-) with a channel allowlist.
+ */
+export function createSlackUserSession(
+  user: UserRecord,
+  connection: McpConnection,
+): UserSession {
+  const accessToken = (connection.providerTokens as any)?.access_token;
+  if (!accessToken) {
+    throw new Error(`Slack user token missing for connection ${connection.instanceId}. Please reconnect.`);
+  }
+
+  // Don't cache Slack user sessions — accessRules can change via dashboard
+  // and the MCP service can't be notified to invalidate its cache.
+  const tokens = connection.providerTokens as any;
+  const accessRules = tokens?.accessRules || {
+    allowedOrgs: [],
+    blacklistUsers: [],
+    whitelistChannels: [],
+    blacklistChannels: [],
+    allowPublicOnly: false,
+  };
+
+  return {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: connection.mcpSlug,
+    slackUserToken: accessToken,
+    slackAccessRules: accessRules,
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
+  };
 }
 
 export function clearSessionCache(apiKey: string): void {

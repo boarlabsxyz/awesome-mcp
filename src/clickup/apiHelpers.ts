@@ -264,4 +264,16 @@ export class ClickUpClient {
   async searchDocs(workspaceId: string, query: string): Promise<any> {
     return this.request('GET', `/workspaces/${workspaceId}/docs?search=${encodeURIComponent(query)}`, undefined, CLICKUP_API_V3_BASE);
   }
+
+  async getDoc(workspaceId: string, docId: string): Promise<any> {
+    return this.request('GET', `/workspaces/${workspaceId}/docs/${docId}`, undefined, CLICKUP_API_V3_BASE);
+  }
+
+  async getDocPages(workspaceId: string, docId: string): Promise<any> {
+    return this.request('GET', `/workspaces/${workspaceId}/docs/${docId}/pages`, undefined, CLICKUP_API_V3_BASE);
+  }
+
+  async createDoc(workspaceId: string, data: { name: string; content?: string; parent?: { id: string; type: number } }): Promise<any> {
+    return this.request('POST', `/workspaces/${workspaceId}/docs`, data, CLICKUP_API_V3_BASE);
+  }
 }

@@ -43,6 +43,8 @@ import { gmailServer } from '../google-gmail/server.js';
 import { slidesServer } from '../google-slides/server.js';
 import { driveServer } from '../google-drive/server.js';
 import { clickUpServer } from '../clickup/server.js';
+import { slackBotServer } from '../slack/server.js';
+import { slackUserServer } from '../slack-user/server.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 
 // Global clients for stdio (single-user) mode
@@ -1771,6 +1773,8 @@ const GMAIL_MCP_PORT = parseInt(process.env.GMAIL_MCP_PORT || "3004", 10);
 const SLIDES_MCP_PORT = parseInt(process.env.SLIDES_MCP_PORT || "3005", 10);
 const DRIVE_MCP_PORT = parseInt(process.env.DRIVE_MCP_PORT || "3006", 10);
 const CLICKUP_MCP_PORT = parseInt(process.env.CLICKUP_MCP_PORT || "3007", 10);
+const SLACK_BOT_MCP_PORT = parseInt(process.env.SLACK_BOT_MCP_PORT || "3008", 10);
+const SLACK_USER_MCP_PORT = parseInt(process.env.SLACK_USER_MCP_PORT || "3009", 10);
 
 // Multi-service deployment mode
 // - undefined or "all": Run everything (website + MCPs) - default single-service mode
@@ -1821,6 +1825,8 @@ async function startServer() {
                          : MCP_SLUG === "google-slides"   ? slidesServer
                          : MCP_SLUG === "google-drive"    ? driveServer
                          : MCP_SLUG === "clickup"         ? clickUpServer
+                         : MCP_SLUG === "slack-bot"        ? slackBotServer
+                         : MCP_SLUG === "slack"           ? slackUserServer
                          : server; // default: google-docs
 
         mcpToStart.start({
@@ -1907,8 +1913,26 @@ async function startServer() {
           },
         });
 
+        // Start Slack Bot MCP on separate internal port
+        slackBotServer.start({
+          transportType: "httpStream",
+          httpStream: {
+            port: SLACK_BOT_MCP_PORT,
+            host: "127.0.0.1",
+          },
+        });
+
+        // Start Slack User MCP on separate internal port
+        slackUserServer.start({
+          transportType: "httpStream",
+          httpStream: {
+            port: SLACK_USER_MCP_PORT,
+            host: "127.0.0.1",
+          },
+        });
+
         // Create Express app with proxy routes and registration/OAuth pages
-        const expressApp = createWebApp(DOCS_MCP_PORT, CALENDAR_MCP_PORT, SHEETS_MCP_PORT, GMAIL_MCP_PORT, SLIDES_MCP_PORT, DRIVE_MCP_PORT, CLICKUP_MCP_PORT);
+        const expressApp = createWebApp(DOCS_MCP_PORT, CALENDAR_MCP_PORT, SHEETS_MCP_PORT, GMAIL_MCP_PORT, SLIDES_MCP_PORT, DRIVE_MCP_PORT, CLICKUP_MCP_PORT, SLACK_BOT_MCP_PORT, SLACK_USER_MCP_PORT);
 
         // Start Express on the public port — single port for all traffic
         const httpServer = expressApp.listen(PORT, HOST, () => {
@@ -1919,6 +1943,8 @@ async function startServer() {
           console.error(`   Slides MCP:     http://${HOST}:${PORT}/slides`);
           console.error(`   Drive MCP:      http://${HOST}:${PORT}/drive`);
           console.error(`   ClickUp MCP:    http://${HOST}:${PORT}/clickup`);
+          console.error(`   Slack Bot MCP:  http://${HOST}:${PORT}/slack-bot`);
+          console.error(`   Slack MCP:      http://${HOST}:${PORT}/slack`);
           console.error(`   Health Check:   http://${HOST}:${PORT}/health`);
           console.error(`   Registration:   http://${HOST}:${PORT}/`);
           console.error(`   OAuth Callback: http://${HOST}:${PORT}/auth/callback`);

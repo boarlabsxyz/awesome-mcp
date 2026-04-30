@@ -5,9 +5,9 @@ import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { createProxyMiddleware } from 'http-proxy-middleware';
-import { resourceServerMiddleware } from '../auth/resourceServerMiddleware.js';
+import { resourceServerMiddleware, createResourceServerMiddleware } from '../auth/resourceServerMiddleware.js';
 import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
-import { validateJwt, validateOpaqueToken } from '../auth/jwtValidator.js';
+import { validateJwt, validateOpaqueToken, hasScope } from '../auth/jwtValidator.js';
 import { mapJwtToUser } from '../auth/userMapping.js';
 import { looksLikeJwt } from '../auth/resourceServerMiddleware.js';
 
@@ -184,6 +184,7 @@ import {
   getMcpConnectionByInstanceId,
   updateMcpInstanceName,
   updateMcpInstanceTokens,
+  updateMcpInstanceProviderTokens,
   updateMcpInstanceGoogleEmail,
   disconnectMcpInstance
 } from '../mcpConnectionStore.js';
@@ -226,8 +227,8 @@ export function computeTokenStatus(
   expiryDate: number | null;
   isExpired: boolean;
 } {
-  // ClickUp tokens are long-lived (no refresh needed, no expiry)
-  if (provider === 'clickup') {
+  // ClickUp and Slack tokens are long-lived (no refresh needed, no expiry)
+  if (provider === 'clickup' || provider === 'slack-bot' || provider === 'slack') {
     return { hasRefreshToken: false, expiryDate: null, isExpired: false };
   }
   return {
@@ -534,13 +535,21 @@ function registerSharedRoutes(app: express.Express): void {
 
       // Branch on provider for authorization URL
       if (mcp.provider && mcp.provider !== 'google') {
-        // Non-Google OAuth (e.g. ClickUp): simple redirect with client_id
+        // Non-Google OAuth (e.g. ClickUp, Slack): simple redirect with client_id
         if (!mcp.oauthAuthorizationUrl) {
-          res.status(500).send(`OAuth authorization URL not configured for ${mcpSlug}.`);
+          // Direct-token providers (e.g. Slack Bot) don't use OAuth — connect via dashboard token input
+          res.status(400).send(`${mcpSlug} uses direct token authentication. Please connect via the dashboard.`);
           return;
         }
-        const authorizeUrl = `${mcp.oauthAuthorizationUrl}?client_id=${encodeURIComponent(client_id)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
-        res.redirect(authorizeUrl);
+        if (mcp.provider === 'slack') {
+          // Slack V2 OAuth: user tokens require user_scope instead of scope
+          const userScopes = (mcp.oauthScopes || []).join(',');
+          const authorizeUrl = `${mcp.oauthAuthorizationUrl}?client_id=${encodeURIComponent(client_id)}&user_scope=${encodeURIComponent(userScopes)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
+          res.redirect(authorizeUrl);
+        } else {
+          const authorizeUrl = `${mcp.oauthAuthorizationUrl}?client_id=${encodeURIComponent(client_id)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
+          res.redirect(authorizeUrl);
+        }
       } else {
         // Google OAuth (default)
         const oauthClient = new OAuth2Client(client_id, client_secret, redirectUri);
@@ -629,7 +638,88 @@ function registerSharedRoutes(app: express.Express): void {
       let connection;
       const provider = stateData.provider || mcp.provider || 'google';
 
-      if (provider === 'clickup') {
+      if (provider === 'slack') {
+        // Slack V2 OAuth: exchange code for user access_token
+        const tokenUrl = mcp.oauthTokenUrl || 'https://slack.com/api/oauth.v2.access';
+        const tokenController = new AbortController();
+        const tokenTimeout = setTimeout(() => tokenController.abort(), 15_000);
+        let tokenResponse: globalThis.Response;
+        try {
+          tokenResponse = await fetch(tokenUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+              client_id: client_id,
+              client_secret: client_secret,
+              code,
+              redirect_uri: redirectUri,
+            }),
+            signal: tokenController.signal,
+          });
+        } catch (err) {
+          clearTimeout(tokenTimeout);
+          console.error('[MCP Connect] Slack token exchange failed:', err);
+          res.status(500).send('Slack token exchange failed. Please try again.');
+          return;
+        } finally {
+          clearTimeout(tokenTimeout);
+        }
+
+        const tokenData = await tokenResponse.json() as {
+          ok: boolean; error?: string;
+          authed_user?: { id: string; access_token: string; scope: string };
+          team?: { id: string; name: string };
+        };
+        if (!tokenData.ok || !tokenData.authed_user?.access_token) {
+          console.error('[MCP Connect] Slack token response error:', tokenData.error || 'no access_token');
+          res.status(500).send(`Slack OAuth failed: ${tokenData.error || 'no access token'}. Please try again.`);
+          return;
+        }
+
+        const slackUserToken = tokenData.authed_user.access_token;
+        const providerTokens = {
+          access_token: slackUserToken,
+          accessRules: {
+            allowedOrgs: [tokenData.team?.id].filter(Boolean) as string[],
+            blacklistUsers: [] as string[],
+            whitelistChannels: [] as string[],
+            blacklistChannels: [] as string[],
+            allowPublicOnly: false,
+          },
+        };
+        const providerEmail = null;
+        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const instanceName = stateData.instanceName || `Slack - ${tokenData.team?.name || 'workspace'}`;
+
+        // Check if this is a reconnect (update existing instance tokens)
+        if (stateData.reconnectInstanceId) {
+          const existing = await getMcpConnectionByInstanceId(stateData.reconnectInstanceId);
+          if (!existing || existing.userId !== user.id || existing.mcpSlug !== mcpSlug) {
+            res.status(404).send('Instance not found or access denied.');
+            return;
+          }
+          // Preserve existing accessRules on reconnect — only update the token
+          const existingRules = (existing.providerTokens as any)?.accessRules;
+          if (existingRules) {
+            providerTokens.accessRules = existingRules;
+          }
+          await updateMcpInstanceProviderTokens(existing.instanceId, providerTokens);
+          connection = existing;
+          console.error(`User ${user.id} reconnected Slack User MCP: ${connection.instanceId}`);
+        } else {
+          connection = await createMcpInstance(
+            user.id, mcpSlug, instanceName, emptyGoogleTokens, null,
+            'slack', providerTokens, providerEmail
+          );
+          console.error(`User ${user.id} connected Slack User MCP: ${connection.instanceId}`);
+        }
+
+        // Redirect to dashboard — channelSetup only for new connections
+        const slackSuccessParam = stateData.reconnectInstanceId ? 'reconnected' : 'channelSetup';
+        res.redirect(`/dashboard?${slackSuccessParam}=${encodeURIComponent(connection.instanceId)}`);
+        return;
+
+      } else if (provider === 'clickup') {
         // ClickUp OAuth: exchange code for access_token
         const tokenUrl = mcp.oauthTokenUrl || 'https://api.clickup.com/api/v2/oauth/token';
         const tokenController = new AbortController();
@@ -775,6 +865,340 @@ function registerSharedRoutes(app: express.Express): void {
     } catch (err: any) {
       console.error('MCP connect callback error:', err);
       res.status(500).send('Connection failed. Please try again.');
+    }
+  });
+
+  // POST /api/connect-token - Connect an MCP via direct token (e.g., Slack bot token)
+  app.post('/api/connect-token', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
+    try {
+      const { mcpSlug, token, instanceName } = req.body as { mcpSlug?: string; token?: string; instanceName?: string };
+      if (!mcpSlug || !token) {
+        res.status(400).json({ error: 'mcpSlug and token are required' });
+        return;
+      }
+
+      const mcp = await getMcpCatalog(mcpSlug);
+      if (!mcp) {
+        res.status(404).json({ error: `MCP "${mcpSlug}" not found in catalog` });
+        return;
+      }
+
+      const googleId = (req as any).session?.googleId;
+      if (!googleId) { res.status(401).json({ error: 'Not authenticated' }); return; }
+      const user = await getUserByGoogleId(googleId);
+      if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
+
+      if (mcpSlug === 'slack-bot') {
+        // Validate the xoxb- bot token by calling auth.test
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10_000);
+        try {
+          const response = await fetch('https://slack.com/api/auth.test', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
+          const data = await response.json() as { ok: boolean; error?: string; team?: string; user_id?: string; bot_id?: string };
+          if (!data.ok) {
+            res.status(400).json({ error: `Invalid Slack token: ${data.error}` });
+            return;
+          }
+
+          const providerEmail = null; // Slack bot tokens don't have an associated email
+          const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+          const providerTokens = { access_token: token };
+          const name = instanceName || `Slack - ${data.team || 'workspace'}`;
+
+          const connection = await createMcpInstance(
+            user.id, mcpSlug, name, emptyGoogleTokens, null,
+            'slack-bot', providerTokens, providerEmail
+          );
+          console.error(`User ${user.id} connected Slack Bot MCP: ${connection.instanceId}`);
+          res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
+        } catch (err: any) {
+          clearTimeout(timeout);
+          console.error('[connect-token] Slack token validation failed:', err);
+          res.status(502).json({ error: 'Failed to validate Slack token. Check the token and try again.' });
+        }
+        return;
+      }
+
+      res.status(400).json({ error: `Direct token connection not supported for "${mcpSlug}"` });
+    } catch (err) {
+      console.error('[connect-token] error:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // GET /api/instances/:instanceId/access-rules - Get current access rules + org info
+  app.get('/api/instances/:instanceId/access-rules', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const instanceId = req.params.instanceId as string;
+      const googleId = (req as any).session?.googleId;
+      if (!googleId) { res.status(401).json({ error: 'Not authenticated' }); return; }
+      const user = await getUserByGoogleId(googleId);
+      if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
+
+      const connection = await getMcpConnectionByInstanceId(instanceId);
+      if (!connection || connection.userId !== user.id || connection.provider !== 'slack') {
+        res.status(404).json({ error: 'Slack connection not found' });
+        return;
+      }
+
+      const accessToken = (connection.providerTokens as any)?.access_token;
+      if (!accessToken) { res.status(400).json({ error: 'No Slack token found' }); return; }
+
+      const { SlackClient } = await import('../slack/apiHelpers.js');
+      const client = new SlackClient(accessToken);
+
+      // Get current workspace info
+      let currentOrg = { id: '', name: 'Unknown' };
+      try {
+        const { team } = await client.teamInfo();
+        currentOrg = { id: team.id, name: team.name };
+      } catch { /* skip */ }
+
+      // Discover connected orgs from shared channels
+      const connectedOrgs: Array<{ id: string; name: string }> = [];
+      const seenOrgIds = new Set<string>([currentOrg.id]);
+
+      // Find shared channels first
+      const sharedChannelIds: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const result = await client.conversationsListAll(cursor, 'public_channel,private_channel');
+        for (const ch of result.channels) {
+          if (ch.is_ext_shared || ch.is_org_shared) {
+            sharedChannelIds.push(ch.id);
+          }
+        }
+        cursor = result.response_metadata?.next_cursor || undefined;
+      } while (cursor);
+
+      // Get shared_team_ids from conversations.info (limited to first 20 shared channels)
+      const orgIdToUserIds = new Map<string, string>(); // org ID → a sample user ID from that org
+      await Promise.all(sharedChannelIds.slice(0, 20).map(async (chId) => {
+        try {
+          const { channel: info } = await client.conversationsInfo(chId);
+          if (info.shared_team_ids) {
+            for (const tid of info.shared_team_ids) {
+              if (!seenOrgIds.has(tid)) {
+                seenOrgIds.add(tid);
+                connectedOrgs.push({ id: tid, name: tid });
+              }
+            }
+          }
+        } catch { /* skip */ }
+      }));
+
+      // Resolve org names: try team.info for each external org, fall back to user names
+      for (const org of connectedOrgs) {
+        if (org.name === org.id) {
+          try {
+            const { team } = await client.teamInfo(org.id);
+            org.name = team.name;
+          } catch {
+            // team.info failed for external org — keep ID as fallback
+          }
+        }
+      }
+
+      // Migrate old format
+      const { migrateSlackTokens } = await import('../mcpConnectionStore.js');
+      const tokens = migrateSlackTokens(connection.providerTokens);
+
+      // Get blacklisted user names for display
+      const blacklistUserDetails: Array<{ id: string; name: string }> = [];
+      if (tokens.accessRules?.blacklistUsers?.length) {
+        await Promise.all(tokens.accessRules.blacklistUsers.slice(0, 50).map(async (uid: string) => {
+          try {
+            const { user: u } = await client.usersInfo(uid);
+            blacklistUserDetails.push({ id: uid, name: u.profile?.display_name || u.real_name || u.name });
+          } catch {
+            blacklistUserDetails.push({ id: uid, name: uid });
+          }
+        }));
+      }
+
+      res.json({
+        currentRules: tokens.accessRules,
+        currentOrg,
+        connectedOrgs,
+        blacklistUserDetails,
+      });
+    } catch (err) {
+      console.error('[access-rules] error:', err);
+      res.status(500).json({ error: 'Failed to load access rules' });
+    }
+  });
+
+  // POST /api/instances/:instanceId/access-rules - Save access rules
+  app.post('/api/instances/:instanceId/access-rules', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
+    try {
+      const instanceId = req.params.instanceId as string;
+      const { accessRules } = req.body as { accessRules?: any };
+      if (!accessRules) {
+        res.status(400).json({ error: 'accessRules object is required' });
+        return;
+      }
+
+      // Validate glob patterns
+      const allPatterns = [...(accessRules.whitelistChannels || []), ...(accessRules.blacklistChannels || [])];
+      for (const pattern of allPatterns) {
+        if (typeof pattern !== 'string' || pattern.length === 0 || pattern.length > 100) {
+          res.status(400).json({ error: `Invalid pattern: "${pattern}". Must be 1-100 characters.` });
+          return;
+        }
+        if (/[^a-zA-Z0-9\-_*?]/.test(pattern)) {
+          res.status(400).json({ error: `Invalid pattern: "${pattern}". Only alphanumeric, hyphens, underscores, *, ? allowed.` });
+          return;
+        }
+      }
+
+      const googleId = (req as any).session?.googleId;
+      if (!googleId) { res.status(401).json({ error: 'Not authenticated' }); return; }
+      const user = await getUserByGoogleId(googleId);
+      if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
+
+      const connection = await getMcpConnectionByInstanceId(instanceId);
+      if (!connection || connection.userId !== user.id || connection.provider !== 'slack') {
+        res.status(404).json({ error: 'Slack connection not found' });
+        return;
+      }
+
+      const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+      const updatedTokens = {
+        ...(connection.providerTokens as any),
+        accessRules: {
+          allowedOrgs: accessRules.allowedOrgs || [],
+          blacklistUsers: accessRules.blacklistUsers || [],
+          whitelistChannels: accessRules.whitelistChannels || [],
+          blacklistChannels: accessRules.blacklistChannels || [],
+          allowPublicOnly: !!accessRules.allowPublicOnly,
+        },
+      };
+      await updateMcpInstanceProviderTokens(instanceId, updatedTokens);
+
+      // Clear session cache so new rules take effect
+      const { clearMcpSessionCache } = await import('../userSession.js');
+      clearMcpSessionCache(user.apiKey, instanceId);
+
+      console.error(`User ${user.id} updated Slack access rules for ${instanceId}`);
+      res.json({ success: true });
+    } catch (err) {
+      console.error('[access-rules] error:', err);
+      res.status(500).json({ error: 'Failed to save access rules' });
+    }
+  });
+
+  // GET /api/instances/:instanceId/users/search - Search workspace users for blacklist
+  const userListCache = new Map<string, { members: any[]; expiresAt: number }>();
+
+  app.get('/api/instances/:instanceId/users/search', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const instanceId = req.params.instanceId as string;
+      const query = ((req.query.q as string) || '').toLowerCase().trim();
+      if (!query) { res.json({ users: [] }); return; }
+
+      const googleId = (req as any).session?.googleId;
+      if (!googleId) { res.status(401).json({ error: 'Not authenticated' }); return; }
+      const user = await getUserByGoogleId(googleId);
+      if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
+
+      const connection = await getMcpConnectionByInstanceId(instanceId);
+      if (!connection || connection.userId !== user.id || connection.provider !== 'slack') {
+        res.status(404).json({ error: 'Slack connection not found' });
+        return;
+      }
+
+      const accessToken = (connection.providerTokens as any)?.access_token;
+      if (!accessToken) { res.status(400).json({ error: 'No Slack token found' }); return; }
+
+      // Cache full user list per instance (5 min TTL)
+      let allMembers: any[];
+      const cached = userListCache.get(instanceId);
+      if (cached && cached.expiresAt > Date.now()) {
+        allMembers = cached.members;
+      } else {
+        const { SlackClient } = await import('../slack/apiHelpers.js');
+        const client = new SlackClient(accessToken);
+        allMembers = [];
+        const seenIds = new Set<string>();
+
+        // 1. Workspace members from users.list
+        try {
+          let cursor: string | undefined;
+          do {
+            const result = await client.usersList(cursor);
+            for (const m of result.members) {
+              if (m.deleted || m.is_bot) continue;
+              seenIds.add(m.id);
+              allMembers.push({
+                id: m.id,
+                name: m.name,
+                real_name: m.real_name,
+                team_id: m.team_id,
+                avatar: m.profile?.image_48 || null,
+                display_name: m.profile?.display_name || '',
+              });
+            }
+            cursor = result.response_metadata?.next_cursor || undefined;
+          } while (cursor);
+        } catch (listErr) {
+          console.error('[users/search] users.list failed:', (listErr as any)?.message);
+        }
+
+        // 2. External users from DM conversations (non-fatal — may lack im:read scope)
+        try {
+          let dmCursor: string | undefined;
+          const externalUserIds: string[] = [];
+          do {
+            const dmResult = await client.conversationsList(dmCursor, 'im');
+            for (const ch of dmResult.channels) {
+              if (ch.user && !seenIds.has(ch.user)) {
+                externalUserIds.push(ch.user);
+                seenIds.add(ch.user);
+              }
+            }
+            dmCursor = dmResult.response_metadata?.next_cursor || undefined;
+          } while (dmCursor);
+
+          // Resolve external user details
+          await Promise.all(externalUserIds.slice(0, 50).map(async (uid) => {
+            try {
+              const { user: u } = await client.usersInfo(uid);
+              if (u.is_bot || (u as any).is_app_user) return;
+              allMembers.push({
+                id: u.id,
+                name: u.name,
+                real_name: u.real_name,
+                team_id: u.team_id || '',
+                avatar: u.profile?.image_48 || null,
+                display_name: u.profile?.display_name || '',
+              });
+            } catch { /* skip */ }
+          }));
+        } catch (dmErr) {
+          console.error('[users/search] DM user discovery failed (may need im:read scope):', (dmErr as any)?.message);
+        }
+
+        userListCache.set(instanceId, { members: allMembers, expiresAt: Date.now() + 5 * 60 * 1000 });
+      }
+
+      // Filter by query
+      const matches = allMembers
+        .filter(m =>
+          (m.name || '').toLowerCase().includes(query) ||
+          (m.real_name || '').toLowerCase().includes(query) ||
+          (m.display_name || '').toLowerCase().includes(query)
+        )
+        .slice(0, 20);
+
+      res.json({ users: matches });
+    } catch (err) {
+      console.error('[users/search] error:', err);
+      res.status(500).json({ error: 'Failed to search users' });
     }
   });
 
@@ -1126,6 +1550,7 @@ function registerSharedRoutes(app: express.Express): void {
           description: c.description,
           iconUrl: c.iconUrl,
           mcpUrl: c.mcpUrl,
+          provider: c.provider || 'google',
         })),
       });
     } catch (err: any) {
@@ -1148,6 +1573,7 @@ function registerSharedRoutes(app: express.Express): void {
         description: catalog.description,
         iconUrl: catalog.iconUrl,
         mcpUrl: catalog.mcpUrl,
+        provider: catalog.provider || 'google',
       });
     } catch (err: any) {
       console.error('Error getting catalog:', err);
@@ -1156,7 +1582,7 @@ function registerSharedRoutes(app: express.Express): void {
   });
 }
 
-export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheetsMcpPort: number, gmailMcpPort?: number, slidesMcpPort?: number, driveMcpPort?: number, clickUpMcpPort?: number): express.Express {
+export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheetsMcpPort: number, gmailMcpPort?: number, slidesMcpPort?: number, driveMcpPort?: number, clickUpMcpPort?: number, slackBotMcpPort?: number, slackUserMcpPort?: number): express.Express {
   const app = express();
   app.set('trust proxy', true);
 
@@ -1219,6 +1645,14 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   if (clickUpMcpPort) {
     addMcpProxy(clickUpMcpPort, 'clickup');
     console.error(`   ClickUp MCP proxy:  /clickup → 127.0.0.1:${clickUpMcpPort}`);
+  }
+  if (slackBotMcpPort) {
+    addMcpProxy(slackBotMcpPort, 'slack-bot');
+    console.error(`   Slack Bot MCP proxy: /slack-bot → 127.0.0.1:${slackBotMcpPort}`);
+  }
+  if (slackUserMcpPort) {
+    addMcpProxy(slackUserMcpPort, 'slack');
+    console.error(`   Slack MCP proxy:     /slack → 127.0.0.1:${slackUserMcpPort}`);
   }
 
   // Register all shared routes (auth, dashboard, connect, API, admin, catalogs)
@@ -1284,6 +1718,14 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
             // ClickUp uses its own session with clickUpAccessToken
             const { createClickUpSession } = await import('../userSession.js');
             req.userSession = createClickUpSession(user, connection);
+          } else if (connection.provider === 'slack-bot') {
+            // Slack Bot uses its own session with slackBotToken
+            const { createSlackBotSession } = await import('../userSession.js');
+            req.userSession = createSlackBotSession(user, connection);
+          } else if (connection.provider === 'slack') {
+            // Slack User uses its own session with slackUserToken + allowedChannels
+            const { createSlackUserSession } = await import('../userSession.js');
+            req.userSession = createSlackUserSession(user, connection);
           } else {
             const mcp = await getMcpCatalog(connection.mcpSlug);
             const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
@@ -2611,7 +3053,16 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
   registerOAuthProxy(app, mcpBaseUrl, getScopesForSlug(mcpSlug));
 
   // Proxy MCP requests to internal FastMCP server (JWT auth enforced before proxy)
-  app.use(['/mcp', '/sse'], resourceServerMiddleware);
+  // In MCP-only mode, /mcp path should require this service's scope, not mcp:docs
+  const mcpScopeForSlug = getScopesForSlug(mcpSlug)[0] || null;
+  const mcpOnlyMiddleware = createResourceServerMiddleware({
+    validateJwt,
+    validateOpaqueToken,
+    hasScope,
+    getRequiredScope: () => mcpScopeForSlug,
+    mapJwtToUser,
+  });
+  app.use(['/mcp', '/sse'], mcpOnlyMiddleware);
   const mcpProxy = createProxyMiddleware({
     target: `http://127.0.0.1:${internalMcpPort}`,
     changeOrigin: true,

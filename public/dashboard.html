@@ -669,11 +669,53 @@
         <div class="name-input-section">
           <label for="instanceNameInput">Name this instance</label>
           <input type="text" id="instanceNameInput" placeholder="e.g., Work Account, Personal" />
-          <p class="name-suggestion">Tip: Use a name that helps you identify which Google account this is for.</p>
+          <p class="name-suggestion" id="nameSuggestion">Tip: Use a name that helps you identify which Google account this is for.</p>
         </div>
+
+        <!-- Token input for direct-token providers (e.g., Slack) -->
+        <div id="tokenInputSection" class="name-input-section" style="display:none;">
+          <label for="tokenInput">Bot Token</label>
+          <input type="password" id="tokenInput" placeholder="xoxb-..." />
+          <p class="name-suggestion" id="tokenHint">
+            Create a Slack App, add bot scopes (channels:history, channels:read, groups:history, groups:read, chat:write, users:read), install to workspace, then paste the Bot User OAuth Token here. The bot only sees channels where it's been /invited.
+          </p>
+        </div>
+
         <button class="btn-connect-google" id="connectGoogleBtn" onclick="startOAuth()">
           Connect with Google
         </button>
+        <button class="btn-connect-google" id="connectTokenBtn" onclick="connectWithToken()" style="display:none;">
+          Connect
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Access Rules Modal (for Slack user OAuth) -->
+  <div id="accessRulesModal" class="modal-overlay hidden">
+    <div class="modal" style="max-width: 550px;">
+      <div class="modal-header">
+        <h3>Access Rules</h3>
+        <button class="modal-close" onclick="closeAccessRules()">&times;</button>
+      </div>
+      <!-- Help toggle -->
+      <div style="margin-bottom: 10px;">
+        <span onclick="document.getElementById('rulesHelp').classList.toggle('hidden')" style="cursor: pointer; color: #4f8df7; font-size: 13px; user-select: none;">&#9432; How access rules work</span>
+        <div id="rulesHelp" class="hidden" style="margin-top: 8px; padding: 12px; background: #111; border: 1px solid #333; border-radius: 8px; font-size: 12px; line-height: 1.6; color: #bbb;">
+          <ul style="margin: 0 0 0 16px; padding: 0;">
+            <li><strong style="color: #a78bfa;">Allowed Orgs</strong> &mdash; your org is always included. Check external orgs to see their shared channels and DMs.</li>
+            <li><strong style="color: #f87171;">Blacklist Users</strong> &mdash; search by name. Blocks their DMs and any group DM they're in.</li>
+            <li><strong style="color: #6ee7b7;">Whitelist Patterns</strong> &mdash; glob patterns for channel names. Use <code style="background:#222;padding:1px 4px;border-radius:3px;">*</code> for all, <code style="background:#222;padding:1px 4px;border-radius:3px;">eng-*</code> for prefix match.</li>
+            <li><strong style="color: #f59e0b;">Blacklist Patterns</strong> &mdash; channels matching these are blocked even if whitelisted.</li>
+            <li><strong>Public Only</strong> &mdash; hides all private channels.</li>
+          </ul>
+        </div>
+      </div>
+      <div id="accessRulesContent" style="max-height: 55vh; overflow-y: auto;">
+        <p>Loading...</p>
+      </div>
+      <div style="margin-top: 12px;">
+        <button class="btn-connect-google" id="saveRulesBtn" onclick="saveAccessRules()">Save Rules</button>
       </div>
     </div>
   </div>
@@ -736,6 +778,7 @@
         'google-calendar': '\u{1F4C5}',  // 📅
         'clickup': '\u2705',             // ✅
         'github': '\u{1F419}',           // 🐙
+        'slack-bot': '\u{1F916}',        // 🤖
         'slack': '\u{1F4AC}',            // 💬
         'notion': '\u{1F4D3}',           // 📓
       };
@@ -816,6 +859,7 @@
             ${showReconnect
               ? `<button class="btn-reconnect" onclick="reconnectInstance('${eid}', '${eslug}')">Reconnect</button>`
               : `<button class="btn-copy" onclick="copyUrl('${eid}', this)">Copy URL</button>`}
+            ${instance.provider === 'slack' ? `<button class="btn-rename" onclick="openAccessRules('${eid}')">Access Rules</button>` : ''}
             <button class="btn-rename" onclick="renameInstance('${eid}')">Rename</button>
             <button class="btn-delete" onclick="deleteInstance('${eid}', '${ename}')">Delete</button>
           </div>
@@ -891,6 +935,19 @@
         document.getElementById('instanceNameInput').value = `${selectedMcpType.name} ${existingCount + 1}`;
       }
 
+      // Toggle between OAuth button and direct token input based on provider
+      const isTokenProvider = selectedMcpType.provider === 'slack-bot';
+      document.getElementById('connectGoogleBtn').style.display = isTokenProvider ? 'none' : '';
+      document.getElementById('connectTokenBtn').style.display = isTokenProvider ? '' : 'none';
+      document.getElementById('tokenInputSection').style.display = isTokenProvider ? '' : 'none';
+      document.getElementById('tokenInput').value = '';
+
+      if (isTokenProvider) {
+        document.getElementById('nameSuggestion').textContent = 'Tip: Use a name like "Engineering" or "My Startup" to identify the workspace.';
+      } else {
+        document.getElementById('nameSuggestion').textContent = 'Tip: Use a name that helps you identify which Google account this is for.';
+      }
+
       document.getElementById('instanceNameInput').focus();
     }
 
@@ -907,6 +964,291 @@
 
       // Redirect to OAuth flow with instance name
       window.location.href = `/connect/${selectedMcpType.slug}?name=${encodeURIComponent(name)}`;
+    }
+
+    async function connectWithToken() {
+      const name = document.getElementById('instanceNameInput').value.trim();
+      if (!name) { alert('Please enter a name for this instance'); return; }
+      if (!selectedMcpType) { alert('Please select an MCP type'); return; }
+      const token = document.getElementById('tokenInput').value.trim();
+      if (!token) { alert('Please enter a bot token'); return; }
+
+      const btn = document.getElementById('connectTokenBtn');
+      btn.disabled = true;
+      btn.textContent = 'Connecting...';
+
+      try {
+        const response = await fetch('/api/connect-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ mcpSlug: selectedMcpType.slug, token, instanceName: name }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          alert(data.error || 'Failed to connect');
+          return;
+        }
+        closeAddToolModal();
+        // Reload user data to pick up the new connection
+        const user = await loadUserData();
+        if (user) {
+          currentUser = user;
+          instances = user.connections || [];
+          renderInstances();
+        }
+      } catch (err) {
+        alert('Connection failed: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Connect';
+      }
+    }
+
+    // === Access Rules ===
+    let rulesInstanceId = null;
+    let rulesState = { allowedOrgs: [], blacklistUsers: [], whitelistChannels: [], blacklistChannels: [], allowPublicOnly: false };
+    let rulesBlacklistUserDetails = []; // { id, name } for display
+    let rulesCurrentOrgId = null; // Always included in allowedOrgs
+    let searchDebounce = null;
+
+    async function openAccessRules(instanceId) {
+      rulesInstanceId = instanceId;
+      document.getElementById('accessRulesModal').classList.remove('hidden');
+      document.getElementById('accessRulesContent').innerHTML = '<p>Loading...</p>';
+
+      try {
+        const response = await fetch(`/api/instances/${instanceId}/access-rules`, { credentials: 'include' });
+        if (!response.ok) throw new Error('Failed to load');
+        const data = await response.json();
+
+        rulesState = data.currentRules || { allowedOrgs: [], blacklistUsers: [], whitelistChannels: [], blacklistChannels: [], allowPublicOnly: false };
+        rulesBlacklistUserDetails = data.blacklistUserDetails || [];
+        rulesCurrentOrgId = data.currentOrg?.id || null;
+
+        renderAccessRulesForm(data.currentOrg, data.connectedOrgs);
+      } catch (err) {
+        document.getElementById('accessRulesContent').innerHTML = `<p style="color: red;">Error: ${err.message}</p>`;
+      }
+    }
+
+    function renderAccessRulesForm(currentOrg, connectedOrgs) {
+      const orgsHtml = [
+        `<label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; opacity: 0.7;">
+          <input type="checkbox" checked disabled style="width: 16px; height: 16px; accent-color: #4f8df7;" />
+          <span>${escapeHtml(currentOrg.name)} <span style="color: #666; font-size: 11px;">(current)</span></span>
+        </label>`,
+        ...connectedOrgs.map(org => `
+          <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer;">
+            <input type="checkbox" data-org-id="${org.id}" ${rulesState.allowedOrgs.includes(org.id) ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #4f8df7;" />
+            <span>${escapeHtml(org.name !== org.id ? org.name : org.id)}</span>
+          </label>
+        `)
+      ].join('');
+
+      const blacklistHtml = rulesBlacklistUserDetails.map(u => `
+        <span style="display: inline-flex; align-items: center; gap: 4px; background: #333; border-radius: 16px; padding: 3px 10px 3px 8px; font-size: 13px; margin: 2px;">
+          ${escapeHtml(u.name)}
+          <span onclick="removeBlacklistUser('${u.id}')" style="cursor: pointer; color: #999; font-size: 16px; line-height: 1;">&times;</span>
+        </span>
+      `).join('');
+
+      const whitelistChips = rulesState.whitelistChannels.map((p, i) => `
+        <span style="display: inline-flex; align-items: center; gap: 4px; background: #1a3a2a; border-radius: 16px; padding: 3px 10px 3px 8px; font-size: 13px; margin: 2px;">
+          ${escapeHtml(p)}
+          <span onclick="removePattern('whitelist', ${i})" style="cursor: pointer; color: #999; font-size: 16px; line-height: 1;">&times;</span>
+        </span>
+      `).join('');
+
+      const blacklistChips = rulesState.blacklistChannels.map((p, i) => `
+        <span style="display: inline-flex; align-items: center; gap: 4px; background: #3a1a1a; border-radius: 16px; padding: 3px 10px 3px 8px; font-size: 13px; margin: 2px;">
+          ${escapeHtml(p)}
+          <span onclick="removePattern('blacklist', ${i})" style="cursor: pointer; color: #999; font-size: 16px; line-height: 1;">&times;</span>
+        </span>
+      `).join('');
+
+      document.getElementById('accessRulesContent').innerHTML = `
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+          <div>
+            <div style="font-weight: 600; font-size: 13px; color: #a78bfa; margin-bottom: 6px;">Allowed Organisations</div>
+            ${orgsHtml}
+          </div>
+
+          <div style="border-top: 1px solid #333; padding-top: 12px;">
+            <div style="font-weight: 600; font-size: 13px; color: #f87171; margin-bottom: 6px;">Blacklist Users</div>
+            <div style="display: flex; gap: 6px; margin-bottom: 6px;">
+              <input type="text" id="userSearchInput" placeholder="Search users..." oninput="debouncedUserSearch()" style="flex: 1; padding: 6px 10px; border: 1px solid #444; border-radius: 6px; background: #1a1a1a; color: #eee; font-size: 13px;" />
+            </div>
+            <div id="userSearchResults" style="max-height: 120px; overflow-y: auto;"></div>
+            <div id="blacklistUserChips" style="margin-top: 4px; display: flex; flex-wrap: wrap; gap: 2px;">${blacklistHtml}</div>
+          </div>
+
+          <div style="border-top: 1px solid #333; padding-top: 12px;">
+            <div style="font-weight: 600; font-size: 13px; color: #6ee7b7; margin-bottom: 6px;">Whitelist Channel Patterns</div>
+            <div style="display: flex; gap: 6px; margin-bottom: 6px;">
+              <input type="text" id="whitelistInput" placeholder="e.g. * or eng-*" style="flex: 1; padding: 6px 10px; border: 1px solid #444; border-radius: 6px; background: #1a1a1a; color: #eee; font-size: 13px;" />
+              <button onclick="addPattern('whitelist')" style="padding: 6px 12px; border: 1px solid #444; border-radius: 6px; background: #222; color: #eee; cursor: pointer;">Add</button>
+            </div>
+            <div id="whitelistChips" style="display: flex; flex-wrap: wrap; gap: 2px;">${whitelistChips}</div>
+          </div>
+
+          <div style="border-top: 1px solid #333; padding-top: 12px;">
+            <div style="font-weight: 600; font-size: 13px; color: #f59e0b; margin-bottom: 6px;">Blacklist Channel Patterns</div>
+            <div style="display: flex; gap: 6px; margin-bottom: 6px;">
+              <input type="text" id="blacklistInput" placeholder="e.g. secret-*" style="flex: 1; padding: 6px 10px; border: 1px solid #444; border-radius: 6px; background: #1a1a1a; color: #eee; font-size: 13px;" />
+              <button onclick="addPattern('blacklist')" style="padding: 6px 12px; border: 1px solid #444; border-radius: 6px; background: #222; color: #eee; cursor: pointer;">Add</button>
+            </div>
+            <div id="blacklistChannelChips" style="display: flex; flex-wrap: wrap; gap: 2px;">${blacklistChips}</div>
+          </div>
+
+          <div style="border-top: 1px solid #333; padding-top: 12px;">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="allowPublicOnly" ${rulesState.allowPublicOnly ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #4f8df7;" />
+              <span style="font-size: 13px;">Allow only public channels</span>
+            </label>
+          </div>
+        </div>
+      `;
+    }
+
+    function addPattern(type) {
+      const inputId = type === 'whitelist' ? 'whitelistInput' : 'blacklistInput';
+      const val = document.getElementById(inputId).value.trim();
+      if (!val) return;
+      if (type === 'whitelist') {
+        rulesState.whitelistChannels.push(val);
+      } else {
+        rulesState.blacklistChannels.push(val);
+      }
+      document.getElementById(inputId).value = '';
+      // Re-render just the chips
+      renderPatternChips(type);
+    }
+
+    function removePattern(type, index) {
+      if (type === 'whitelist') {
+        rulesState.whitelistChannels.splice(index, 1);
+      } else {
+        rulesState.blacklistChannels.splice(index, 1);
+      }
+      renderPatternChips(type);
+    }
+
+    function renderPatternChips(type) {
+      const list = type === 'whitelist' ? rulesState.whitelistChannels : rulesState.blacklistChannels;
+      const bg = type === 'whitelist' ? '#1a3a2a' : '#3a1a1a';
+      const containerId = type === 'whitelist' ? 'whitelistChips' : 'blacklistChannelChips';
+      const container = document.getElementById(containerId);
+      container.innerHTML = list.map((p, i) => `
+        <span style="display: inline-flex; align-items: center; gap: 4px; background: ${bg}; border-radius: 16px; padding: 3px 10px 3px 8px; font-size: 13px; margin: 2px;">
+          ${escapeHtml(p)}
+          <span onclick="removePattern('${type}', ${i})" style="cursor: pointer; color: #999; font-size: 16px; line-height: 1;">&times;</span>
+        </span>
+      `).join('');
+    }
+
+    function debouncedUserSearch() {
+      clearTimeout(searchDebounce);
+      searchDebounce = setTimeout(() => searchUsers(), 300);
+    }
+
+    async function searchUsers() {
+      const q = document.getElementById('userSearchInput').value.trim();
+      const resultsEl = document.getElementById('userSearchResults');
+      if (!q || q.length < 2) { resultsEl.innerHTML = ''; return; }
+
+      try {
+        const response = await fetch(`/api/instances/${rulesInstanceId}/users/search?q=${encodeURIComponent(q)}`, { credentials: 'include' });
+        if (!response.ok) return;
+        const data = await response.json();
+
+        const filtered = data.users.filter(u => !rulesState.blacklistUsers.includes(u.id));
+        resultsEl.innerHTML = filtered.length === 0
+          ? '<p style="color: #666; font-size: 12px; padding: 4px 8px;">No results</p>'
+          : filtered.map(u => {
+              const displayName = u.display_name || u.real_name || u.name;
+              return `<div data-uid="${u.id}" data-uname="${escapeAttr(displayName)}" class="user-search-result" style="padding: 5px 8px; cursor: pointer; font-size: 13px; border-radius: 4px; display: flex; align-items: center; gap: 6px;" onmouseover="this.style.background='#333'" onmouseout="this.style.background='transparent'">
+                <span>${escapeHtml(displayName)}</span>
+                <span style="color: #666; font-size: 11px;">@${escapeHtml(u.name)}</span>
+              </div>`;
+            }).join('');
+        // Attach click handlers via event delegation
+        resultsEl.querySelectorAll('.user-search-result').forEach(el => {
+          el.addEventListener('click', () => {
+            addBlacklistUser(el.getAttribute('data-uid'), el.getAttribute('data-uname'));
+          });
+        });
+      } catch (err) {
+        console.error('[user search] error:', err);
+        resultsEl.innerHTML = `<p style="color: #f87171; font-size: 12px; padding: 4px 8px;">Search failed</p>`;
+      }
+    }
+
+    function addBlacklistUser(id, name) {
+      if (rulesState.blacklistUsers.includes(id)) return;
+      rulesState.blacklistUsers.push(id);
+      rulesBlacklistUserDetails.push({ id, name });
+      document.getElementById('userSearchInput').value = '';
+      document.getElementById('userSearchResults').innerHTML = '';
+      renderBlacklistChips();
+    }
+
+    function removeBlacklistUser(id) {
+      rulesState.blacklistUsers = rulesState.blacklistUsers.filter(uid => uid !== id);
+      rulesBlacklistUserDetails = rulesBlacklistUserDetails.filter(u => u.id !== id);
+      renderBlacklistChips();
+    }
+
+    function renderBlacklistChips() {
+      document.getElementById('blacklistUserChips').innerHTML = rulesBlacklistUserDetails.map(u => `
+        <span style="display: inline-flex; align-items: center; gap: 4px; background: #333; border-radius: 16px; padding: 3px 10px 3px 8px; font-size: 13px; margin: 2px;">
+          ${escapeHtml(u.name)}
+          <span onclick="removeBlacklistUser('${u.id}')" style="cursor: pointer; color: #999; font-size: 16px; line-height: 1;">&times;</span>
+        </span>
+      `).join('');
+    }
+
+    function closeAccessRules() {
+      document.getElementById('accessRulesModal').classList.add('hidden');
+      rulesInstanceId = null;
+    }
+
+    async function saveAccessRules() {
+      if (!rulesInstanceId) return;
+
+      // Collect org checkboxes + always include current org
+      const orgCheckboxes = document.querySelectorAll('#accessRulesContent input[data-org-id]:checked');
+      const selectedOrgs = Array.from(orgCheckboxes).map(cb => cb.getAttribute('data-org-id'));
+      if (rulesCurrentOrgId && !selectedOrgs.includes(rulesCurrentOrgId)) {
+        selectedOrgs.unshift(rulesCurrentOrgId);
+      }
+      rulesState.allowedOrgs = selectedOrgs;
+      rulesState.allowPublicOnly = document.getElementById('allowPublicOnly')?.checked || false;
+
+      const btn = document.getElementById('saveRulesBtn');
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+
+      try {
+        const response = await fetch(`/api/instances/${rulesInstanceId}/access-rules`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ accessRules: rulesState }),
+        });
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.error || 'Failed to save');
+        }
+        closeAccessRules();
+        const user = await loadUserData();
+        if (user) { currentUser = user; instances = user.connections || []; renderInstances(); }
+      } catch (err) {
+        alert('Failed to save: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save Rules';
+      }
     }
 
     function copyUrl(instanceId, btn) {
@@ -1072,6 +1414,13 @@
           showSuccess(`Successfully connected "${decodeURIComponent(connectedInstance)}"!`);
         } else if (reconnectedInstance) {
           showSuccess(`Successfully reconnected "${decodeURIComponent(reconnectedInstance)}"!`);
+        }
+
+        // Auto-open access rules if redirected from Slack OAuth
+        const channelSetupId = new URLSearchParams(window.location.search).get('channelSetup');
+        if (channelSetupId) {
+          window.history.replaceState({}, '', '/dashboard');
+          openAccessRules(channelSetupId);
         }
 
         document.getElementById('loading').classList.add('hidden');

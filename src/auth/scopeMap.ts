@@ -9,6 +9,8 @@ const ROUTE_SCOPE_MAP: Record<string, string> = {
   slides: 'mcp:slides',
   drive: 'mcp:drive',
   clickup: 'mcp:clickup',
+  'slack-bot': 'mcp:slack-bot',
+  slack: 'mcp:slack',
 };
 
 /** All supported MCP scopes (single source of truth). */
@@ -23,6 +25,8 @@ const SLUG_SCOPE_MAP: Record<string, string> = {
   'google-slides': 'mcp:slides',
   'google-drive': 'mcp:drive',
   'clickup': 'mcp:clickup',
+  'slack-bot': 'mcp:slack-bot',
+  'slack': 'mcp:slack',
 };
 
 /** Return the scope for a given MCP_SLUG, or all scopes if unknown. */

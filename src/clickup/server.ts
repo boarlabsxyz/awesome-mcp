@@ -551,6 +551,43 @@ clickUpServer.addTool({
 });
 
 clickUpServer.addTool({
+  name: 'getDoc',
+  description: 'Get a ClickUp Doc by ID, including its content and pages.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+    docId: z.string().describe('The doc ID.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+
+    // Get doc metadata
+    const doc = await client.getDoc(args.workspaceId, args.docId);
+    const parts = [
+      `Doc: ${doc.name || doc.title || 'Untitled'}`,
+      `  ID: ${doc.id}`,
+    ];
+    if (doc.date_created) parts.push(`  Created: ${new Date(parseInt(doc.date_created)).toISOString()}`);
+    if (doc.date_updated) parts.push(`  Updated: ${new Date(parseInt(doc.date_updated)).toISOString()}`);
+    if (doc.content) parts.push(`\nContent:\n${doc.content}`);
+
+    // Try to get pages
+    try {
+      const pagesResult = await client.getDocPages(args.workspaceId, args.docId);
+      const pages = pagesResult.pages || pagesResult || [];
+      if (Array.isArray(pages) && pages.length > 0) {
+        parts.push('\nPages:');
+        for (const page of pages) {
+          parts.push(`\n--- ${page.name || page.title || 'Untitled Page'} (ID: ${page.id}) ---`);
+          if (page.content) parts.push(page.content);
+        }
+      }
+    } catch { /* pages endpoint may not exist for all docs */ }
+
+    return parts.join('\n');
+  },
+});
+
+clickUpServer.addTool({
   name: 'searchDocs',
   description: 'Search ClickUp Docs in a workspace.',
   parameters: z.object({
@@ -565,6 +602,48 @@ clickUpServer.addTool({
     return docs.map((d: any) =>
       `Doc: ${d.name || d.title || 'Untitled'}\n  ID: ${d.id}`
     ).join('\n\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'createDoc',
+  description: 'Create a new ClickUp Doc in a workspace. Optionally place it inside a Space, Folder, or List by providing parent ID and type.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+    name: z.string().min(1).describe('Title of the new doc.'),
+    content: z.string().optional().describe('Initial content of the doc (markdown supported).'),
+    parentId: z.string().optional().describe('ID of the parent (Space, Folder, or List) to place the doc in.'),
+    parentType: z.number().optional().describe('Type of parent: 4 = Space, 5 = Folder, 6 = List. Required if parentId is provided.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    const data: any = { name: args.name };
+    if (args.content) data.content = args.content;
+    if (args.parentId && args.parentType !== undefined) {
+      data.parent = { id: args.parentId, type: args.parentType };
+    }
+    const result = await client.createDoc(args.workspaceId, data);
+    return `Doc created: ${result.name || result.title || args.name}\n  ID: ${result.id}`;
+  },
+});
+
+clickUpServer.addTool({
+  name: 'listWorkspaceMembers',
+  description: 'List all members of a ClickUp workspace. Useful for looking up user IDs by name when assigning tasks.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    const result = await client.getWorkspaces();
+    const team = (result.teams || []).find((t: any) => String(t.id) === String(args.workspaceId));
+    if (!team) return `Workspace ${args.workspaceId} not found.`;
+    const members = team.members || [];
+    if (members.length === 0) return 'No members found in this workspace.';
+    return members.map((m: any) => {
+      const u = m.user || m;
+      return `${u.username || u.email}\n  ID: ${u.id}\n  Email: ${u.email || 'N/A'}\n  Role: ${m.role || 'member'}`;
+    }).join('\n\n');
   },
 });
 
