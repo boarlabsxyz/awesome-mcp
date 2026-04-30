@@ -208,11 +208,8 @@ export function createSlackUserSession(
     throw new Error(`Slack user token missing for connection ${connection.instanceId}. Please reconnect.`);
   }
 
-  const cacheKey = `${user.apiKey}:${connection.instanceId}`;
-  const cached = mcpSessionCache.get(cacheKey);
-  if (cached) return cached;
-
-  // Migrate old format if needed
+  // Don't cache Slack user sessions — accessRules can change via dashboard
+  // and the MCP service can't be notified to invalidate its cache.
   const tokens = connection.providerTokens as any;
   const accessRules = tokens?.accessRules || {
     allowedOrgs: [],
@@ -222,14 +219,13 @@ export function createSlackUserSession(
     allowPublicOnly: false,
   };
 
-  const session: UserSession = {
+  return {
     userId: user.id,
     apiKey: user.apiKey,
     email: user.email,
     mcpSlug: connection.mcpSlug,
     slackUserToken: accessToken,
     slackAccessRules: accessRules,
-    // Null placeholders for Google clients (Slack MCP won't use them)
     googleDocs: null as any,
     googleDrive: null as any,
     googleSheets: null as any,
@@ -238,9 +234,6 @@ export function createSlackUserSession(
     googleSlides: null as any,
     oauthClient: null as any,
   };
-
-  mcpSessionCache.set(cacheKey, session);
-  return session;
 }
 
 export function clearSessionCache(apiKey: string): void {
