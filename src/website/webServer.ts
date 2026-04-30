@@ -958,6 +958,7 @@ function registerSharedRoutes(app: express.Express): void {
       } while (cursor);
 
       // Get shared_team_ids from conversations.info (limited to first 20 shared channels)
+      const orgIdToUserIds = new Map<string, string>(); // org ID → a sample user ID from that org
       await Promise.all(sharedChannelIds.slice(0, 20).map(async (chId) => {
         try {
           const { channel: info } = await client.conversationsInfo(chId);
@@ -971,6 +972,40 @@ function registerSharedRoutes(app: express.Express): void {
           }
         } catch { /* skip */ }
       }));
+
+      // Resolve org names: find users from each external org and collect their names
+      if (connectedOrgs.some(o => o.name === o.id)) {
+        const orgMembers = new Map<string, string[]>(); // org ID → [user names]
+        let dmCur: string | undefined;
+        do {
+          const dmRes = await client.conversationsList(dmCur, 'im');
+          for (const ch of dmRes.channels) {
+            if (!ch.user) continue;
+            try {
+              const { user: u } = await client.usersInfo(ch.user);
+              if (u.team_id && u.team_id !== currentOrg.id) {
+                const names = orgMembers.get(u.team_id) || [];
+                names.push(u.profile?.display_name || u.real_name || u.name);
+                orgMembers.set(u.team_id, names);
+              }
+            } catch { /* skip */ }
+          }
+          dmCur = dmRes.response_metadata?.next_cursor || undefined;
+        } while (dmCur);
+
+        for (const org of connectedOrgs) {
+          if (org.name === org.id) {
+            const members = orgMembers.get(org.id);
+            if (members && members.length > 0) {
+              const preview = members.slice(0, 3).join(', ');
+              const suffix = members.length > 3 ? ` +${members.length - 3} more` : '';
+              org.name = `External org (${preview}${suffix})`;
+            } else {
+              org.name = `External org (${org.id})`;
+            }
+          }
+        }
+      }
 
       // Migrate old format
       const { migrateSlackTokens } = await import('../mcpConnectionStore.js');
