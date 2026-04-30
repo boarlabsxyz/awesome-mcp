@@ -996,6 +996,7 @@
     let rulesInstanceId = null;
     let rulesState = { allowedOrgs: [], blacklistUsers: [], whitelistChannels: [], blacklistChannels: [], allowPublicOnly: false };
     let rulesBlacklistUserDetails = []; // { id, name } for display
+    let rulesCurrentOrgId = null; // Always included in allowedOrgs
     let searchDebounce = null;
 
     async function openAccessRules(instanceId) {
@@ -1010,6 +1011,7 @@
 
         rulesState = data.currentRules || { allowedOrgs: [], blacklistUsers: [], whitelistChannels: [], blacklistChannels: [], allowPublicOnly: false };
         rulesBlacklistUserDetails = data.blacklistUserDetails || [];
+        rulesCurrentOrgId = data.currentOrg?.id || null;
 
         renderAccessRulesForm(data.currentOrg, data.connectedOrgs);
       } catch (err) {
@@ -1190,9 +1192,13 @@
     async function saveAccessRules() {
       if (!rulesInstanceId) return;
 
-      // Collect org checkboxes
+      // Collect org checkboxes + always include current org
       const orgCheckboxes = document.querySelectorAll('#accessRulesContent input[data-org-id]:checked');
-      rulesState.allowedOrgs = Array.from(orgCheckboxes).map(cb => cb.getAttribute('data-org-id'));
+      const selectedOrgs = Array.from(orgCheckboxes).map(cb => cb.getAttribute('data-org-id'));
+      if (rulesCurrentOrgId && !selectedOrgs.includes(rulesCurrentOrgId)) {
+        selectedOrgs.unshift(rulesCurrentOrgId);
+      }
+      rulesState.allowedOrgs = selectedOrgs;
       rulesState.allowPublicOnly = document.getElementById('allowPublicOnly')?.checked || false;
 
       const btn = document.getElementById('saveRulesBtn');
