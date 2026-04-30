@@ -1189,9 +1189,9 @@ function registerSharedRoutes(app: express.Express): void {
       // Filter by query
       const matches = allMembers
         .filter(m =>
-          m.name.toLowerCase().includes(query) ||
-          m.real_name.toLowerCase().includes(query) ||
-          m.display_name.toLowerCase().includes(query)
+          (m.name || '').toLowerCase().includes(query) ||
+          (m.real_name || '').toLowerCase().includes(query) ||
+          (m.display_name || '').toLowerCase().includes(query)
         )
         .slice(0, 20);
 
