@@ -1065,7 +1065,7 @@
               <input type="text" id="userSearchInput" placeholder="Search users..." oninput="debouncedUserSearch()" style="flex: 1; padding: 6px 10px; border: 1px solid #444; border-radius: 6px; background: #1a1a1a; color: #eee; font-size: 13px;" />
             </div>
             <div id="userSearchResults" style="max-height: 120px; overflow-y: auto;"></div>
-            <div id="blacklistChips" style="margin-top: 4px; display: flex; flex-wrap: wrap; gap: 2px;">${blacklistHtml}</div>
+            <div id="blacklistUserChips" style="margin-top: 4px; display: flex; flex-wrap: wrap; gap: 2px;">${blacklistHtml}</div>
           </div>
 
           <div style="border-top: 1px solid #333; padding-top: 12px;">
@@ -1083,7 +1083,7 @@
               <input type="text" id="blacklistInput" placeholder="e.g. secret-*" style="flex: 1; padding: 6px 10px; border: 1px solid #444; border-radius: 6px; background: #1a1a1a; color: #eee; font-size: 13px;" />
               <button onclick="addPattern('blacklist')" style="padding: 6px 12px; border: 1px solid #444; border-radius: 6px; background: #222; color: #eee; cursor: pointer;">Add</button>
             </div>
-            <div id="blacklistChips" style="display: flex; flex-wrap: wrap; gap: 2px;">${blacklistChips}</div>
+            <div id="blacklistChannelChips" style="display: flex; flex-wrap: wrap; gap: 2px;">${blacklistChips}</div>
           </div>
 
           <div style="border-top: 1px solid #333; padding-top: 12px;">
@@ -1122,7 +1122,8 @@
     function renderPatternChips(type) {
       const list = type === 'whitelist' ? rulesState.whitelistChannels : rulesState.blacklistChannels;
       const bg = type === 'whitelist' ? '#1a3a2a' : '#3a1a1a';
-      const container = document.getElementById(type + 'Chips');
+      const containerId = type === 'whitelist' ? 'whitelistChips' : 'blacklistChannelChips';
+      const container = document.getElementById(containerId);
       container.innerHTML = list.map((p, i) => `
         <span style="display: inline-flex; align-items: center; gap: 4px; background: ${bg}; border-radius: 16px; padding: 3px 10px 3px 8px; font-size: 13px; margin: 2px;">
           ${escapeHtml(p)}
@@ -1173,7 +1174,7 @@
     }
 
     function renderBlacklistChips() {
-      document.getElementById('blacklistChips').innerHTML = rulesBlacklistUserDetails.map(u => `
+      document.getElementById('blacklistUserChips').innerHTML = rulesBlacklistUserDetails.map(u => `
         <span style="display: inline-flex; align-items: center; gap: 4px; background: #333; border-radius: 16px; padding: 3px 10px 3px 8px; font-size: 13px; margin: 2px;">
           ${escapeHtml(u.name)}
           <span onclick="removeBlacklistUser('${u.id}')" style="cursor: pointer; color: #999; font-size: 16px; line-height: 1;">&times;</span>
