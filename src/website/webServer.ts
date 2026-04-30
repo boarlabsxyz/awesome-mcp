@@ -1079,11 +1079,15 @@ function registerSharedRoutes(app: express.Express): void {
         const { SlackClient } = await import('../slack/apiHelpers.js');
         const client = new SlackClient(accessToken);
         allMembers = [];
+        const seenIds = new Set<string>();
+
+        // 1. Workspace members from users.list
         let cursor: string | undefined;
         do {
           const result = await client.usersList(cursor);
           for (const m of result.members) {
             if (m.deleted || m.is_bot) continue;
+            seenIds.add(m.id);
             allMembers.push({
               id: m.id,
               name: m.name,
@@ -1095,6 +1099,37 @@ function registerSharedRoutes(app: express.Express): void {
           }
           cursor = result.response_metadata?.next_cursor || undefined;
         } while (cursor);
+
+        // 2. External users from DM conversations
+        let dmCursor: string | undefined;
+        const externalUserIds: string[] = [];
+        do {
+          const dmResult = await client.conversationsList(dmCursor, 'im');
+          for (const ch of dmResult.channels) {
+            if (ch.user && !seenIds.has(ch.user)) {
+              externalUserIds.push(ch.user);
+              seenIds.add(ch.user);
+            }
+          }
+          dmCursor = dmResult.response_metadata?.next_cursor || undefined;
+        } while (dmCursor);
+
+        // Resolve external user details
+        await Promise.all(externalUserIds.slice(0, 50).map(async (uid) => {
+          try {
+            const { user: u } = await client.usersInfo(uid);
+            if (u.is_bot || (u as any).is_app_user) return;
+            allMembers.push({
+              id: u.id,
+              name: u.name,
+              real_name: u.real_name,
+              team_id: u.team_id || '',
+              avatar: u.profile?.image_48 || null,
+              display_name: u.profile?.display_name || '',
+            });
+          } catch { /* skip */ }
+        }));
+
         userListCache.set(instanceId, { members: allMembers, expiresAt: Date.now() + 5 * 60 * 1000 });
       }
 
