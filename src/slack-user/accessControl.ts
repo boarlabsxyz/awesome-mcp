@@ -146,15 +146,17 @@ export async function filterDmsByOrg(
 }
 
 /**
- * Filter group DMs (mpim) that contain any blacklisted user.
- * Requires async member lookups via conversations.members.
+ * Filter group DMs (mpim) that contain any blacklisted user or user from non-allowed org.
+ * Requires async member lookups via conversations.members and users.info.
  */
-export async function filterGroupDmsByBlacklist(
+export async function filterGroupDmsByRules(
   client: SlackClient,
   rules: SlackAccessRules,
   channels: Array<{ is_mpim?: boolean; id: string; [key: string]: any }>,
 ): Promise<typeof channels> {
-  if (rules.blacklistUsers.length === 0) return channels;
+  const hasBlacklist = rules.blacklistUsers.length > 0;
+  const hasOrgFilter = rules.allowedOrgs.length > 0;
+  if (!hasBlacklist && !hasOrgFilter) return channels;
 
   const mpimChannels = channels.filter(ch => !!ch.is_mpim);
   if (mpimChannels.length === 0) return channels;
@@ -163,8 +165,24 @@ export async function filterGroupDmsByBlacklist(
   await Promise.all(mpimChannels.map(async (ch) => {
     try {
       const { members } = await client.conversationsMembers(ch.id);
-      if (members.some(uid => rules.blacklistUsers.includes(uid))) {
+
+      // Check blacklist
+      if (hasBlacklist && members.some(uid => rules.blacklistUsers.includes(uid))) {
         blockedMpimIds.add(ch.id);
+        return;
+      }
+
+      // Check org: if any member is from a non-allowed org, block
+      if (hasOrgFilter) {
+        for (const uid of members) {
+          try {
+            const { user } = await client.usersInfo(uid);
+            if (user.team_id && !rules.allowedOrgs.includes(user.team_id)) {
+              blockedMpimIds.add(ch.id);
+              return;
+            }
+          } catch { /* skip */ }
+        }
       }
     } catch { /* skip — can't check members, allow through */ }
   }));
