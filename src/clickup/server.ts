@@ -551,6 +551,43 @@ clickUpServer.addTool({
 });
 
 clickUpServer.addTool({
+  name: 'getDoc',
+  description: 'Get a ClickUp Doc by ID, including its content and pages.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+    docId: z.string().describe('The doc ID.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+
+    // Get doc metadata
+    const doc = await client.getDoc(args.workspaceId, args.docId);
+    const parts = [
+      `Doc: ${doc.name || doc.title || 'Untitled'}`,
+      `  ID: ${doc.id}`,
+    ];
+    if (doc.date_created) parts.push(`  Created: ${new Date(parseInt(doc.date_created)).toISOString()}`);
+    if (doc.date_updated) parts.push(`  Updated: ${new Date(parseInt(doc.date_updated)).toISOString()}`);
+    if (doc.content) parts.push(`\nContent:\n${doc.content}`);
+
+    // Try to get pages
+    try {
+      const pagesResult = await client.getDocPages(args.workspaceId, args.docId);
+      const pages = pagesResult.pages || pagesResult || [];
+      if (Array.isArray(pages) && pages.length > 0) {
+        parts.push('\nPages:');
+        for (const page of pages) {
+          parts.push(`\n--- ${page.name || page.title || 'Untitled Page'} (ID: ${page.id}) ---`);
+          if (page.content) parts.push(page.content);
+        }
+      }
+    } catch { /* pages endpoint may not exist for all docs */ }
+
+    return parts.join('\n');
+  },
+});
+
+clickUpServer.addTool({
   name: 'searchDocs',
   description: 'Search ClickUp Docs in a workspace.',
   parameters: z.object({
