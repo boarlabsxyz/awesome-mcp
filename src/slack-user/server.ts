@@ -69,9 +69,10 @@ slackUserServer.addTool({
   parameters: z.object({
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
   }),
-  execute: async (args, { session }) => {
+  execute: async (args, { session, log }) => {
     const client = getSlackUserClient(session);
     const rules = getRules(session!);
+    log.info(`[listChannels] rules: orgs=${JSON.stringify(rules.allowedOrgs)}, whitelist=${JSON.stringify(rules.whitelistChannels)}, blacklist=${JSON.stringify(rules.blacklistChannels)}, publicOnly=${rules.allowPublicOnly}`);
 
     // Use conversations.list (all workspace channels) + users.conversations (DMs)
     const result = await client.conversationsListAll(args.cursor, 'public_channel,private_channel');
