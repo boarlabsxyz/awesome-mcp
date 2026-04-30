@@ -184,6 +184,7 @@ import {
   getMcpConnectionByInstanceId,
   updateMcpInstanceName,
   updateMcpInstanceTokens,
+  updateMcpInstanceProviderTokens,
   updateMcpInstanceGoogleEmail,
   disconnectMcpInstance
 } from '../mcpConnectionStore.js';
@@ -690,14 +691,32 @@ function registerSharedRoutes(app: express.Express): void {
         const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
         const instanceName = stateData.instanceName || `Slack - ${tokenData.team?.name || 'workspace'}`;
 
-        connection = await createMcpInstance(
-          user.id, mcpSlug, instanceName, emptyGoogleTokens, null,
-          'slack', providerTokens, providerEmail
-        );
-        console.error(`User ${user.id} connected Slack User MCP: ${connection.instanceId}`);
+        // Check if this is a reconnect (update existing instance tokens)
+        if (stateData.reconnectInstanceId) {
+          const existing = await getMcpConnectionByInstanceId(stateData.reconnectInstanceId);
+          if (!existing || existing.userId !== user.id || existing.mcpSlug !== mcpSlug) {
+            res.status(404).send('Instance not found or access denied.');
+            return;
+          }
+          // Preserve existing accessRules on reconnect — only update the token
+          const existingRules = (existing.providerTokens as any)?.accessRules;
+          if (existingRules) {
+            providerTokens.accessRules = existingRules;
+          }
+          await updateMcpInstanceProviderTokens(existing.instanceId, providerTokens);
+          connection = existing;
+          console.error(`User ${user.id} reconnected Slack User MCP: ${connection.instanceId}`);
+        } else {
+          connection = await createMcpInstance(
+            user.id, mcpSlug, instanceName, emptyGoogleTokens, null,
+            'slack', providerTokens, providerEmail
+          );
+          console.error(`User ${user.id} connected Slack User MCP: ${connection.instanceId}`);
+        }
 
-        // Redirect to dashboard with channelSetup param to trigger channel picker
-        res.redirect(`/dashboard?channelSetup=${encodeURIComponent(connection.instanceId)}`);
+        // Redirect to dashboard — channelSetup only for new connections
+        const slackSuccessParam = stateData.reconnectInstanceId ? 'reconnected' : 'channelSetup';
+        res.redirect(`/dashboard?${slackSuccessParam}=${encodeURIComponent(connection.instanceId)}`);
         return;
 
       } else if (provider === 'clickup') {
