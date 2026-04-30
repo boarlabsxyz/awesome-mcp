@@ -88,8 +88,11 @@ export function assertAccess(rules: SlackAccessRules, meta: ChannelMeta): void {
     throw new UserError('Access denied: only public channels are allowed (allowPublicOnly is enabled).');
   }
 
-  // 2. Org check for shared/external channels
-  if (meta.is_shared && rules.allowedOrgs.length > 0 && meta.shared_team_ids) {
+  // 2. Org check for shared/external channels — block unless org is explicitly allowed
+  if (meta.is_shared && rules.allowedOrgs.length > 0) {
+    if (!meta.shared_team_ids || meta.shared_team_ids.length === 0) {
+      throw new UserError('Access denied: this shared channel\'s organisation could not be verified.');
+    }
     const hasAllowedOrg = meta.shared_team_ids.some(tid => rules.allowedOrgs.includes(tid));
     if (!hasAllowedOrg) {
       throw new UserError('Access denied: this shared channel belongs to an organisation not in your allowed list.');
@@ -197,9 +200,13 @@ export function filterChannelList(
     // Channel checks
     if (rules.allowPublicOnly && ch.is_private) return false;
 
-    // Org filter: external/shared channels must have at least one allowed org
+    // Org filter: external/shared channels blocked unless their org is allowed
     const isShared = !!(ch.is_ext_shared || ch.is_org_shared);
-    if (isShared && rules.allowedOrgs.length > 0 && ch.shared_team_ids) {
+    if (isShared && rules.allowedOrgs.length > 0) {
+      if (!ch.shared_team_ids || ch.shared_team_ids.length === 0) {
+        // Can't verify org — block by default
+        return false;
+      }
       const hasAllowedOrg = ch.shared_team_ids.some(tid => rules.allowedOrgs.includes(tid));
       if (!hasAllowedOrg) return false;
     }
