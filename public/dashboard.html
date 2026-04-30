@@ -1162,15 +1162,26 @@
         if (!response.ok) return;
         const data = await response.json();
 
-        resultsEl.innerHTML = data.users
-          .filter(u => !rulesState.blacklistUsers.includes(u.id))
-          .map(u => `
-            <div onclick="addBlacklistUser('${u.id}', '${escapeHtml(u.display_name || u.real_name || u.name)}')" style="padding: 5px 8px; cursor: pointer; font-size: 13px; border-radius: 4px; display: flex; align-items: center; gap: 6px;" onmouseover="this.style.background='#333'" onmouseout="this.style.background='transparent'">
-              <span>${escapeHtml(u.display_name || u.real_name || u.name)}</span>
-              <span style="color: #666; font-size: 11px;">@${escapeHtml(u.name)}</span>
-            </div>
-          `).join('') || '<p style="color: #666; font-size: 12px; padding: 4px 8px;">No results</p>';
-      } catch { /* skip */ }
+        const filtered = data.users.filter(u => !rulesState.blacklistUsers.includes(u.id));
+        resultsEl.innerHTML = filtered.length === 0
+          ? '<p style="color: #666; font-size: 12px; padding: 4px 8px;">No results</p>'
+          : filtered.map(u => {
+              const displayName = u.display_name || u.real_name || u.name;
+              return `<div data-uid="${u.id}" data-uname="${escapeAttr(displayName)}" class="user-search-result" style="padding: 5px 8px; cursor: pointer; font-size: 13px; border-radius: 4px; display: flex; align-items: center; gap: 6px;" onmouseover="this.style.background='#333'" onmouseout="this.style.background='transparent'">
+                <span>${escapeHtml(displayName)}</span>
+                <span style="color: #666; font-size: 11px;">@${escapeHtml(u.name)}</span>
+              </div>`;
+            }).join('');
+        // Attach click handlers via event delegation
+        resultsEl.querySelectorAll('.user-search-result').forEach(el => {
+          el.addEventListener('click', () => {
+            addBlacklistUser(el.getAttribute('data-uid'), el.getAttribute('data-uname'));
+          });
+        });
+      } catch (err) {
+        console.error('[user search] error:', err);
+        resultsEl.innerHTML = `<p style="color: #f87171; font-size: 12px; padding: 4px 8px;">Search failed</p>`;
+      }
     }
 
     function addBlacklistUser(id, name) {
