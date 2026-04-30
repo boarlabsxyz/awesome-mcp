@@ -158,10 +158,10 @@ export class SlackClient {
 
   // === Team ===
 
-  async teamInfo(): Promise<{
+  async teamInfo(teamId?: string): Promise<{
     team: { id: string; name: string; domain: string };
   }> {
-    return this.request('team.info');
+    return this.request('team.info', teamId ? { team: teamId } : undefined);
   }
 
   // === Conversations (extended) ===

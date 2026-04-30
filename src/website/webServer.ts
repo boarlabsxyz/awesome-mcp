@@ -973,36 +973,14 @@ function registerSharedRoutes(app: express.Express): void {
         } catch { /* skip */ }
       }));
 
-      // Resolve org names: find users from each external org and collect their names
-      if (connectedOrgs.some(o => o.name === o.id)) {
-        const orgMembers = new Map<string, string[]>(); // org ID → [user names]
-        let dmCur: string | undefined;
-        do {
-          const dmRes = await client.conversationsList(dmCur, 'im');
-          for (const ch of dmRes.channels) {
-            if (!ch.user) continue;
-            try {
-              const { user: u } = await client.usersInfo(ch.user);
-              if (u.team_id && u.team_id !== currentOrg.id) {
-                const names = orgMembers.get(u.team_id) || [];
-                names.push(u.profile?.display_name || u.real_name || u.name);
-                orgMembers.set(u.team_id, names);
-              }
-            } catch { /* skip */ }
-          }
-          dmCur = dmRes.response_metadata?.next_cursor || undefined;
-        } while (dmCur);
-
-        for (const org of connectedOrgs) {
-          if (org.name === org.id) {
-            const members = orgMembers.get(org.id);
-            if (members && members.length > 0) {
-              const preview = members.slice(0, 3).join(', ');
-              const suffix = members.length > 3 ? ` +${members.length - 3} more` : '';
-              org.name = `External org (${preview}${suffix})`;
-            } else {
-              org.name = `External org (${org.id})`;
-            }
+      // Resolve org names: try team.info for each external org, fall back to user names
+      for (const org of connectedOrgs) {
+        if (org.name === org.id) {
+          try {
+            const { team } = await client.teamInfo(org.id);
+            org.name = team.name;
+          } catch {
+            // team.info failed for external org — keep ID as fallback
           }
         }
       }
