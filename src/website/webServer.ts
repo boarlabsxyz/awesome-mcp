@@ -1127,53 +1127,61 @@ function registerSharedRoutes(app: express.Express): void {
         const seenIds = new Set<string>();
 
         // 1. Workspace members from users.list
-        let cursor: string | undefined;
-        do {
-          const result = await client.usersList(cursor);
-          for (const m of result.members) {
-            if (m.deleted || m.is_bot) continue;
-            seenIds.add(m.id);
-            allMembers.push({
-              id: m.id,
-              name: m.name,
-              real_name: m.real_name,
-              team_id: m.team_id,
-              avatar: m.profile?.image_48 || null,
-              display_name: m.profile?.display_name || '',
-            });
-          }
-          cursor = result.response_metadata?.next_cursor || undefined;
-        } while (cursor);
-
-        // 2. External users from DM conversations
-        let dmCursor: string | undefined;
-        const externalUserIds: string[] = [];
-        do {
-          const dmResult = await client.conversationsList(dmCursor, 'im');
-          for (const ch of dmResult.channels) {
-            if (ch.user && !seenIds.has(ch.user)) {
-              externalUserIds.push(ch.user);
-              seenIds.add(ch.user);
+        try {
+          let cursor: string | undefined;
+          do {
+            const result = await client.usersList(cursor);
+            for (const m of result.members) {
+              if (m.deleted || m.is_bot) continue;
+              seenIds.add(m.id);
+              allMembers.push({
+                id: m.id,
+                name: m.name,
+                real_name: m.real_name,
+                team_id: m.team_id,
+                avatar: m.profile?.image_48 || null,
+                display_name: m.profile?.display_name || '',
+              });
             }
-          }
-          dmCursor = dmResult.response_metadata?.next_cursor || undefined;
-        } while (dmCursor);
+            cursor = result.response_metadata?.next_cursor || undefined;
+          } while (cursor);
+        } catch (listErr) {
+          console.error('[users/search] users.list failed:', (listErr as any)?.message);
+        }
 
-        // Resolve external user details
-        await Promise.all(externalUserIds.slice(0, 50).map(async (uid) => {
-          try {
-            const { user: u } = await client.usersInfo(uid);
-            if (u.is_bot || (u as any).is_app_user) return;
-            allMembers.push({
-              id: u.id,
-              name: u.name,
-              real_name: u.real_name,
-              team_id: u.team_id || '',
-              avatar: u.profile?.image_48 || null,
-              display_name: u.profile?.display_name || '',
-            });
-          } catch { /* skip */ }
-        }));
+        // 2. External users from DM conversations (non-fatal — may lack im:read scope)
+        try {
+          let dmCursor: string | undefined;
+          const externalUserIds: string[] = [];
+          do {
+            const dmResult = await client.conversationsList(dmCursor, 'im');
+            for (const ch of dmResult.channels) {
+              if (ch.user && !seenIds.has(ch.user)) {
+                externalUserIds.push(ch.user);
+                seenIds.add(ch.user);
+              }
+            }
+            dmCursor = dmResult.response_metadata?.next_cursor || undefined;
+          } while (dmCursor);
+
+          // Resolve external user details
+          await Promise.all(externalUserIds.slice(0, 50).map(async (uid) => {
+            try {
+              const { user: u } = await client.usersInfo(uid);
+              if (u.is_bot || (u as any).is_app_user) return;
+              allMembers.push({
+                id: u.id,
+                name: u.name,
+                real_name: u.real_name,
+                team_id: u.team_id || '',
+                avatar: u.profile?.image_48 || null,
+                display_name: u.profile?.display_name || '',
+              });
+            } catch { /* skip */ }
+          }));
+        } catch (dmErr) {
+          console.error('[users/search] DM user discovery failed (may need im:read scope):', (dmErr as any)?.message);
+        }
 
         userListCache.set(instanceId, { members: allMembers, expiresAt: Date.now() + 5 * 60 * 1000 });
       }
