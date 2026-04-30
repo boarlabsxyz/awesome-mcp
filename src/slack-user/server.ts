@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { SlackClient } from '../slack/apiHelpers.js';
-import { resolveUsers, getWorkspaceUrl, formatMessage, assertWritesEnabled } from '../slack/helpers.js';
+import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handlePostMessage, handleReplyInThread } from '../slack/helpers.js';
 import { assertAccess, fetchChannelMeta, filterChannelList, filterDmsByOrg, filterGroupDmsByRules } from './accessControl.js';
 import type { SlackAccessRules } from '../mcpConnectionStore.js';
 
@@ -22,6 +22,10 @@ function getSlackUserClient(session?: UserSession): SlackClient {
   return new SlackClient(session.slackUserToken as string);
 }
 
+function getTokenKey(session: UserSession): string {
+  return session.slackUserToken as string;
+}
+
 function getRules(session: UserSession): SlackAccessRules {
   const rules = session.slackAccessRules as SlackAccessRules | undefined;
   if (!rules) {
@@ -33,7 +37,7 @@ function getRules(session: UserSession): SlackAccessRules {
 /** Enforce access rules for a channel, fetching metadata as needed. */
 async function enforceAccess(client: SlackClient, session: UserSession, channelId: string): Promise<void> {
   const rules = getRules(session);
-  const meta = await fetchChannelMeta(client, channelId, session.slackUserToken as string);
+  const meta = await fetchChannelMeta(client, channelId, getTokenKey(session));
   assertAccess(rules, meta);
 
   // Additional checks for DMs (assertAccess can't do these without API lookups)
@@ -99,7 +103,7 @@ slackUserServer.addTool({
 
     // Resolve DM user names
     const dmUserIds = channels.filter(ch => (ch as any).is_im && ch.user).map(ch => ch.user!);
-    const userNames = dmUserIds.length > 0 ? await resolveUsers(client, dmUserIds, session!.slackUserToken as string) : new Map<string, string>();
+    const userNames = dmUserIds.length > 0 ? await resolveUsers(client, dmUserIds, getTokenKey(session!)) : new Map<string, string>();
 
     const lines = channels.map(ch => {
       const isDm = !!(ch as any).is_im;
@@ -142,29 +146,7 @@ slackUserServer.addTool({
   execute: async (args, { session }) => {
     const client = getSlackUserClient(session);
     await enforceAccess(client, session!, args.channelId);
-    const limit = Math.min(Math.max(args.limit, 1), 100);
-    const wsUrl = await getWorkspaceUrl(client, session!.slackUserToken as string);
-    const result = await client.conversationsHistory(args.channelId, {
-      limit,
-      oldest: args.oldest,
-      latest: args.latest,
-      cursor: args.cursor,
-    });
-
-    const messages = result.messages;
-    if (messages.length === 0) return 'No messages found in this channel.';
-
-    const userIds = messages.map(m => m.user).filter(Boolean) as string[];
-    const userNames = await resolveUsers(client, userIds, session!.slackUserToken as string);
-
-    const lines = messages.reverse().map(msg => formatMessage(msg, userNames, args.channelId, wsUrl));
-
-    let output = lines.join('\n');
-    const nextCursor = result.response_metadata?.next_cursor;
-    if (nextCursor) {
-      output += `\n\n---\nMore messages available. Use cursor: "${nextCursor}"`;
-    }
-    return output;
+    return handleReadChannelHistory(client, getTokenKey(session!), args.channelId, args);
   },
 });
 
@@ -180,27 +162,7 @@ slackUserServer.addTool({
   execute: async (args, { session }) => {
     const client = getSlackUserClient(session);
     await enforceAccess(client, session!, args.channelId);
-    const limit = Math.min(Math.max(args.limit, 1), 200);
-    const wsUrl = await getWorkspaceUrl(client, session!.slackUserToken as string);
-    const result = await client.conversationsReplies(args.channelId, args.threadTs, {
-      limit,
-      cursor: args.cursor,
-    });
-
-    const messages = result.messages;
-    if (messages.length === 0) return 'No replies found in this thread.';
-
-    const userIds = messages.map(m => m.user).filter(Boolean) as string[];
-    const userNames = await resolveUsers(client, userIds, session!.slackUserToken as string);
-
-    const lines = messages.map(msg => formatMessage(msg, userNames, args.channelId, wsUrl));
-
-    let output = lines.join('\n');
-    const nextCursor = result.response_metadata?.next_cursor;
-    if (nextCursor) {
-      output += `\n\n---\nMore replies available. Use cursor: "${nextCursor}"`;
-    }
-    return output;
+    return handleReadThreadReplies(client, getTokenKey(session!), args.channelId, args.threadTs, args);
   },
 });
 
@@ -212,11 +174,9 @@ slackUserServer.addTool({
     text: z.string().describe('Message text (supports Slack markdown/mrkdwn).'),
   }),
   execute: async (args, { session }) => {
-    assertWritesEnabled();
     const client = getSlackUserClient(session);
     await enforceAccess(client, session!, args.channelId);
-    const result = await client.chatPostMessage(args.channelId, args.text);
-    return `Message posted to ${result.channel} (ts: ${result.ts})`;
+    return handlePostMessage(client, args.channelId, args.text);
   },
 });
 
@@ -229,10 +189,8 @@ slackUserServer.addTool({
     text: z.string().describe('Reply text (supports Slack markdown/mrkdwn).'),
   }),
   execute: async (args, { session }) => {
-    assertWritesEnabled();
     const client = getSlackUserClient(session);
     await enforceAccess(client, session!, args.channelId);
-    const result = await client.chatPostMessage(args.channelId, args.text, args.threadTs);
-    return `Reply posted to thread ${args.threadTs} in ${result.channel} (ts: ${result.ts})`;
+    return handleReplyInThread(client, args.channelId, args.threadTs, args.text);
   },
 });

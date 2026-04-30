@@ -88,3 +88,57 @@ export function assertWritesEnabled(): void {
     throw new UserError('Slack writes are disabled. Set SLACK_WRITES_ENABLED=true to enable posting messages.');
   }
 }
+
+// === Shared tool handlers ===
+
+export async function handleReadChannelHistory(
+  client: SlackClient, tokenKey: string, channelId: string,
+  opts: { limit: number; oldest?: string; latest?: string; cursor?: string },
+): Promise<string> {
+  const limit = Math.min(Math.max(opts.limit, 1), 100);
+  const wsUrl = await getWorkspaceUrl(client, tokenKey);
+  const result = await client.conversationsHistory(channelId, { limit, oldest: opts.oldest, latest: opts.latest, cursor: opts.cursor });
+  const messages = result.messages;
+  if (messages.length === 0) return 'No messages found in this channel.';
+  const userIds = messages.map(m => m.user).filter(Boolean) as string[];
+  const userNames = await resolveUsers(client, userIds, tokenKey);
+  const lines = messages.reverse().map(msg => formatMessage(msg, userNames, channelId, wsUrl));
+  let output = lines.join('\n');
+  const nextCursor = result.response_metadata?.next_cursor;
+  if (nextCursor) output += `\n\n---\nMore messages available. Use cursor: "${nextCursor}"`;
+  return output;
+}
+
+export async function handleReadThreadReplies(
+  client: SlackClient, tokenKey: string, channelId: string, threadTs: string,
+  opts: { limit: number; cursor?: string },
+): Promise<string> {
+  const limit = Math.min(Math.max(opts.limit, 1), 200);
+  const wsUrl = await getWorkspaceUrl(client, tokenKey);
+  const result = await client.conversationsReplies(channelId, threadTs, { limit, cursor: opts.cursor });
+  const messages = result.messages;
+  if (messages.length === 0) return 'No replies found in this thread.';
+  const userIds = messages.map(m => m.user).filter(Boolean) as string[];
+  const userNames = await resolveUsers(client, userIds, tokenKey);
+  const lines = messages.map(msg => formatMessage(msg, userNames, channelId, wsUrl));
+  let output = lines.join('\n');
+  const nextCursor = result.response_metadata?.next_cursor;
+  if (nextCursor) output += `\n\n---\nMore replies available. Use cursor: "${nextCursor}"`;
+  return output;
+}
+
+export async function handlePostMessage(
+  client: SlackClient, channelId: string, text: string,
+): Promise<string> {
+  assertWritesEnabled();
+  const result = await client.chatPostMessage(channelId, text);
+  return `Message posted to ${result.channel} (ts: ${result.ts})`;
+}
+
+export async function handleReplyInThread(
+  client: SlackClient, channelId: string, threadTs: string, text: string,
+): Promise<string> {
+  assertWritesEnabled();
+  const result = await client.chatPostMessage(channelId, text, threadTs);
+  return `Reply posted to thread ${threadTs} in ${result.channel} (ts: ${result.ts})`;
+}

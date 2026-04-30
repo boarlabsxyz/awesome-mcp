@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { SlackClient } from './apiHelpers.js';
-import { resolveUsers, getWorkspaceUrl, formatMessage, assertWritesEnabled } from './helpers.js';
+import { handleReadChannelHistory, handleReadThreadReplies, handlePostMessage, handleReplyInThread } from './helpers.js';
 
 export const slackBotServer = new FastMCP<UserSession>({
   name: 'Slack Bot MCP Server',
@@ -17,6 +17,10 @@ function getSlackClient(session?: UserSession): SlackClient {
     throw new UserError('Slack not connected. Visit the dashboard to connect your Slack bot token.');
   }
   return new SlackClient(session.slackBotToken as string);
+}
+
+function getTokenKey(session: UserSession): string {
+  return session.slackBotToken as string;
 }
 
 // === Tools ===
@@ -65,31 +69,7 @@ slackBotServer.addTool({
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
   }),
   execute: async (args, { session }) => {
-    const client = getSlackClient(session);
-    const limit = Math.min(Math.max(args.limit, 1), 100);
-    const wsUrl = await getWorkspaceUrl(client, session!.slackBotToken as string);
-    const result = await client.conversationsHistory(args.channelId, {
-      limit,
-      oldest: args.oldest,
-      latest: args.latest,
-      cursor: args.cursor,
-    });
-
-    const messages = result.messages;
-    if (messages.length === 0) return 'No messages found in this channel.';
-
-    const userIds = messages.map(m => m.user).filter(Boolean) as string[];
-    const userNames = await resolveUsers(client, userIds, session!.slackBotToken as string);
-
-    // Messages come newest-first from Slack; reverse for chronological order
-    const lines = messages.reverse().map(msg => formatMessage(msg, userNames, args.channelId, wsUrl));
-
-    let output = lines.join('\n');
-    const nextCursor = result.response_metadata?.next_cursor;
-    if (nextCursor) {
-      output += `\n\n---\nMore messages available. Use cursor: "${nextCursor}"`;
-    }
-    return output;
+    return handleReadChannelHistory(getSlackClient(session), getTokenKey(session!), args.channelId, args);
   },
 });
 
@@ -103,28 +83,7 @@ slackBotServer.addTool({
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
   }),
   execute: async (args, { session }) => {
-    const client = getSlackClient(session);
-    const limit = Math.min(Math.max(args.limit, 1), 200);
-    const wsUrl = await getWorkspaceUrl(client, session!.slackBotToken as string);
-    const result = await client.conversationsReplies(args.channelId, args.threadTs, {
-      limit,
-      cursor: args.cursor,
-    });
-
-    const messages = result.messages;
-    if (messages.length === 0) return 'No replies found in this thread.';
-
-    const userIds = messages.map(m => m.user).filter(Boolean) as string[];
-    const userNames = await resolveUsers(client, userIds, session!.slackBotToken as string);
-
-    const lines = messages.map(msg => formatMessage(msg, userNames, args.channelId, wsUrl));
-
-    let output = lines.join('\n');
-    const nextCursor = result.response_metadata?.next_cursor;
-    if (nextCursor) {
-      output += `\n\n---\nMore replies available. Use cursor: "${nextCursor}"`;
-    }
-    return output;
+    return handleReadThreadReplies(getSlackClient(session), getTokenKey(session!), args.channelId, args.threadTs, args);
   },
 });
 
@@ -136,10 +95,7 @@ slackBotServer.addTool({
     text: z.string().describe('Message text (supports Slack markdown/mrkdwn).'),
   }),
   execute: async (args, { session }) => {
-    assertWritesEnabled();
-    const client = getSlackClient(session);
-    const result = await client.chatPostMessage(args.channelId, args.text);
-    return `Message posted to ${result.channel} (ts: ${result.ts})`;
+    return handlePostMessage(getSlackClient(session), args.channelId, args.text);
   },
 });
 
@@ -152,9 +108,6 @@ slackBotServer.addTool({
     text: z.string().describe('Reply text (supports Slack markdown/mrkdwn).'),
   }),
   execute: async (args, { session }) => {
-    assertWritesEnabled();
-    const client = getSlackClient(session);
-    const result = await client.chatPostMessage(args.channelId, args.text, args.threadTs);
-    return `Reply posted to thread ${args.threadTs} in ${result.channel} (ts: ${result.ts})`;
+    return handleReplyInThread(getSlackClient(session), args.channelId, args.threadTs, args.text);
   },
 });
