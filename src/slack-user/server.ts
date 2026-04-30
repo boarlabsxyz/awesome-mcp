@@ -6,7 +6,7 @@ import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { SlackClient } from '../slack/apiHelpers.js';
 import { resolveUsers, getWorkspaceUrl, formatMessage, assertWritesEnabled } from '../slack/helpers.js';
-import { assertAccess, fetchChannelMeta, filterChannelList, filterDmsByOrg } from './accessControl.js';
+import { assertAccess, fetchChannelMeta, filterChannelList, filterDmsByOrg, filterGroupDmsByBlacklist } from './accessControl.js';
 import type { SlackAccessRules } from '../mcpConnectionStore.js';
 
 export const slackUserServer = new FastMCP<UserSession>({
@@ -36,8 +36,8 @@ async function enforceAccess(client: SlackClient, session: UserSession, channelI
   const meta = await fetchChannelMeta(client, channelId, session.slackUserToken as string);
   assertAccess(rules, meta);
 
-  // Additional org check for DMs (assertAccess can't do this without user lookup)
-  if ((meta.is_im || meta.is_mpim) && meta.user && rules.allowedOrgs.length > 0) {
+  // Additional checks for DMs (assertAccess can't do these without API lookups)
+  if (meta.is_im && meta.user && rules.allowedOrgs.length > 0) {
     try {
       const { user } = await client.usersInfo(meta.user);
       if (user.team_id && !rules.allowedOrgs.includes(user.team_id)) {
@@ -45,7 +45,18 @@ async function enforceAccess(client: SlackClient, session: UserSession, channelI
       }
     } catch (err) {
       if (err instanceof UserError) throw err;
-      // If we can't resolve the user, allow through
+    }
+  }
+
+  // Group DM: check if any member is blacklisted
+  if (meta.is_mpim && rules.blacklistUsers.length > 0) {
+    try {
+      const { members } = await client.conversationsMembers(channelId);
+      if (members.some(uid => rules.blacklistUsers.includes(uid))) {
+        throw new UserError('Access denied: this group DM contains a blacklisted user.');
+      }
+    } catch (err) {
+      if (err instanceof UserError) throw err;
     }
   }
 }
@@ -67,8 +78,9 @@ slackUserServer.addTool({
     const dmResult = !args.cursor ? await client.conversationsList(undefined, 'im,mpim') : { channels: [] };
     const allConvos = [...result.channels, ...dmResult.channels];
     let channels = filterChannelList(rules, allConvos) as typeof allConvos;
-    // Filter DMs from non-allowed orgs (requires async user lookups)
+    // Filter DMs from non-allowed orgs and group DMs with blacklisted users
     channels = await filterDmsByOrg(client, rules, channels) as typeof allConvos;
+    channels = await filterGroupDmsByBlacklist(client, rules, channels) as typeof allConvos;
 
     if (channels.length === 0) return 'No channels match your access rules. Check your configuration in the dashboard.';
 

@@ -143,6 +143,33 @@ export async function filterDmsByOrg(
 }
 
 /**
+ * Filter group DMs (mpim) that contain any blacklisted user.
+ * Requires async member lookups via conversations.members.
+ */
+export async function filterGroupDmsByBlacklist(
+  client: SlackClient,
+  rules: SlackAccessRules,
+  channels: Array<{ is_mpim?: boolean; id: string; [key: string]: any }>,
+): Promise<typeof channels> {
+  if (rules.blacklistUsers.length === 0) return channels;
+
+  const mpimChannels = channels.filter(ch => !!ch.is_mpim);
+  if (mpimChannels.length === 0) return channels;
+
+  const blockedMpimIds = new Set<string>();
+  await Promise.all(mpimChannels.map(async (ch) => {
+    try {
+      const { members } = await client.conversationsMembers(ch.id);
+      if (members.some(uid => rules.blacklistUsers.includes(uid))) {
+        blockedMpimIds.add(ch.id);
+      }
+    } catch { /* skip — can't check members, allow through */ }
+  }));
+
+  return channels.filter(ch => !blockedMpimIds.has(ch.id));
+}
+
+/**
  * Filter a list of channels from conversations.list based on access rules.
  * Synchronous — uses only fields already present in the API response.
  */
