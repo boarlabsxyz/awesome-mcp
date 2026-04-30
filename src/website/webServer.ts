@@ -943,21 +943,34 @@ function registerSharedRoutes(app: express.Express): void {
       // Discover connected orgs from shared channels
       const connectedOrgs: Array<{ id: string; name: string }> = [];
       const seenOrgIds = new Set<string>([currentOrg.id]);
+
+      // Find shared channels first
+      const sharedChannelIds: string[] = [];
       let cursor: string | undefined;
       do {
-        const result = await client.conversationsList(cursor, 'public_channel,private_channel');
+        const result = await client.conversationsListAll(cursor, 'public_channel,private_channel');
         for (const ch of result.channels) {
-          if ((ch.is_ext_shared || ch.is_org_shared) && (ch as any).shared_team_ids) {
-            for (const tid of (ch as any).shared_team_ids) {
-              if (!seenOrgIds.has(tid)) {
-                seenOrgIds.add(tid);
-                connectedOrgs.push({ id: tid, name: tid }); // Name resolved below if possible
-              }
-            }
+          if (ch.is_ext_shared || ch.is_org_shared) {
+            sharedChannelIds.push(ch.id);
           }
         }
         cursor = result.response_metadata?.next_cursor || undefined;
       } while (cursor);
+
+      // Get shared_team_ids from conversations.info (limited to first 20 shared channels)
+      await Promise.all(sharedChannelIds.slice(0, 20).map(async (chId) => {
+        try {
+          const { channel: info } = await client.conversationsInfo(chId);
+          if (info.shared_team_ids) {
+            for (const tid of info.shared_team_ids) {
+              if (!seenOrgIds.has(tid)) {
+                seenOrgIds.add(tid);
+                connectedOrgs.push({ id: tid, name: tid });
+              }
+            }
+          }
+        } catch { /* skip */ }
+      }));
 
       // Migrate old format
       const { migrateSlackTokens } = await import('../mcpConnectionStore.js');
