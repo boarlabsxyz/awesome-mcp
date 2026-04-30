@@ -1214,7 +1214,11 @@
     }
 
     async function saveAccessRules() {
-      if (!rulesInstanceId) return;
+      console.log('[saveAccessRules] called, instanceId:', rulesInstanceId);
+      if (!rulesInstanceId) {
+        alert('Error: no instance selected. Please close and reopen Access Rules.');
+        return;
+      }
 
       // Collect org checkboxes + always include current org
       const orgCheckboxes = document.querySelectorAll('#accessRulesContent input[data-org-id]:checked');
