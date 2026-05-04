@@ -26,7 +26,19 @@ function getTokenKey(session: UserSession): string {
   return session.slackUserToken as string;
 }
 
-function getRules(session: UserSession): SlackAccessRules {
+/** Re-read access rules from the database on each call (SSE sessions are long-lived). */
+async function getRules(session: UserSession): Promise<SlackAccessRules> {
+  const instanceId = session.slackInstanceId as string | undefined;
+  if (instanceId) {
+    try {
+      const { getMcpConnectionByInstanceId } = await import('../mcpConnectionStore.js');
+      const connection = await getMcpConnectionByInstanceId(instanceId);
+      if (connection?.providerTokens) {
+        const rules = (connection.providerTokens as any).accessRules;
+        if (rules) return rules;
+      }
+    } catch { /* fall back to session */ }
+  }
   const rules = session.slackAccessRules as SlackAccessRules | undefined;
   if (!rules) {
     throw new UserError('No access rules configured. Visit the dashboard to configure access rules.');
@@ -36,7 +48,7 @@ function getRules(session: UserSession): SlackAccessRules {
 
 /** Enforce access rules for a channel, fetching metadata as needed. */
 async function enforceAccess(client: SlackClient, session: UserSession, channelId: string): Promise<void> {
-  const rules = getRules(session);
+  const rules = await getRules(session);
   const meta = await fetchChannelMeta(client, channelId, getTokenKey(session));
   assertAccess(rules, meta);
 
@@ -87,8 +99,7 @@ slackUserServer.addTool({
   }),
   execute: async (args, { session }) => {
     const client = getSlackUserClient(session);
-    const rules = getRules(session!);
-    console.error(`[listChannels] rules: orgs=${JSON.stringify(rules.allowedOrgs)}, whitelist=${JSON.stringify(rules.whitelistChannels)}, blacklist=${JSON.stringify(rules.blacklistChannels)}, publicOnly=${rules.allowPublicOnly}, blacklistUsers=${JSON.stringify(rules.blacklistUsers)}`);
+    const rules = await getRules(session!);
 
     // Use conversations.list (all workspace channels) + users.conversations (DMs)
     const result = await client.conversationsListAll(args.cursor, 'public_channel,private_channel');

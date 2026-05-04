@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { matchGlob, assertAccess, filterChannelList } from '../../slack-user/accessControl.js';
+import { matchGlob, assertAccess, filterChannelList, filterDmsByOrg, filterGroupDmsByRules } from '../../slack-user/accessControl.js';
 import type { SlackAccessRules } from '../../mcpConnectionStore.js';
 import type { ChannelMeta } from '../../slack-user/accessControl.js';
 
@@ -238,6 +238,104 @@ describe('filterChannelList', () => {
       { id: 'CS1', name: 'awesome-shared', is_private: false, is_ext_shared: true, shared_team_ids: ['T_BOARLABS'] },
     ];
     const result = filterChannelList(rules, sharedChannels);
+    assert.equal(result.length, 1);
+  });
+});
+
+// === filterDmsByOrg ===
+
+describe('filterDmsByOrg', () => {
+  function mockClient(teamMap: Record<string, string>): any {
+    return {
+      usersInfo: async (uid: string) => ({
+        user: { id: uid, name: uid, real_name: uid, team_id: teamMap[uid] || '' },
+      }),
+    };
+  }
+
+  it('should skip filtering when allowedOrgs is empty', async () => {
+    const rules: SlackAccessRules = { allowedOrgs: [], blacklistUsers: [], whitelistChannels: [], blacklistChannels: [], allowPublicOnly: false };
+    const channels = [{ id: 'D1', name: 'user', is_im: true, user: 'U1', is_private: true }];
+    const result = await filterDmsByOrg(mockClient({}), rules, channels);
+    assert.equal(result.length, 1);
+  });
+
+  it('should filter out DMs from non-allowed orgs', async () => {
+    const rules: SlackAccessRules = { allowedOrgs: ['T_MINE'], blacklistUsers: [], whitelistChannels: [], blacklistChannels: [], allowPublicOnly: false };
+    const channels = [
+      { id: 'D1', name: 'u1', is_im: true, user: 'U1', is_private: true },
+      { id: 'D2', name: 'u2', is_im: true, user: 'U2', is_private: true },
+      { id: 'C1', name: 'general', is_private: false }, // non-DM passes through
+    ];
+    const client = mockClient({ U1: 'T_MINE', U2: 'T_OTHER' });
+    const result = await filterDmsByOrg(client, rules, channels);
+    const ids = result.map(ch => ch.id);
+    assert.ok(ids.includes('D1'));
+    assert.ok(!ids.includes('D2'));
+    assert.ok(ids.includes('C1'));
+  });
+
+  it('should allow DMs when user team_id cannot be resolved', async () => {
+    const rules: SlackAccessRules = { allowedOrgs: ['T_MINE'], blacklistUsers: [], whitelistChannels: [], blacklistChannels: [], allowPublicOnly: false };
+    const channels = [{ id: 'D1', name: 'u1', is_im: true, user: 'U1', is_private: true }];
+    const client = { usersInfo: async () => { throw new Error('fail'); } };
+    const result = await filterDmsByOrg(client as any, rules, channels);
+    assert.equal(result.length, 1);
+  });
+});
+
+// === filterGroupDmsByRules ===
+
+describe('filterGroupDmsByRules', () => {
+  function mockClient(members: Record<string, string[]>, teamMap?: Record<string, string>): any {
+    return {
+      conversationsMembers: async (chId: string) => ({ members: members[chId] || [] }),
+      usersInfo: async (uid: string) => ({
+        user: { id: uid, name: uid, real_name: uid, team_id: teamMap?.[uid] || 'T_DEFAULT' },
+      }),
+    };
+  }
+
+  it('should skip filtering when no blacklist and no org filter', async () => {
+    const rules: SlackAccessRules = { allowedOrgs: [], blacklistUsers: [], whitelistChannels: [], blacklistChannels: [], allowPublicOnly: false };
+    const channels = [{ id: 'G1', name: 'group', is_mpim: true, is_private: true }];
+    const result = await filterGroupDmsByRules(mockClient({}), rules, channels);
+    assert.equal(result.length, 1);
+  });
+
+  it('should block group DM containing blacklisted user', async () => {
+    const rules: SlackAccessRules = { allowedOrgs: [], blacklistUsers: ['U_BAD'], whitelistChannels: [], blacklistChannels: [], allowPublicOnly: false };
+    const channels = [
+      { id: 'G1', name: 'group1', is_mpim: true, is_private: true },
+      { id: 'G2', name: 'group2', is_mpim: true, is_private: true },
+    ];
+    const client = mockClient({ G1: ['U1', 'U_BAD'], G2: ['U1', 'U2'] });
+    const result = await filterGroupDmsByRules(client, rules, channels);
+    const ids = result.map(ch => ch.id);
+    assert.ok(!ids.includes('G1'));
+    assert.ok(ids.includes('G2'));
+  });
+
+  it('should block group DM with member from non-allowed org', async () => {
+    const rules: SlackAccessRules = { allowedOrgs: ['T_MINE'], blacklistUsers: [], whitelistChannels: [], blacklistChannels: [], allowPublicOnly: false };
+    const channels = [{ id: 'G1', name: 'group', is_mpim: true, is_private: true }];
+    const client = mockClient({ G1: ['U1', 'U2'] }, { U1: 'T_MINE', U2: 'T_OTHER' });
+    const result = await filterGroupDmsByRules(client, rules, channels);
+    assert.equal(result.length, 0);
+  });
+
+  it('should allow group DM when all members are from allowed orgs', async () => {
+    const rules: SlackAccessRules = { allowedOrgs: ['T_MINE'], blacklistUsers: [], whitelistChannels: [], blacklistChannels: [], allowPublicOnly: false };
+    const channels = [{ id: 'G1', name: 'group', is_mpim: true, is_private: true }];
+    const client = mockClient({ G1: ['U1', 'U2'] }, { U1: 'T_MINE', U2: 'T_MINE' });
+    const result = await filterGroupDmsByRules(client, rules, channels);
+    assert.equal(result.length, 1);
+  });
+
+  it('should not filter non-mpim channels', async () => {
+    const rules: SlackAccessRules = { allowedOrgs: [], blacklistUsers: ['U_BAD'], whitelistChannels: [], blacklistChannels: [], allowPublicOnly: false };
+    const channels = [{ id: 'C1', name: 'general', is_private: false }];
+    const result = await filterGroupDmsByRules(mockClient({}), rules, channels);
     assert.equal(result.length, 1);
   });
 });

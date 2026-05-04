@@ -21,6 +21,7 @@ export interface UserSession {
   slackBotToken?: string;
   slackUserToken?: string;
   slackAccessRules?: import('./mcpConnectionStore.js').SlackAccessRules;
+  slackInstanceId?: string;
 }
 
 // Cache sessions to avoid recreating clients per request
@@ -226,6 +227,7 @@ export function createSlackUserSession(
     mcpSlug: connection.mcpSlug,
     slackUserToken: accessToken,
     slackAccessRules: accessRules,
+    slackInstanceId: connection.instanceId,
     googleDocs: null as any,
     googleDrive: null as any,
     googleSheets: null as any,

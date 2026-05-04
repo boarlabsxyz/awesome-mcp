@@ -640,9 +640,6 @@
               <li>On first use, you'll be asked to log in with Google via Auth0</li>
               <li>After login, your tools are ready to use</li>
             </ol>
-            <div class="sidebar-note" style="margin-top: 12px; padding: 10px; background: rgba(255,180,0,0.1); border-radius: 6px; font-size: 13px; color: #ccc;">
-              <strong>Security update:</strong> All MCP connections now require OAuth authentication. If you had old URLs with API keys, please reconnect your tools and use the new URLs.
-            </div>
           </div>
         </div>
       </div>
@@ -1214,7 +1211,6 @@
     }
 
     async function saveAccessRules() {
-      console.log('[saveAccessRules] called, instanceId:', rulesInstanceId);
       if (!rulesInstanceId) {
         alert('Error: no instance selected. Please close and reopen Access Rules.');
         return;
