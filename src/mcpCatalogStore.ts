@@ -476,7 +476,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
     oauthTokenUrl: 'https://slack.com/api/oauth.v2.access',
     oauthScopes: ['channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'mpim:history', 'mpim:read', 'chat:write', 'users:read', 'team:read'],
     isLocal: !process.env.SLACK_USER_MCP_URL,
-    isActive: false, // Hidden from dashboard until access rules UI is stable
+    isActive: true,
   });
 
   console.error('Default MCP catalog entries seeded.');
