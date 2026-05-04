@@ -211,6 +211,7 @@ export function createSlackUserSession(
   // Don't cache Slack user sessions — accessRules can change via dashboard
   // and the MCP service can't be notified to invalidate its cache.
   const tokens = connection.providerTokens as any;
+  console.error(`[createSlackUserSession] instance=${connection.instanceId}, hasAccessRules=${!!tokens?.accessRules}, whitelist=${JSON.stringify(tokens?.accessRules?.whitelistChannels)}, blacklistUsers=${JSON.stringify(tokens?.accessRules?.blacklistUsers)}`);
   const accessRules = tokens?.accessRules || {
     allowedOrgs: [],
     blacklistUsers: [],
