@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
-import { formatTimestamp, buildPermalink, formatMessage } from '../../slack/helpers.js';
+import { describe, it, afterEach } from 'node:test';
+import { formatTimestamp, buildPermalink, formatMessage, assertWritesEnabled } from '../../slack/helpers.js';
+import { UserError } from 'fastmcp';
 
 describe('Slack helpers', () => {
   describe('formatTimestamp', () => {
@@ -69,6 +70,30 @@ describe('Slack helpers', () => {
       const userNames = new Map<string, string>();
       const result = formatMessage({ ts: '1234.0', text: 'Bot msg' }, userNames);
       assert.ok(result.includes('unknown'));
+    });
+  });
+
+  describe('assertWritesEnabled', () => {
+    const origEnv = process.env.SLACK_WRITES_ENABLED;
+
+    afterEach(() => {
+      if (origEnv === undefined) delete process.env.SLACK_WRITES_ENABLED;
+      else process.env.SLACK_WRITES_ENABLED = origEnv;
+    });
+
+    it('should throw UserError when SLACK_WRITES_ENABLED is not set', () => {
+      delete process.env.SLACK_WRITES_ENABLED;
+      assert.throws(() => assertWritesEnabled(), (err: any) => err instanceof UserError);
+    });
+
+    it('should throw UserError when SLACK_WRITES_ENABLED is false', () => {
+      process.env.SLACK_WRITES_ENABLED = 'false';
+      assert.throws(() => assertWritesEnabled(), (err: any) => err instanceof UserError);
+    });
+
+    it('should not throw when SLACK_WRITES_ENABLED is true', () => {
+      process.env.SLACK_WRITES_ENABLED = 'true';
+      assert.doesNotThrow(() => assertWritesEnabled());
     });
   });
 });
