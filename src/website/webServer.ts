@@ -1183,6 +1183,44 @@ function registerSharedRoutes(app: express.Express): void {
           console.error('[users/search] DM user discovery failed (may need im:read scope):', (dmErr as any)?.message);
         }
 
+        // 3. Members from group DMs (mpim) — surfaces users you interact with in group chats
+        try {
+          let mpimCursor: string | undefined;
+          const mpimMemberIds: string[] = [];
+          do {
+            const mpimResult = await client.conversationsList(mpimCursor, 'mpim');
+            for (const ch of mpimResult.channels) {
+              try {
+                const { members } = await client.conversationsMembers(ch.id);
+                for (const uid of members) {
+                  if (!seenIds.has(uid)) {
+                    mpimMemberIds.push(uid);
+                    seenIds.add(uid);
+                  }
+                }
+              } catch { /* skip */ }
+            }
+            mpimCursor = mpimResult.response_metadata?.next_cursor || undefined;
+          } while (mpimCursor);
+
+          await Promise.all(mpimMemberIds.slice(0, 50).map(async (uid) => {
+            try {
+              const { user: u } = await client.usersInfo(uid);
+              if (u.is_bot || (u as any).is_app_user) return;
+              allMembers.push({
+                id: u.id,
+                name: u.name,
+                real_name: u.real_name,
+                team_id: u.team_id || '',
+                avatar: u.profile?.image_48 || null,
+                display_name: u.profile?.display_name || '',
+              });
+            } catch { /* skip */ }
+          }));
+        } catch (mpimErr) {
+          console.error('[users/search] Group DM member discovery failed:', (mpimErr as any)?.message);
+        }
+
         userListCache.set(instanceId, { members: allMembers, expiresAt: Date.now() + 5 * 60 * 1000 });
       }
 
