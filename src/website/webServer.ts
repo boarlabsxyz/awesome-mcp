@@ -1084,7 +1084,7 @@ function registerSharedRoutes(app: express.Express): void {
       const { clearMcpSessionCache } = await import('../userSession.js');
       clearMcpSessionCache(user.apiKey, instanceId);
 
-      console.error(`User ${user.id} updated Slack access rules for ${instanceId}`);
+      console.error(`User ${user.id} updated Slack access rules for ${instanceId}: whitelist=${JSON.stringify(updatedTokens.accessRules.whitelistChannels)}, blacklist=${JSON.stringify(updatedTokens.accessRules.blacklistChannels)}, blacklistUsers=${JSON.stringify(updatedTokens.accessRules.blacklistUsers)}, orgs=${JSON.stringify(updatedTokens.accessRules.allowedOrgs)}`);
       res.json({ success: true });
     } catch (err) {
       console.error('[access-rules] error:', err);
