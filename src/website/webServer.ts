@@ -405,6 +405,7 @@ function registerSharedRoutes(app: express.Express): void {
             codeChallengeMethod: oauthState.codeChallengeMethod,
             redirectUri: oauthState.redirectUri,
             expiresAt: Date.now() + 600_000,
+            scope: oauthState.requestedScope || 'mcp',
           });
 
           // Redirect back to Claude.ai with the authorization code

@@ -36,6 +36,7 @@ interface OAuthAuthCode {
   codeChallengeMethod: string;
   redirectUri: string;
   expiresAt: number;
+  scope?: string;
 }
 
 interface OAuthClient {
@@ -52,6 +53,7 @@ interface OAuthState {
   codeChallengeMethod: string;
   state: string; // original state from Claude.ai
   mcpSlug?: string; // optional MCP slug for dynamic scopes
+  requestedScope?: string; // scope requested by MCP client (echoed back in token response)
 }
 
 // --- In-memory fallback stores ---
@@ -181,7 +183,7 @@ export function registerOAuthRoutes(app: express.Express): void {
       grant_types_supported: ['authorization_code'],
       token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
       code_challenge_methods_supported: ['S256'],
-      scopes_supported: ['mcp'],
+      scopes_supported: ['mcp', 'read', 'write', 'admin'],
     });
   });
 
@@ -310,6 +312,7 @@ export function registerOAuthRoutes(app: express.Express): void {
                 codeChallengeMethod,
                 redirectUri,
                 expiresAt: Date.now() + 600_000,
+                scope: scope || 'mcp',
               });
 
               const tokenSource = hasUserTokens ? 'user tokens' : `MCP "${targetMcpSlug}" connection`;
@@ -361,6 +364,7 @@ export function registerOAuthRoutes(app: express.Express): void {
         codeChallengeMethod,
         state, // Claude.ai's original state, returned in the final redirect
         mcpSlug,
+        requestedScope: scope || 'mcp',
       });
 
       // Redirect to Google OAuth
@@ -438,10 +442,11 @@ export function registerOAuthRoutes(app: express.Express): void {
       await deleteAuthCode(code);
 
       // Return the user's API key as the access token
+      // Echo back the originally requested scope so clients see all permissions granted
       res.json({
         access_token: authCode.apiKey,
         token_type: 'Bearer',
-        scope: 'mcp',
+        scope: authCode.scope || 'mcp',
       });
 
       console.error(`OAuth token issued for client ${authCode.clientId} (apiKey: ${authCode.apiKey.substring(0, 8)}...)`);
