@@ -458,4 +458,4 @@ export function registerOAuthRoutes(app: express.Express): void {
 }
 
 // Exported for use in webServer.ts callback handler
-export { storeAuthCode };
+export { storeAuthCode, getAuthCode, deleteAuthCode, storeClient, getClient, verifyPKCE };

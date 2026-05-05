@@ -69,7 +69,7 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
     }
   });
 
-  // --- OAuth proxy routes: forward Claude's requests to Auth0 ---
+  // --- OAuth routes: intercept client OAuth flow, authenticate via Auth0, issue our own tokens ---
 
   /** Guard that checks AUTH0_DOMAIN is configured, returns issuer or sends 503. */
   function requireIssuer(res: express.Response): string | null {
@@ -78,92 +78,250 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
     return issuer;
   }
 
-  // Client Registration — returns static client or proxies to Auth0 DCR
+  // In-memory state store for OAuth proxy flow (maps our state → client's original params)
+  const proxyOAuthStates = new Map<string, {
+    clientId: string;
+    redirectUri: string;
+    codeChallenge: string;
+    codeChallengeMethod: string;
+    state: string;
+    scope: string;
+  }>();
+
+  // Dynamic Client Registration (RFC 7591)
   app.post('/oauth/register', express.json(), async (req, res) => {
-    // If a static client is configured, return it directly (no DCR needed)
-    const staticClientId = process.env.AUTH0_CLIENT_ID;
-    if (staticClientId) {
-      res.status(200).json({
-        client_id: staticClientId,
-        client_name: req.body?.client_name || 'MCP Client',
-        redirect_uris: req.body?.redirect_uris || [],
+    try {
+      const { client_name, redirect_uris } = req.body;
+      if (!redirect_uris || !Array.isArray(redirect_uris) || redirect_uris.length === 0) {
+        res.status(400).json({ error: 'invalid_client_metadata', error_description: 'redirect_uris is required' });
+        return;
+      }
+      const clientId = crypto.randomUUID();
+      const clientSecret = crypto.randomBytes(32).toString('hex');
+      await storeClient({ clientId, clientSecret, redirectUris: redirect_uris, clientName: client_name || 'MCP Client' });
+      console.error(`[oauth-proxy] Client registered: ${client_name || 'Unknown'} (${clientId})`);
+      res.status(201).json({
+        client_id: clientId,
+        client_secret: clientSecret,
+        client_name: client_name || 'MCP Client',
+        redirect_uris,
         token_endpoint_auth_method: 'none',
       });
+    } catch (err: any) {
+      console.error('[oauth-proxy] Registration failed:', err.message);
+      res.status(500).json({ error: 'server_error' });
+    }
+  });
+
+  // Authorization endpoint — intercept client's redirect_uri, authenticate via Auth0
+  app.get('/oauth/authorize', async (req, res) => {
+    const issuer = requireIssuer(res);
+    if (!issuer) return;
+
+    const clientId = req.query.client_id as string;
+    const redirectUri = req.query.redirect_uri as string;
+    const codeChallenge = req.query.code_challenge as string;
+    const codeChallengeMethod = (req.query.code_challenge_method as string) || 'S256';
+    const state = req.query.state as string;
+    const scope = req.query.scope as string || 'mcp';
+
+    if (!clientId || !redirectUri || !codeChallenge || !state) {
+      res.status(400).json({ error: 'invalid_request', error_description: 'Missing required parameters' });
       return;
     }
 
-    // Fallback: proxy to Auth0 DCR
-    const issuer = requireIssuer(res);
-    if (!issuer) return;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
-    try {
-      const response = await fetch(`${issuer}/oidc/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(req.body),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-      const data = await response.json();
-      res.status(response.status).json(data);
-    } catch (err: any) {
-      clearTimeout(timeout);
-      console.error('[oauth-proxy] Registration failed:', err.message);
-      res.status(502).json({ error: 'OAuth proxy failed' });
+    // Validate client
+    const client = await getClient(clientId);
+    if (!client) {
+      res.status(400).json({ error: 'invalid_client', error_description: 'Unknown client_id' });
+      return;
     }
-  });
+    if (!client.redirectUris.includes(redirectUri)) {
+      res.status(400).json({ error: 'invalid_request', error_description: 'redirect_uri not registered' });
+      return;
+    }
 
-  // Authorization endpoint proxy (redirect to Auth0)
-  app.get('/oauth/authorize', (req, res) => {
-    const issuer = requireIssuer(res);
-    if (!issuer) return;
-    const params = new URLSearchParams(req.query as Record<string, string>);
-    params.delete('audience');
-    // Force re-authentication so Auth0 doesn't reuse its SSO session.
-    // Combined with upstream_params.prompt=select_account on the Google connection,
-    // this ensures Google shows the account picker every time.
-    if (!params.has('prompt')) params.set('prompt', 'login');
-    // Ensure openid and email scopes are requested so /userinfo returns identity claims
-    const scopes = (params.get('scope') || '').split(' ').filter(Boolean);
-    for (const required of ['openid', 'email']) {
-      if (!scopes.includes(required)) scopes.push(required);
-    }
-    params.set('scope', scopes.join(' '));
+    // Store client's original params; replace redirect_uri with our own callback
+    const internalState = crypto.randomBytes(32).toString('hex');
+    proxyOAuthStates.set(internalState, {
+      clientId,
+      redirectUri,
+      codeChallenge,
+      codeChallengeMethod,
+      state,
+      scope,
+    });
+    // Clean up after 10 minutes
+    setTimeout(() => proxyOAuthStates.delete(internalState), 600_000);
+
+    // Build Auth0 authorize URL with OUR callback
+    const auth0ClientId = process.env.AUTH0_CLIENT_ID || '';
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: auth0ClientId,
+      redirect_uri: `${resource}/oauth/callback`,
+      state: internalState,
+      scope: 'openid email profile',
+      prompt: 'login',
+    });
+
+    console.error(`[oauth-proxy] /authorize: redirecting to Auth0, internalState=${internalState.substring(0, 8)}...`);
     res.redirect(`${issuer}/authorize?${params.toString()}`);
   });
 
-  // Token endpoint proxy — supports both JSON and form-urlencoded from clients
-  app.post('/oauth/token', express.urlencoded({ extended: false }), express.json(), async (req, res) => {
+  // OAuth callback — Auth0 redirects here after user authenticates
+  app.get('/oauth/callback', async (req, res) => {
     const issuer = requireIssuer(res);
     if (!issuer) return;
-    try {
-      const contentType = req.headers['content-type'] || '';
-      let forwardBody: string;
-      let forwardContentType: string;
 
-      if (contentType.includes('application/json')) {
-        forwardBody = JSON.stringify(req.body);
-        forwardContentType = 'application/json';
-      } else {
-        forwardBody = new URLSearchParams(req.body).toString();
-        forwardContentType = 'application/x-www-form-urlencoded';
+    const code = req.query.code as string;
+    const internalState = req.query.state as string;
+
+    if (!code || !internalState) {
+      res.status(400).send('Missing code or state from Auth0');
+      return;
+    }
+
+    const savedState = proxyOAuthStates.get(internalState);
+    if (!savedState) {
+      res.status(400).send('OAuth state expired or invalid. Please try again.');
+      return;
+    }
+    proxyOAuthStates.delete(internalState);
+
+    try {
+      // Exchange Auth0 code for tokens
+      const auth0ClientId = process.env.AUTH0_CLIENT_ID || '';
+      const auth0ClientSecret = process.env.AUTH0_CLIENT_SECRET || '';
+      const tokenRes = await fetch(`${issuer}/oauth/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'authorization_code',
+          client_id: auth0ClientId,
+          client_secret: auth0ClientSecret,
+          code,
+          redirect_uri: `${resource}/oauth/callback`,
+        }),
+      });
+
+      if (!tokenRes.ok) {
+        const errData = await tokenRes.text();
+        console.error('[oauth-proxy] Auth0 token exchange failed:', errData);
+        res.status(502).send('Authentication failed. Please try again.');
+        return;
       }
 
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10_000);
-      const response = await fetch(`${issuer}/oauth/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': forwardContentType },
-        body: forwardBody,
-        signal: controller.signal,
+      const tokenData = await tokenRes.json() as { access_token: string };
+
+      // Use Auth0 /userinfo to identify the user
+      const userinfoRes = await fetch(`${issuer}/userinfo`, {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` },
       });
-      clearTimeout(timeout);
-      const data = await response.json() as Record<string, unknown>;
-      res.status(response.status).json(data);
+
+      if (!userinfoRes.ok) {
+        console.error('[oauth-proxy] Auth0 /userinfo failed');
+        res.status(502).send('Failed to identify user. Please try again.');
+        return;
+      }
+
+      const userinfo = await userinfoRes.json() as { email?: string; sub?: string; name?: string };
+      if (!userinfo.email) {
+        res.status(400).send('Could not determine user email from Auth0.');
+        return;
+      }
+
+      // Find user in our database by email
+      await loadUsers();
+      const allUsers = await getAllUsers();
+      const user = allUsers.find(u => u.email === userinfo.email);
+
+      if (!user) {
+        res.status(403).send(`
+          <!DOCTYPE html>
+          <html><head><title>Account Not Found</title>
+          <style>body { font-family: system-ui, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; } h1 { color: #c53030; } a { color: #2563eb; }</style>
+          </head><body>
+          <h1>Account Not Found</h1>
+          <p>No account found for <strong>${userinfo.email}</strong>. Please register on the <a href="${resource}/dashboard">dashboard</a> first.</p>
+          </body></html>
+        `);
+        return;
+      }
+
+      // Issue our own authorization code
+      const authCode = crypto.randomBytes(32).toString('hex');
+      await storeAuthCode(authCode, {
+        apiKey: user.apiKey,
+        clientId: savedState.clientId,
+        codeChallenge: savedState.codeChallenge,
+        codeChallengeMethod: savedState.codeChallengeMethod,
+        redirectUri: savedState.redirectUri,
+        expiresAt: Date.now() + 600_000,
+        scope: savedState.scope,
+      });
+
+      // Redirect back to the client (ChatGPT) with our auth code
+      const callbackUrl = new URL(savedState.redirectUri);
+      callbackUrl.searchParams.set('code', authCode);
+      callbackUrl.searchParams.set('state', savedState.state);
+
+      console.error(`[oauth-proxy] Issuing auth code for ${user.email}, redirecting to ${callbackUrl.origin}`);
+      res.redirect(callbackUrl.toString());
     } catch (err: any) {
-      console.error('[oauth-proxy] Token exchange failed:', err.message);
-      res.status(502).json({ error: 'OAuth proxy failed' });
+      console.error('[oauth-proxy] Callback error:', err);
+      res.status(500).send('Authentication failed. Please try again.');
+    }
+  });
+
+  // Token endpoint — exchange our auth code for user's apiKey
+  app.post('/oauth/token', express.urlencoded({ extended: false }), express.json(), async (req, res) => {
+    try {
+      const { grant_type, code, code_verifier, client_id, redirect_uri } = req.body;
+
+      if (grant_type !== 'authorization_code') {
+        res.status(400).json({ error: 'unsupported_grant_type' });
+        return;
+      }
+
+      if (!code || !code_verifier) {
+        res.status(400).json({ error: 'invalid_request', error_description: 'Missing code or code_verifier' });
+        return;
+      }
+
+      const authCode = await getAuthCode(code);
+      if (!authCode) {
+        res.status(400).json({ error: 'invalid_grant', error_description: 'Authorization code expired or invalid' });
+        return;
+      }
+
+      if (client_id && authCode.clientId !== client_id) {
+        res.status(400).json({ error: 'invalid_grant', error_description: 'client_id mismatch' });
+        return;
+      }
+
+      if (redirect_uri && authCode.redirectUri !== redirect_uri) {
+        res.status(400).json({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' });
+        return;
+      }
+
+      if (!verifyPKCE(code_verifier, authCode.codeChallenge, authCode.codeChallengeMethod)) {
+        res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE verification failed' });
+        return;
+      }
+
+      await deleteAuthCode(code);
+
+      res.json({
+        access_token: authCode.apiKey,
+        token_type: 'Bearer',
+        scope: authCode.scope || 'mcp',
+      });
+
+      console.error(`[oauth-proxy] Token issued for client ${authCode.clientId}`);
+    } catch (err: any) {
+      console.error('[oauth-proxy] Token exchange error:', err);
+      res.status(500).json({ error: 'server_error' });
     }
   });
 }
@@ -171,7 +329,7 @@ import crypto from 'crypto';
 import cookieParser from 'cookie-parser';
 import { loadUsers, createOrUpdateUser, getUserByGoogleId, getUserByApiKey, getUserById, regenerateApiKey, getAllUsers, UserRecord } from '../userStore.js';
 import { loadClientCredentials } from '../auth.js';
-import { getOAuthState, deleteOAuthState, storeAuthCode } from './oauthServer.js';
+import { getOAuthState, deleteOAuthState, storeAuthCode, getAuthCode, deleteAuthCode, storeClient, getClient, verifyPKCE } from './oauthServer.js';
 import { createSession, getSession, deleteSession, Session } from './sessionStore.js';
 import { clearSessionCache, createUserSession, createUserSessionFromConnection, UserSession } from '../userSession.js';
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
@@ -3086,10 +3244,10 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
     res.status(200).json({ status: 'ok' });
   });
 
-  // MCP-only mode: auth is via apiKey in the URL (no OAuth).
-  // Do NOT advertise OAuth metadata here — external clients (e.g. ChatGPT)
-  // would try to use it and fail on Auth0 redirect_uri mismatch.
+  // RFC 9728: OAuth Protected Resource Metadata (scoped to this MCP service)
   const mcpSlug = process.env.MCP_SLUG || 'google-docs';
+  const mcpBaseUrl = process.env.MCP_BASE_URL || BASE_URL;
+  registerOAuthProxy(app, mcpBaseUrl, getScopesForSlug(mcpSlug));
 
   // Proxy MCP requests to internal FastMCP server (JWT auth enforced before proxy)
   // In MCP-only mode, /mcp path should require this service's scope, not mcp:docs
