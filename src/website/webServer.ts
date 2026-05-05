@@ -3086,10 +3086,10 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
     res.status(200).json({ status: 'ok' });
   });
 
-  // RFC 9728: OAuth Protected Resource Metadata (scoped to this MCP service)
+  // MCP-only mode: auth is via apiKey in the URL (no OAuth).
+  // Do NOT advertise OAuth metadata here — external clients (e.g. ChatGPT)
+  // would try to use it and fail on Auth0 redirect_uri mismatch.
   const mcpSlug = process.env.MCP_SLUG || 'google-docs';
-  const mcpBaseUrl = process.env.MCP_BASE_URL || BASE_URL;
-  registerOAuthProxy(app, mcpBaseUrl, getScopesForSlug(mcpSlug));
 
   // Proxy MCP requests to internal FastMCP server (JWT auth enforced before proxy)
   // In MCP-only mode, /mcp path should require this service's scope, not mcp:docs
