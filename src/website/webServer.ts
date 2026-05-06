@@ -277,48 +277,15 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
   // Token endpoint — exchange our auth code for user's apiKey
   app.post('/oauth/token', express.urlencoded({ extended: false }), express.json(), async (req, res) => {
     try {
-      const { grant_type, code, code_verifier, client_id, redirect_uri } = req.body;
-
-      if (grant_type !== 'authorization_code') {
-        res.status(400).json({ error: 'unsupported_grant_type' });
+      const result = await exchangeAuthCode(req.body);
+      if (!result.ok) {
+        const body: Record<string, string> = { error: result.error };
+        if (result.errorDescription) body.error_description = result.errorDescription;
+        res.status(result.status).json(body);
         return;
       }
-
-      if (!code || !code_verifier) {
-        res.status(400).json({ error: 'invalid_request', error_description: 'Missing code or code_verifier' });
-        return;
-      }
-
-      const authCode = await getAuthCode(code);
-      if (!authCode) {
-        res.status(400).json({ error: 'invalid_grant', error_description: 'Authorization code expired or invalid' });
-        return;
-      }
-
-      if (client_id && authCode.clientId !== client_id) {
-        res.status(400).json({ error: 'invalid_grant', error_description: 'client_id mismatch' });
-        return;
-      }
-
-      if (redirect_uri && authCode.redirectUri !== redirect_uri) {
-        res.status(400).json({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' });
-        return;
-      }
-
-      if (!verifyPKCE(code_verifier, authCode.codeChallenge, authCode.codeChallengeMethod)) {
-        res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE verification failed' });
-        return;
-      }
-
-      await deleteAuthCode(code);
-
-      res.json({
-        access_token: authCode.apiKey,
-        token_type: 'Bearer',
-        scope: authCode.scope || 'mcp',
-      });
-
-      console.error(`[oauth-proxy] Token issued for client ${authCode.clientId}`);
+      res.json({ access_token: result.apiKey, token_type: 'Bearer', scope: result.scope });
+      console.error(`[oauth-proxy] Token issued for client ${result.clientId}`);
     } catch (err: any) {
       console.error('[oauth-proxy] Token exchange error:', err);
       res.status(500).json({ error: 'server_error' });
@@ -329,7 +296,7 @@ import crypto from 'crypto';
 import cookieParser from 'cookie-parser';
 import { loadUsers, createOrUpdateUser, getUserByGoogleId, getUserByApiKey, getUserById, regenerateApiKey, getAllUsers, UserRecord } from '../userStore.js';
 import { loadClientCredentials } from '../auth.js';
-import { getOAuthState, deleteOAuthState, storeAuthCode, getAuthCode, deleteAuthCode, storeClient, getClient, verifyPKCE } from './oauthServer.js';
+import { getOAuthState, deleteOAuthState, storeAuthCode, storeClient, getClient, exchangeAuthCode } from './oauthServer.js';
 import { createSession, getSession, deleteSession, Session } from './sessionStore.js';
 import { clearSessionCache, createUserSession, createUserSessionFromConnection, UserSession } from '../userSession.js';
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
