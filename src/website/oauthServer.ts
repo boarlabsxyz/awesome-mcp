@@ -36,6 +36,7 @@ interface OAuthAuthCode {
   codeChallengeMethod: string;
   redirectUri: string;
   expiresAt: number;
+  scope?: string;
 }
 
 interface OAuthClient {
@@ -52,6 +53,7 @@ interface OAuthState {
   codeChallengeMethod: string;
   state: string; // original state from Claude.ai
   mcpSlug?: string; // optional MCP slug for dynamic scopes
+  requestedScope?: string; // scope requested by MCP client (echoed back in token response)
 }
 
 // --- In-memory fallback stores ---
@@ -146,6 +148,50 @@ function verifyPKCE(codeVerifier: string, codeChallenge: string, method: string)
   return false;
 }
 
+// --- Shared token exchange logic ---
+
+/**
+ * Exchange an authorization code for the user's apiKey.
+ * Validates grant_type, code, PKCE, client_id, and redirect_uri.
+ * Returns { apiKey, scope } on success, or { error, errorDescription, status } on failure.
+ */
+export async function exchangeAuthCode(params: {
+  grant_type: string;
+  code: string;
+  code_verifier: string;
+  client_id?: string;
+  redirect_uri?: string;
+}): Promise<
+  | { ok: true; apiKey: string; scope: string; clientId: string }
+  | { ok: false; status: number; error: string; errorDescription?: string }
+> {
+  const { grant_type, code, code_verifier, client_id, redirect_uri } = params;
+
+  if (grant_type !== 'authorization_code') {
+    return { ok: false, status: 400, error: 'unsupported_grant_type' };
+  }
+  if (!code || !code_verifier) {
+    return { ok: false, status: 400, error: 'invalid_request', errorDescription: 'Missing code or code_verifier' };
+  }
+
+  const authCode = await getAuthCode(code);
+  if (!authCode) {
+    return { ok: false, status: 400, error: 'invalid_grant', errorDescription: 'Authorization code expired or invalid' };
+  }
+  if (client_id && authCode.clientId !== client_id) {
+    return { ok: false, status: 400, error: 'invalid_grant', errorDescription: 'client_id mismatch' };
+  }
+  if (redirect_uri && authCode.redirectUri !== redirect_uri) {
+    return { ok: false, status: 400, error: 'invalid_grant', errorDescription: 'redirect_uri mismatch' };
+  }
+  if (!verifyPKCE(code_verifier, authCode.codeChallenge, authCode.codeChallengeMethod)) {
+    return { ok: false, status: 400, error: 'invalid_grant', errorDescription: 'PKCE verification failed' };
+  }
+
+  await deleteAuthCode(code);
+  return { ok: true, apiKey: authCode.apiKey, scope: authCode.scope || 'mcp', clientId: authCode.clientId };
+}
+
 // --- Route registration ---
 
 export function registerOAuthRoutes(app: express.Express): void {
@@ -181,7 +227,7 @@ export function registerOAuthRoutes(app: express.Express): void {
       grant_types_supported: ['authorization_code'],
       token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
       code_challenge_methods_supported: ['S256'],
-      scopes_supported: ['mcp'],
+      scopes_supported: ['mcp', 'read', 'write', 'admin'],
     });
   });
 
@@ -310,6 +356,7 @@ export function registerOAuthRoutes(app: express.Express): void {
                 codeChallengeMethod,
                 redirectUri,
                 expiresAt: Date.now() + 600_000,
+                scope: scope || 'mcp',
               });
 
               const tokenSource = hasUserTokens ? 'user tokens' : `MCP "${targetMcpSlug}" connection`;
@@ -361,6 +408,7 @@ export function registerOAuthRoutes(app: express.Express): void {
         codeChallengeMethod,
         state, // Claude.ai's original state, returned in the final redirect
         mcpSlug,
+        requestedScope: scope || 'mcp',
       });
 
       // Redirect to Google OAuth
@@ -399,52 +447,15 @@ export function registerOAuthRoutes(app: express.Express): void {
   // Token Endpoint
   app.post('/token', express.urlencoded({ extended: false }), async (req, res) => {
     try {
-      const { grant_type, code, code_verifier, client_id, redirect_uri } = req.body;
-
-      if (grant_type !== 'authorization_code') {
-        res.status(400).json({ error: 'unsupported_grant_type' });
+      const result = await exchangeAuthCode(req.body);
+      if (!result.ok) {
+        const body: Record<string, string> = { error: result.error };
+        if (result.errorDescription) body.error_description = result.errorDescription;
+        res.status(result.status).json(body);
         return;
       }
-
-      if (!code || !code_verifier) {
-        res.status(400).json({ error: 'invalid_request', error_description: 'Missing code or code_verifier' });
-        return;
-      }
-
-      const authCode = await getAuthCode(code);
-      if (!authCode) {
-        res.status(400).json({ error: 'invalid_grant', error_description: 'Authorization code expired or invalid' });
-        return;
-      }
-
-      // Validate client_id and redirect_uri match
-      if (client_id && authCode.clientId !== client_id) {
-        res.status(400).json({ error: 'invalid_grant', error_description: 'client_id mismatch' });
-        return;
-      }
-
-      if (redirect_uri && authCode.redirectUri !== redirect_uri) {
-        res.status(400).json({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' });
-        return;
-      }
-
-      // Verify PKCE
-      if (!verifyPKCE(code_verifier, authCode.codeChallenge, authCode.codeChallengeMethod)) {
-        res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE verification failed' });
-        return;
-      }
-
-      // Auth code is single-use
-      await deleteAuthCode(code);
-
-      // Return the user's API key as the access token
-      res.json({
-        access_token: authCode.apiKey,
-        token_type: 'Bearer',
-        scope: 'mcp',
-      });
-
-      console.error(`OAuth token issued for client ${authCode.clientId} (apiKey: ${authCode.apiKey.substring(0, 8)}...)`);
+      res.json({ access_token: result.apiKey, token_type: 'Bearer', scope: result.scope });
+      console.error(`OAuth token issued for client ${result.clientId} (apiKey: ${result.apiKey.substring(0, 8)}...)`);
     } catch (err: any) {
       console.error('Token exchange error:', err);
       res.status(500).json({ error: 'server_error' });
@@ -453,4 +464,4 @@ export function registerOAuthRoutes(app: express.Express): void {
 }
 
 // Exported for use in webServer.ts callback handler
-export { storeAuthCode };
+export { storeAuthCode, storeClient, getClient };
