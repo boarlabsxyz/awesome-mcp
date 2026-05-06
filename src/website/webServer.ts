@@ -3249,16 +3249,70 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
   const mcpBaseUrl = process.env.MCP_BASE_URL || BASE_URL;
   registerOAuthProxy(app, mcpBaseUrl, getScopesForSlug(mcpSlug));
 
-  // Proxy MCP requests to internal FastMCP server (JWT auth enforced before proxy)
-  // In MCP-only mode, /mcp path should require this service's scope, not mcp:docs
+  // Proxy MCP requests to internal FastMCP server
+  // Auth middleware: try JWT/Auth0 first, fall back to apiKey lookup (issued by our OAuth proxy)
   const mcpScopeForSlug = getScopesForSlug(mcpSlug)[0] || null;
-  const mcpOnlyMiddleware = createResourceServerMiddleware({
+  const jwtMiddleware = createResourceServerMiddleware({
     validateJwt,
     validateOpaqueToken,
     hasScope,
     getRequiredScope: () => mcpScopeForSlug,
     mapJwtToUser,
   });
+
+  const mcpOnlyMiddleware = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    // Try JWT/Auth0 auth first
+    const origEnd = res.end;
+    let jwtFailed = false;
+    const fakeRes = Object.create(res);
+    fakeRes.status = (code: number) => {
+      if (code === 401) jwtFailed = true;
+      return fakeRes;
+    };
+    fakeRes.setHeader = () => fakeRes;
+    fakeRes.json = () => fakeRes;
+    fakeRes.end = () => {};
+
+    await jwtMiddleware(req, fakeRes as any, () => { jwtFailed = false; });
+    if (!jwtFailed) {
+      next();
+      return;
+    }
+
+    // JWT/Auth0 failed — try apiKey from Bearer header (issued by our OAuth /token endpoint)
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      const baseUrl = process.env.BASE_URL || 'http://localhost:8080';
+      res.status(401).json({ error: 'unauthorized', message: 'Missing Authorization header.' });
+      return;
+    }
+
+    const token = authHeader.slice(7);
+    try {
+      await loadUsers();
+      // Support compound token format: "apiKey.instanceId"
+      let apiKey = token;
+      const dotIndex = token.lastIndexOf('.');
+      if (dotIndex > 0) {
+        const possibleUser = await getUserByApiKey(token.substring(0, dotIndex));
+        if (possibleUser) apiKey = token.substring(0, dotIndex);
+      }
+      const user = await getUserByApiKey(apiKey);
+      if (!user || !user.id) {
+        res.status(401).json({ error: 'invalid_token', message: 'Invalid API key.' });
+        return;
+      }
+      // Set trusted headers so FastMCP can identify the user
+      req.headers['x-mcp-user-id'] = String(user.id);
+      if (user.email) req.headers['x-mcp-user-email'] = user.email;
+      console.error(`[mcp-only-auth] API key auth for user ${user.email}`);
+      next();
+    } catch (err: any) {
+      console.error('[mcp-only-auth] API key lookup failed:', err.message);
+      res.status(401).json({ error: 'invalid_token', message: 'Authentication failed.' });
+    }
+  };
+
   app.use(['/mcp', '/sse'], mcpOnlyMiddleware);
   const mcpProxy = createProxyMiddleware({
     target: `http://127.0.0.1:${internalMcpPort}`,
