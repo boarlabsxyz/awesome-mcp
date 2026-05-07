@@ -3087,10 +3087,14 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   // GET /api/v1/clickup/workspaces/:workspaceId/docs/search - Search docs
   app.get('/api/v1/clickup/workspaces/:workspaceId/docs/search', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const query = req.query.query as string || '';
+      const query = (req.query.query as string || '').toLowerCase();
       const { ClickUpClient } = await import('../clickup/apiHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
       const result = await client.searchDocs(req.params.workspaceId as string);
+      // Client-side name filtering (ClickUp v3 API has no text search param)
+      if (query && Array.isArray(result.data)) {
+        result.data = result.data.filter((d: any) => (d.name || d.title || '').toLowerCase().includes(query));
+      }
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to search docs' });
