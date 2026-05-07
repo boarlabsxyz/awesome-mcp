@@ -3090,7 +3090,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       const query = req.query.query as string || '';
       const { ClickUpClient } = await import('../clickup/apiHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
-      const result = await client.searchDocs(req.params.workspaceId as string, query);
+      const result = await client.searchDocs(req.params.workspaceId as string);
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to search docs' });

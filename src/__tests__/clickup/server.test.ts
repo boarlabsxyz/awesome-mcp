@@ -81,8 +81,8 @@ describe('ClickUp server tools', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('should have registered all 31 tools', () => {
-    assert.equal(toolMap.size, 31);
+  it('should have registered all 34 tools', () => {
+    assert.equal(toolMap.size, 34);
   });
 
   // === getClickUpClient / auth guard ===
@@ -616,17 +616,18 @@ describe('ClickUp server tools', () => {
   });
 
   describe('searchDocs', () => {
-    it('returns matching docs', async () => {
+    it('returns matching docs filtered by name', async () => {
       mockFetch([{
         status: 200,
-        body: { docs: [{ id: 'd1', name: 'API Spec' }] },
+        body: { data: [{ id: 'd1', name: 'API Spec' }, { id: 'd2', name: 'Other Doc' }] },
       }]);
       const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'API' });
       assert.ok(result.includes('API Spec'));
+      assert.ok(!result.includes('Other Doc'));
     });
 
     it('returns message when no match', async () => {
-      mockFetch([{ status: 200, body: { docs: [] } }]);
+      mockFetch([{ status: 200, body: { data: [] } }]);
       const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'xyz' });
       assert.ok(result.includes('No docs found matching'));
       assert.ok(result.includes('xyz'));
@@ -808,25 +809,26 @@ describe('ClickUp server tools', () => {
   // === getDoc ===
 
   describe('getDoc', () => {
-    it('should return doc content', async () => {
+    it('should return doc metadata and page content', async () => {
       mockFetch([
-        { status: 200, body: { id: 'doc1', name: 'Test Doc', content: 'Hello world', date_created: '1700000000000' } },
+        { status: 200, body: { id: 'doc1', name: 'Test Doc', date_created: '1700000000000' } },
         { status: 200, body: { pages: [] } },
       ]);
       const result = await callTool('getDoc', { workspaceId: 'w1', docId: 'doc1' });
       assert.ok(result.includes('Test Doc'));
-      assert.ok(result.includes('Hello world'));
       assert.ok(result.includes('doc1'));
     });
 
-    it('should include pages when available', async () => {
+    it('should fetch individual page content', async () => {
       mockFetch([
         { status: 200, body: { id: 'doc1', name: 'Doc' } },
-        { status: 200, body: { pages: [{ id: 'p1', name: 'Page 1', content: 'Page content' }] } },
+        { status: 200, body: { pages: [{ id: 'p1', name: 'Page 1' }] } },
+        // getPage call for p1
+        { status: 200, body: { id: 'p1', name: 'Page 1', content: 'Page content here' } },
       ]);
       const result = await callTool('getDoc', { workspaceId: 'w1', docId: 'doc1' });
       assert.ok(result.includes('Page 1'));
-      assert.ok(result.includes('Page content'));
+      assert.ok(result.includes('Page content here'));
     });
   });
 
