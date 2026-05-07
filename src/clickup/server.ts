@@ -642,12 +642,40 @@ clickUpServer.addTool({
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
     const data: any = { name: args.name };
-    if (args.content) data.content = args.content;
+    // Note: ClickUp's createDoc API ignores the content field — content must
+    // be written to the auto-created page separately via editPage.
     if (args.parentId && args.parentType !== undefined) {
       data.parent = { id: args.parentId, type: args.parentType };
     }
     const result = await client.createDoc(args.workspaceId, data);
-    return `Doc created: ${result.name || result.title || args.name}\n  ID: ${result.id}`;
+    const docId = result.id;
+
+    // If content was provided, write it to the auto-created first page
+    if (args.content) {
+      try {
+        const pagesResult = await client.getDocPages(args.workspaceId, docId);
+        const pages = pagesResult.pages || pagesResult.data || pagesResult || [];
+        if (Array.isArray(pages) && pages.length > 0) {
+          await client.editPage(args.workspaceId, docId, pages[0].id, {
+            content: args.content,
+            content_format: 'text/md',
+            content_edit_mode: 'replace',
+          });
+        } else {
+          // No auto-created page — create one with content
+          await client.createPage(args.workspaceId, docId, {
+            name: args.name,
+            content: args.content,
+            content_format: 'text/md',
+          });
+        }
+      } catch {
+        // Content write failed but doc was created — report partial success
+        return `Doc created: ${result.name || result.title || args.name}\n  ID: ${docId}\n  ⚠ Content could not be written to the page. Use editPage to add content manually.`;
+      }
+    }
+
+    return `Doc created: ${result.name || result.title || args.name}\n  ID: ${docId}`;
   },
 });
 

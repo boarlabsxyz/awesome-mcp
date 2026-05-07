@@ -791,7 +791,7 @@ describe('ClickUp server tools', () => {
   // === createDoc ===
 
   describe('createDoc', () => {
-    it('should create a doc and return its ID', async () => {
+    it('should create a doc without content (no extra API calls)', async () => {
       mockFetch([{ status: 200, body: { id: 'doc123', name: 'My Doc' } }]);
       const result = await callTool('createDoc', { workspaceId: 'w1', name: 'My Doc' });
       assert.ok(result.includes('doc123'));
@@ -803,6 +803,56 @@ describe('ClickUp server tools', () => {
       await callTool('createDoc', { workspaceId: 'w1', name: 'Nested', parentId: 's1', parentType: 4 });
       const body = JSON.parse(calls[0].body!);
       assert.deepEqual(body.parent, { id: 's1', type: 4 });
+    });
+
+    it('should write content to auto-created page via editPage', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: { id: 'doc-new', name: 'Content Doc' } },
+        // getDocPages returns auto-created page
+        { status: 200, body: { pages: [{ id: 'page-auto', name: 'Untitled Page' }] } },
+        // editPage call
+        { status: 200, body: {} },
+      ]);
+      const result = await callTool('createDoc', {
+        workspaceId: 'w1', name: 'Content Doc', content: '# Hello World',
+      });
+      assert.ok(result.includes('doc-new'));
+      // Verify editPage was called with the content
+      assert.equal(calls.length, 3);
+      const editBody = JSON.parse(calls[2].body!);
+      assert.equal(editBody.content, '# Hello World');
+      assert.equal(editBody.content_format, 'text/md');
+      assert.equal(editBody.content_edit_mode, 'replace');
+    });
+
+    it('should create a page if no auto-created page exists', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: { id: 'doc-empty', name: 'Empty Doc' } },
+        // getDocPages returns no pages
+        { status: 200, body: { pages: [] } },
+        // createPage call
+        { status: 201, body: { id: 'page-new' } },
+      ]);
+      const result = await callTool('createDoc', {
+        workspaceId: 'w1', name: 'Empty Doc', content: 'Some content',
+      });
+      assert.ok(result.includes('doc-empty'));
+      assert.equal(calls.length, 3);
+      const createBody = JSON.parse(calls[2].body!);
+      assert.equal(createBody.content, 'Some content');
+    });
+
+    it('should report partial success if content write fails', async () => {
+      mockFetch([
+        { status: 200, body: { id: 'doc-partial', name: 'Partial Doc' } },
+        // getDocPages fails
+        { status: 500, body: { error: 'Internal error' } },
+      ]);
+      const result = await callTool('createDoc', {
+        workspaceId: 'w1', name: 'Partial Doc', content: 'Will fail',
+      });
+      assert.ok(result.includes('doc-partial'));
+      assert.ok(result.includes('Content could not be written'));
     });
   });
 
