@@ -832,6 +832,110 @@ describe('ClickUp server tools', () => {
     });
   });
 
+  // === getPage ===
+
+  describe('getPage', () => {
+    it('returns page with content', async () => {
+      mockFetch([{
+        status: 200,
+        body: { id: 'p1', name: 'My Page', sub_title: 'Subtitle', content: '# Hello\nWorld' },
+      }]);
+      const result = await callTool('getPage', { workspaceId: 'w1', docId: 'd1', pageId: 'p1' });
+      assert.ok(result.includes('My Page'));
+      assert.ok(result.includes('Subtitle'));
+      assert.ok(result.includes('# Hello'));
+      assert.ok(result.includes('World'));
+    });
+
+    it('shows empty for page without content', async () => {
+      mockFetch([{
+        status: 200,
+        body: { id: 'p2', name: 'Empty Page' },
+      }]);
+      const result = await callTool('getPage', { workspaceId: 'w1', docId: 'd1', pageId: 'p2' });
+      assert.ok(result.includes('Empty Page'));
+      assert.ok(result.includes('(empty)'));
+    });
+  });
+
+  // === createPage ===
+
+  describe('createPage', () => {
+    it('creates a page with name and content', async () => {
+      mockFetch([{
+        status: 201,
+        body: { id: 'p-new', name: 'New Page' },
+      }]);
+      const result = await callTool('createPage', {
+        workspaceId: 'w1',
+        docId: 'd1',
+        name: 'New Page',
+        content: '# Draft',
+      });
+      assert.ok(result.includes('Page created'));
+      assert.ok(result.includes('New Page'));
+      assert.ok(result.includes('p-new'));
+    });
+
+    it('creates a page without optional fields', async () => {
+      mockFetch([{
+        status: 201,
+        body: { id: 'p-bare' },
+      }]);
+      const result = await callTool('createPage', { workspaceId: 'w1', docId: 'd1' });
+      assert.ok(result.includes('Page created'));
+      assert.ok(result.includes('p-bare'));
+    });
+  });
+
+  // === editPage ===
+
+  describe('editPage', () => {
+    it('replaces page content by default', async () => {
+      mockFetch([{
+        status: 200,
+        body: {},
+      }]);
+      const result = await callTool('editPage', {
+        workspaceId: 'w1',
+        docId: 'd1',
+        pageId: 'p1',
+        content: '# Updated',
+      });
+      assert.ok(result.includes('p1'));
+      assert.ok(result.includes('replace'));
+    });
+
+    it('appends content when editMode is append', async () => {
+      mockFetch([{
+        status: 200,
+        body: {},
+      }]);
+      const result = await callTool('editPage', {
+        workspaceId: 'w1',
+        docId: 'd1',
+        pageId: 'p1',
+        content: 'More text',
+        editMode: 'append',
+      });
+      assert.ok(result.includes('append'));
+    });
+
+    it('renames page without changing content', async () => {
+      mockFetch([{
+        status: 200,
+        body: {},
+      }]);
+      const result = await callTool('editPage', {
+        workspaceId: 'w1',
+        docId: 'd1',
+        pageId: 'p1',
+        name: 'New Name',
+      });
+      assert.ok(result.includes('updated'));
+    });
+  });
+
   // === listWorkspaceMembers ===
 
   describe('listWorkspaceMembers', () => {
