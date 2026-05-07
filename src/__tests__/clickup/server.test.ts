@@ -81,8 +81,8 @@ describe('ClickUp server tools', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('should have registered all 31 tools', () => {
-    assert.equal(toolMap.size, 31);
+  it('should have registered all 34 tools', () => {
+    assert.equal(toolMap.size, 34);
   });
 
   // === getClickUpClient / auth guard ===
@@ -616,17 +616,18 @@ describe('ClickUp server tools', () => {
   });
 
   describe('searchDocs', () => {
-    it('returns matching docs', async () => {
+    it('returns matching docs filtered by name', async () => {
       mockFetch([{
         status: 200,
-        body: { docs: [{ id: 'd1', name: 'API Spec' }] },
+        body: { data: [{ id: 'd1', name: 'API Spec' }, { id: 'd2', name: 'Other Doc' }] },
       }]);
       const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'API' });
       assert.ok(result.includes('API Spec'));
+      assert.ok(!result.includes('Other Doc'));
     });
 
     it('returns message when no match', async () => {
-      mockFetch([{ status: 200, body: { docs: [] } }]);
+      mockFetch([{ status: 200, body: { data: [] } }]);
       const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'xyz' });
       assert.ok(result.includes('No docs found matching'));
       assert.ok(result.includes('xyz'));
@@ -790,7 +791,7 @@ describe('ClickUp server tools', () => {
   // === createDoc ===
 
   describe('createDoc', () => {
-    it('should create a doc and return its ID', async () => {
+    it('should create a doc without content (no extra API calls)', async () => {
       mockFetch([{ status: 200, body: { id: 'doc123', name: 'My Doc' } }]);
       const result = await callTool('createDoc', { workspaceId: 'w1', name: 'My Doc' });
       assert.ok(result.includes('doc123'));
@@ -803,30 +804,185 @@ describe('ClickUp server tools', () => {
       const body = JSON.parse(calls[0].body!);
       assert.deepEqual(body.parent, { id: 's1', type: 4 });
     });
+
+    it('should write content to auto-created page via editPage', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: { id: 'doc-new', name: 'Content Doc' } },
+        // getDocPages returns auto-created page
+        { status: 200, body: { pages: [{ id: 'page-auto', name: 'Untitled Page' }] } },
+        // editPage call
+        { status: 200, body: {} },
+      ]);
+      const result = await callTool('createDoc', {
+        workspaceId: 'w1', name: 'Content Doc', content: '# Hello World',
+      });
+      assert.ok(result.includes('doc-new'));
+      // Verify editPage was called with the content
+      assert.equal(calls.length, 3);
+      const editBody = JSON.parse(calls[2].body!);
+      assert.equal(editBody.content, '# Hello World');
+      assert.equal(editBody.content_format, 'text/md');
+      assert.equal(editBody.content_edit_mode, 'replace');
+    });
+
+    it('should create a page if no auto-created page exists', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: { id: 'doc-empty', name: 'Empty Doc' } },
+        // getDocPages returns no pages
+        { status: 200, body: { pages: [] } },
+        // createPage call
+        { status: 201, body: { id: 'page-new' } },
+      ]);
+      const result = await callTool('createDoc', {
+        workspaceId: 'w1', name: 'Empty Doc', content: 'Some content',
+      });
+      assert.ok(result.includes('doc-empty'));
+      assert.equal(calls.length, 3);
+      const createBody = JSON.parse(calls[2].body!);
+      assert.equal(createBody.content, 'Some content');
+    });
+
+    it('should report partial success if content write fails', async () => {
+      mockFetch([
+        { status: 200, body: { id: 'doc-partial', name: 'Partial Doc' } },
+        // getDocPages fails
+        { status: 500, body: { error: 'Internal error' } },
+      ]);
+      const result = await callTool('createDoc', {
+        workspaceId: 'w1', name: 'Partial Doc', content: 'Will fail',
+      });
+      assert.ok(result.includes('doc-partial'));
+      assert.ok(result.includes('Content could not be written'));
+    });
   });
 
   // === getDoc ===
 
   describe('getDoc', () => {
-    it('should return doc content', async () => {
+    it('should return doc metadata and page content', async () => {
       mockFetch([
-        { status: 200, body: { id: 'doc1', name: 'Test Doc', content: 'Hello world', date_created: '1700000000000' } },
+        { status: 200, body: { id: 'doc1', name: 'Test Doc', date_created: '1700000000000' } },
         { status: 200, body: { pages: [] } },
       ]);
       const result = await callTool('getDoc', { workspaceId: 'w1', docId: 'doc1' });
       assert.ok(result.includes('Test Doc'));
-      assert.ok(result.includes('Hello world'));
       assert.ok(result.includes('doc1'));
     });
 
-    it('should include pages when available', async () => {
+    it('should fetch individual page content', async () => {
       mockFetch([
         { status: 200, body: { id: 'doc1', name: 'Doc' } },
-        { status: 200, body: { pages: [{ id: 'p1', name: 'Page 1', content: 'Page content' }] } },
+        { status: 200, body: { pages: [{ id: 'p1', name: 'Page 1' }] } },
+        // getPage call for p1
+        { status: 200, body: { id: 'p1', name: 'Page 1', content: 'Page content here' } },
       ]);
       const result = await callTool('getDoc', { workspaceId: 'w1', docId: 'doc1' });
       assert.ok(result.includes('Page 1'));
-      assert.ok(result.includes('Page content'));
+      assert.ok(result.includes('Page content here'));
+    });
+  });
+
+  // === getPage ===
+
+  describe('getPage', () => {
+    it('returns page with content', async () => {
+      mockFetch([{
+        status: 200,
+        body: { id: 'p1', name: 'My Page', sub_title: 'Subtitle', content: '# Hello\nWorld' },
+      }]);
+      const result = await callTool('getPage', { workspaceId: 'w1', docId: 'd1', pageId: 'p1' });
+      assert.ok(result.includes('My Page'));
+      assert.ok(result.includes('Subtitle'));
+      assert.ok(result.includes('# Hello'));
+      assert.ok(result.includes('World'));
+    });
+
+    it('shows empty for page without content', async () => {
+      mockFetch([{
+        status: 200,
+        body: { id: 'p2', name: 'Empty Page' },
+      }]);
+      const result = await callTool('getPage', { workspaceId: 'w1', docId: 'd1', pageId: 'p2' });
+      assert.ok(result.includes('Empty Page'));
+      assert.ok(result.includes('(empty)'));
+    });
+  });
+
+  // === createPage ===
+
+  describe('createPage', () => {
+    it('creates a page with name and content', async () => {
+      mockFetch([{
+        status: 201,
+        body: { id: 'p-new', name: 'New Page' },
+      }]);
+      const result = await callTool('createPage', {
+        workspaceId: 'w1',
+        docId: 'd1',
+        name: 'New Page',
+        content: '# Draft',
+      });
+      assert.ok(result.includes('Page created'));
+      assert.ok(result.includes('New Page'));
+      assert.ok(result.includes('p-new'));
+    });
+
+    it('creates a page without optional fields', async () => {
+      mockFetch([{
+        status: 201,
+        body: { id: 'p-bare' },
+      }]);
+      const result = await callTool('createPage', { workspaceId: 'w1', docId: 'd1' });
+      assert.ok(result.includes('Page created'));
+      assert.ok(result.includes('p-bare'));
+    });
+  });
+
+  // === editPage ===
+
+  describe('editPage', () => {
+    it('replaces page content by default', async () => {
+      mockFetch([{
+        status: 200,
+        body: {},
+      }]);
+      const result = await callTool('editPage', {
+        workspaceId: 'w1',
+        docId: 'd1',
+        pageId: 'p1',
+        content: '# Updated',
+      });
+      assert.ok(result.includes('p1'));
+      assert.ok(result.includes('replace'));
+    });
+
+    it('appends content when editMode is append', async () => {
+      mockFetch([{
+        status: 200,
+        body: {},
+      }]);
+      const result = await callTool('editPage', {
+        workspaceId: 'w1',
+        docId: 'd1',
+        pageId: 'p1',
+        content: 'More text',
+        editMode: 'append',
+      });
+      assert.ok(result.includes('append'));
+    });
+
+    it('renames page without changing content', async () => {
+      mockFetch([{
+        status: 200,
+        body: {},
+      }]);
+      const result = await callTool('editPage', {
+        workspaceId: 'w1',
+        docId: 'd1',
+        pageId: 'p1',
+        name: 'New Name',
+      });
+      assert.ok(result.includes('updated'));
     });
   });
 

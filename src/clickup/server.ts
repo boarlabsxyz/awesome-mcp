@@ -542,7 +542,7 @@ clickUpServer.addTool({
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
     const result = await client.listDocs(args.workspaceId);
-    const docs = result.docs || [];
+    const docs = result.data || result.docs || [];
     if (docs.length === 0) return 'No docs found in this workspace.';
     return docs.map((d: any) =>
       `Doc: ${d.name || d.title || 'Untitled'}\n  ID: ${d.id}\n  Created: ${d.date_created ? new Date(parseInt(d.date_created)).toISOString() : 'unknown'}`
@@ -552,7 +552,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'getDoc',
-  description: 'Get a ClickUp Doc by ID, including its content and pages.',
+  description: 'Get a ClickUp Doc by ID, including its pages and their content (markdown).',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
     docId: z.string().describe('The doc ID.'),
@@ -568,17 +568,26 @@ clickUpServer.addTool({
     ];
     if (doc.date_created) parts.push(`  Created: ${new Date(parseInt(doc.date_created)).toISOString()}`);
     if (doc.date_updated) parts.push(`  Updated: ${new Date(parseInt(doc.date_updated)).toISOString()}`);
-    if (doc.content) parts.push(`\nContent:\n${doc.content}`);
 
-    // Try to get pages
+    // Fetch pages and their content
     try {
       const pagesResult = await client.getDocPages(args.workspaceId, args.docId);
-      const pages = pagesResult.pages || pagesResult || [];
+      const pages = pagesResult.pages || pagesResult.data || pagesResult || [];
       if (Array.isArray(pages) && pages.length > 0) {
         parts.push('\nPages:');
         for (const page of pages) {
-          parts.push(`\n--- ${page.name || page.title || 'Untitled Page'} (ID: ${page.id}) ---`);
-          if (page.content) parts.push(page.content);
+          const pageId = page.id;
+          const pageName = page.name || page.title || 'Untitled Page';
+          parts.push(`\n--- ${pageName} (ID: ${pageId}) ---`);
+          // Fetch full page content individually
+          try {
+            const fullPage = await client.getPage(args.workspaceId, args.docId, pageId);
+            if (fullPage.content) parts.push(fullPage.content);
+            else parts.push('(empty)');
+          } catch {
+            if (page.content) parts.push(page.content);
+            else parts.push('(content unavailable)');
+          }
         }
       }
     } catch { /* pages endpoint may not exist for all docs */ }
@@ -589,16 +598,31 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'searchDocs',
-  description: 'Search ClickUp Docs in a workspace.',
+  description: 'Search ClickUp Docs in a workspace by name. Optionally filter by creator, parent, or status.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
-    query: z.string().min(1).describe('Search query string.'),
+    query: z.string().optional().describe('Text to match against doc names (case-insensitive). Omit to list all docs.'),
+    creator: z.number().optional().describe('Filter by creator user ID.'),
+    parentId: z.string().optional().describe('Filter by parent ID (Space, Folder, or List).'),
+    parentType: z.enum(['SPACE', 'FOLDER', 'LIST', 'EVERYTHING', 'WORKSPACE']).optional().describe('Type of parent to filter by.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
-    const result = await client.searchDocs(args.workspaceId, args.query);
-    const docs = result.docs || [];
-    if (docs.length === 0) return `No docs found matching "${args.query}".`;
+    const result = await client.searchDocs(args.workspaceId, {
+      creator: args.creator,
+      parentId: args.parentId,
+      parentType: args.parentType,
+    });
+    let docs = result.data || result.docs || [];
+    // Client-side text filtering (ClickUp v3 API doesn't support text search)
+    if (args.query) {
+      const q = args.query.toLowerCase();
+      docs = docs.filter((d: any) => {
+        const name = (d.name || d.title || '').toLowerCase();
+        return name.includes(q);
+      });
+    }
+    if (docs.length === 0) return args.query ? `No docs found matching "${args.query}".` : 'No docs found in this workspace.';
     return docs.map((d: any) =>
       `Doc: ${d.name || d.title || 'Untitled'}\n  ID: ${d.id}`
     ).join('\n\n');
@@ -618,12 +642,108 @@ clickUpServer.addTool({
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
     const data: any = { name: args.name };
-    if (args.content) data.content = args.content;
+    // Note: ClickUp's createDoc API ignores the content field — content must
+    // be written to the auto-created page separately via editPage.
     if (args.parentId && args.parentType !== undefined) {
       data.parent = { id: args.parentId, type: args.parentType };
     }
     const result = await client.createDoc(args.workspaceId, data);
-    return `Doc created: ${result.name || result.title || args.name}\n  ID: ${result.id}`;
+    const docId = result.id;
+
+    // If content was provided, write it to the auto-created first page
+    if (args.content) {
+      try {
+        const pagesResult = await client.getDocPages(args.workspaceId, docId);
+        const pages = pagesResult.pages || pagesResult.data || pagesResult || [];
+        if (Array.isArray(pages) && pages.length > 0) {
+          await client.editPage(args.workspaceId, docId, pages[0].id, {
+            content: args.content,
+            content_format: 'text/md',
+            content_edit_mode: 'replace',
+          });
+        } else {
+          // No auto-created page — create one with content
+          await client.createPage(args.workspaceId, docId, {
+            name: args.name,
+            content: args.content,
+            content_format: 'text/md',
+          });
+        }
+      } catch {
+        // Content write failed but doc was created — report partial success
+        return `Doc created: ${result.name || result.title || args.name}\n  ID: ${docId}\n  ⚠ Content could not be written to the page. Use editPage to add content manually.`;
+      }
+    }
+
+    return `Doc created: ${result.name || result.title || args.name}\n  ID: ${docId}`;
+  },
+});
+
+clickUpServer.addTool({
+  name: 'getPage',
+  description: 'Get a specific page from a ClickUp Doc, including its full content in markdown.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+    docId: z.string().describe('The doc ID.'),
+    pageId: z.string().describe('The page ID.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    const page = await client.getPage(args.workspaceId, args.docId, args.pageId);
+    const parts = [
+      `Page: ${page.name || page.title || 'Untitled'}`,
+      `  ID: ${page.id}`,
+    ];
+    if (page.sub_title) parts.push(`  Subtitle: ${page.sub_title}`);
+    if (page.content) parts.push(`\n${page.content}`);
+    else parts.push('\n(empty)');
+    return parts.join('\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'createPage',
+  description: 'Create a new page in a ClickUp Doc.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+    docId: z.string().describe('The doc ID.'),
+    name: z.string().optional().describe('Name of the new page.'),
+    content: z.string().optional().describe('Content of the page (markdown).'),
+    parentPageId: z.string().optional().describe('ID of the parent page for nesting.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    const data: any = {};
+    if (args.name) data.name = args.name;
+    if (args.content) { data.content = args.content; data.content_format = 'text/md'; }
+    if (args.parentPageId) data.parent_page_id = args.parentPageId;
+    const result = await client.createPage(args.workspaceId, args.docId, data);
+    return `Page created: ${result.name || args.name || 'Untitled'}\n  ID: ${result.id}\n  Doc: ${args.docId}`;
+  },
+});
+
+clickUpServer.addTool({
+  name: 'editPage',
+  description: 'Edit a page in a ClickUp Doc. Can replace, append, or prepend content.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+    docId: z.string().describe('The doc ID.'),
+    pageId: z.string().describe('The page ID.'),
+    name: z.string().optional().describe('New name for the page.'),
+    content: z.string().optional().describe('New content (markdown).'),
+    editMode: z.enum(['replace', 'append', 'prepend']).optional().default('replace').describe('How to apply content: replace (default), append, or prepend.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    const data: any = {};
+    if (args.name) data.name = args.name;
+    if (args.content) {
+      data.content = args.content;
+      data.content_format = 'text/md';
+      data.content_edit_mode = args.editMode || 'replace';
+    }
+    await client.editPage(args.workspaceId, args.docId, args.pageId, data);
+    return `Page ${args.pageId} updated (${args.editMode || 'replace'}).`;
   },
 });
 

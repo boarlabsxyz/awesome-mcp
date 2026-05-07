@@ -261,8 +261,16 @@ export class ClickUpClient {
     return this.request('GET', `/workspaces/${workspaceId}/docs`, undefined, CLICKUP_API_V3_BASE);
   }
 
-  async searchDocs(workspaceId: string, query: string): Promise<any> {
-    return this.request('GET', `/workspaces/${workspaceId}/docs?search=${encodeURIComponent(query)}`, undefined, CLICKUP_API_V3_BASE);
+  async searchDocs(workspaceId: string, opts?: { creator?: number; parentId?: string; parentType?: string; deleted?: boolean; archived?: boolean; limit?: number }): Promise<any> {
+    const params = new URLSearchParams();
+    if (opts?.creator) params.set('creator', String(opts.creator));
+    if (opts?.parentId) params.set('parent_id', opts.parentId);
+    if (opts?.parentType) params.set('parent_type', opts.parentType);
+    if (opts?.deleted !== undefined) params.set('deleted', String(opts.deleted));
+    if (opts?.archived !== undefined) params.set('archived', String(opts.archived));
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    const qs = params.toString();
+    return this.request('GET', `/workspaces/${workspaceId}/docs${qs ? `?${qs}` : ''}`, undefined, CLICKUP_API_V3_BASE);
   }
 
   async getDoc(workspaceId: string, docId: string): Promise<any> {
@@ -271,6 +279,18 @@ export class ClickUpClient {
 
   async getDocPages(workspaceId: string, docId: string): Promise<any> {
     return this.request('GET', `/workspaces/${workspaceId}/docs/${docId}/pages`, undefined, CLICKUP_API_V3_BASE);
+  }
+
+  async getPage(workspaceId: string, docId: string, pageId: string, contentFormat: string = 'text/md'): Promise<any> {
+    return this.request('GET', `/workspaces/${workspaceId}/docs/${docId}/pages/${pageId}?content_format=${encodeURIComponent(contentFormat)}`, undefined, CLICKUP_API_V3_BASE);
+  }
+
+  async createPage(workspaceId: string, docId: string, data: { name?: string; sub_title?: string; content?: string; content_format?: string; parent_page_id?: string }): Promise<any> {
+    return this.request('POST', `/workspaces/${workspaceId}/docs/${docId}/pages`, data, CLICKUP_API_V3_BASE);
+  }
+
+  async editPage(workspaceId: string, docId: string, pageId: string, data: { name?: string; sub_title?: string; content?: string; content_edit_mode?: string; content_format?: string }): Promise<any> {
+    return this.request('PUT', `/workspaces/${workspaceId}/docs/${docId}/pages/${pageId}`, data, CLICKUP_API_V3_BASE);
   }
 
   async createDoc(workspaceId: string, data: { name: string; content?: string; parent?: { id: string; type: number } }): Promise<any> {

@@ -315,7 +315,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
     slug: 'google-calendar',
     name: 'Google Calendar MCP',
     description: 'Manage Google Calendar events and schedules',
-    iconUrl: null,
+    iconUrl: 'https://fonts.gstatic.com/s/i/productlogos/calendar_2020q4/v13/192px.svg',
     mcpUrl: googleCalendarMcpUrl,
     scopes: [
       'https://www.googleapis.com/auth/calendar',
