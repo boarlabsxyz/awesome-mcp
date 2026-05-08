@@ -816,7 +816,7 @@ function registerSharedRoutes(app: express.Express): void {
         const providerEmail = null;
         const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
         // Auto-generate instance name: Slack team name + service display name
-        const serviceName = mcp.name.replace(/\s*MCP\s*$/i, '').trim();
+        const serviceName = mcp.name.replace(' MCP', '').trim();
         const instanceName = stateData.instanceName || `${tokenData.team?.name || 'workspace'} ${serviceName}`;
 
         // Check if this is a reconnect (update existing instance tokens)
@@ -909,7 +909,7 @@ function registerSharedRoutes(app: express.Express): void {
         const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
 
         // Auto-generate instance name: ClickUp email prefix + service display name
-        const clickUpServiceName = mcp.name.replace(/\s*MCP\s*$/i, '').trim();
+        const clickUpServiceName = mcp.name.replace(' MCP', '').trim();
         const clickUpUserPrefix = providerEmail ? providerEmail.split('@')[0] : null;
         const clickUpInstanceName = stateData.instanceName || (clickUpUserPrefix ? `${clickUpUserPrefix} ${clickUpServiceName}` : clickUpServiceName);
 
@@ -970,7 +970,7 @@ function registerSharedRoutes(app: express.Express): void {
           console.error(`User ${user.id} reconnected MCP instance: ${existing.instanceId} (${existing.instanceName})`);
         } else if (stateData.instanceName || googleEmail) {
           // Auto-generate instance name: Google email prefix + service display name
-          const googleServiceName = mcp.name.replace(/\s*MCP\s*$/i, '').trim();
+          const googleServiceName = mcp.name.replace(' MCP', '').trim();
           const googleUserPrefix = googleEmail ? googleEmail.split('@')[0] : null;
           const autoName = stateData.instanceName || (googleUserPrefix ? `${googleUserPrefix} ${googleServiceName}` : googleServiceName);
           // Create new instance with unique ID
@@ -1038,7 +1038,7 @@ function registerSharedRoutes(app: express.Express): void {
           const providerEmail = null; // Slack bot tokens don't have an associated email
           const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
           const providerTokens = { access_token: token };
-          const botServiceName = mcp.name.replace(/\s*MCP\s*$/i, '').trim();
+          const botServiceName = mcp.name.replace(' MCP', '').trim();
           const name = instanceName || `${data.team || 'workspace'} ${botServiceName}`;
 
           const connection = await createMcpInstance(
