@@ -1427,6 +1427,20 @@ function registerSharedRoutes(app: express.Express): void {
       // Get user's MCP connections
       const connections = user.id ? await getUserConnectedMcps(user.id) : [];
 
+      // Auto-migrate old instance names that still contain " MCP"
+      for (const c of connections) {
+        if (c.instanceName && c.instanceName.includes(' MCP')) {
+          const serviceName = c.instanceName.replace(' MCP', '').trim();
+          const email = c.googleEmail || c.providerEmail;
+          const prefix = email ? email.split('@')[0] : '';
+          const newName = prefix ? `${prefix} ${serviceName}` : serviceName;
+          if (newName !== c.instanceName) {
+            await updateMcpInstanceName(c.instanceId, newName);
+            c.instanceName = newName;
+          }
+        }
+      }
+
       res.json({
         email: user.email,
         name: user.name,
