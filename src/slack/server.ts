@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { SlackClient } from './apiHelpers.js';
-import { handleReadChannelHistory, handleReadThreadReplies, handlePostMessage, handleReplyInThread } from './helpers.js';
+import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handlePostMessage, handleReplyInThread } from './helpers.js';
 
 export const slackBotServer = new FastMCP<UserSession>({
   name: 'Slack Bot MCP Server',
@@ -27,18 +27,27 @@ function getTokenKey(session: UserSession): string {
 
 slackBotServer.addTool({
   name: 'listChannels',
-  description: 'List Slack channels the bot is a member of. The bot only sees channels where it has been /invited.',
+  description: 'List Slack channels and DMs the bot is a member of. Includes public/private channels and 1-on-1 DMs. The bot only sees channels where it has been /invited.',
   parameters: z.object({
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
   }),
   execute: async (args, { session }) => {
     const client = getSlackClient(session);
+    const tokenKey = getTokenKey(session!);
     const result = await client.conversationsList(args.cursor);
     const channels = result.channels;
 
     if (channels.length === 0) return 'No channels found. The bot must be /invited to channels to see them.';
 
+    // Resolve user names for DM channels
+    const dmUserIds = channels.filter(ch => ch.is_im && ch.user).map(ch => ch.user!);
+    const userNames = dmUserIds.length > 0 ? await resolveUsers(client, dmUserIds, tokenKey) : new Map<string, string>();
+
     const lines = channels.map(ch => {
+      if (ch.is_im) {
+        const userName = ch.user ? (userNames.get(ch.user) || ch.user) : 'unknown';
+        return `DM with ${userName} (${ch.id})\n  Type: im\n  User ID: ${ch.user || 'unknown'}`;
+      }
       const parts = [
         `#${ch.name} (${ch.id})`,
         ch.is_private ? '  Type: private' : '  Type: public',
@@ -109,5 +118,45 @@ slackBotServer.addTool({
   }),
   execute: async (args, { session }) => {
     return handleReplyInThread(getSlackClient(session), args.channelId, args.threadTs, args.text);
+  },
+});
+
+slackBotServer.addTool({
+  name: 'listUsers',
+  description: 'List workspace members. Use this to find a user by name and get their user ID for opening a DM.',
+  parameters: z.object({
+    cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getSlackClient(session);
+    const result = await client.usersList(args.cursor);
+    const members = result.members.filter(m => !m.deleted && !m.is_bot);
+
+    if (members.length === 0) return 'No users found.';
+
+    const lines = members.map(m => {
+      const displayName = m.profile?.display_name || m.real_name || m.name;
+      return `${displayName} (@${m.name}) — ID: ${m.id}`;
+    });
+
+    let output = lines.join('\n');
+    const nextCursor = result.response_metadata?.next_cursor;
+    if (nextCursor) {
+      output += `\n\n---\nMore users available. Use cursor: "${nextCursor}"`;
+    }
+    return output;
+  },
+});
+
+slackBotServer.addTool({
+  name: 'openDm',
+  description: 'Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage.',
+  parameters: z.object({
+    userId: z.string().describe('The Slack user ID to open a DM with (e.g., U01234ABCDE).'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getSlackClient(session);
+    const result = await client.conversationsOpen(args.userId);
+    return `DM channel opened: ${result.channel.id}\n\nYou can now use postMessage with channelId "${result.channel.id}" to send a direct message.`;
   },
 });

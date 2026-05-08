@@ -80,7 +80,7 @@ export class SlackClient {
     // users.conversations returns only channels the bot/user is a member of,
     // unlike conversations.list which returns all visible channels.
     return this.request('users.conversations', {
-      types: types || 'public_channel,private_channel',
+      types: types || 'public_channel,private_channel,im',
       exclude_archived: true,
       limit: 200,
       ...(cursor ? { cursor } : {}),
@@ -189,6 +189,14 @@ export class SlackClient {
       limit: 200,
       ...(cursor ? { cursor } : {}),
     });
+  }
+
+  // === Conversations (open DM) ===
+
+  async conversationsOpen(userId: string): Promise<{
+    channel: { id: string };
+  }> {
+    return this.request('conversations.open', { users: userId });
   }
 
   // === Users (list) ===
