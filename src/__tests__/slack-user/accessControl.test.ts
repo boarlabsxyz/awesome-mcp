@@ -1,8 +1,83 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { matchGlob, assertAccess, filterChannelList, filterDmsByOrg, filterGroupDmsByRules } from '../../slack-user/accessControl.js';
+import { matchGlob, assertAccess, filterChannelList, filterDmsByOrg, filterGroupDmsByRules, fetchChannelMeta } from '../../slack-user/accessControl.js';
 import type { SlackAccessRules } from '../../mcpConnectionStore.js';
 import type { ChannelMeta } from '../../slack-user/accessControl.js';
+
+// === fetchChannelMeta ===
+
+describe('fetchChannelMeta', () => {
+  function mockClient(channelData: any): any {
+    return {
+      conversationsInfo: async () => ({ channel: channelData }),
+    };
+  }
+
+  it('should fetch and return channel metadata', async () => {
+    const client = mockClient({
+      id: 'C_META_1', name: 'test-channel', is_private: false,
+      is_shared: false, is_ext_shared: false, is_org_shared: false,
+      is_im: false, is_mpim: false, user: undefined, shared_team_ids: ['T1'],
+    });
+    const meta = await fetchChannelMeta(client, 'C_META_1', 'meta-test-token-' + Date.now());
+    assert.equal(meta.id, 'C_META_1');
+    assert.equal(meta.name, 'test-channel');
+    assert.equal(meta.is_private, false);
+    assert.equal(meta.is_shared, false);
+    assert.deepEqual(meta.shared_team_ids, ['T1']);
+  });
+
+  it('should detect shared channels from is_ext_shared', async () => {
+    const client = mockClient({
+      id: 'C_EXT', name: 'ext-channel', is_private: false,
+      is_shared: false, is_ext_shared: true, is_org_shared: false,
+      is_im: false, is_mpim: false,
+    });
+    const meta = await fetchChannelMeta(client, 'C_EXT', 'meta-ext-token-' + Date.now());
+    assert.equal(meta.is_shared, true);
+  });
+
+  it('should detect shared channels from is_org_shared', async () => {
+    const client = mockClient({
+      id: 'C_ORG', name: 'org-channel', is_private: false,
+      is_shared: false, is_ext_shared: false, is_org_shared: true,
+      is_im: false, is_mpim: false,
+    });
+    const meta = await fetchChannelMeta(client, 'C_ORG', 'meta-org-token-' + Date.now());
+    assert.equal(meta.is_shared, true);
+  });
+
+  it('should return DM metadata with user field', async () => {
+    const client = mockClient({
+      id: 'D_DM', name: 'dm', is_private: true,
+      is_shared: false, is_ext_shared: false, is_org_shared: false,
+      is_im: true, is_mpim: false, user: 'U_PARTNER',
+    });
+    const meta = await fetchChannelMeta(client, 'D_DM', 'meta-dm-token-' + Date.now());
+    assert.equal(meta.is_im, true);
+    assert.equal(meta.user, 'U_PARTNER');
+  });
+
+  it('should cache results and return cached on second call', async () => {
+    let callCount = 0;
+    const client = {
+      conversationsInfo: async () => {
+        callCount++;
+        return {
+          channel: {
+            id: 'C_CACHED', name: 'cached', is_private: false,
+            is_shared: false, is_ext_shared: false, is_org_shared: false,
+            is_im: false, is_mpim: false,
+          },
+        };
+      },
+    };
+    const tokenKey = 'meta-cache-token-' + Date.now();
+    await fetchChannelMeta(client as any, 'C_CACHED', tokenKey);
+    await fetchChannelMeta(client as any, 'C_CACHED', tokenKey);
+    assert.equal(callCount, 1);
+  });
+});
 
 // === matchGlob ===
 
