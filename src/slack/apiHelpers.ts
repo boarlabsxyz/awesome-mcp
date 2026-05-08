@@ -42,8 +42,30 @@ export class SlackClient {
     }
 
     if (res.status === 429) {
-      const retryAfter = res.headers.get('Retry-After');
-      throw new UserError(`Slack rate limit exceeded. Try again${retryAfter ? ` in ${retryAfter}s` : ' in a moment'}.`);
+      const retryAfter = parseInt(res.headers.get('Retry-After') || '5', 10);
+      const waitMs = Math.min(retryAfter * 1000, 30_000);
+      await new Promise(resolve => setTimeout(resolve, waitMs));
+      // Retry once after waiting
+      const retryRes = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.botToken}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: formBody,
+      });
+      if (retryRes.status === 429) {
+        throw new UserError(`Slack rate limit exceeded. Try again in a moment.`);
+      }
+      if (!retryRes.ok) {
+        const errText = await retryRes.text();
+        throw new UserError(`Slack API HTTP error (${retryRes.status}): ${errText}`);
+      }
+      const retryData = await retryRes.json() as any;
+      if (!retryData.ok) {
+        throw new UserError(`Slack API error (${method}): ${retryData.error || 'unknown error'}`);
+      }
+      return retryData as T;
     }
     if (!res.ok) {
       const errText = await res.text();

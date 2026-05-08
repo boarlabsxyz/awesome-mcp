@@ -1107,9 +1107,8 @@ function registerSharedRoutes(app: express.Express): void {
         cursor = result.response_metadata?.next_cursor || undefined;
       } while (cursor);
 
-      // Get shared_team_ids from conversations.info (limited to first 20 shared channels)
-      const orgIdToUserIds = new Map<string, string>(); // org ID → a sample user ID from that org
-      await Promise.all(sharedChannelIds.slice(0, 20).map(async (chId) => {
+      // Get shared_team_ids from conversations.info (limited to first 10 shared channels, sequential to avoid rate limits)
+      for (const chId of sharedChannelIds.slice(0, 10)) {
         try {
           const { channel: info } = await client.conversationsInfo(chId);
           if (info.shared_team_ids) {
@@ -1120,8 +1119,8 @@ function registerSharedRoutes(app: express.Express): void {
               }
             }
           }
-        } catch { /* skip */ }
-      }));
+        } catch { /* skip — rate limit or other error */ }
+      }
 
       // Resolve org names: try team.info for each external org, fall back to user names
       for (const org of connectedOrgs) {
@@ -1139,17 +1138,17 @@ function registerSharedRoutes(app: express.Express): void {
       const { migrateSlackTokens } = await import('../mcpConnectionStore.js');
       const tokens = migrateSlackTokens(connection.providerTokens);
 
-      // Get blacklisted user names for display
+      // Get blacklisted user names for display (sequential to avoid rate limits)
       const blacklistUserDetails: Array<{ id: string; name: string }> = [];
       if (tokens.accessRules?.blacklistUsers?.length) {
-        await Promise.all(tokens.accessRules.blacklistUsers.slice(0, 50).map(async (uid: string) => {
+        for (const uid of tokens.accessRules.blacklistUsers.slice(0, 50)) {
           try {
             const { user: u } = await client.usersInfo(uid);
             blacklistUserDetails.push({ id: uid, name: u.profile?.display_name || u.real_name || u.name });
           } catch {
             blacklistUserDetails.push({ id: uid, name: uid });
           }
-        }));
+        }
       }
 
       res.json({
