@@ -904,14 +904,41 @@ function registerSharedRoutes(app: express.Express): void {
           console.error('[MCP Connect] Could not fetch ClickUp user info:', emailErr);
         }
 
+        // Fetch ClickUp workspace names for instance naming
+        let clickUpWorkspaceNames: string[] = [];
+        try {
+          const teamController = new AbortController();
+          const teamTimeout = setTimeout(() => teamController.abort(), 10_000);
+          const teamResponse = await fetch('https://api.clickup.com/api/v2/team', {
+            headers: { 'Authorization': `Bearer ${clickUpAccessToken}` },
+            signal: teamController.signal,
+          });
+          clearTimeout(teamTimeout);
+          if (teamResponse.ok) {
+            const teamData = await teamResponse.json() as { teams?: Array<{ name: string }> };
+            clickUpWorkspaceNames = (teamData.teams || []).map(t => t.name);
+            console.error(`[MCP Connect] ClickUp workspaces: ${clickUpWorkspaceNames.join(', ')}`);
+          }
+        } catch (teamErr) {
+          console.error('[MCP Connect] Could not fetch ClickUp teams:', teamErr);
+        }
+
         const providerTokens = { access_token: clickUpAccessToken };
         // Use empty GoogleTokens placeholder (ClickUp doesn't use them)
         const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
 
-        // Auto-generate instance name: ClickUp email prefix + service display name
+        // Auto-generate instance name: workspace name(s) + service display name
         const clickUpServiceName = mcp.name.replace(' MCP', '').trim();
-        const clickUpUserPrefix = providerEmail ? providerEmail.split('@')[0] : null;
-        const clickUpInstanceName = stateData.instanceName || (clickUpUserPrefix ? `${clickUpUserPrefix} ${clickUpServiceName}` : clickUpServiceName);
+        let clickUpInstanceName: string;
+        if (stateData.instanceName) {
+          clickUpInstanceName = stateData.instanceName;
+        } else if (clickUpWorkspaceNames.length > 0) {
+          const wsLabel = clickUpWorkspaceNames.join(', ');
+          clickUpInstanceName = `${wsLabel} ${clickUpServiceName}`;
+        } else {
+          const clickUpUserPrefix = providerEmail ? providerEmail.split('@')[0] : null;
+          clickUpInstanceName = clickUpUserPrefix ? `${clickUpUserPrefix} ${clickUpServiceName}` : clickUpServiceName;
+        }
 
         connection = await createMcpInstance(
           user.id, mcpSlug, clickUpInstanceName, emptyGoogleTokens, null,
