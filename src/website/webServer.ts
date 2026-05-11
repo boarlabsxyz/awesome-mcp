@@ -820,9 +820,10 @@ function registerSharedRoutes(app: express.Express): void {
         };
         const providerEmail = null;
         const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
-        // Auto-generate instance name: Slack team name + service display name
+        // Auto-generate instance name: Service Name (team name)
         const serviceName = mcp.name.replace(' MCP', '').trim();
-        const instanceName = stateData.instanceName || titleCase(`${tokenData.team?.name || 'workspace'} ${serviceName}`);
+        const teamLabel = tokenData.team?.name || 'workspace';
+        const instanceName = stateData.instanceName || `${serviceName} (${teamLabel})`;
 
         // Check if this is a reconnect (update existing instance tokens)
         if (stateData.reconnectInstanceId) {
@@ -932,16 +933,15 @@ function registerSharedRoutes(app: express.Express): void {
         // Use empty GoogleTokens placeholder (ClickUp doesn't use them)
         const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
 
-        // Auto-generate instance name: workspace name(s) + service display name
+        // Auto-generate instance name: Service Name (workspace or email)
         const clickUpServiceName = mcp.name.replace(' MCP', '').trim();
         let clickUpInstanceName: string;
         if (stateData.instanceName) {
           clickUpInstanceName = stateData.instanceName;
         } else if (clickUpWorkspaceNames.length > 0) {
-          const wsLabel = clickUpWorkspaceNames.join(', ');
-          clickUpInstanceName = titleCase(`${wsLabel} ${clickUpServiceName}`);
+          clickUpInstanceName = `${clickUpServiceName} (${clickUpWorkspaceNames.join(', ')})`;
         } else {
-          clickUpInstanceName = providerEmail ? `${providerEmail} ${titleCase(clickUpServiceName)}` : titleCase(clickUpServiceName);
+          clickUpInstanceName = providerEmail ? `${clickUpServiceName} (${providerEmail})` : clickUpServiceName;
         }
 
         connection = await createMcpInstance(
@@ -1000,9 +1000,9 @@ function registerSharedRoutes(app: express.Express): void {
           connection = { ...existing, googleTokens, googleEmail: googleEmail || existing.googleEmail };
           console.error(`User ${user.id} reconnected MCP instance: ${existing.instanceId} (${existing.instanceName})`);
         } else if (stateData.instanceName || googleEmail) {
-          // Auto-generate instance name: Google email + service display name
+          // Auto-generate instance name: Service Name (email)
           const googleServiceName = mcp.name.replace(' MCP', '').trim();
-          const autoName = stateData.instanceName || (googleEmail ? `${googleEmail} ${titleCase(googleServiceName)}` : titleCase(googleServiceName));
+          const autoName = stateData.instanceName || (googleEmail ? `${googleServiceName} (${googleEmail})` : googleServiceName);
           // Create new instance with unique ID
           connection = await createMcpInstance(
             user.id,
@@ -1069,7 +1069,7 @@ function registerSharedRoutes(app: express.Express): void {
           const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
           const providerTokens = { access_token: token };
           const botServiceName = mcp.name.replace(' MCP', '').trim();
-          const name = instanceName || titleCase(`${data.team || 'workspace'} ${botServiceName}`);
+          const name = instanceName || `${botServiceName} (${data.team || 'workspace'})`;
 
           const connection = await createMcpInstance(
             user.id, mcpSlug, name, emptyGoogleTokens, null,
@@ -1461,8 +1461,8 @@ function registerSharedRoutes(app: express.Express): void {
       for (const c of connections) {
         if (c.instanceName && c.instanceName.includes(' MCP')) {
           const serviceName = c.instanceName.replace(' MCP', '').trim();
-          const email = c.googleEmail || c.providerEmail;
-          const newName = email ? `${email} ${titleCase(serviceName)}` : titleCase(serviceName);
+          const identifier = c.googleEmail || c.providerEmail;
+          const newName = identifier ? `${serviceName} (${identifier})` : serviceName;
           if (newName !== c.instanceName) {
             await updateMcpInstanceName(c.instanceId, newName);
             c.instanceName = newName;
