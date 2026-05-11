@@ -19,21 +19,20 @@ function migrateInstanceName(
   }
   const serviceName = instanceName.replace(' MCP', '').trim();
   const email = googleEmail || providerEmail;
-  const raw = email ? `${email} ${serviceName}` : serviceName;
-  const newName = titleCase(raw);
+  const newName = email ? `${email} ${titleCase(serviceName)}` : titleCase(serviceName);
   return { newName, changed: newName !== instanceName };
 }
 
 describe('Instance name migration logic', () => {
-  it('should use full email and capitalize for Google services', () => {
+  it('should use full email as-is for Google services', () => {
     const result = migrateInstanceName('Google Docs MCP', 'evgen@boarlabs.xyz', null);
-    assert.equal(result.newName, 'Evgen@Boarlabs.Xyz Google Docs');
+    assert.equal(result.newName, 'evgen@boarlabs.xyz Google Docs');
     assert.equal(result.changed, true);
   });
 
-  it('should use full email and capitalize for Gmail', () => {
+  it('should use full email as-is for Gmail', () => {
     const result = migrateInstanceName('Gmail MCP', 'evgen@boarlabs.xyz', null);
-    assert.equal(result.newName, 'Evgen@Boarlabs.Xyz Gmail');
+    assert.equal(result.newName, 'evgen@boarlabs.xyz Gmail');
     assert.equal(result.changed, true);
   });
 
@@ -43,15 +42,15 @@ describe('Instance name migration logic', () => {
     assert.equal(result.changed, true);
   });
 
-  it('should use full providerEmail and capitalize for ClickUp', () => {
+  it('should use full providerEmail as-is for ClickUp', () => {
     const result = migrateInstanceName('ClickUp MCP', null, 'evgen@boarlabs.xyz');
-    assert.equal(result.newName, 'Evgen@Boarlabs.Xyz ClickUp');
+    assert.equal(result.newName, 'evgen@boarlabs.xyz ClickUp');
     assert.equal(result.changed, true);
   });
 
   it('should prefer googleEmail over providerEmail', () => {
     const result = migrateInstanceName('Google Docs MCP', 'google@test.com', 'provider@test.com');
-    assert.equal(result.newName, 'Google@Test.Com Google Docs');
+    assert.equal(result.newName, 'google@test.com Google Docs');
   });
 
   it('should not change names that do not contain " MCP"', () => {
@@ -72,27 +71,27 @@ describe('Instance name migration logic', () => {
     assert.equal(result.changed, true);
   });
 
-  it('should handle Google Sheets MCP with full email', () => {
+  it('should handle Google Sheets MCP with email as-is', () => {
     const result = migrateInstanceName('Google Sheets MCP', 'nick@speedandfunction.com', null);
-    assert.equal(result.newName, 'Nick@Speedandfunction.Com Google Sheets');
+    assert.equal(result.newName, 'nick@speedandfunction.com Google Sheets');
     assert.equal(result.changed, true);
   });
 
   it('should handle Google Calendar MCP', () => {
     const result = migrateInstanceName('Google Calendar MCP', 'user@example.com', null);
-    assert.equal(result.newName, 'User@Example.Com Google Calendar');
+    assert.equal(result.newName, 'user@example.com Google Calendar');
     assert.equal(result.changed, true);
   });
 
   it('should handle Google Slides MCP', () => {
     const result = migrateInstanceName('Google Slides MCP', 'user@example.com', null);
-    assert.equal(result.newName, 'User@Example.Com Google Slides');
+    assert.equal(result.newName, 'user@example.com Google Slides');
     assert.equal(result.changed, true);
   });
 
   it('should handle Google Drive MCP', () => {
     const result = migrateInstanceName('Google Drive MCP', 'user@example.com', null);
-    assert.equal(result.newName, 'User@Example.Com Google Drive');
+    assert.equal(result.newName, 'user@example.com Google Drive');
     assert.equal(result.changed, true);
   });
 });
@@ -115,7 +114,7 @@ function generateInstanceName(
     if (opts.workspaceNames && opts.workspaceNames.length > 0) {
       return titleCase(`${opts.workspaceNames.join(', ')} ${serviceName}`);
     }
-    return titleCase(opts.providerEmail ? `${opts.providerEmail} ${serviceName}` : serviceName);
+    return opts.providerEmail ? `${opts.providerEmail} ${titleCase(serviceName)}` : titleCase(serviceName);
   }
 
   // Slack: team name
@@ -123,15 +122,15 @@ function generateInstanceName(
     return titleCase(`${opts.teamName || 'workspace'} ${serviceName}`);
   }
 
-  // Google: full email
-  return titleCase(opts.googleEmail ? `${opts.googleEmail} ${serviceName}` : serviceName);
+  // Google: full email as-is, capitalize service name only
+  return opts.googleEmail ? `${opts.googleEmail} ${titleCase(serviceName)}` : titleCase(serviceName);
 }
 
 describe('Instance name generation logic', () => {
   describe('Google services', () => {
-    it('should generate name from full email + service, capitalized', () => {
+    it('should generate name from full email (as-is) + capitalized service', () => {
       const name = generateInstanceName('Google Docs MCP', { googleEmail: 'evgen@boarlabs.xyz' });
-      assert.equal(name, 'Evgen@Boarlabs.Xyz Google Docs');
+      assert.equal(name, 'evgen@boarlabs.xyz Google Docs');
     });
 
     it('should fall back to service name only when no email', () => {
@@ -139,9 +138,9 @@ describe('Instance name generation logic', () => {
       assert.equal(name, 'Google Docs');
     });
 
-    it('should handle Gmail with full email', () => {
+    it('should handle Gmail with email as-is', () => {
       const name = generateInstanceName('Gmail MCP', { googleEmail: 'nick@speed.com' });
-      assert.equal(name, 'Nick@Speed.Com Gmail');
+      assert.equal(name, 'nick@speed.com Gmail');
     });
   });
 
@@ -164,13 +163,13 @@ describe('Instance name generation logic', () => {
       assert.equal(name, 'Boarlabs, Acme Corp ClickUp');
     });
 
-    it('should fall back to full email when no workspaces', () => {
+    it('should fall back to email as-is when no workspaces', () => {
       const name = generateInstanceName('ClickUp MCP', {
         provider: 'clickup',
         workspaceNames: [],
         providerEmail: 'evgen@boarlabs.xyz',
       });
-      assert.equal(name, 'Evgen@Boarlabs.Xyz ClickUp');
+      assert.equal(name, 'evgen@boarlabs.xyz ClickUp');
     });
 
     it('should fall back to service name when no workspaces and no email', () => {

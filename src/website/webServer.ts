@@ -941,7 +941,7 @@ function registerSharedRoutes(app: express.Express): void {
           const wsLabel = clickUpWorkspaceNames.join(', ');
           clickUpInstanceName = titleCase(`${wsLabel} ${clickUpServiceName}`);
         } else {
-          clickUpInstanceName = titleCase(providerEmail ? `${providerEmail} ${clickUpServiceName}` : clickUpServiceName);
+          clickUpInstanceName = providerEmail ? `${providerEmail} ${titleCase(clickUpServiceName)}` : titleCase(clickUpServiceName);
         }
 
         connection = await createMcpInstance(
@@ -1002,7 +1002,7 @@ function registerSharedRoutes(app: express.Express): void {
         } else if (stateData.instanceName || googleEmail) {
           // Auto-generate instance name: Google email + service display name
           const googleServiceName = mcp.name.replace(' MCP', '').trim();
-          const autoName = stateData.instanceName || titleCase(googleEmail ? `${googleEmail} ${googleServiceName}` : googleServiceName);
+          const autoName = stateData.instanceName || (googleEmail ? `${googleEmail} ${titleCase(googleServiceName)}` : titleCase(googleServiceName));
           // Create new instance with unique ID
           connection = await createMcpInstance(
             user.id,
@@ -1462,8 +1462,7 @@ function registerSharedRoutes(app: express.Express): void {
         if (c.instanceName && c.instanceName.includes(' MCP')) {
           const serviceName = c.instanceName.replace(' MCP', '').trim();
           const email = c.googleEmail || c.providerEmail;
-          const raw = email ? `${email} ${serviceName}` : serviceName;
-          const newName = titleCase(raw);
+          const newName = email ? `${email} ${titleCase(serviceName)}` : titleCase(serviceName);
           if (newName !== c.instanceName) {
             await updateMcpInstanceName(c.instanceId, newName);
             c.instanceName = newName;
