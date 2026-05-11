@@ -959,9 +959,8 @@ function registerSharedRoutes(app: express.Express): void {
 
         // Check if user already has this mcpSlug + same ClickUp account — reconnect instead
         const clickUpConnections = await getUserConnectedMcps(user.id);
-        const existingClickUp = providerEmail
-          ? clickUpConnections.find(c => c.mcpSlug === mcpSlug && c.providerEmail === providerEmail)
-          : null;
+        // Match by instance name (contains workspace name) to allow same email across different workspaces
+        const existingClickUp = clickUpConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === clickUpInstanceName);
 
         if (existingClickUp) {
           console.error(`User ${user.id} already has ${mcpSlug} for ${providerEmail}: ${existingClickUp.instanceId}`);
