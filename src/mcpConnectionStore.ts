@@ -690,10 +690,22 @@ export async function createMcpInstance(
   providerTokens?: ProviderTokens,
   providerEmail?: string | null
 ): Promise<McpConnection> {
-  if (isDatabaseAvailable()) {
-    return dbCreateMcpInstance(userId, mcpSlug, instanceName, tokens, googleEmail, provider, providerTokens, providerEmail);
+  // Ensure unique instance name per user
+  const existing = await getUserConnectedMcps(userId);
+  const existingNames = new Set(existing.map(c => c.instanceName));
+  let uniqueName = instanceName;
+  if (existingNames.has(uniqueName)) {
+    let counter = 2;
+    while (existingNames.has(`${instanceName} ${counter}`)) {
+      counter++;
+    }
+    uniqueName = `${instanceName} ${counter}`;
   }
-  return fileCreateMcpInstance(userId, mcpSlug, instanceName, tokens, googleEmail, provider, providerTokens, providerEmail);
+
+  if (isDatabaseAvailable()) {
+    return dbCreateMcpInstance(userId, mcpSlug, uniqueName, tokens, googleEmail, provider, providerTokens, providerEmail);
+  }
+  return fileCreateMcpInstance(userId, mcpSlug, uniqueName, tokens, googleEmail, provider, providerTokens, providerEmail);
 }
 
 export async function updateMcpInstanceName(

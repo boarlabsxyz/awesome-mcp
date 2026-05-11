@@ -125,4 +125,42 @@ describe('mcpConnectionStore (file-based)', () => {
     assert.ok(slugs.includes('google-docs'));
     assert.ok(slugs.includes('google-calendar'));
   });
+
+  it('createMcpInstance deduplicates names by appending counter', async () => {
+    const userId = 200;
+    const conn1 = await store.createMcpInstance(userId, 'google-docs', 'evgen Google Docs', sampleTokens, 'evgen@test.com');
+    assert.equal(conn1.instanceName, 'evgen Google Docs');
+
+    const conn2 = await store.createMcpInstance(userId, 'google-docs', 'evgen Google Docs', sampleTokens, 'evgen@test.com');
+    assert.equal(conn2.instanceName, 'evgen Google Docs 2');
+
+    const conn3 = await store.createMcpInstance(userId, 'google-docs', 'evgen Google Docs', sampleTokens, 'evgen@test.com');
+    assert.equal(conn3.instanceName, 'evgen Google Docs 3');
+  });
+
+  it('createMcpInstance does not add suffix when name is unique', async () => {
+    const userId = 201;
+    const conn = await store.createMcpInstance(userId, 'google-docs', 'Unique Name', sampleTokens, null);
+    assert.equal(conn.instanceName, 'Unique Name');
+  });
+
+  it('createMcpInstance dedup works across different mcpSlugs', async () => {
+    const userId = 202;
+    await store.createMcpInstance(userId, 'google-docs', 'Same Name', sampleTokens, null);
+    // Same name but different slug — should still get deduplicated (names are per-user)
+    const conn2 = await store.createMcpInstance(userId, 'google-calendar', 'Same Name', sampleTokens, null);
+    assert.equal(conn2.instanceName, 'Same Name 2');
+  });
+
+  it('createMcpInstance with provider and providerTokens stores them', async () => {
+    const userId = 203;
+    const providerTokens = { access_token: 'clickup-token-123' };
+    const conn = await store.createMcpInstance(
+      userId, 'clickup', 'Boarlabs ClickUp', sampleTokens, null,
+      'clickup', providerTokens, 'evgen@boarlabs.xyz'
+    );
+    assert.equal(conn.instanceName, 'Boarlabs ClickUp');
+    assert.equal(conn.provider, 'clickup');
+    assert.equal(conn.providerEmail, 'evgen@boarlabs.xyz');
+  });
 });

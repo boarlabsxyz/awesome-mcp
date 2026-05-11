@@ -316,6 +316,11 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/** Capitalize each word in a string. */
+function titleCase(str: string): string {
+  return str.replace(/\b\w/g, c => c.toUpperCase());
+}
 const publicDir = path.resolve(__dirname, '..', 'public');
 
 // Base scopes for registration/login (only profile info, no MCP permissions)
@@ -815,7 +820,10 @@ function registerSharedRoutes(app: express.Express): void {
         };
         const providerEmail = null;
         const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
-        const instanceName = stateData.instanceName || `Slack - ${tokenData.team?.name || 'workspace'}`;
+        // Auto-generate instance name: Service Name (team name)
+        const serviceName = mcp.name.replace(' MCP', '').trim();
+        const teamLabel = tokenData.team?.name || 'workspace';
+        const instanceName = stateData.instanceName || `${serviceName} (${teamLabel})`;
 
         // Check if this is a reconnect (update existing instance tokens)
         if (stateData.reconnectInstanceId) {
@@ -833,11 +841,21 @@ function registerSharedRoutes(app: express.Express): void {
           connection = existing;
           console.error(`User ${user.id} reconnected Slack User MCP: ${connection.instanceId}`);
         } else {
-          connection = await createMcpInstance(
-            user.id, mcpSlug, instanceName, emptyGoogleTokens, null,
-            'slack', providerTokens, providerEmail
-          );
-          console.error(`User ${user.id} connected Slack User MCP: ${connection.instanceId}`);
+          // Check if user already has this Slack MCP for the same team — reconnect instead
+          const slackConnections = await getUserConnectedMcps(user.id);
+          const existingSlack = slackConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === instanceName);
+
+          if (existingSlack) {
+            console.error(`User ${user.id} already has ${mcpSlug} for ${instanceName}: ${existingSlack.instanceId}`);
+            res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingSlack.instanceName));
+            return;
+          } else {
+            connection = await createMcpInstance(
+              user.id, mcpSlug, instanceName, emptyGoogleTokens, null,
+              'slack', providerTokens, providerEmail
+            );
+            console.error(`User ${user.id} connected Slack User MCP: ${connection.instanceId}`);
+          }
         }
 
         // Redirect to dashboard — channelSetup only for new connections
@@ -902,22 +920,56 @@ function registerSharedRoutes(app: express.Express): void {
           console.error('[MCP Connect] Could not fetch ClickUp user info:', emailErr);
         }
 
+        // Fetch ClickUp workspace names for instance naming
+        let clickUpWorkspaceNames: string[] = [];
+        try {
+          const teamController = new AbortController();
+          const teamTimeout = setTimeout(() => teamController.abort(), 10_000);
+          const teamResponse = await fetch('https://api.clickup.com/api/v2/team', {
+            headers: { 'Authorization': `Bearer ${clickUpAccessToken}` },
+            signal: teamController.signal,
+          });
+          clearTimeout(teamTimeout);
+          if (teamResponse.ok) {
+            const teamData = await teamResponse.json() as { teams?: Array<{ name: string }> };
+            clickUpWorkspaceNames = (teamData.teams || []).map(t => t.name);
+            console.error(`[MCP Connect] ClickUp workspaces: ${clickUpWorkspaceNames.join(', ')}`);
+          }
+        } catch (teamErr) {
+          console.error('[MCP Connect] Could not fetch ClickUp teams:', teamErr);
+        }
+
         const providerTokens = { access_token: clickUpAccessToken };
         // Use empty GoogleTokens placeholder (ClickUp doesn't use them)
         const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
 
+        // Auto-generate instance name: Service Name (workspace or email)
+        const clickUpServiceName = mcp.name.replace(' MCP', '').trim();
+        let clickUpInstanceName: string;
         if (stateData.instanceName) {
-          connection = await createMcpInstance(
-            user.id, mcpSlug, stateData.instanceName, emptyGoogleTokens, null,
-            'clickup', providerTokens, providerEmail
-          );
+          clickUpInstanceName = stateData.instanceName;
+        } else if (clickUpWorkspaceNames.length > 0) {
+          clickUpInstanceName = `${clickUpServiceName} (${clickUpWorkspaceNames.join(', ')})`;
+        } else {
+          clickUpInstanceName = providerEmail ? `${clickUpServiceName} (${providerEmail})` : clickUpServiceName;
+        }
+
+        // Check if user already has this mcpSlug + same ClickUp account — reconnect instead
+        const clickUpConnections = await getUserConnectedMcps(user.id);
+        // Match by instance name (contains workspace name) to allow same email across different workspaces
+        const existingClickUp = clickUpConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === clickUpInstanceName);
+
+        if (existingClickUp) {
+          console.error(`User ${user.id} already has ${mcpSlug} for ${providerEmail}: ${existingClickUp.instanceId}`);
+          res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingClickUp.instanceName));
+          return;
         } else {
           connection = await createMcpInstance(
-            user.id, mcpSlug, mcpSlug, emptyGoogleTokens, null,
+            user.id, mcpSlug, clickUpInstanceName, emptyGoogleTokens, null,
             'clickup', providerTokens, providerEmail
           );
+          console.error(`User ${user.id} connected ClickUp MCP: ${connection.instanceId}`);
         }
-        console.error(`User ${user.id} connected ClickUp MCP: ${connection.instanceId}`);
       } else {
         // Google OAuth (default)
         const oauthClient = new OAuth2Client(client_id, client_secret, redirectUri);
@@ -968,16 +1020,31 @@ function registerSharedRoutes(app: express.Express): void {
           }
           connection = { ...existing, googleTokens, googleEmail: googleEmail || existing.googleEmail };
           console.error(`User ${user.id} reconnected MCP instance: ${existing.instanceId} (${existing.instanceName})`);
-        } else if (stateData.instanceName) {
-          // Create new instance with unique ID
-          connection = await createMcpInstance(
-            user.id,
-            mcpSlug,
-            stateData.instanceName,
-            googleTokens,
-            googleEmail
-          );
-          console.error(`User ${user.id} created MCP instance: ${connection.instanceId} (${stateData.instanceName})`);
+        } else if (stateData.instanceName || googleEmail) {
+          // Check if user already has this mcpSlug + same account — reconnect instead of creating duplicate
+          const userConnections = await getUserConnectedMcps(user.id);
+          const existingForAccount = googleEmail
+            ? userConnections.find(c => c.mcpSlug === mcpSlug && c.googleEmail === googleEmail)
+            : null;
+
+          if (existingForAccount) {
+            // Already connected — redirect with warning
+            console.error(`User ${user.id} already has ${mcpSlug} for ${googleEmail}: ${existingForAccount.instanceId}`);
+            res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingForAccount.instanceName));
+            return;
+          } else {
+            // Auto-generate instance name: Service Name (email)
+            const googleServiceName = mcp.name.replace(' MCP', '').trim();
+            const autoName = stateData.instanceName || (googleEmail ? `${googleServiceName} (${googleEmail})` : googleServiceName);
+            connection = await createMcpInstance(
+              user.id,
+              mcpSlug,
+              autoName,
+              googleTokens,
+              googleEmail
+            );
+            console.error(`User ${user.id} created MCP instance: ${connection.instanceId} (${autoName})`);
+          }
         } else {
           // Legacy: single instance per MCP type
           connection = await connectMcp(user.id, mcpSlug, googleTokens, undefined, googleEmail);
@@ -1034,7 +1101,8 @@ function registerSharedRoutes(app: express.Express): void {
           const providerEmail = null; // Slack bot tokens don't have an associated email
           const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
           const providerTokens = { access_token: token };
-          const name = instanceName || `Slack - ${data.team || 'workspace'}`;
+          const botServiceName = mcp.name.replace(' MCP', '').trim();
+          const name = instanceName || `${botServiceName} (${data.team || 'workspace'})`;
 
           const connection = await createMcpInstance(
             user.id, mcpSlug, name, emptyGoogleTokens, null,
@@ -1102,9 +1170,8 @@ function registerSharedRoutes(app: express.Express): void {
         cursor = result.response_metadata?.next_cursor || undefined;
       } while (cursor);
 
-      // Get shared_team_ids from conversations.info (limited to first 20 shared channels)
-      const orgIdToUserIds = new Map<string, string>(); // org ID → a sample user ID from that org
-      await Promise.all(sharedChannelIds.slice(0, 20).map(async (chId) => {
+      // Get shared_team_ids from conversations.info (limited to first 10 shared channels, sequential to avoid rate limits)
+      for (const chId of sharedChannelIds.slice(0, 10)) {
         try {
           const { channel: info } = await client.conversationsInfo(chId);
           if (info.shared_team_ids) {
@@ -1115,8 +1182,8 @@ function registerSharedRoutes(app: express.Express): void {
               }
             }
           }
-        } catch { /* skip */ }
-      }));
+        } catch { /* skip — rate limit or other error */ }
+      }
 
       // Resolve org names: try team.info for each external org, fall back to user names
       for (const org of connectedOrgs) {
@@ -1134,17 +1201,17 @@ function registerSharedRoutes(app: express.Express): void {
       const { migrateSlackTokens } = await import('../mcpConnectionStore.js');
       const tokens = migrateSlackTokens(connection.providerTokens);
 
-      // Get blacklisted user names for display
+      // Get blacklisted user names for display (sequential to avoid rate limits)
       const blacklistUserDetails: Array<{ id: string; name: string }> = [];
       if (tokens.accessRules?.blacklistUsers?.length) {
-        await Promise.all(tokens.accessRules.blacklistUsers.slice(0, 50).map(async (uid: string) => {
+        for (const uid of tokens.accessRules.blacklistUsers.slice(0, 50)) {
           try {
             const { user: u } = await client.usersInfo(uid);
             blacklistUserDetails.push({ id: uid, name: u.profile?.display_name || u.real_name || u.name });
           } catch {
             blacklistUserDetails.push({ id: uid, name: uid });
           }
-        }));
+        }
       }
 
       res.json({
@@ -1422,6 +1489,19 @@ function registerSharedRoutes(app: express.Express): void {
 
       // Get user's MCP connections
       const connections = user.id ? await getUserConnectedMcps(user.id) : [];
+
+      // Auto-migrate old instance names that still contain " MCP"
+      for (const c of connections) {
+        if (c.instanceName && c.instanceName.includes(' MCP')) {
+          const serviceName = c.instanceName.replace(' MCP', '').trim();
+          const identifier = c.googleEmail || c.providerEmail;
+          const newName = identifier ? `${serviceName} (${identifier})` : serviceName;
+          if (newName !== c.instanceName) {
+            await updateMcpInstanceName(c.instanceId, newName);
+            c.instanceName = newName;
+          }
+        }
+      }
 
       res.json({
         email: user.email,

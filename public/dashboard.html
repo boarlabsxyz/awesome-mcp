@@ -850,14 +850,13 @@
               </div>
               <!-- type label removed -->
             </div>
-            ${instance.googleEmail ? `<div class="instance-email">${escapeHtml(instance.googleEmail)}</div>` : ''}
+            <!-- email removed — now shown in instance name -->
           </div>
           <div class="instance-row-actions">
             ${showReconnect
               ? `<button class="btn-reconnect" onclick="reconnectInstance('${eid}', '${eslug}')">Reconnect</button>`
               : `<button class="btn-copy" onclick="copyUrl('${eid}', this)">Copy URL</button>`}
             ${instance.provider === 'slack' ? `<button class="btn-rename" onclick="openAccessRules('${eid}')">Access Rules</button>` : ''}
-            <button class="btn-rename" onclick="renameInstance('${eid}')">Rename</button>
             <button class="btn-delete" onclick="deleteInstance('${eid}', '${ename}')">Delete</button>
           </div>
         </div>
@@ -920,6 +919,16 @@
       selectedMcpType = catalogs.find(c => c.slug === slug);
       if (!selectedMcpType) return;
 
+      const isTokenProvider = selectedMcpType.provider === 'slack-bot';
+
+      // For OAuth providers, skip naming step — name is auto-generated on the backend
+      if (!isTokenProvider) {
+        closeAddToolModal();
+        window.location.href = `/connect/${selectedMcpType.slug}`;
+        return;
+      }
+
+      // Token providers (Slack Bot) still need Step 2 for token input
       document.getElementById('step1').classList.remove('active');
       document.getElementById('step2').classList.add('active');
       document.getElementById('modalTitle').textContent = `Add ${selectedMcpType.name}`;
@@ -932,18 +941,12 @@
         document.getElementById('instanceNameInput').value = `${selectedMcpType.name} ${existingCount + 1}`;
       }
 
-      // Toggle between OAuth button and direct token input based on provider
-      const isTokenProvider = selectedMcpType.provider === 'slack-bot';
-      document.getElementById('connectGoogleBtn').style.display = isTokenProvider ? 'none' : '';
-      document.getElementById('connectTokenBtn').style.display = isTokenProvider ? '' : 'none';
-      document.getElementById('tokenInputSection').style.display = isTokenProvider ? '' : 'none';
+      document.getElementById('connectGoogleBtn').style.display = 'none';
+      document.getElementById('connectTokenBtn').style.display = '';
+      document.getElementById('tokenInputSection').style.display = '';
       document.getElementById('tokenInput').value = '';
 
-      if (isTokenProvider) {
-        document.getElementById('nameSuggestion').textContent = 'Tip: Use a name like "Engineering" or "My Startup" to identify the workspace.';
-      } else {
-        document.getElementById('nameSuggestion').textContent = 'Tip: Use a name that helps you identify which Google account this is for.';
-      }
+      document.getElementById('nameSuggestion').textContent = 'Tip: Use a name like "Engineering" or "My Startup" to identify the workspace.';
 
       document.getElementById('instanceNameInput').focus();
     }
@@ -1387,7 +1390,8 @@
         const urlParams = new URLSearchParams(window.location.search);
         const connectedInstance = urlParams.get('connected');
         const reconnectedInstance = urlParams.get('reconnected');
-        if (connectedInstance || reconnectedInstance) {
+        const alreadyExists = urlParams.get('already_exists');
+        if (connectedInstance || reconnectedInstance || alreadyExists) {
           window.history.replaceState({}, '', '/dashboard');
         }
 
@@ -1409,11 +1413,13 @@
 
         renderInstances();
 
-        // Show success message if just connected or reconnected
+        // Show success/error message based on redirect params
         if (connectedInstance) {
           showSuccess(`Successfully connected "${decodeURIComponent(connectedInstance)}"!`);
         } else if (reconnectedInstance) {
           showSuccess(`Successfully reconnected "${decodeURIComponent(reconnectedInstance)}"!`);
+        } else if (alreadyExists) {
+          showError(`"${decodeURIComponent(alreadyExists)}" is already connected.`);
         }
 
         // Auto-open access rules if redirected from Slack OAuth

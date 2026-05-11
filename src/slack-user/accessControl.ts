@@ -127,15 +127,15 @@ export async function filterDmsByOrg(
   const dmChannels = channels.filter(ch => !!(ch.is_im) && ch.user);
   if (dmChannels.length === 0) return channels;
 
-  // Batch-lookup team_ids for DM counterparts
+  // Lookup team_ids for DM counterparts (sequential to avoid rate limits)
   const userIds = [...new Set(dmChannels.map(ch => ch.user!))];
   const userTeamMap = new Map<string, string>();
-  await Promise.all(userIds.slice(0, 50).map(async (uid) => {
+  for (const uid of userIds.slice(0, 50)) {
     try {
       const { user } = await client.usersInfo(uid);
       if (user.team_id) userTeamMap.set(uid, user.team_id);
     } catch { /* skip */ }
-  }));
+  }
 
   return channels.filter(ch => {
     if (!(ch.is_im) || !ch.user) return true; // non-DMs pass through
@@ -162,14 +162,15 @@ export async function filterGroupDmsByRules(
   if (mpimChannels.length === 0) return channels;
 
   const blockedMpimIds = new Set<string>();
-  await Promise.all(mpimChannels.map(async (ch) => {
+  // Sequential to avoid Slack rate limits
+  for (const ch of mpimChannels) {
     try {
       const { members } = await client.conversationsMembers(ch.id);
 
       // Check blacklist
       if (hasBlacklist && members.some(uid => rules.blacklistUsers.includes(uid))) {
         blockedMpimIds.add(ch.id);
-        return;
+        continue;
       }
 
       // Check org: if any member is from a non-allowed org, block
@@ -179,13 +180,13 @@ export async function filterGroupDmsByRules(
             const { user } = await client.usersInfo(uid);
             if (user.team_id && !rules.allowedOrgs.includes(user.team_id)) {
               blockedMpimIds.add(ch.id);
-              return;
+              break;
             }
           } catch { /* skip */ }
         }
       }
     } catch { /* skip — can't check members, allow through */ }
-  }));
+  }
 
   return channels.filter(ch => !blockedMpimIds.has(ch.id));
 }

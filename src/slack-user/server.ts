@@ -93,30 +93,63 @@ async function enforceAccess(client: SlackClient, session: UserSession, channelI
 
 slackUserServer.addTool({
   name: 'listChannels',
-  description: 'List Slack channels and DMs you have access to, filtered by your access rules.',
+  description: 'List Slack channels and DMs you have access to, filtered by your access rules. Use the "search" parameter to find a specific channel by name without paginating.',
   parameters: z.object({
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
+    search: z.string().optional().describe('Search for channels by name (case-insensitive substring match). When provided, paginates through all channels internally and returns only matches.'),
   }),
   execute: async (args, { session }) => {
     const client = getSlackUserClient(session);
     const rules = await getRules(session!);
 
-    // Use conversations.list (all workspace channels) + users.conversations (DMs)
-    const result = await client.conversationsListAll(args.cursor, 'public_channel,private_channel');
-    const dmResult = !args.cursor ? await client.conversationsList(undefined, 'im,mpim') : { channels: [] };
-    const allConvos = [...result.channels, ...dmResult.channels];
-    let channels = filterChannelList(rules, allConvos) as typeof allConvos;
-    // Filter DMs from non-allowed orgs and group DMs with blacklisted users
-    channels = await filterDmsByOrg(client, rules, channels) as typeof allConvos;
-    channels = await filterGroupDmsByRules(client, rules, channels) as typeof allConvos;
+    let allChannels: any[];
+    let nextCursor: string | undefined;
 
-    if (channels.length === 0) return 'No channels match your access rules. Check your configuration in the dashboard.';
+    if (args.search) {
+      // Search mode: paginate through all channels internally to find matches
+      const searchLower = args.search.toLowerCase();
+      const matches: any[] = [];
+      let cursor: string | undefined;
+      let pages = 0;
+      const MAX_PAGES = 30; // safety limit
+
+      do {
+        const result = await client.conversationsListAll(cursor, 'public_channel,private_channel');
+        const filtered = filterChannelList(rules, result.channels);
+        for (const ch of filtered) {
+          if (ch.name?.toLowerCase().includes(searchLower)) {
+            matches.push(ch);
+          }
+        }
+        cursor = result.response_metadata?.next_cursor || undefined;
+        pages++;
+      } while (cursor && pages < MAX_PAGES && matches.length < 50);
+
+      allChannels = matches;
+      nextCursor = undefined;
+    } else {
+      // Normal paginated mode
+      const result = await client.conversationsListAll(args.cursor, 'public_channel,private_channel');
+      const dmResult = !args.cursor ? await client.conversationsList(undefined, 'im,mpim') : { channels: [] };
+      const allConvos = [...result.channels, ...dmResult.channels];
+      const channels = filterChannelList(rules, allConvos);
+      const filteredByOrg = await filterDmsByOrg(client, rules, channels as any);
+      const filteredByRules = await filterGroupDmsByRules(client, rules, filteredByOrg as any);
+      allChannels = filteredByRules;
+      nextCursor = result.response_metadata?.next_cursor || undefined;
+    }
+
+    if (allChannels.length === 0) {
+      return args.search
+        ? `No channels matching "${args.search}" found within your access rules.`
+        : 'No channels match your access rules. Check your configuration in the dashboard.';
+    }
 
     // Resolve DM user names
-    const dmUserIds = channels.filter(ch => (ch as any).is_im && ch.user).map(ch => ch.user!);
+    const dmUserIds = allChannels.filter(ch => (ch as any).is_im && ch.user).map(ch => ch.user!);
     const userNames = dmUserIds.length > 0 ? await resolveUsers(client, dmUserIds, getTokenKey(session!)) : new Map<string, string>();
 
-    const lines = channels.map(ch => {
+    const lines = allChannels.map(ch => {
       const isDm = !!(ch as any).is_im;
       const isMpim = !!(ch as any).is_mpim;
       const type = isDm ? 'im' : isMpim ? 'mpim' : ch.is_private ? 'private' : 'public';
@@ -136,7 +169,6 @@ slackUserServer.addTool({
     });
 
     let output = lines.join('\n\n');
-    const nextCursor = result.response_metadata?.next_cursor;
     if (nextCursor) {
       output += `\n\n---\nMore channels available. Use cursor: "${nextCursor}"`;
     }
@@ -203,5 +235,45 @@ slackUserServer.addTool({
     const client = getSlackUserClient(session);
     await enforceAccess(client, session!, args.channelId);
     return handleReplyInThread(client, args.channelId, args.threadTs, args.text);
+  },
+});
+
+slackUserServer.addTool({
+  name: 'listUsers',
+  description: 'List workspace members. Use this to find a user by name and get their user ID for opening a DM.',
+  parameters: z.object({
+    cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getSlackUserClient(session);
+    const result = await client.usersList(args.cursor);
+    const members = result.members.filter(m => !m.deleted && !m.is_bot);
+
+    if (members.length === 0) return 'No users found.';
+
+    const lines = members.map(m => {
+      const displayName = m.profile?.display_name || m.real_name || m.name;
+      return `${displayName} (@${m.name}) — ID: ${m.id}`;
+    });
+
+    let output = lines.join('\n');
+    const nextCursor = result.response_metadata?.next_cursor;
+    if (nextCursor) {
+      output += `\n\n---\nMore users available. Use cursor: "${nextCursor}"`;
+    }
+    return output;
+  },
+});
+
+slackUserServer.addTool({
+  name: 'openDm',
+  description: 'Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage.',
+  parameters: z.object({
+    userId: z.string().describe('The Slack user ID to open a DM with (e.g., U01234ABCDE).'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getSlackUserClient(session);
+    const result = await client.conversationsOpen(args.userId);
+    return `DM channel opened: ${result.channel.id}\n\nYou can now use postMessage with channelId "${result.channel.id}" to send a direct message.`;
   },
 });
