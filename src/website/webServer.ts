@@ -843,13 +843,10 @@ function registerSharedRoutes(app: express.Express): void {
         } else {
           // Check if user already has this Slack MCP for the same team — reconnect instead
           const slackConnections = await getUserConnectedMcps(user.id);
-          const teamId = tokenData.team?.id;
-          const existingSlack = teamId
-            ? slackConnections.find(c => c.mcpSlug === mcpSlug && (c.providerTokens as any)?.accessRules?.allowedOrgs?.includes(teamId))
-            : null;
+          const existingSlack = slackConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === instanceName);
 
           if (existingSlack) {
-            console.error(`User ${user.id} already has ${mcpSlug} for team ${teamId}: ${existingSlack.instanceId}`);
+            console.error(`User ${user.id} already has ${mcpSlug} for ${instanceName}: ${existingSlack.instanceId}`);
             res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingSlack.instanceName));
             return;
           } else {
