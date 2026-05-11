@@ -849,13 +849,9 @@ function registerSharedRoutes(app: express.Express): void {
             : null;
 
           if (existingSlack) {
-            const existingRules = (existingSlack.providerTokens as any)?.accessRules;
-            if (existingRules) {
-              providerTokens.accessRules = existingRules;
-            }
-            await updateMcpInstanceProviderTokens(existingSlack.instanceId, providerTokens);
-            connection = { ...existingSlack, providerTokens };
-            console.error(`User ${user.id} auto-reconnected Slack: ${existingSlack.instanceId}`);
+            console.error(`User ${user.id} already has ${mcpSlug} for team ${teamId}: ${existingSlack.instanceId}`);
+            res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingSlack.instanceName));
+            return;
           } else {
             connection = await createMcpInstance(
               user.id, mcpSlug, instanceName, emptyGoogleTokens, null,
@@ -968,9 +964,9 @@ function registerSharedRoutes(app: express.Express): void {
           : null;
 
         if (existingClickUp) {
-          await updateMcpInstanceProviderTokens(existingClickUp.instanceId, providerTokens);
-          connection = { ...existingClickUp, providerTokens };
-          console.error(`User ${user.id} auto-reconnected ClickUp: ${existingClickUp.instanceId}`);
+          console.error(`User ${user.id} already has ${mcpSlug} for ${providerEmail}: ${existingClickUp.instanceId}`);
+          res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingClickUp.instanceName));
+          return;
         } else {
           connection = await createMcpInstance(
             user.id, mcpSlug, clickUpInstanceName, emptyGoogleTokens, null,
@@ -1036,12 +1032,10 @@ function registerSharedRoutes(app: express.Express): void {
             : null;
 
           if (existingForAccount) {
-            // Reconnect existing instance
-            const mergedTokens = mergeReconnectTokens(googleTokens, existingForAccount.googleTokens.refresh_token);
-            Object.assign(googleTokens, mergedTokens);
-            await updateMcpInstanceTokens(existingForAccount.instanceId, googleTokens);
-            connection = { ...existingForAccount, googleTokens };
-            console.error(`User ${user.id} auto-reconnected existing instance: ${existingForAccount.instanceId} (${existingForAccount.instanceName})`);
+            // Already connected — redirect with warning
+            console.error(`User ${user.id} already has ${mcpSlug} for ${googleEmail}: ${existingForAccount.instanceId}`);
+            res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingForAccount.instanceName));
+            return;
           } else {
             // Auto-generate instance name: Service Name (email)
             const googleServiceName = mcp.name.replace(' MCP', '').trim();

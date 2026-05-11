@@ -1390,7 +1390,8 @@
         const urlParams = new URLSearchParams(window.location.search);
         const connectedInstance = urlParams.get('connected');
         const reconnectedInstance = urlParams.get('reconnected');
-        if (connectedInstance || reconnectedInstance) {
+        const alreadyExists = urlParams.get('already_exists');
+        if (connectedInstance || reconnectedInstance || alreadyExists) {
           window.history.replaceState({}, '', '/dashboard');
         }
 
@@ -1412,11 +1413,13 @@
 
         renderInstances();
 
-        // Show success message if just connected or reconnected
+        // Show success/error message based on redirect params
         if (connectedInstance) {
           showSuccess(`Successfully connected "${decodeURIComponent(connectedInstance)}"!`);
         } else if (reconnectedInstance) {
           showSuccess(`Successfully reconnected "${decodeURIComponent(reconnectedInstance)}"!`);
+        } else if (alreadyExists) {
+          showError(`"${decodeURIComponent(alreadyExists)}" is already connected. Delete it first to reconnect with a different setup.`);
         }
 
         // Auto-open access rules if redirected from Slack OAuth
