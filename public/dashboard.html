@@ -1419,7 +1419,7 @@
         } else if (reconnectedInstance) {
           showSuccess(`Successfully reconnected "${decodeURIComponent(reconnectedInstance)}"!`);
         } else if (alreadyExists) {
-          showError(`"${decodeURIComponent(alreadyExists)}" is already connected. Delete it first to reconnect with a different setup.`);
+          showError(`"${decodeURIComponent(alreadyExists)}" is already connected.`);
         }
 
         // Auto-open access rules if redirected from Slack OAuth
