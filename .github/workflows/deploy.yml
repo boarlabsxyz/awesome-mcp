@@ -27,7 +27,7 @@ jobs:
       - id: parse
         run: |
           SERVICES=$(echo '${{ vars.RAILWAY_SERVICES }}' | \
-            python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip().split(',')))")
+            python3 -c "import sys,json; print(json.dumps([s.strip() for s in sys.stdin.read().strip().split(',')]))")
           echo "services=$SERVICES" >> $GITHUB_OUTPUT
 
   deploy:

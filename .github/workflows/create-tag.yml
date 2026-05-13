@@ -15,6 +15,8 @@ on:
 jobs:
   validate-ci:
     runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
     steps:
       - name: Resolve ref to SHA
         id: resolve
@@ -76,13 +78,25 @@ jobs:
     needs: [validate-ci]
     runs-on: ubuntu-latest
     steps:
-      - name: Verify ref is a release branch
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify ref is on a release branch
         run: |
           REF="${{ inputs.ref }}"
-          if [[ ! "$REF" =~ ^release- ]]; then
-            echo "::error::v* tags can only be created on release-* branches. Got: $REF"
+          SHA="${{ needs.validate-ci.outputs.sha }}"
+          # If ref looks like a branch name, check prefix directly
+          if [[ "$REF" =~ ^release- ]]; then
+            echo "Ref is a release branch: $REF"
+            exit 0
+          fi
+          # Otherwise resolve via git (handles SHAs and other refs)
+          BRANCHES=$(git branch -r --contains "$SHA" | grep 'origin/release-' || true)
+          if [ -z "$BRANCHES" ]; then
+            echo "::error::v* tags require a release-* branch. SHA $SHA is not on any release branch."
             exit 1
           fi
+          echo "SHA is on release branch(es): $BRANCHES"
 
   create-tag:
     needs: [validate-ci, validate-release-tag]
@@ -100,20 +114,13 @@ jobs:
         with:
           script: |
             const tag = '${{ inputs.tag }}';
-            const ref = '${{ inputs.ref }}';
-
-            // Resolve to SHA
-            const { data: commit } = await github.rest.repos.getCommit({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: ref
-            });
+            const sha = '${{ needs.validate-ci.outputs.sha }}';
 
             await github.rest.git.createRef({
               owner: context.repo.owner,
               repo: context.repo.repo,
               ref: `refs/tags/${tag}`,
-              sha: commit.sha
+              sha: sha
             });
 
-            console.log(`Created tag ${tag} → ${commit.sha} (on ${ref})`);
+            console.log(`Created tag ${tag} → ${sha}`);

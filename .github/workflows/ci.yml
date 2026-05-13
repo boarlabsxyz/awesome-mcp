@@ -57,6 +57,8 @@ jobs:
     if: github.event_name == 'push'
     needs: [lint, typecheck, test, build]
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
     steps:
       - name: Trigger dev deploy
         if: github.ref == 'refs/heads/main'
