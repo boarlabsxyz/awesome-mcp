@@ -2,65 +2,31 @@ name: Deploy → Prod
 
 on:
   push:
-    branches: [main]
+    tags: ['v*']
 
 jobs:
-  test:
+  validate-release-branch:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: npm test
-
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      services: ${{ steps.parse.outputs.services }}
-    steps:
-      - id: parse
+          fetch-depth: 0
+      - name: Verify tag is on a release branch
         run: |
-          SERVICES=$(echo '${{ vars.RAILWAY_SERVICES_PROD }}' | \
-            python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip().split(',')))")
-          echo "services=$SERVICES" >> $GITHUB_OUTPUT
+          BRANCHES=$(git branch -r --contains ${{ github.sha }} | grep 'origin/release-' || true)
+          if [ -z "$BRANCHES" ]; then
+            echo "::error::Tag ${{ github.ref_name }} is not on a release-* branch. Prod deploys require a release branch."
+            echo "Found on branches:"
+            git branch -r --contains ${{ github.sha }}
+            exit 1
+          fi
+          echo "Tag is on release branch(es): $BRANCHES"
 
   deploy:
-    needs: [test, prepare]
-    strategy:
-      matrix:
-        service: ${{ fromJson(needs.prepare.outputs.services) }}
-      fail-fast: false
-    name: Deploy ${{ matrix.service }}
-    runs-on: ubuntu-latest
-    environment:
-      name: prod
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Railway CLI
-        run: npm i -g @railway/cli
-      - name: Deploy ${{ matrix.service }}
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_PROD }}
-        run: |
-          railway up \
-            --service ${{ matrix.service }} \
-            --environment production \
-            --detach
-      - name: Notify Slack
-        if: always()
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          DEPLOY_STATUS: ${{ job.status }}
-          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
-          SERVICE_NAME: ${{ matrix.service }}
-          APP_URL: ${{ vars.PROD_APP_URL }}
-        run: |
-          PAYLOAD=$(jq -n --arg text "Deploy → Prod: ${SERVICE_NAME} ${DEPLOY_STATUS} — ${COMMIT_MESSAGE} (${APP_URL})" '{text: $text}')
-          curl -X POST "${SLACK_WEBHOOK_URL}" \
-            -H 'Content-type: application/json' \
-            -d "${PAYLOAD}" \
-            || true
+    needs: [validate-release-branch]
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: prod
+      railway_environment: production
+      ref: ${{ github.sha }}
+    secrets: inherit

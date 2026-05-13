@@ -1,0 +1,72 @@
+name: Deploy (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub environment name (dev, qa, staging, prod)
+        required: true
+        type: string
+      railway_environment:
+        description: Railway environment name
+        required: true
+        type: string
+      ref:
+        description: Git ref to deploy
+        required: true
+        type: string
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+    outputs:
+      services: ${{ steps.parse.outputs.services }}
+    steps:
+      - id: parse
+        run: |
+          SERVICES=$(echo '${{ vars.RAILWAY_SERVICES }}' | \
+            python3 -c "import sys,json; print(json.dumps([s.strip() for s in sys.stdin.read().strip().split(',')]))")
+          echo "services=$SERVICES" >> $GITHUB_OUTPUT
+
+  deploy:
+    needs: [prepare]
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.prepare.outputs.services) }}
+      fail-fast: false
+    name: Deploy ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli
+      - name: Deploy ${{ matrix.service }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up \
+            --service ${{ matrix.service }} \
+            --environment ${{ inputs.railway_environment }} \
+            --detach
+      - name: Notify Slack
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DEPLOY_STATUS: ${{ job.status }}
+          SERVICE_NAME: ${{ matrix.service }}
+          APP_URL: ${{ vars.APP_URL }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg text "Deploy → ${ENVIRONMENT}: ${SERVICE_NAME} ${DEPLOY_STATUS} (${APP_URL})" \
+            '{text: $text}')
+          curl -X POST "${SLACK_WEBHOOK_URL}" \
+            -H 'Content-type: application/json' \
+            -d "${PAYLOAD}" \
+            || true
