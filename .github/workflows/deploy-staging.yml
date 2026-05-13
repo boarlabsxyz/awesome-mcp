@@ -1,4 +1,4 @@
-name: Deploy → Dev
+name: Deploy → Staging
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ jobs:
   deploy:
     uses: ./.github/workflows/deploy.yml
     with:
-      environment: dev
-      railway_environment: development
+      environment: staging
+      railway_environment: staging
       ref: ${{ inputs.ref }}
     secrets: inherit
