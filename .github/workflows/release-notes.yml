@@ -35,11 +35,25 @@ jobs:
       - name: Collect commits and parse ClickUp IDs
         id: commits
         run: |
+          # Use record separator (%x1e) between commits and unit separator (%x1f) between fields
+          # Then flatten each record to a single pipe-delimited line
           if [ -n "${{ steps.tags.outputs.range }}" ]; then
-            git log ${{ steps.tags.outputs.range }} --pretty=format:"%H|%s|%b" --no-merges > /tmp/commits.txt
+            git log ${{ steps.tags.outputs.range }} --pretty=format:"%H%x1f%s%x1f%b%x1e" --no-merges > /tmp/commits_raw.txt
           else
-            git log --pretty=format:"%H|%s|%b" --no-merges > /tmp/commits.txt
+            git log --pretty=format:"%H%x1f%s%x1f%b%x1e" --no-merges > /tmp/commits_raw.txt
           fi
+          # Convert to one-line-per-commit: replace newlines within records with spaces, then split on record separator
+          node -e "
+            const fs = require('fs');
+            const raw = fs.readFileSync('/tmp/commits_raw.txt', 'utf8');
+            const records = raw.split('\x1e').filter(r => r.trim());
+            const lines = records.map(r => {
+              const [hash, subject, ...bodyParts] = r.split('\x1f');
+              const body = bodyParts.join(' ').replace(/\n/g, ' ').trim();
+              return [hash.trim(), subject.trim(), body].join('|');
+            });
+            fs.writeFileSync('/tmp/commits.txt', lines.join('\n'));
+          "
           TASK_IDS=$(grep -oi 'CU-[a-z0-9]\+' /tmp/commits.txt | tr '[:upper:]' '[:lower:]' | sed 's/cu-//' | sort -u | tr '\n' ',' | sed 's/,$//' || true)
           echo "task_ids=$TASK_IDS" >> "$GITHUB_OUTPUT"
 
