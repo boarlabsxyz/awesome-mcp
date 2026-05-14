@@ -1798,8 +1798,9 @@ function registerSharedRoutes(app: express.Express): void {
   }
 
   // Send release notification emails to all users via an admin's Gmail connection
+  // Pass { test: true } in the body to send only to test addresses instead of all users
   app.post('/api/internal/release-notify', requireInternalApiKey, async (req: Request, res: Response) => {
-    const { subject, body } = req.body;
+    const { subject, body, test } = req.body;
     if (!subject || !body) {
       res.status(400).json({ error: 'subject and body are required' });
       return;
@@ -1823,10 +1824,12 @@ function registerSharedRoutes(app: express.Express): void {
       const { client_id, client_secret } = await loadClientCredentials();
       const session = createUserSessionFromConnection(adminUser as UserRecord, gmailConnection, client_id, client_secret);
 
-      // Collect all user emails (excluding the sender)
-      const recipients = allUsers
-        .map(u => u.email)
-        .filter(Boolean);
+      const TEST_EMAILS = ['evgen@boarlabs.xyz', 'eugeneovchinnikov2006@gmail.com'];
+
+      // When test mode is enabled, send only to test addresses
+      const recipients = test
+        ? TEST_EMAILS
+        : allUsers.map(u => u.email).filter(Boolean);
 
       if (recipients.length === 0) {
         res.json({ sent: 0, failed: 0, message: 'No recipients found' });
