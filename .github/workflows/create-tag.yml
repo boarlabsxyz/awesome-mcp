@@ -13,6 +13,10 @@ on:
         type: string
         default: main
 
+permissions:
+  contents: write
+  checks: read
+
 jobs:
   validate-ci:
     runs-on: ubuntu-latest
