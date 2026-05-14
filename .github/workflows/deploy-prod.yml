@@ -5,25 +5,7 @@ on:
     tags: ['v*']
 
 jobs:
-  validate-release-branch:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Verify tag is on a release branch
-        run: |
-          BRANCHES=$(git branch -r --contains ${{ github.sha }} | grep 'origin/release-' || true)
-          if [ -z "$BRANCHES" ]; then
-            echo "::error::Tag ${{ github.ref_name }} is not on a release-* branch. Prod deploys require a release branch."
-            echo "Found on branches:"
-            git branch -r --contains ${{ github.sha }}
-            exit 1
-          fi
-          echo "Tag is on release branch(es): $BRANCHES"
-
   deploy:
-    needs: [validate-release-branch]
     uses: ./.github/workflows/deploy.yml
     with:
       environment: prod

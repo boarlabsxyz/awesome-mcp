@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Awesome MCP - Updates</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #000;
+      color: #ededed;
+      min-height: 100vh;
+    }
+    .page-container {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 3rem;
+      padding: 1rem 0;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .header h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .header a {
+      color: #888;
+      text-decoration: none;
+      font-size: 0.85rem;
+      padding: 0.5rem 1rem;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 6px;
+      transition: all 0.2s;
+    }
+    .header a:hover {
+      background: #111;
+      color: #ededed;
+    }
+
+    .release {
+      margin-bottom: 3rem;
+      padding-bottom: 3rem;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .release:last-child {
+      border-bottom: none;
+    }
+    .release-header {
+      display: flex;
+      align-items: baseline;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    .release-version {
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .release-date {
+      font-size: 0.85rem;
+      color: #666;
+    }
+    .release-tag {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+    }
+    .tag-feature {
+      background: rgba(0,112,243,0.15);
+      color: #0070f3;
+    }
+    .tag-fix {
+      background: rgba(52,168,83,0.15);
+      color: #34a853;
+    }
+    .tag-improvement {
+      background: rgba(251,188,4,0.15);
+      color: #fbbc04;
+    }
+    .release-body h3 {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      margin: 1.25rem 0 0.5rem;
+    }
+    .release-body ul {
+      list-style: none;
+      padding: 0;
+    }
+    .release-body li {
+      position: relative;
+      padding-left: 1.25rem;
+      margin-bottom: 0.4rem;
+      font-size: 0.95rem;
+      color: #ccc;
+      line-height: 1.5;
+    }
+    .release-body li::before {
+      content: '•';
+      position: absolute;
+      left: 0;
+      color: #444;
+    }
+    .empty-state {
+      text-align: center;
+      color: #666;
+      padding: 4rem 0;
+      font-size: 0.95rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="page-container">
+    <div class="header">
+      <h1>Updates</h1>
+      <a href="/dashboard">Dashboard</a>
+    </div>
+
+    <div id="releases">
+      <div class="release">
+        <div class="release-header">
+          <span class="release-version">v0.1.0</span>
+          <span class="release-date">May 13, 2025</span>
+          <span class="release-tag tag-feature">Feature</span>
+        </div>
+        <div class="release-body">
+          <h3>What's New</h3>
+          <ul>
+            <li>Initial release of Awesome MCP</li>
+            <li>Google Docs, Sheets, Slides, Calendar, Drive, and Gmail integrations</li>
+            <li>ClickUp and Slack integrations</li>
+            <li>Multi-account support with per-instance access rules</li>
+            <li>Dashboard for managing connections and API keys</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

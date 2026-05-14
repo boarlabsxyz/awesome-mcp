@@ -4,13 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag name (e.g. qa-20260513, v1.0.0)'
+        description: 'Tag name (e.g. v1.0.0)'
         required: true
         type: string
       ref:
-        description: 'Branch or SHA to tag'
+        description: 'Branch or SHA to tag (defaults to main)'
         required: true
         type: string
+        default: main
 
 jobs:
   validate-ci:
@@ -73,42 +74,10 @@ jobs:
 
             console.log('All required CI checks passed.');
 
-  validate-release-tag:
-    if: startsWith(inputs.tag, 'v')
+  create-tag:
     needs: [validate-ci]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Verify ref is on a release branch
-        run: |
-          REF="${{ inputs.ref }}"
-          SHA="${{ needs.validate-ci.outputs.sha }}"
-          # If ref looks like a branch name, check prefix directly
-          if [[ "$REF" =~ ^release- ]]; then
-            echo "Ref is a release branch: $REF"
-            exit 0
-          fi
-          # Otherwise resolve via git (handles SHAs and other refs)
-          BRANCHES=$(git branch -r --contains "$SHA" | grep 'origin/release-' || true)
-          if [ -z "$BRANCHES" ]; then
-            echo "::error::v* tags require a release-* branch. SHA $SHA is not on any release branch."
-            exit 1
-          fi
-          echo "SHA is on release branch(es): $BRANCHES"
-
-  create-tag:
-    needs: [validate-ci, validate-release-tag]
-    if: |
-      always() &&
-      needs.validate-ci.result == 'success' &&
-      (needs.validate-release-tag.result == 'success' || needs.validate-release-tag.result == 'skipped')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref }}
       - name: Create and push tag
         uses: actions/github-script@v7
         with:

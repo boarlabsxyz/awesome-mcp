@@ -23,20 +23,3 @@ branches:
       restrictions: null
       allow_force_pushes: false
       allow_deletions: false
-
-  release-*:
-    protection:
-      required_status_checks:
-        strict: true
-        contexts:
-          - lint
-          - typecheck
-          - test
-          - build
-      required_pull_request_reviews:
-        required_approving_review_count: 1
-        dismiss_stale_reviews: true
-      enforce_admins: true
-      restrictions: null
-      allow_force_pushes: false
-      allow_deletions: false
