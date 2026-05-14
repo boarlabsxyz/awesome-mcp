@@ -409,6 +409,11 @@ function registerSharedRoutes(app: express.Express): void {
     res.sendFile(path.join(publicDir, 'dashboard.html'));
   });
 
+  // Public changelog / release notes
+  app.get('/updates', (_req, res) => {
+    res.sendFile(path.join(publicDir, 'updates.html'));
+  });
+
   // Serve static files
   app.use(express.static(publicDir));
 
@@ -1776,6 +1781,83 @@ function registerSharedRoutes(app: express.Express): void {
     } catch (err: any) {
       console.error('Error fetching admin users:', err);
       res.status(500).json({ error: 'Failed to fetch users' });
+    }
+  });
+
+  // === Internal API (GitHub Actions → app server) ===
+
+  function requireInternalApiKey(req: Request, res: Response, next: NextFunction) {
+    const internalKey = process.env.INTERNAL_API_KEY;
+    if (!internalKey) { res.status(503).json({ error: 'Internal API not configured' }); return; }
+    const auth = req.headers.authorization;
+    if (!auth || auth !== `Bearer ${internalKey}`) {
+      res.status(401).json({ error: 'Invalid internal API key' });
+      return;
+    }
+    next();
+  }
+
+  // Send release notification emails to all users via an admin's Gmail connection
+  app.post('/api/internal/release-notify', requireInternalApiKey, async (req: Request, res: Response) => {
+    const { subject, body } = req.body;
+    if (!subject || !body) {
+      res.status(400).json({ error: 'subject and body are required' });
+      return;
+    }
+    try {
+      // Find an admin user with a Gmail connection to send from
+      const allUsers = await getAllUsers();
+      const adminUser = allUsers.find(u => ADMIN_EMAILS.includes(u.email.toLowerCase()));
+      if (!adminUser || !adminUser.id) {
+        res.status(503).json({ error: 'No admin user found for sending emails' });
+        return;
+      }
+
+      const adminConnections = await getUserConnectedMcps(adminUser.id);
+      const gmailConnection = adminConnections.find(c => c.mcpSlug === 'google-gmail');
+      if (!gmailConnection) {
+        res.status(503).json({ error: 'Admin user has no Gmail connection' });
+        return;
+      }
+
+      const { client_id, client_secret } = await loadClientCredentials();
+      const session = createUserSessionFromConnection(adminUser as UserRecord, gmailConnection, client_id, client_secret);
+
+      // Collect all user emails (excluding the sender)
+      const recipients = allUsers
+        .map(u => u.email)
+        .filter(Boolean);
+
+      if (recipients.length === 0) {
+        res.json({ sent: 0, failed: 0, message: 'No recipients found' });
+        return;
+      }
+
+      // Send in BCC batches of 50
+      const BATCH_SIZE = 50;
+      let sent = 0;
+      let failed = 0;
+
+      for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
+        const batch = recipients.slice(i, i + BATCH_SIZE);
+        try {
+          const { createRawEmail } = await import('../google-gmail/apiHelpers.js');
+          const raw = createRawEmail(adminUser.email, subject, body, {
+            bcc: batch.join(', '),
+            isHtml: true,
+          });
+          await session.googleGmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+          sent += batch.length;
+        } catch (err: any) {
+          console.error(`[release-notify] Failed to send batch ${i}:`, err.message);
+          failed += batch.length;
+        }
+      }
+
+      res.json({ sent, failed });
+    } catch (err: any) {
+      console.error('[release-notify] Error:', err);
+      res.status(500).json({ error: 'Failed to send release notifications' });
     }
   });
 

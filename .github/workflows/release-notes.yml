@@ -1,0 +1,139 @@
+name: Release Notes
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Determine tag range
+        id: tags
+        run: |
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          PREVIOUS_TAG=$(git tag -l 'v*' --sort=-version:refname | grep -v "^${CURRENT_TAG}$" | head -1)
+          echo "current=$CURRENT_TAG" >> "$GITHUB_OUTPUT"
+          echo "previous=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
+          if [ -n "$PREVIOUS_TAG" ]; then
+            echo "range=${PREVIOUS_TAG}..${CURRENT_TAG}" >> "$GITHUB_OUTPUT"
+          else
+            echo "range=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Collect commits and parse ClickUp IDs
+        id: commits
+        run: |
+          # Use record separator (%x1e) between commits and unit separator (%x1f) between fields
+          # Then flatten each record to a single pipe-delimited line
+          if [ -n "${{ steps.tags.outputs.range }}" ]; then
+            git log ${{ steps.tags.outputs.range }} --pretty=format:"%H%x1f%s%x1f%b%x1e" --no-merges > /tmp/commits_raw.txt
+          else
+            git log --pretty=format:"%H%x1f%s%x1f%b%x1e" --no-merges > /tmp/commits_raw.txt
+          fi
+          # Convert to one-line-per-commit: replace newlines within records with spaces, then split on record separator
+          node -e "
+            const fs = require('fs');
+            const raw = fs.readFileSync('/tmp/commits_raw.txt', 'utf8');
+            const records = raw.split('\x1e').filter(r => r.trim());
+            const lines = records.map(r => {
+              const [hash, subject, ...bodyParts] = r.split('\x1f');
+              const body = bodyParts.join(' ').replace(/\n/g, ' ').trim();
+              return [hash.trim(), subject.trim(), body].join('|');
+            });
+            fs.writeFileSync('/tmp/commits.txt', lines.join('\n'));
+          "
+          TASK_IDS=$(grep -oi 'CU-[a-z0-9]\+' /tmp/commits.txt | tr '[:upper:]' '[:lower:]' | sed 's/cu-//' | sort -u | tr '\n' ',' | sed 's/,$//' || true)
+          echo "task_ids=$TASK_IDS" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch ClickUp task titles
+        if: steps.commits.outputs.task_ids != ''
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+        run: |
+          IFS=',' read -ra IDS <<< "${{ steps.commits.outputs.task_ids }}"
+          > /tmp/task_map.txt
+          for id in "${IDS[@]}"; do
+            RESPONSE=$(curl -s -H "Authorization: Bearer ${CLICKUP_API_TOKEN}" \
+              "https://api.clickup.com/api/v2/task/${id}" || echo '{}')
+            TITLE=$(echo "$RESPONSE" | jq -r '.name // empty')
+            URL=$(echo "$RESPONSE" | jq -r '.url // empty')
+            if [ -n "$TITLE" ]; then
+              echo "${id}|${TITLE}|${URL}" >> /tmp/task_map.txt
+            fi
+            sleep 0.2
+          done
+
+      - name: Generate release notes
+        run: |
+          node .github/scripts/generate-release-notes.mjs \
+            --tag "${{ steps.tags.outputs.current }}" \
+            --commits /tmp/commits.txt \
+            --tasks /tmp/task_map.txt \
+            --output-dir /tmp/release
+
+      - name: Update updates.html
+        run: |
+          node -e "
+            const fs = require('fs');
+            const html = fs.readFileSync('public/updates.html', 'utf8');
+            const block = fs.readFileSync('/tmp/release/updates-block.html', 'utf8');
+            const marker = '<div id=\"releases\">';
+            const updated = html.replace(marker, marker + '\n' + block);
+            fs.writeFileSync('public/updates.html', updated);
+          "
+
+      - name: Commit and push updates.html
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout main
+          git add public/updates.html
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "docs: update release notes for ${{ steps.tags.outputs.current }}"
+            git push origin main
+          fi
+
+      - name: Post to Slack
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -f /tmp/release/slack-message.txt ]; then
+            SLACK_TEXT=$(cat /tmp/release/slack-message.txt)
+            PAYLOAD=$(jq -n --arg text "$SLACK_TEXT" '{text: $text}')
+            curl -X POST "${SLACK_WEBHOOK_URL}" \
+              -H 'Content-type: application/json' \
+              -d "${PAYLOAD}" || true
+          fi
+
+      - name: Send email notifications
+        if: always()
+        env:
+          INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
+        run: |
+          if [ -f /tmp/release/email-body.html ]; then
+            APP_URL="${{ vars.APP_URL }}"
+            EMAIL_HTML=$(cat /tmp/release/email-body.html)
+            TAG="${{ steps.tags.outputs.current }}"
+            curl -s -X POST "${APP_URL}/api/internal/release-notify" \
+              -H "Authorization: Bearer ${INTERNAL_API_KEY}" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n \
+                --arg subject "Awesome MCP ${TAG} Released" \
+                --arg body "$EMAIL_HTML" \
+                '{subject: $subject, body: $body}')" || true
+          fi
