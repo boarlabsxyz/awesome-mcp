@@ -17,8 +17,19 @@ if (!process.env.GOOGLE_CREDENTIALS) {
 
 const testKey = 'test-internal-key-12345';
 
+// Snapshot env vars that tests mutate, restore after suite
+const originalInternalKey = process.env.INTERNAL_API_KEY;
+const originalAdminEmails = process.env.ADMIN_EMAILS;
+
 describe('POST /api/internal/release-notify', () => {
   const app = createWebOnlyApp();
+
+  after(() => {
+    if (originalInternalKey !== undefined) process.env.INTERNAL_API_KEY = originalInternalKey;
+    else delete process.env.INTERNAL_API_KEY;
+    if (originalAdminEmails !== undefined) process.env.ADMIN_EMAILS = originalAdminEmails;
+    else delete process.env.ADMIN_EMAILS;
+  });
 
   describe('requireInternalApiKey middleware', () => {
     it('returns 503 when INTERNAL_API_KEY is not set', async () => {

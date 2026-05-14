@@ -3,6 +3,13 @@ name: Release Notes
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      test:
+        description: 'Test mode — send emails only to test addresses'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -124,6 +131,7 @@ jobs:
         if: always()
         env:
           INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
+          TEST_MODE: ${{ inputs.test == true && 'true' || 'false' }}
         run: |
           if [ -f /tmp/release/email-body.html ]; then
             APP_URL="${{ vars.APP_URL }}"
@@ -135,5 +143,6 @@ jobs:
               -d "$(jq -n \
                 --arg subject "Awesome MCP ${TAG} Released" \
                 --arg body "$EMAIL_HTML" \
-                '{subject: $subject, body: $body}')" || true
+                --argjson test "${TEST_MODE}" \
+                '{subject: $subject, body: $body, test: $test}')" || true
           fi
