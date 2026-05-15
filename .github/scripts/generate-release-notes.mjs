@@ -71,6 +71,17 @@ for (const commit of commits) {
   else categories.other.push(entry);
 }
 
+// --- Find tasks not linked to any commit (e.g. CU- IDs only in merge commits) ---
+const linkedTaskIds = new Set();
+for (const list of Object.values(categories)) {
+  for (const entry of list) {
+    for (const id of entry.taskIds) linkedTaskIds.add(id);
+  }
+}
+const unlinkedTasks = [...tasks.entries()]
+  .filter(([id]) => !linkedTaskIds.has(id))
+  .map(([id, info]) => ({ id, ...info }));
+
 // --- Determine primary tag ---
 let primaryTag = 'improvement';
 if (categories.feat.length > 0) primaryTag = 'feature';
@@ -121,6 +132,11 @@ function generateSlack() {
     for (const e of categories.other) lines.push(`• ${enrichWithTasks(e, 'slack')}`);
     lines.push('');
   }
+  if (unlinkedTasks.length) {
+    lines.push('*Related Tasks*');
+    for (const t of unlinkedTasks) lines.push(`• <${t.url}|${t.title}>`);
+    lines.push('');
+  }
 
   return lines.join('\n').trim();
 }
@@ -155,6 +171,11 @@ function generateHtmlBlock() {
     for (const e of categories.other) html += `          <li>${enrichWithTasks(e, 'html')}</li>\n`;
     html += `        </ul>\n`;
   }
+  if (unlinkedTasks.length) {
+    html += `        <h3>Related Tasks</h3>\n        <ul>\n`;
+    for (const t of unlinkedTasks) html += `          <li><a href="${escapeHtml(t.url)}">${escapeHtml(t.title)}</a></li>\n`;
+    html += `        </ul>\n`;
+  }
 
   html += `      </div>\n`;
   html += `    </div>\n`;
@@ -181,6 +202,11 @@ function generateEmail() {
   if (categories.other.length) {
     html += `<h2 style="font-size: 16px; color: #888; text-transform: uppercase; letter-spacing: 0.03em; margin: 20px 0 8px;">Improvements</h2><ul style="padding-left: 20px; margin: 0;">`;
     for (const e of categories.other) html += `<li style="color: #ccc; margin-bottom: 6px; line-height: 1.5;">${enrichWithTasks(e, 'html')}</li>`;
+    html += `</ul>`;
+  }
+  if (unlinkedTasks.length) {
+    html += `<h2 style="font-size: 16px; color: #888; text-transform: uppercase; letter-spacing: 0.03em; margin: 20px 0 8px;">Related Tasks</h2><ul style="padding-left: 20px; margin: 0;">`;
+    for (const t of unlinkedTasks) html += `<li style="color: #ccc; margin-bottom: 6px; line-height: 1.5;"><a href="${escapeHtml(t.url)}" style="color: #0070f3;">${escapeHtml(t.title)}</a></li>`;
     html += `</ul>`;
   }
 
