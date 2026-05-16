@@ -93,11 +93,11 @@ export class ClickUpClient {
     return this.request('GET', `/space/${spaceId}/list${params}`);
   }
 
-  async createList(folderId: string, data: { name: string; content?: string; due_date?: number; priority?: number; assignee?: number; status?: string }): Promise<any> {
+  async createList(folderId: string, data: { name: string; content?: string; markdown_content?: string; due_date?: number; priority?: number; assignee?: number; status?: string }): Promise<any> {
     return this.request('POST', `/folder/${folderId}/list`, data);
   }
 
-  async createFolderlessList(spaceId: string, data: { name: string; content?: string }): Promise<any> {
+  async createFolderlessList(spaceId: string, data: { name: string; content?: string; markdown_content?: string }): Promise<any> {
     return this.request('POST', `/space/${spaceId}/list`, data);
   }
 
@@ -146,6 +146,7 @@ export class ClickUpClient {
   async createTask(listId: string, data: {
     name: string;
     description?: string;
+    markdown_content?: string;
     assignees?: number[];
     status?: string;
     priority?: number | null;
@@ -161,6 +162,7 @@ export class ClickUpClient {
   async updateTask(taskId: string, data: {
     name?: string;
     description?: string;
+    markdown_content?: string;
     status?: string;
     priority?: number | null;
     due_date?: number;

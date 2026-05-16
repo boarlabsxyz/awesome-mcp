@@ -211,7 +211,8 @@ clickUpServer.addTool({
   parameters: z.object({
     listId: z.string().describe('The list ID to create the task in.'),
     name: z.string().min(1).describe('Task name.'),
-    description: z.string().optional().describe('Task description (supports markdown).'),
+    description: z.string().optional().describe('Task description (plain text). Use markdownContent instead for formatted text.'),
+    markdownContent: z.string().optional().describe('Task description in markdown format. Takes precedence over description. Supports bold, italic, code blocks, lists, etc.'),
     assignees: z.array(z.number()).optional().describe('Array of user IDs to assign.'),
     status: z.string().optional().describe('Task status name.'),
     priority: z.number().int().min(1).max(4).nullable().optional().describe('Priority: 1=Urgent, 2=High, 3=Normal, 4=Low, null=none.'),
@@ -225,7 +226,8 @@ clickUpServer.addTool({
     const client = getClickUpClient(session);
     const task = await client.createTask(args.listId, {
       name: args.name,
-      description: args.description,
+      description: args.markdownContent ? undefined : args.description,
+      markdown_content: args.markdownContent,
       assignees: args.assignees,
       status: args.status,
       priority: args.priority,
@@ -245,7 +247,8 @@ clickUpServer.addTool({
   parameters: z.object({
     taskId: z.string().describe('The task ID to update.'),
     name: z.string().optional().describe('New task name.'),
-    description: z.string().optional().describe('New description (supports markdown).'),
+    description: z.string().optional().describe('New description (plain text). Use markdownContent instead for formatted text.'),
+    markdownContent: z.string().optional().describe('New description in markdown format. Takes precedence over description. Supports bold, italic, code blocks, lists, etc.'),
     status: z.string().optional().describe('New status name.'),
     priority: z.number().int().min(1).max(4).nullable().optional().describe('Priority: 1=Urgent, 2=High, 3=Normal, 4=Low, null=none.'),
     dueDate: z.string().optional().describe('New due date as ISO string or Unix timestamp in ms.'),
@@ -259,7 +262,11 @@ clickUpServer.addTool({
     const client = getClickUpClient(session);
     const data: any = {};
     if (args.name !== undefined) data.name = args.name;
-    if (args.description !== undefined) data.description = args.description;
+    if (args.markdownContent !== undefined) {
+      data.markdown_content = args.markdownContent;
+    } else if (args.description !== undefined) {
+      data.description = args.description;
+    }
     if (args.status !== undefined) data.status = args.status;
     if (args.priority !== undefined) data.priority = args.priority;
     if (args.dueDate !== undefined) data.due_date = new Date(args.dueDate).getTime();
@@ -304,10 +311,10 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'addTaskComment',
-  description: 'Add a comment to a ClickUp task.',
+  description: 'Add a comment to a ClickUp task. The comment text supports markdown formatting (bold, italic, code blocks, lists).',
   parameters: z.object({
     taskId: z.string().describe('The task ID to comment on.'),
-    commentText: z.string().min(1).describe('The comment text.'),
+    commentText: z.string().min(1).describe('The comment text. Supports markdown: **bold**, *italic*, `code`, ```code blocks```, - lists.'),
     assignee: z.number().optional().describe('User ID to assign (if creating an assigned comment).'),
     notifyAll: z.boolean().optional().default(true).describe('Notify all assignees and watchers.'),
   }),
@@ -449,14 +456,18 @@ clickUpServer.addTool({
     folderId: z.string().optional().describe('The folder ID (for a list inside a folder).'),
     spaceId: z.string().optional().describe('The space ID (for a folderless list). Used when folderId is not provided.'),
     name: z.string().min(1).describe('Name for the new list.'),
-    content: z.string().optional().describe('Description/content for the list.'),
+    content: z.string().optional().describe('Description/content for the list (plain text). Use markdownContent instead for formatted text.'),
+    markdownContent: z.string().optional().describe('Description/content in markdown format. Takes precedence over content.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
     if (!args.folderId && !args.spaceId) {
       throw new UserError('Provide either folderId or spaceId.');
     }
-    const data = { name: args.name, content: args.content };
+    const data: any = {
+      name: args.name,
+      ...(args.markdownContent ? { markdown_content: args.markdownContent } : { content: args.content }),
+    };
     const list = args.folderId
       ? await client.createList(args.folderId, data)
       : await client.createFolderlessList(args.spaceId!, data);
