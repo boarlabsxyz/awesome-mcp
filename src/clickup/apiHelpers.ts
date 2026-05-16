@@ -4,6 +4,64 @@ import { UserError } from 'fastmcp';
 const CLICKUP_API_BASE = 'https://api.clickup.com/api/v2';
 const CLICKUP_API_V3_BASE = 'https://api.clickup.com/api/v3';
 
+export interface CommentBlock {
+  text: string;
+  attributes?: Record<string, any>;
+}
+
+/**
+ * Convert markdown text to ClickUp comment blocks.
+ * Handles bold, italic, inline code, and plain text.
+ * Each line becomes a separate segment ending with \n.
+ */
+export function markdownToCommentBlocks(markdown: string): CommentBlock[] {
+  const blocks: CommentBlock[] = [];
+  const lines = markdown.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Parse inline formatting within each line
+    const inlineRegex = /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`)/g;
+    let lastIndex = 0;
+    let match;
+
+    while ((match = inlineRegex.exec(line)) !== null) {
+      // Add plain text before this match
+      if (match.index > lastIndex) {
+        blocks.push({ text: line.slice(lastIndex, match.index) });
+      }
+
+      if (match[2]) {
+        // ***bold italic***
+        blocks.push({ text: match[2], attributes: { bold: true, italic: true } });
+      } else if (match[3]) {
+        // **bold**
+        blocks.push({ text: match[3], attributes: { bold: true } });
+      } else if (match[4]) {
+        // *italic*
+        blocks.push({ text: match[4], attributes: { italic: true } });
+      } else if (match[5]) {
+        // `inline code`
+        blocks.push({ text: match[5], attributes: { code: true } });
+      }
+
+      lastIndex = match.index + match[0].length;
+    }
+
+    // Add remaining plain text on this line
+    if (lastIndex < line.length) {
+      blocks.push({ text: line.slice(lastIndex) });
+    }
+
+    // Add newline after each line (except the last)
+    if (i < lines.length - 1) {
+      blocks.push({ text: '\n' });
+    }
+  }
+
+  return blocks;
+}
+
 export class ClickUpClient {
   constructor(private accessToken: string) {}
 
@@ -224,7 +282,7 @@ export class ClickUpClient {
     return this.request('GET', `/task/${taskId}/comment${qs ? '?' + qs : ''}`);
   }
 
-  async addTaskComment(taskId: string, data: { comment_text: string; assignee?: number; notify_all?: boolean }): Promise<any> {
+  async addTaskComment(taskId: string, data: { comment_text?: string; comment?: CommentBlock[]; assignee?: number; notify_all?: boolean }): Promise<any> {
     return this.request('POST', `/task/${taskId}/comment`, data);
   }
 

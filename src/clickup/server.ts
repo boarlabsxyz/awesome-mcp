@@ -3,7 +3,7 @@ import { FastMCP, UserError } from 'fastmcp';
 import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
-import { ClickUpClient } from './apiHelpers.js';
+import { ClickUpClient, markdownToCommentBlocks } from './apiHelpers.js';
 
 export const clickUpServer = new FastMCP<UserSession>({
   name: 'ClickUp MCP Server',
@@ -311,17 +311,18 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'addTaskComment',
-  description: 'Add a comment to a ClickUp task. The comment text supports markdown formatting (bold, italic, code blocks, lists).',
+  description: 'Add a comment to a ClickUp task. Supports markdown formatting: **bold**, *italic*, `inline code`.',
   parameters: z.object({
     taskId: z.string().describe('The task ID to comment on.'),
-    commentText: z.string().min(1).describe('The comment text. Supports markdown: **bold**, *italic*, `code`, ```code blocks```, - lists.'),
+    commentText: z.string().min(1).describe('The comment text. Supports markdown: **bold**, *italic*, `inline code`.'),
     assignee: z.number().optional().describe('User ID to assign (if creating an assigned comment).'),
     notifyAll: z.boolean().optional().default(true).describe('Notify all assignees and watchers.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
+    const comment = markdownToCommentBlocks(args.commentText);
     const result = await client.addTaskComment(args.taskId, {
-      comment_text: args.commentText,
+      comment,
       assignee: args.assignee,
       notify_all: args.notifyAll,
     });
