@@ -282,7 +282,9 @@ export class ClickUpClient {
     return this.request('GET', `/task/${taskId}/comment${qs ? '?' + qs : ''}`);
   }
 
-  async addTaskComment(taskId: string, data: { comment_text?: string; comment?: CommentBlock[]; assignee?: number; notify_all?: boolean }): Promise<any> {
+  async addTaskComment(taskId: string, data: (
+    { comment_text: string; comment?: never } | { comment: CommentBlock[]; comment_text?: never }
+  ) & { assignee?: number; notify_all?: boolean }): Promise<any> {
     return this.request('POST', `/task/${taskId}/comment`, data);
   }
 
