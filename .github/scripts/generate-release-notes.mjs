@@ -54,12 +54,23 @@ const tasks = tasksFile ? parseTasks(tasksFile) : new Map();
 const categories = { feat: [], fix: [], other: [] };
 const typeRegex = /^(feat|fix|docs|style|refactor|perf|test|chore|ci|revert)(\(.+?\))?!?:\s*/;
 
+// Internal commit types not shown to users
+const internalTypes = new Set(['ci', 'chore', 'test', 'docs', 'style', 'refactor', 'revert']);
+
 for (const commit of commits) {
   const match = commit.subject.match(typeRegex);
   const type = match ? match[1] : null;
-  const cleanSubject = commit.subject.replace(typeRegex, '');
 
-  // Extract CU- references from subject + body
+  // Skip internal/technical commits
+  if (type && internalTypes.has(type)) continue;
+
+  // Strip CU- references from display text
+  const cleanSubject = commit.subject
+    .replace(typeRegex, '')
+    .replace(/\s*CU-[a-z0-9]+/gi, '')
+    .trim();
+
+  // Extract CU- references from subject + body for ClickUp lookup
   const fullText = `${commit.subject} ${commit.body}`;
   const cuMatches = [...fullText.matchAll(/CU-([a-z0-9]+)/gi)].map(m => m[1].toLowerCase());
   const uniqueIds = [...new Set(cuMatches)];

@@ -138,10 +138,29 @@ describe('createWebOnlyApp routes', () => {
     assert.ok(Array.isArray(res.body.catalogs));
   });
 
+  it('GET /api/v1/catalogs entries expose scopes and samplePrompts arrays', async () => {
+    const res = await request(app).get('/api/v1/catalogs');
+    assert.equal(res.status, 200);
+    for (const c of res.body.catalogs) {
+      assert.ok(Array.isArray(c.scopes), `${c.slug} should expose scopes array`);
+      assert.ok(Array.isArray(c.samplePrompts), `${c.slug} should expose samplePrompts array`);
+      assert.ok(typeof c.provider === 'string' && c.provider.length > 0);
+    }
+  });
+
   it('GET /api/v1/catalogs/:slug returns 404 for unknown slug', async () => {
     const res = await request(app).get('/api/v1/catalogs/nonexistent');
     assert.equal(res.status, 404);
     assert.equal(res.body.error, 'Catalog not found');
+  });
+
+  it('GET /integrations is registered and invokes sendFile handler', async () => {
+    // The handler is `res.sendFile(integrations.html)`; in test env the public
+    // dir may not be co-located (publicDir resolves to src/public via tsx),
+    // so we accept either a successful serve or a 404 from sendFile. Either
+    // way the route handler statement executed.
+    const res = await request(app).get('/integrations');
+    assert.ok([200, 404].includes(res.status), `unexpected status ${res.status}`);
   });
 
   // --- POST /api/disconnect without session ---

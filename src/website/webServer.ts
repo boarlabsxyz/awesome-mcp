@@ -329,6 +329,23 @@ const BASE_SCOPES = [
   'https://www.googleapis.com/auth/userinfo.profile',
 ];
 
+/**
+ * Effective OAuth scopes shown on /integrations and used by the Google
+ * connect flow when an MCP has no explicit oauthScopes. Mirrors the
+ * fallback at /connect/:mcpSlug. Exported for testability.
+ */
+export function computeEffectiveScopes(
+  provider: string,
+  oauthScopes: string[] | undefined | null,
+  mcpScopes: string[] | undefined | null
+): string[] {
+  const declared = oauthScopes || [];
+  if (provider === 'google' && declared.length === 0) {
+    return [...BASE_SCOPES, ...(mcpScopes || [])];
+  }
+  return declared;
+}
+
 const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 const COOKIE_SECRET = process.env.COOKIE_SECRET || 'dev-secret-change-me';
 const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -412,6 +429,11 @@ function registerSharedRoutes(app: express.Express): void {
   // Public changelog / release notes
   app.get('/updates', (_req, res) => {
     res.sendFile(path.join(publicDir, 'updates.html'));
+  });
+
+  // Public integrations directory
+  app.get('/integrations', (_req, res) => {
+    res.sendFile(path.join(publicDir, 'integrations.html'));
   });
 
   // Serve static files
@@ -1866,6 +1888,56 @@ function registerSharedRoutes(app: express.Express): void {
 
   // === MCP Catalog API (public endpoints) ===
 
+  // Sample prompts per integration, surfaced on the /integrations directory.
+  // Kept here (not in the DB) so they can be edited without a migration.
+  const SAMPLE_PROMPTS: Record<string, string[]> = {
+    'google-docs': [
+      'Summarize the doc at https://docs.google.com/document/d/…',
+      'Append a "Next steps" section to my planning doc',
+      'Find every "TODO" in this doc and turn them into a checklist',
+    ],
+    'google-sheets': [
+      'Read the "Q3 forecast" sheet and chart revenue by region',
+      'Append a new row with today\'s standup notes',
+      'Clear the scratchpad range A1:D50',
+    ],
+    'google-calendar': [
+      'What\'s on my calendar tomorrow?',
+      'Schedule a 30-min sync with the team for Thursday afternoon',
+      'Move my 4pm meeting to Friday',
+    ],
+    'google-gmail': [
+      'Summarize unread mail from this week',
+      'Draft a reply to the latest message from finance@',
+      'Search for invoices from Stripe and label them "Receipts"',
+    ],
+    'google-slides': [
+      'Add a title slide to the kickoff deck',
+      'Replace "OLD_LOGO" with our new logo in every slide',
+      'Read the speaker notes from slide 5',
+    ],
+    'google-drive': [
+      'Find the latest version of the pricing memo',
+      'Move all PDFs from /Inbox to /Archive',
+      'Share this folder with alex@ as commenter',
+    ],
+    'clickup': [
+      'Create a task in the "Backlog" list with today\'s sync notes',
+      'What\'s assigned to me and due this week?',
+      'Comment on CU-86c9mr5kd with the latest status',
+    ],
+    'slack': [
+      'Summarize what I missed in #eng-platform today',
+      'Send a release note to #announcements',
+      'Find the thread where we agreed on the API shape',
+    ],
+    'slack-bot': [
+      'Post the daily standup template to #standup',
+      'List the last 20 messages from #incidents',
+      'Pin the runbook link in #oncall',
+    ],
+  };
+
   // GET /api/v1/catalogs - List all active MCPs
   app.get('/api/v1/catalogs', async (_req, res) => {
     try {
@@ -1873,14 +1945,19 @@ function registerSharedRoutes(app: express.Express): void {
       const catalogs = await listMcpCatalogs();
       console.error(`[/api/v1/catalogs] Found ${catalogs.length} catalogs`);
       res.json({
-        catalogs: catalogs.map(c => ({
-          slug: c.slug,
-          name: c.name,
-          description: c.description,
-          iconUrl: c.iconUrl,
-          mcpUrl: c.mcpUrl,
-          provider: c.provider || 'google',
-        })),
+        catalogs: catalogs.map(c => {
+          const provider = c.provider || 'google';
+          return {
+            slug: c.slug,
+            name: c.name,
+            description: c.description,
+            iconUrl: c.iconUrl,
+            mcpUrl: c.mcpUrl,
+            provider,
+            scopes: computeEffectiveScopes(provider, c.oauthScopes, c.scopes),
+            samplePrompts: SAMPLE_PROMPTS[c.slug] || [],
+          };
+        }),
       });
     } catch (err: any) {
       console.error('[/api/v1/catalogs] Error:', err);
