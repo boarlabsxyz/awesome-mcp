@@ -1429,6 +1429,14 @@
           openAccessRules(channelSetupId);
         }
 
+        // Auto-open the add-tool flow when arriving from /integrations
+        const addSlug = new URLSearchParams(window.location.search).get('add');
+        if (addSlug && catalogs.some(c => c.slug === addSlug)) {
+          window.history.replaceState({}, '', '/dashboard');
+          openAddToolModal();
+          selectMcpType(addSlug);
+        }
+
         document.getElementById('loading').classList.add('hidden');
         document.getElementById('content').classList.remove('hidden');
       } catch (err) {
