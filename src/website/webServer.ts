@@ -1928,16 +1928,27 @@ function registerSharedRoutes(app: express.Express): void {
       const catalogs = await listMcpCatalogs();
       console.error(`[/api/v1/catalogs] Found ${catalogs.length} catalogs`);
       res.json({
-        catalogs: catalogs.map(c => ({
-          slug: c.slug,
-          name: c.name,
-          description: c.description,
-          iconUrl: c.iconUrl,
-          mcpUrl: c.mcpUrl,
-          provider: c.provider || 'google',
-          scopes: c.oauthScopes || [],
-          samplePrompts: SAMPLE_PROMPTS[c.slug] || [],
-        })),
+        catalogs: catalogs.map(c => {
+          const provider = c.provider || 'google';
+          const declaredScopes = c.oauthScopes || [];
+          // Mirror the Google connect flow fallback (see /connect/:mcpSlug):
+          // when oauthScopes is empty on a Google MCP, the consent screen
+          // actually requests BASE_SCOPES + mcp.scopes. Surface the same.
+          const effectiveScopes =
+            provider === 'google' && declaredScopes.length === 0
+              ? [...BASE_SCOPES, ...(c.scopes || [])]
+              : declaredScopes;
+          return {
+            slug: c.slug,
+            name: c.name,
+            description: c.description,
+            iconUrl: c.iconUrl,
+            mcpUrl: c.mcpUrl,
+            provider,
+            scopes: effectiveScopes,
+            samplePrompts: SAMPLE_PROMPTS[c.slug] || [],
+          };
+        }),
       });
     } catch (err: any) {
       console.error('[/api/v1/catalogs] Error:', err);
