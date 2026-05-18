@@ -329,6 +329,23 @@ const BASE_SCOPES = [
   'https://www.googleapis.com/auth/userinfo.profile',
 ];
 
+/**
+ * Effective OAuth scopes shown on /integrations and used by the Google
+ * connect flow when an MCP has no explicit oauthScopes. Mirrors the
+ * fallback at /connect/:mcpSlug. Exported for testability.
+ */
+export function computeEffectiveScopes(
+  provider: string,
+  oauthScopes: string[] | undefined | null,
+  mcpScopes: string[] | undefined | null
+): string[] {
+  const declared = oauthScopes || [];
+  if (provider === 'google' && declared.length === 0) {
+    return [...BASE_SCOPES, ...(mcpScopes || [])];
+  }
+  return declared;
+}
+
 const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 const COOKIE_SECRET = process.env.COOKIE_SECRET || 'dev-secret-change-me';
 const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -1930,14 +1947,6 @@ function registerSharedRoutes(app: express.Express): void {
       res.json({
         catalogs: catalogs.map(c => {
           const provider = c.provider || 'google';
-          const declaredScopes = c.oauthScopes || [];
-          // Mirror the Google connect flow fallback (see /connect/:mcpSlug):
-          // when oauthScopes is empty on a Google MCP, the consent screen
-          // actually requests BASE_SCOPES + mcp.scopes. Surface the same.
-          const effectiveScopes =
-            provider === 'google' && declaredScopes.length === 0
-              ? [...BASE_SCOPES, ...(c.scopes || [])]
-              : declaredScopes;
           return {
             slug: c.slug,
             name: c.name,
@@ -1945,7 +1954,7 @@ function registerSharedRoutes(app: express.Express): void {
             iconUrl: c.iconUrl,
             mcpUrl: c.mcpUrl,
             provider,
-            scopes: effectiveScopes,
+            scopes: computeEffectiveScopes(provider, c.oauthScopes, c.scopes),
             samplePrompts: SAMPLE_PROMPTS[c.slug] || [],
           };
         }),

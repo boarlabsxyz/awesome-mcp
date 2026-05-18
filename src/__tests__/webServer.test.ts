@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { computeTokenStatus, mergeReconnectTokens } from '../website/webServer.js';
+import { computeEffectiveScopes, computeTokenStatus, mergeReconnectTokens } from '../website/webServer.js';
 
 // Test the exported pure functions with more edge cases
 // to boost coverage on the webServer.ts new code
@@ -70,5 +70,57 @@ describe('mergeReconnectTokens – additional edge cases', () => {
     const result = mergeReconnectTokens(tokens, 'preserved');
     assert.notEqual(result, tokens, 'should return a new object when merging');
     assert.equal(result.refresh_token, 'preserved');
+  });
+});
+
+describe('computeEffectiveScopes', () => {
+  const USERINFO_EMAIL = 'https://www.googleapis.com/auth/userinfo.email';
+  const USERINFO_PROFILE = 'https://www.googleapis.com/auth/userinfo.profile';
+
+  it('falls back to BASE_SCOPES + mcp.scopes when google provider has empty oauthScopes', () => {
+    const result = computeEffectiveScopes(
+      'google',
+      [],
+      ['https://www.googleapis.com/auth/documents']
+    );
+    assert.deepEqual(result, [
+      USERINFO_EMAIL,
+      USERINFO_PROFILE,
+      'https://www.googleapis.com/auth/documents',
+    ]);
+  });
+
+  it('falls back when google provider has null/undefined oauthScopes', () => {
+    assert.deepEqual(
+      computeEffectiveScopes('google', null, ['https://www.googleapis.com/auth/drive']),
+      [USERINFO_EMAIL, USERINFO_PROFILE, 'https://www.googleapis.com/auth/drive']
+    );
+    assert.deepEqual(
+      computeEffectiveScopes('google', undefined, undefined),
+      [USERINFO_EMAIL, USERINFO_PROFILE]
+    );
+  });
+
+  it('returns declared oauthScopes when google provider has them', () => {
+    const declared = [
+      USERINFO_EMAIL,
+      'https://www.googleapis.com/auth/gmail.modify',
+    ];
+    assert.deepEqual(computeEffectiveScopes('google', declared, ['ignored']), declared);
+  });
+
+  it('returns declared oauthScopes for non-google providers without fallback', () => {
+    assert.deepEqual(
+      computeEffectiveScopes('clickup', [], ['ignored']),
+      []
+    );
+    assert.deepEqual(
+      computeEffectiveScopes('slack', ['channels:read', 'chat:write'], ['ignored']),
+      ['channels:read', 'chat:write']
+    );
+    assert.deepEqual(
+      computeEffectiveScopes('slack-bot', null, ['ignored']),
+      []
+    );
   });
 });
