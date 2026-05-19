@@ -681,6 +681,23 @@ export async function handleDownloadDriveFile(
       });
       return formatExportResult(fileName, uploadResponse.data);
     }
+    // For text-based files, download and return the actual content
+    const textMimeTypes = [
+      'text/plain', 'text/csv', 'text/html', 'text/xml', 'text/markdown',
+      'application/json', 'application/xml', 'application/javascript',
+      'application/x-yaml', 'text/yaml', 'text/tab-separated-values',
+    ];
+    if (textMimeTypes.some(t => mime.startsWith(t) || mime === t)) {
+      log.info(`Reading text content of ${fileName} (${mime})`);
+      const contentResponse = await drive.files.get({
+        fileId: args.fileId,
+        alt: 'media',
+        supportsAllDrives: true,
+      }, { responseType: 'arraybuffer' });
+      const content = Buffer.from(contentResponse.data as ArrayBuffer).toString('utf-8');
+      return `File: ${fileName}\nFile ID: ${file.id}\nType: ${mime}\nSize: ${file.size || 'Unknown'} bytes\n\n--- Content ---\n${content}`;
+    }
+
     return formatBinaryFileInfo(file);
   } catch (error: any) {
     if (error instanceof UserError) throw error;
