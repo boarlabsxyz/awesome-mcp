@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f5f5f5">
   <title>Registration Complete - Google Docs MCP</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -15,6 +16,40 @@
       align-items: center;
       justify-content: center;
     }
+
+    /* Shared a11y scaffolding */
+    :focus-visible {
+      outline: 2px solid #4285f4;
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+    .skip-link {
+      position: absolute;
+      left: -9999px;
+      top: 0;
+    }
+    .skip-link:focus {
+      left: 8px;
+      top: 8px;
+      z-index: 10000;
+      padding: 0.5rem 1rem;
+      background: #4285f4;
+      color: #fff;
+      border-radius: 6px;
+      text-decoration: none;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
     .container {
       max-width: 600px;
       width: 100%;
@@ -41,10 +76,12 @@
     h1 {
       font-size: 1.5rem;
       margin-bottom: 0.5rem;
+      text-wrap: balance;
     }
     .subtitle {
       color: #666;
       margin-bottom: 1.5rem;
+      text-wrap: pretty;
     }
     .api-key-section {
       background: #f8f9fa;
@@ -52,7 +89,8 @@
       padding: 1.25rem;
       margin-bottom: 1.5rem;
     }
-    .api-key-section label {
+    .api-key-section label,
+    .config-section label {
       display: block;
       font-size: 0.85rem;
       text-transform: uppercase;
@@ -69,7 +107,7 @@
       padding: 0.7rem;
       border: 1px solid #ddd;
       border-radius: 6px;
-      font-family: monospace;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 0.85rem;
       background: #fff;
     }
@@ -82,6 +120,8 @@
       cursor: pointer;
       font-size: 0.85rem;
       white-space: nowrap;
+      transition: background-color 0.2s;
+      touch-action: manipulation;
     }
     .btn-copy:hover { background: #3367d6; }
     .btn-copy.copied { background: #34a853; }
@@ -116,85 +156,122 @@
       color: #856404;
       margin-top: 1rem;
     }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="container">
+  <a href="#main" class="skip-link">Skip to content</a>
+  <main id="main" class="container">
     <div class="card">
-      <div class="success-icon">&#10003;</div>
+      <div class="success-icon" aria-hidden="true">&#10003;</div>
       <h1>You're all set!</h1>
-      <p class="subtitle">Your Google account has been connected. Use the API key below in your MCP client.</p>
+      <p class="subtitle">Your <span translate="no">Google</span> account has been connected. Use the API key below in your MCP client.</p>
 
       <div class="api-key-section">
-        <label>Your API Key</label>
+        <label for="apiKey">Your API Key</label>
         <div class="api-key-row">
-          <input type="text" class="api-key-input" id="apiKey" readonly value="" />
-          <button class="btn-copy" id="copyBtn" onclick="copyKey()">Copy</button>
+          <input type="text" class="api-key-input" id="apiKey" readonly value="" autocomplete="off" spellcheck="false" translate="no" />
+          <button class="btn-copy" id="copyBtn" type="button" onclick="copyKey()">Copy</button>
         </div>
       </div>
 
       <div class="config-section">
-        <h3>Claude.ai Connector</h3>
-        <p>Paste this URL in Claude.ai &rarr; Settings &rarr; Connectors &rarr; Add custom connector:</p>
+        <label for="connectorUrl"><span translate="no">Claude.ai</span> Connector</label>
+        <p>Paste this URL in <span translate="no">Claude.ai</span> → Settings → Connectors → Add custom connector:</p>
         <div class="api-key-row" style="margin-bottom: 0.5rem;">
-          <input type="text" class="api-key-input" id="connectorUrl" readonly value="" />
-          <button class="btn-copy" id="copyUrlBtn" onclick="copyConnectorUrl()">Copy URL</button>
+          <input type="text" class="api-key-input" id="connectorUrl" readonly value="" autocomplete="off" spellcheck="false" translate="no" />
+          <button class="btn-copy" id="copyUrlBtn" type="button" onclick="copyConnectorUrl()">Copy URL</button>
         </div>
       </div>
 
       <div class="config-section">
-        <h3>Claude Desktop Configuration</h3>
-        <p>Add this to your Claude Desktop MCP config file:</p>
-        <pre id="configSnippet"></pre>
+        <h3><span translate="no">Claude Desktop</span> Configuration</h3>
+        <p>Add this to your <span translate="no">Claude Desktop</span> MCP config file:</p>
+        <pre id="configSnippet" translate="no"></pre>
       </div>
 
-      <div class="warning">
+      <div class="warning" role="alert">
         Save your API key now. For security, it won't be shown again. If you lose it, sign in again to get a new session.
       </div>
+
+      <span id="copyStatus" class="sr-only" aria-live="polite" role="status"></span>
     </div>
-  </div>
+  </main>
 
   <script>
     const params = new URLSearchParams(window.location.search);
-    const apiKey = params.get('apiKey') || 'ERROR: No API key received';
+    const apiKey = params.get('apiKey');
     const baseUrl = window.location.origin;
 
-    const connectorUrl = baseUrl + '/mcp?apiKey=' + encodeURIComponent(apiKey);
+    if (!apiKey) {
+      document.getElementById('apiKey').value = '';
+      document.getElementById('apiKey').placeholder = 'No API key received. Sign in again to get a new key.';
+    } else {
+      document.getElementById('apiKey').value = apiKey;
+    }
 
-    document.getElementById('apiKey').value = apiKey;
+    const connectorUrl = apiKey ? baseUrl + '/mcp?apiKey=' + encodeURIComponent(apiKey) : '';
     document.getElementById('connectorUrl').value = connectorUrl;
     document.getElementById('configSnippet').textContent = JSON.stringify({
       "mcpServers": {
         "google-docs": {
           "url": baseUrl + "/mcp",
           "headers": {
-            "Authorization": "Bearer " + apiKey
+            "Authorization": "Bearer " + (apiKey || 'YOUR_API_KEY')
           }
         }
       }
     }, null, 2);
 
+    function announceCopy(message) {
+      const el = document.getElementById('copyStatus');
+      el.textContent = '';
+      // Re-set on next tick so screen readers announce the change reliably.
+      setTimeout(() => { el.textContent = message; }, 50);
+    }
+
+    function flashButton(btn, label) {
+      const original = btn.dataset.label || btn.textContent;
+      btn.dataset.label = original;
+      btn.textContent = label;
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = original;
+        btn.classList.remove('copied');
+      }, 2000);
+    }
+
     function copyConnectorUrl() {
+      if (!connectorUrl) {
+        announceCopy('Nothing to copy.');
+        return;
+      }
       navigator.clipboard.writeText(connectorUrl).then(() => {
-        const btn = document.getElementById('copyUrlBtn');
-        btn.textContent = 'Copied!';
-        btn.classList.add('copied');
-        setTimeout(() => {
-          btn.textContent = 'Copy URL';
-          btn.classList.remove('copied');
-        }, 2000);
+        flashButton(document.getElementById('copyUrlBtn'), 'Copied!');
+        announceCopy('Connector URL copied to clipboard.');
+      }).catch(() => {
+        announceCopy('Copy failed. Please copy the URL manually.');
       });
     }
 
     function copyKey() {
+      if (!apiKey) {
+        announceCopy('Nothing to copy.');
+        return;
+      }
       navigator.clipboard.writeText(apiKey).then(() => {
-        const btn = document.getElementById('copyBtn');
-        btn.textContent = 'Copied!';
-        btn.classList.add('copied');
-        setTimeout(() => {
-          btn.textContent = 'Copy';
-          btn.classList.remove('copied');
-        }, 2000);
+        flashButton(document.getElementById('copyBtn'), 'Copied!');
+        announceCopy('API key copied to clipboard.');
+      }).catch(() => {
+        announceCopy('Copy failed. Please copy the API key manually.');
       });
     }
   </script>

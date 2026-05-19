@@ -3,11 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
   <title>Awesome MCP - Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
+    :root { color-scheme: dark; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     .hidden { display: none !important; }
     body {
@@ -16,6 +18,40 @@
       color: #ededed;
       min-height: 100vh;
     }
+
+    /* Shared a11y scaffolding */
+    :focus-visible {
+      outline: 2px solid #0070f3;
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+    .skip-link {
+      position: absolute;
+      left: -9999px;
+      top: 0;
+    }
+    .skip-link:focus {
+      left: 8px;
+      top: 8px;
+      z-index: 10000;
+      padding: 0.5rem 1rem;
+      background: #0070f3;
+      color: #fff;
+      border-radius: 6px;
+      text-decoration: none;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
     .page-container {
       max-width: 1200px;
       margin: 0 auto;
@@ -59,7 +95,8 @@
       border-radius: 6px;
       cursor: pointer;
       font-size: 0.85rem;
-      transition: all 0.2s;
+      transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+      touch-action: manipulation;
     }
     .btn-logout:hover {
       background: #111;
@@ -126,7 +163,8 @@
       cursor: pointer;
       font-size: 0.9rem;
       font-weight: 500;
-      transition: background 0.2s;
+      transition: background-color 0.2s;
+      touch-action: manipulation;
     }
     .btn-add:hover {
       background: #005bb5;
@@ -143,7 +181,7 @@
       gap: 1rem;
       padding: 0.85rem 0;
       border-bottom: 1px solid rgba(255,255,255,0.08);
-      transition: background 0.15s;
+      transition: background-color 0.15s;
     }
     .instance-row:hover {
       background: rgba(255,255,255,0.03);
@@ -239,6 +277,8 @@
       cursor: pointer;
       font-size: 0.75rem;
       white-space: nowrap;
+      transition: background-color 0.2s;
+      touch-action: manipulation;
     }
     .btn-copy:hover { background: #005bb5; }
     .btn-copy.copied { background: #34a853; }
@@ -251,7 +291,8 @@
       border-radius: 5px;
       cursor: pointer;
       font-size: 0.75rem;
-      transition: all 0.2s;
+      transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+      touch-action: manipulation;
     }
     .btn-rename:hover {
       background: #111;
@@ -265,7 +306,8 @@
       border-radius: 5px;
       cursor: pointer;
       font-size: 0.75rem;
-      transition: all 0.2s;
+      transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+      touch-action: manipulation;
     }
     .btn-delete:hover {
       background: #dc3545;
@@ -279,7 +321,8 @@
       border-radius: 5px;
       cursor: pointer;
       font-size: 0.75rem;
-      transition: all 0.2s;
+      transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+      touch-action: manipulation;
     }
     .btn-reconnect:hover {
       background: #f0ad4e;
@@ -383,6 +426,7 @@
       max-height: 80vh;
       overflow-y: auto;
       overflow-x: hidden;
+      overscroll-behavior: contain;
     }
     .modal-header {
       display: flex;
@@ -400,6 +444,14 @@
       font-size: 1.5rem;
       cursor: pointer;
       color: #888;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      line-height: 1;
+      transition: background-color 0.2s, color 0.2s;
+    }
+    .btn-close:hover {
+      background: rgba(255,255,255,0.05);
+      color: #ededed;
     }
     .modal-step {
       display: none;
@@ -424,9 +476,15 @@
       border: 1px solid rgba(255,255,255,0.1);
       border-radius: 8px;
       cursor: pointer;
-      transition: all 0.2s;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      width: 100%;
+      transition: background-color 0.2s, border-color 0.2s;
     }
-    .mcp-type-item:hover {
+    .mcp-type-item:hover,
+    .mcp-type-item:focus-visible {
       border-color: #0070f3;
       background: rgba(0,112,243,0.1);
     }
@@ -472,8 +530,7 @@
       background: #111;
       color: #ededed;
     }
-    .name-input-section input:focus {
-      outline: none;
+    .name-input-section input:focus-visible {
       border-color: #0070f3;
     }
     .name-suggestion {
@@ -495,6 +552,8 @@
       align-items: center;
       justify-content: center;
       gap: 0.5rem;
+      transition: background-color 0.2s;
+      touch-action: manipulation;
     }
     .btn-connect-google:hover {
       background: #005bb5;
@@ -502,6 +561,125 @@
     .btn-connect-google:disabled {
       background: #333;
       cursor: not-allowed;
+    }
+
+    /* Access Rules */
+    .rules-help-toggle {
+      cursor: pointer;
+      color: #4f8df7;
+      font-size: 13px;
+      user-select: none;
+      background: none;
+      border: none;
+      padding: 0;
+      font-family: inherit;
+    }
+    .rules-help-body {
+      margin-top: 8px;
+      padding: 12px;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #bbb;
+    }
+    .rules-help-body ul {
+      margin: 0 0 0 16px;
+      padding: 0;
+    }
+    .rules-help-body code {
+      background: #222;
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+    .rules-section {
+      border-top: 1px solid #333;
+      padding-top: 12px;
+    }
+    .rules-section:first-child {
+      border-top: none;
+      padding-top: 0;
+    }
+    .rules-section-label {
+      font-weight: 600;
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+    .rules-input {
+      flex: 1;
+      padding: 6px 10px;
+      border: 1px solid #444;
+      border-radius: 6px;
+      background: #1a1a1a;
+      color: #eee;
+      font-size: 13px;
+    }
+    .rules-add-btn {
+      padding: 6px 12px;
+      border: 1px solid #444;
+      border-radius: 6px;
+      background: #222;
+      color: #eee;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    .rules-add-btn:hover { background: #2a2a2a; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: #333;
+      border-radius: 16px;
+      padding: 3px 6px 3px 10px;
+      font-size: 13px;
+      margin: 2px;
+    }
+    .chip-whitelist { background: #1a3a2a; }
+    .chip-blacklist { background: #3a1a1a; }
+    .chip-remove {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #bbb;
+      font-size: 16px;
+      line-height: 1;
+      padding: 0 4px;
+      border-radius: 3px;
+    }
+    .chip-remove:hover { color: #fff; }
+    .user-search-result {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      padding: 5px 8px;
+      cursor: pointer;
+      font-size: 13px;
+      border-radius: 4px;
+      background: transparent;
+      border: none;
+      color: inherit;
+      font-family: inherit;
+      text-align: left;
+      transition: background-color 0.15s;
+    }
+    .user-search-result:hover,
+    .user-search-result:focus-visible {
+      background: #333;
+    }
+    .user-search-result .uname {
+      color: #666;
+      font-size: 11px;
+    }
+    .access-rules-content {
+      max-height: 55vh;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+    .access-rules-content .scroll-list {
+      max-height: 120px;
+      overflow-y: auto;
     }
 
     /* Login overlay */
@@ -552,7 +730,8 @@
       font-weight: 500;
       cursor: pointer;
       text-decoration: none;
-      transition: all 0.2s;
+      transition: background-color 0.2s, border-color 0.2s;
+      touch-action: manipulation;
     }
     .btn-google-login:hover {
       background: #f8f9fa;
@@ -590,68 +769,83 @@
         padding-left: 3.5rem;
       }
     }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+      }
+    }
   </style>
 </head>
 <body>
+  <a href="#main" class="skip-link">Skip to content</a>
   <div class="page-container">
     <div class="header">
-      <a href="https://awesome-mcp.xyz" style="text-decoration:none;color:inherit;"><h1>Awesome MCP</h1></a>
+      <a href="https://awesome-mcp.xyz" style="text-decoration:none;color:inherit;"><h1 translate="no">Awesome MCP</h1></a>
       <div class="header-right">
         <span class="user-info">
           <span id="userInfo"></span>
         </span>
-        <button class="btn-logout" onclick="logout()">Sign out</button>
+        <button class="btn-logout" type="button" onclick="logout()">Sign out</button>
       </div>
     </div>
 
-    <div id="loading" class="loading">Loading...</div>
-    <div id="error" class="error hidden"></div>
-    <div id="successAlert" class="alert alert-success hidden"></div>
+    <main id="main">
+      <div id="loading" class="loading" aria-live="polite">Loading…</div>
+      <div id="error" class="error hidden" role="alert" aria-live="polite"></div>
+      <div id="successAlert" class="alert alert-success hidden" role="status" aria-live="polite"></div>
+      <span id="copyStatus" class="sr-only" aria-live="polite" role="status"></span>
 
-    <div id="content" class="hidden">
-      <div class="dashboard-layout">
-        <!-- Main content: instance list -->
-        <div class="main-content">
-          <div class="section">
-            <div class="section-header">
-              <h2>Your Connected Tools</h2>
-              <button class="btn-add" onclick="openAddToolModal()">+ Add Tool</button>
-            </div>
-            <div id="instanceList" class="instance-list">
-              <!-- Instance rows will be inserted here -->
-            </div>
-            <div id="emptyState" class="empty-state hidden">
-              <p>No tools connected yet.</p>
-              <button class="btn-add" onclick="openAddToolModal()">+ Add Your First Tool</button>
+      <div id="content" class="hidden">
+        <div class="dashboard-layout">
+          <!-- Main content: instance list -->
+          <div class="main-content">
+            <div class="section">
+              <div class="section-header">
+                <h2>Your Connected Tools</h2>
+                <button class="btn-add" type="button" onclick="openAddToolModal()">+ Add Tool</button>
+              </div>
+              <div id="instanceList" class="instance-list">
+                <!-- Instance rows will be inserted here -->
+              </div>
+              <div id="emptyState" class="empty-state hidden">
+                <p>No tools connected yet.</p>
+                <button class="btn-add" type="button" onclick="openAddToolModal()">+ Add Your First Tool</button>
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- Sidebar: How to Connect -->
-        <div class="sidebar">
-          <div class="sidebar-card">
-            <h3>How to Connect</h3>
-            <ol class="sidebar-steps">
-              <li>Click "+ Add Tool"</li>
-              <li>Choose your MCP type (e.g., Google Docs)</li>
-              <li>Name your instance and connect with Google</li>
-              <li>Press the "Copy URL" button</li>
-              <li>In Claude or ChatGPT, add the URL as a custom MCP connector</li>
-              <li>On first use, you'll be asked to log in with Google via Auth0</li>
-              <li>After login, your tools are ready to use</li>
-            </ol>
+          <!-- Sidebar: How to Connect -->
+          <div class="sidebar">
+            <div class="sidebar-card">
+              <h3>How to Connect</h3>
+              <ol class="sidebar-steps">
+                <li>Click "+ Add Tool"</li>
+                <li>Choose your MCP type (e.g., <span translate="no">Google Docs</span>)</li>
+                <li>Name your instance and connect with <span translate="no">Google</span></li>
+                <li>Press the "Copy URL" button</li>
+                <li>In <span translate="no">Claude</span> or <span translate="no">ChatGPT</span>, add the URL as a custom MCP connector</li>
+                <li>On first use, you'll be asked to log in with <span translate="no">Google</span> via <span translate="no">Auth0</span></li>
+                <li>After login, your tools are ready to use</li>
+              </ol>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </main>
   </div>
 
   <!-- Add Tool Modal -->
-  <div id="addToolModal" class="modal-overlay hidden">
+  <div id="addToolModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="addToolModalTitle">
     <div class="modal">
       <div class="modal-header">
-        <h3 id="modalTitle">Add Tool</h3>
-        <button class="btn-close" onclick="closeAddToolModal()">&times;</button>
+        <h3 id="addToolModalTitle">Add Tool</h3>
+        <button class="btn-close" type="button" onclick="closeAddToolModal()" aria-label="Close dialog">
+          <span aria-hidden="true">&times;</span>
+        </button>
       </div>
 
       <!-- Step 1: Select MCP Type -->
@@ -665,23 +859,23 @@
       <div id="step2" class="modal-step">
         <div class="name-input-section">
           <label for="instanceNameInput">Name this instance</label>
-          <input type="text" id="instanceNameInput" placeholder="e.g., Work Account, Personal" />
-          <p class="name-suggestion" id="nameSuggestion">Tip: Use a name that helps you identify which Google account this is for.</p>
+          <input type="text" id="instanceNameInput" placeholder="e.g., Work Account, Personal…" autocomplete="off" />
+          <p class="name-suggestion" id="nameSuggestion">Tip: Use a name that helps you identify which <span translate="no">Google</span> account this is for.</p>
         </div>
 
         <!-- Token input for direct-token providers (e.g., Slack) -->
         <div id="tokenInputSection" class="name-input-section" style="display:none;">
           <label for="tokenInput">Bot Token</label>
-          <input type="password" id="tokenInput" placeholder="xoxb-..." />
+          <input type="password" id="tokenInput" placeholder="xoxb-…" autocomplete="off" spellcheck="false" />
           <p class="name-suggestion" id="tokenHint">
-            Create a Slack App, add bot scopes (channels:history, channels:read, groups:history, groups:read, chat:write, users:read), install to workspace, then paste the Bot User OAuth Token here. The bot only sees channels where it's been /invited.
+            Create a <span translate="no">Slack</span> App, add bot scopes (<code translate="no">channels:history</code>, <code translate="no">channels:read</code>, <code translate="no">groups:history</code>, <code translate="no">groups:read</code>, <code translate="no">chat:write</code>, <code translate="no">users:read</code>), install to workspace, then paste the Bot User OAuth Token here. The bot only sees channels where it's been /invited.
           </p>
         </div>
 
-        <button class="btn-connect-google" id="connectGoogleBtn" onclick="startOAuth()">
-          Connect with Google
+        <button class="btn-connect-google" type="button" id="connectGoogleBtn" onclick="startOAuth()">
+          Connect with <span translate="no">Google</span>
         </button>
-        <button class="btn-connect-google" id="connectTokenBtn" onclick="connectWithToken()" style="display:none;">
+        <button class="btn-connect-google" type="button" id="connectTokenBtn" onclick="connectWithToken()" style="display:none;">
           Connect
         </button>
       </div>
@@ -689,42 +883,44 @@
   </div>
 
   <!-- Access Rules Modal (for Slack user OAuth) -->
-  <div id="accessRulesModal" class="modal-overlay hidden">
+  <div id="accessRulesModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="accessRulesModalTitle">
     <div class="modal" style="max-width: 550px;">
       <div class="modal-header">
-        <h3>Access Rules</h3>
-        <button class="modal-close" onclick="closeAccessRules()">&times;</button>
+        <h3 id="accessRulesModalTitle">Access Rules</h3>
+        <button class="btn-close" type="button" onclick="closeAccessRules()" aria-label="Close dialog">
+          <span aria-hidden="true">&times;</span>
+        </button>
       </div>
       <!-- Help toggle -->
       <div style="margin-bottom: 10px;">
-        <span onclick="document.getElementById('rulesHelp').classList.toggle('hidden')" style="cursor: pointer; color: #4f8df7; font-size: 13px; user-select: none;">&#9432; How access rules work</span>
-        <div id="rulesHelp" class="hidden" style="margin-top: 8px; padding: 12px; background: #111; border: 1px solid #333; border-radius: 8px; font-size: 12px; line-height: 1.6; color: #bbb;">
-          <ul style="margin: 0 0 0 16px; padding: 0;">
+        <button type="button" class="rules-help-toggle" onclick="document.getElementById('rulesHelp').classList.toggle('hidden')" aria-expanded="false" aria-controls="rulesHelp">&#9432; How access rules work</button>
+        <div id="rulesHelp" class="rules-help-body hidden">
+          <ul>
             <li><strong style="color: #a78bfa;">Allowed Orgs</strong> &mdash; your org is always included. Check external orgs to see their shared channels and DMs.</li>
             <li><strong style="color: #f87171;">Blacklist Users</strong> &mdash; search by name. Blocks their DMs and any group DM they're in.</li>
-            <li><strong style="color: #6ee7b7;">Whitelist Patterns</strong> &mdash; glob patterns for channel names. Use <code style="background:#222;padding:1px 4px;border-radius:3px;">*</code> for all, <code style="background:#222;padding:1px 4px;border-radius:3px;">eng-*</code> for prefix match.</li>
+            <li><strong style="color: #6ee7b7;">Whitelist Patterns</strong> &mdash; glob patterns for channel names. Use <code>*</code> for all, <code>eng-*</code> for prefix match.</li>
             <li><strong style="color: #f59e0b;">Blacklist Patterns</strong> &mdash; channels matching these are blocked even if whitelisted.</li>
             <li><strong>Public Only</strong> &mdash; hides all private channels.</li>
           </ul>
         </div>
       </div>
-      <div id="accessRulesContent" style="max-height: 55vh; overflow-y: auto;">
-        <p>Loading...</p>
+      <div id="accessRulesContent" class="access-rules-content">
+        <p>Loading…</p>
       </div>
       <div style="margin-top: 12px;">
-        <button class="btn-connect-google" id="saveRulesBtn" onclick="saveAccessRules()">Save Rules</button>
+        <button class="btn-connect-google" type="button" id="saveRulesBtn" onclick="saveAccessRules()">Save Rules</button>
       </div>
     </div>
   </div>
 
   <!-- Login Overlay (shown when not authenticated) -->
-  <div id="loginOverlay" class="login-overlay hidden">
+  <div id="loginOverlay" class="login-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="loginOverlayTitle">
     <div class="login-card">
-      <h2>Sign in to continue</h2>
-      <p class="login-subtitle">Sign in with your Google account to access the MCP Dashboard.</p>
+      <h2 id="loginOverlayTitle">Sign in to continue</h2>
+      <p class="login-subtitle">Sign in with your <span translate="no">Google</span> account to access the MCP Dashboard.</p>
       <a href="/auth/google" class="btn-google-login">
-        <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-        Sign in with Google
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+        Sign in with <span translate="no">Google</span>
       </a>
       <p class="login-footer">Your credentials are stored securely and used only for MCP tool access.</p>
     </div>
@@ -738,9 +934,89 @@
     let authMode = 'dual'; // 'dual' = apiKey in URL, 'jwt' = bare URL (Auth0)
     let selectedMcpType = null;
 
+    // ====== Modal helpers (focus management) ======
+    const modalState = new WeakMap();
+
+    function getFocusables(modal) {
+      return Array.from(modal.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )).filter(el => !el.closest('.hidden') && el.offsetParent !== null);
+    }
+
+    function openModal(modalEl) {
+      const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      modalState.set(modalEl, { opener });
+      modalEl.classList.remove('hidden');
+      setTimeout(() => {
+        const focusables = getFocusables(modalEl);
+        if (focusables.length) focusables[0].focus();
+      }, 0);
+    }
+
+    function closeModal(modalEl) {
+      modalEl.classList.add('hidden');
+      const state = modalState.get(modalEl);
+      if (state && state.opener && document.body.contains(state.opener)) {
+        state.opener.focus();
+      }
+      modalState.delete(modalEl);
+    }
+
+    function getTopmostOpenModal() {
+      const candidates = ['accessRulesModal', 'addToolModal', 'loginOverlay'];
+      for (const id of candidates) {
+        const el = document.getElementById(id);
+        if (el && !el.classList.contains('hidden')) return el;
+      }
+      return null;
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      const topmost = getTopmostOpenModal();
+      if (!topmost) return;
+      if (topmost.id === 'addToolModal') closeAddToolModal();
+      else if (topmost.id === 'accessRulesModal') closeAccessRules();
+      // loginOverlay is not dismissible — sign-in required
+    });
+
+    function attachFocusTrap(modalId) {
+      const modal = document.getElementById(modalId);
+      if (!modal) return;
+      modal.addEventListener('keydown', (e) => {
+        if (e.key !== 'Tab') return;
+        const focusables = getFocusables(modal);
+        if (!focusables.length) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      });
+    }
+    attachFocusTrap('addToolModal');
+    attachFocusTrap('accessRulesModal');
+    attachFocusTrap('loginOverlay');
+
+    function announce(message) {
+      const el = document.getElementById('copyStatus');
+      if (!el) return;
+      el.textContent = '';
+      setTimeout(() => { el.textContent = message; }, 50);
+    }
+
     function showLoginOverlay() {
-      document.getElementById('loginOverlay').classList.remove('hidden');
+      const overlay = document.getElementById('loginOverlay');
+      overlay.classList.remove('hidden');
       document.getElementById('loading').classList.add('hidden');
+      setTimeout(() => {
+        const link = overlay.querySelector('.btn-google-login');
+        if (link) link.focus();
+      }, 0);
     }
 
     async function loadUserData() {
@@ -773,7 +1049,7 @@
       const icons = {
         'google-docs': '\u{1F4C4}',      // 📄
         'google-calendar': '\u{1F4C5}',  // 📅
-        'clickup': '\u2705',             // ✅
+        'clickup': '✅',             // ✅
         'github': '\u{1F419}',           // 🐙
         'slack-bot': '\u{1F916}',        // 🤖
         'slack': '\u{1F4AC}',            // 💬
@@ -829,7 +1105,7 @@
       const mcpName = mcp?.name || instance.mcpSlug;
       const safeIcon = mcp?.iconUrl ? safeIconUrl(mcp.iconUrl) : '';
       const mcpIcon = safeIcon
-        ? `<img src="${escapeAttr(safeIcon)}" alt="${escapeAttr(mcpName)}">`
+        ? `<img src="${escapeAttr(safeIcon)}" alt="" width="24" height="24" loading="lazy">`
         : getIconForMcp({ slug: instance.mcpSlug });
       const showReconnect = needsReconnect(instance);
       const tokenHtml = getTokenStatusHtml(instance);
@@ -839,7 +1115,7 @@
 
       return `
         <div class="instance-row" data-instance-id="${eid}">
-          <div class="instance-icon">
+          <div class="instance-icon" aria-hidden="true">
             ${mcpIcon}
           </div>
           <div class="instance-info">
@@ -848,16 +1124,14 @@
                 <span id="name-${eid}">${escapeHtml(instance.instanceName)}</span>
                 ${tokenHtml}
               </div>
-              <!-- type label removed -->
             </div>
-            <!-- email removed — now shown in instance name -->
           </div>
           <div class="instance-row-actions">
             ${showReconnect
-              ? `<button class="btn-reconnect" onclick="reconnectInstance('${eid}', '${eslug}')">Reconnect</button>`
-              : `<button class="btn-copy" onclick="copyUrl('${eid}', this)">Copy URL</button>`}
-            ${instance.provider === 'slack' ? `<button class="btn-rename" onclick="openAccessRules('${eid}')">Access Rules</button>` : ''}
-            <button class="btn-delete" onclick="deleteInstance('${eid}', '${ename}')">Delete</button>
+              ? `<button class="btn-reconnect" type="button" onclick="reconnectInstance('${eid}', '${eslug}')">Reconnect</button>`
+              : `<button class="btn-copy" type="button" onclick="copyUrl('${eid}', this)">Copy URL</button>`}
+            ${instance.provider === 'slack' ? `<button class="btn-rename" type="button" onclick="openAccessRules('${eid}')">Access Rules</button>` : ''}
+            <button class="btn-delete" type="button" onclick="deleteInstance('${eid}', '${ename}')">Delete</button>
           </div>
         </div>
       `;
@@ -880,39 +1154,39 @@
       selectedMcpType = null;
       document.getElementById('step1').classList.add('active');
       document.getElementById('step2').classList.remove('active');
-      document.getElementById('modalTitle').textContent = 'Add Tool';
+      document.getElementById('addToolModalTitle').textContent = 'Add Tool';
       document.getElementById('instanceNameInput').value = '';
 
       console.log('Opening modal with catalogs:', catalogs, 'count:', catalogs.length);
 
-      // Render MCP type list
+      // Render MCP type list as buttons (was <div onclick> before)
       const list = document.getElementById('mcpTypeList');
       const htmlItems = [];
       for (const mcp of catalogs) {
         console.log('Rendering MCP:', mcp.slug, mcp.name);
         const safeIcon = mcp.iconUrl ? safeIconUrl(mcp.iconUrl) : '';
         const icon = safeIcon
-          ? `<img src="${escapeAttr(safeIcon)}" alt="${escapeAttr(mcp.name)}">`
+          ? `<img src="${escapeAttr(safeIcon)}" alt="" width="24" height="24" loading="lazy">`
           : getIconForMcp(mcp);
         htmlItems.push(`
-          <div class="mcp-type-item" onclick="selectMcpType('${escapeAttr(mcp.slug)}')">
-            <div class="mcp-type-icon">${icon}</div>
-            <div class="mcp-type-info">
-              <h4>${escapeHtml(mcp.name || 'Unknown')}</h4>
+          <button type="button" class="mcp-type-item" onclick="selectMcpType('${escapeAttr(mcp.slug)}')">
+            <span class="mcp-type-icon" aria-hidden="true">${icon}</span>
+            <span class="mcp-type-info">
+              <h4 translate="no">${escapeHtml(mcp.name || 'Unknown')}</h4>
               <p>${escapeHtml(mcp.description || '')}</p>
-            </div>
-          </div>
+            </span>
+          </button>
         `);
       }
       console.log('Generated', htmlItems.length, 'MCP items');
       list.innerHTML = htmlItems.join('');
       console.log('List children count:', list.children.length);
 
-      document.getElementById('addToolModal').classList.remove('hidden');
+      openModal(document.getElementById('addToolModal'));
     }
 
     function closeAddToolModal() {
-      document.getElementById('addToolModal').classList.add('hidden');
+      closeModal(document.getElementById('addToolModal'));
     }
 
     function selectMcpType(slug) {
@@ -931,7 +1205,7 @@
       // Token providers (Slack Bot) still need Step 2 for token input
       document.getElementById('step1').classList.remove('active');
       document.getElementById('step2').classList.add('active');
-      document.getElementById('modalTitle').textContent = `Add ${selectedMcpType.name}`;
+      document.getElementById('addToolModalTitle').textContent = `Add ${selectedMcpType.name}`;
 
       // Suggest a default name
       const existingCount = instances.filter(i => i.mcpSlug === slug).length;
@@ -975,7 +1249,7 @@
 
       const btn = document.getElementById('connectTokenBtn');
       btn.disabled = true;
-      btn.textContent = 'Connecting...';
+      btn.textContent = 'Connecting…';
 
       try {
         const response = await fetch('/api/connect-token', {
@@ -1014,8 +1288,12 @@
 
     async function openAccessRules(instanceId) {
       rulesInstanceId = instanceId;
-      document.getElementById('accessRulesModal').classList.remove('hidden');
-      document.getElementById('accessRulesContent').innerHTML = '<p>Loading...</p>';
+      const modal = document.getElementById('accessRulesModal');
+      const helpToggle = modal.querySelector('.rules-help-toggle');
+      if (helpToggle) helpToggle.setAttribute('aria-expanded', 'false');
+      document.getElementById('rulesHelp').classList.add('hidden');
+      openModal(modal);
+      document.getElementById('accessRulesContent').innerHTML = '<p>Loading…</p>';
 
       try {
         const response = await fetch(`/api/instances/${instanceId}/access-rules`, { credentials: 'include' });
@@ -1028,7 +1306,7 @@
 
         renderAccessRulesForm(data.currentOrg, data.connectedOrgs);
       } catch (err) {
-        document.getElementById('accessRulesContent').innerHTML = `<p style="color: red;">Error: ${err.message}</p>`;
+        document.getElementById('accessRulesContent').innerHTML = `<p style="color: #dc3545;" role="alert">Error: ${escapeHtml(err.message)}</p>`;
       }
     }
 
@@ -1040,68 +1318,74 @@
         </label>`,
         ...connectedOrgs.map(org => `
           <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer;">
-            <input type="checkbox" data-org-id="${org.id}" ${rulesState.allowedOrgs.includes(org.id) ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #4f8df7;" />
+            <input type="checkbox" data-org-id="${escapeAttr(org.id)}" ${rulesState.allowedOrgs.includes(org.id) ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #4f8df7;" />
             <span>${escapeHtml(org.name !== org.id ? org.name : org.id)}</span>
           </label>
         `)
       ].join('');
 
       const blacklistHtml = rulesBlacklistUserDetails.map(u => `
-        <span style="display: inline-flex; align-items: center; gap: 4px; background: #333; border-radius: 16px; padding: 3px 10px 3px 8px; font-size: 13px; margin: 2px;">
+        <span class="chip">
           ${escapeHtml(u.name)}
-          <span onclick="removeBlacklistUser('${u.id}')" style="cursor: pointer; color: #999; font-size: 16px; line-height: 1;">&times;</span>
+          <button type="button" class="chip-remove" data-action="remove-user" data-uid="${escapeAttr(u.id)}" aria-label="Remove ${escapeAttr(u.name)}">
+            <span aria-hidden="true">&times;</span>
+          </button>
         </span>
       `).join('');
 
       const whitelistChips = rulesState.whitelistChannels.map((p, i) => `
-        <span style="display: inline-flex; align-items: center; gap: 4px; background: #1a3a2a; border-radius: 16px; padding: 3px 10px 3px 8px; font-size: 13px; margin: 2px;">
+        <span class="chip chip-whitelist">
           ${escapeHtml(p)}
-          <span onclick="removePattern('whitelist', ${i})" style="cursor: pointer; color: #999; font-size: 16px; line-height: 1;">&times;</span>
+          <button type="button" class="chip-remove" data-action="remove-pattern" data-type="whitelist" data-index="${i}" aria-label="Remove pattern ${escapeAttr(p)}">
+            <span aria-hidden="true">&times;</span>
+          </button>
         </span>
       `).join('');
 
       const blacklistChips = rulesState.blacklistChannels.map((p, i) => `
-        <span style="display: inline-flex; align-items: center; gap: 4px; background: #3a1a1a; border-radius: 16px; padding: 3px 10px 3px 8px; font-size: 13px; margin: 2px;">
+        <span class="chip chip-blacklist">
           ${escapeHtml(p)}
-          <span onclick="removePattern('blacklist', ${i})" style="cursor: pointer; color: #999; font-size: 16px; line-height: 1;">&times;</span>
+          <button type="button" class="chip-remove" data-action="remove-pattern" data-type="blacklist" data-index="${i}" aria-label="Remove pattern ${escapeAttr(p)}">
+            <span aria-hidden="true">&times;</span>
+          </button>
         </span>
       `).join('');
 
       document.getElementById('accessRulesContent').innerHTML = `
         <div style="display: flex; flex-direction: column; gap: 16px;">
-          <div>
-            <div style="font-weight: 600; font-size: 13px; color: #a78bfa; margin-bottom: 6px;">Allowed Organisations</div>
+          <div class="rules-section">
+            <div class="rules-section-label" style="color: #a78bfa;">Allowed Organisations</div>
             ${orgsHtml}
           </div>
 
-          <div style="border-top: 1px solid #333; padding-top: 12px;">
-            <div style="font-weight: 600; font-size: 13px; color: #f87171; margin-bottom: 6px;">Blacklist Users</div>
+          <div class="rules-section">
+            <label class="rules-section-label" for="userSearchInput" style="color: #f87171; display: block;">Blacklist Users</label>
             <div style="display: flex; gap: 6px; margin-bottom: 6px;">
-              <input type="text" id="userSearchInput" placeholder="Search users..." oninput="debouncedUserSearch()" style="flex: 1; padding: 6px 10px; border: 1px solid #444; border-radius: 6px; background: #1a1a1a; color: #eee; font-size: 13px;" />
+              <input type="text" id="userSearchInput" placeholder="Search users…" oninput="debouncedUserSearch()" autocomplete="off" spellcheck="false" class="rules-input" />
             </div>
-            <div id="userSearchResults" style="max-height: 120px; overflow-y: auto;"></div>
+            <div id="userSearchResults" class="scroll-list"></div>
             <div id="blacklistUserChips" style="margin-top: 4px; display: flex; flex-wrap: wrap; gap: 2px;">${blacklistHtml}</div>
           </div>
 
-          <div style="border-top: 1px solid #333; padding-top: 12px;">
-            <div style="font-weight: 600; font-size: 13px; color: #6ee7b7; margin-bottom: 6px;">Whitelist Channel Patterns</div>
+          <div class="rules-section">
+            <label class="rules-section-label" for="whitelistInput" style="color: #6ee7b7; display: block;">Whitelist Channel Patterns</label>
             <div style="display: flex; gap: 6px; margin-bottom: 6px;">
-              <input type="text" id="whitelistInput" placeholder="e.g. * or eng-*" style="flex: 1; padding: 6px 10px; border: 1px solid #444; border-radius: 6px; background: #1a1a1a; color: #eee; font-size: 13px;" />
-              <button onclick="addPattern('whitelist')" style="padding: 6px 12px; border: 1px solid #444; border-radius: 6px; background: #222; color: #eee; cursor: pointer;">Add</button>
+              <input type="text" id="whitelistInput" placeholder="e.g. * or eng-*" autocomplete="off" spellcheck="false" class="rules-input" />
+              <button type="button" onclick="addPattern('whitelist')" class="rules-add-btn">Add</button>
             </div>
             <div id="whitelistChips" style="display: flex; flex-wrap: wrap; gap: 2px;">${whitelistChips}</div>
           </div>
 
-          <div style="border-top: 1px solid #333; padding-top: 12px;">
-            <div style="font-weight: 600; font-size: 13px; color: #f59e0b; margin-bottom: 6px;">Blacklist Channel Patterns</div>
+          <div class="rules-section">
+            <label class="rules-section-label" for="blacklistInput" style="color: #f59e0b; display: block;">Blacklist Channel Patterns</label>
             <div style="display: flex; gap: 6px; margin-bottom: 6px;">
-              <input type="text" id="blacklistInput" placeholder="e.g. secret-*" style="flex: 1; padding: 6px 10px; border: 1px solid #444; border-radius: 6px; background: #1a1a1a; color: #eee; font-size: 13px;" />
-              <button onclick="addPattern('blacklist')" style="padding: 6px 12px; border: 1px solid #444; border-radius: 6px; background: #222; color: #eee; cursor: pointer;">Add</button>
+              <input type="text" id="blacklistInput" placeholder="e.g. secret-*" autocomplete="off" spellcheck="false" class="rules-input" />
+              <button type="button" onclick="addPattern('blacklist')" class="rules-add-btn">Add</button>
             </div>
             <div id="blacklistChannelChips" style="display: flex; flex-wrap: wrap; gap: 2px;">${blacklistChips}</div>
           </div>
 
-          <div style="border-top: 1px solid #333; padding-top: 12px;">
+          <div class="rules-section">
             <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
               <input type="checkbox" id="allowPublicOnly" ${rulesState.allowPublicOnly ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #4f8df7;" />
               <span style="font-size: 13px;">Allow only public channels</span>
@@ -1109,7 +1393,29 @@
           </div>
         </div>
       `;
+
+      // Attach delegated click handlers for chip-remove buttons
+      document.getElementById('accessRulesContent').addEventListener('click', handleAccessRulesClick);
     }
+
+    function handleAccessRulesClick(e) {
+      const btn = e.target.closest('button[data-action]');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      if (action === 'remove-user') {
+        removeBlacklistUser(btn.dataset.uid);
+      } else if (action === 'remove-pattern') {
+        removePattern(btn.dataset.type, parseInt(btn.dataset.index, 10));
+      }
+    }
+
+    // Help toggle exposes its expanded state for screen readers
+    document.addEventListener('click', (e) => {
+      const toggle = e.target.closest('.rules-help-toggle');
+      if (!toggle) return;
+      const expanded = !document.getElementById('rulesHelp').classList.contains('hidden');
+      toggle.setAttribute('aria-expanded', String(expanded));
+    });
 
     function addPattern(type) {
       const inputId = type === 'whitelist' ? 'whitelistInput' : 'blacklistInput';
@@ -1121,7 +1427,6 @@
         rulesState.blacklistChannels.push(val);
       }
       document.getElementById(inputId).value = '';
-      // Re-render just the chips
       renderPatternChips(type);
     }
 
@@ -1136,13 +1441,15 @@
 
     function renderPatternChips(type) {
       const list = type === 'whitelist' ? rulesState.whitelistChannels : rulesState.blacklistChannels;
-      const bg = type === 'whitelist' ? '#1a3a2a' : '#3a1a1a';
+      const cssClass = type === 'whitelist' ? 'chip chip-whitelist' : 'chip chip-blacklist';
       const containerId = type === 'whitelist' ? 'whitelistChips' : 'blacklistChannelChips';
       const container = document.getElementById(containerId);
       container.innerHTML = list.map((p, i) => `
-        <span style="display: inline-flex; align-items: center; gap: 4px; background: ${bg}; border-radius: 16px; padding: 3px 10px 3px 8px; font-size: 13px; margin: 2px;">
+        <span class="${cssClass}">
           ${escapeHtml(p)}
-          <span onclick="removePattern('${type}', ${i})" style="cursor: pointer; color: #999; font-size: 16px; line-height: 1;">&times;</span>
+          <button type="button" class="chip-remove" data-action="remove-pattern" data-type="${type}" data-index="${i}" aria-label="Remove pattern ${escapeAttr(p)}">
+            <span aria-hidden="true">&times;</span>
+          </button>
         </span>
       `).join('');
     }
@@ -1167,10 +1474,10 @@
           ? '<p style="color: #666; font-size: 12px; padding: 4px 8px;">No results</p>'
           : filtered.map(u => {
               const displayName = u.display_name || u.real_name || u.name;
-              return `<div data-uid="${u.id}" data-uname="${escapeAttr(displayName)}" class="user-search-result" style="padding: 5px 8px; cursor: pointer; font-size: 13px; border-radius: 4px; display: flex; align-items: center; gap: 6px;" onmouseover="this.style.background='#333'" onmouseout="this.style.background='transparent'">
+              return `<button type="button" data-uid="${escapeAttr(u.id)}" data-uname="${escapeAttr(displayName)}" class="user-search-result">
                 <span>${escapeHtml(displayName)}</span>
-                <span style="color: #666; font-size: 11px;">@${escapeHtml(u.name)}</span>
-              </div>`;
+                <span class="uname">@${escapeHtml(u.name)}</span>
+              </button>`;
             }).join('');
         // Attach click handlers via event delegation
         resultsEl.querySelectorAll('.user-search-result').forEach(el => {
@@ -1180,7 +1487,7 @@
         });
       } catch (err) {
         console.error('[user search] error:', err);
-        resultsEl.innerHTML = `<p style="color: #f87171; font-size: 12px; padding: 4px 8px;">Search failed</p>`;
+        resultsEl.innerHTML = `<p style="color: #f87171; font-size: 12px; padding: 4px 8px;" role="alert">Search failed</p>`;
       }
     }
 
@@ -1201,15 +1508,17 @@
 
     function renderBlacklistChips() {
       document.getElementById('blacklistUserChips').innerHTML = rulesBlacklistUserDetails.map(u => `
-        <span style="display: inline-flex; align-items: center; gap: 4px; background: #333; border-radius: 16px; padding: 3px 10px 3px 8px; font-size: 13px; margin: 2px;">
+        <span class="chip">
           ${escapeHtml(u.name)}
-          <span onclick="removeBlacklistUser('${u.id}')" style="cursor: pointer; color: #999; font-size: 16px; line-height: 1;">&times;</span>
+          <button type="button" class="chip-remove" data-action="remove-user" data-uid="${escapeAttr(u.id)}" aria-label="Remove ${escapeAttr(u.name)}">
+            <span aria-hidden="true">&times;</span>
+          </button>
         </span>
       `).join('');
     }
 
     function closeAccessRules() {
-      document.getElementById('accessRulesModal').classList.add('hidden');
+      closeModal(document.getElementById('accessRulesModal'));
       rulesInstanceId = null;
     }
 
@@ -1230,7 +1539,7 @@
 
       const btn = document.getElementById('saveRulesBtn');
       btn.disabled = true;
-      btn.textContent = 'Saving...';
+      btn.textContent = 'Saving…';
 
       try {
         const response = await fetch(`/api/instances/${rulesInstanceId}/access-rules`, {
@@ -1261,6 +1570,7 @@
       if (!url) {
         btn.textContent = 'Copy failed';
         btn.classList.add('copy-failed');
+        announce('Copy failed.');
         setTimeout(() => {
           btn.textContent = 'Copy URL';
           btn.classList.remove('copy-failed');
@@ -1271,6 +1581,7 @@
       navigator.clipboard.writeText(url).then(() => {
         btn.textContent = 'Copied!';
         btn.classList.add('copied');
+        announce('URL copied to clipboard.');
         setTimeout(() => {
           btn.textContent = 'Copy URL';
           btn.classList.remove('copied');
@@ -1278,6 +1589,7 @@
       }).catch(() => {
         btn.textContent = 'Copy failed';
         btn.classList.add('copy-failed');
+        announce('Copy failed. Please copy the URL manually.');
         setTimeout(() => {
           btn.textContent = 'Copy URL';
           btn.classList.remove('copy-failed');
@@ -1456,6 +1768,11 @@
     document.getElementById('addToolModal').addEventListener('click', function(e) {
       if (e.target === this) {
         closeAddToolModal();
+      }
+    });
+    document.getElementById('accessRulesModal').addEventListener('click', function(e) {
+      if (e.target === this) {
+        closeAccessRules();
       }
     });
 
