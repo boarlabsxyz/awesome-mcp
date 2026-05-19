@@ -3,11 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
   <title>Awesome MCP - Updates</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
+    :root { color-scheme: dark; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -15,6 +17,29 @@
       color: #ededed;
       min-height: 100vh;
     }
+
+    /* Shared a11y scaffolding */
+    :focus-visible {
+      outline: 2px solid #0070f3;
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+    .skip-link {
+      position: absolute;
+      left: -9999px;
+      top: 0;
+    }
+    .skip-link:focus {
+      left: 8px;
+      top: 8px;
+      z-index: 10000;
+      padding: 0.5rem 1rem;
+      background: #0070f3;
+      color: #fff;
+      border-radius: 6px;
+      text-decoration: none;
+    }
+
     .page-container {
       max-width: 720px;
       margin: 0 auto;
@@ -40,7 +65,8 @@
       padding: 0.5rem 1rem;
       border: 1px solid rgba(255,255,255,0.15);
       border-radius: 6px;
-      transition: all 0.2s;
+      transition: background-color 0.2s, color 0.2s;
+      touch-action: manipulation;
     }
     .header a:hover {
       background: #111;
@@ -60,15 +86,18 @@
       align-items: baseline;
       gap: 1rem;
       margin-bottom: 1rem;
+      flex-wrap: wrap;
     }
     .release-version {
       font-size: 1.25rem;
       font-weight: 700;
       letter-spacing: -0.02em;
+      margin: 0;
     }
     .release-date {
       font-size: 0.85rem;
       color: #666;
+      font-variant-numeric: tabular-nums;
     }
     .release-tag {
       font-size: 0.7rem;
@@ -122,89 +151,114 @@
       padding: 4rem 0;
       font-size: 0.95rem;
     }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+      }
+    }
   </style>
 </head>
 <body>
+  <a href="#main" class="skip-link">Skip to content</a>
   <div class="page-container">
     <div class="header">
       <h1>Updates</h1>
       <a href="/dashboard">Dashboard</a>
     </div>
 
-    <div id="releases">
-    <div class="release">
-      <div class="release-header">
-        <span class="release-version">v0.5.0</span>
-        <span class="release-date">May 17, 2026</span>
-        <span class="release-tag tag-feature">Feature</span>
-      </div>
-      <div class="release-body">
-        <h3>What's New</h3>
-        <ul>
-          <li>add rich text formatting for task comments CU-86c9mr5kd CU-86c9qxnqy</li>
-          <li>add markdown_content support for tasks, lists, and comments CU-86c9mr5kd CU-86c9qxnqy</li>
-        </ul>
-        <h3>Bug Fixes</h3>
-        <ul>
-          <li>enforce exclusive comment_text or comment in addTaskComment type</li>
-        </ul>
-        <h3>Improvements</h3>
-        <ul>
-          <li>update release notes for v0.4.0</li>
-        </ul>
-      </div>
-    </div>
+    <main id="main">
+      <div id="releases">
+        <article class="release">
+          <header class="release-header">
+            <h2 class="release-version" translate="no">v0.5.0</h2>
+            <time class="release-date" datetime="2026-05-17" data-locale-date>May 17, 2026</time>
+            <span class="release-tag tag-feature">Feature</span>
+          </header>
+          <div class="release-body">
+            <h3>What's New</h3>
+            <ul>
+              <li>Add rich text formatting for task comments</li>
+              <li>Add <code translate="no">markdown_content</code> support for tasks, lists, and comments</li>
+            </ul>
+            <h3>Bug Fixes</h3>
+            <ul>
+              <li>Enforce exclusive <code translate="no">comment_text</code> or <code translate="no">comment</code> in <code translate="no">addTaskComment</code> type</li>
+            </ul>
+            <h3>Improvements</h3>
+            <ul>
+              <li>Update release notes for v0.4.0</li>
+            </ul>
+          </div>
+        </article>
 
-    <div class="release">
-      <div class="release-header">
-        <span class="release-version">v0.4.0</span>
-        <span class="release-date">May 15, 2026</span>
-        <span class="release-tag tag-fix">Fix</span>
-      </div>
-      <div class="release-body">
-        <h3>Bug Fixes</h3>
-        <ul>
-          <li>scan merge commits for CU- IDs and show unlinked tasks</li>
-        </ul>
-        <h3>Improvements</h3>
-        <ul>
-          <li>update release notes for v0.3.0</li>
-        </ul>
-      </div>
-    </div>
+        <article class="release">
+          <header class="release-header">
+            <h2 class="release-version" translate="no">v0.4.0</h2>
+            <time class="release-date" datetime="2026-05-15" data-locale-date>May 15, 2026</time>
+            <span class="release-tag tag-fix">Fix</span>
+          </header>
+          <div class="release-body">
+            <h3>Bug Fixes</h3>
+            <ul>
+              <li>Scan merge commits for <span translate="no">CU-</span> IDs and show unlinked tasks</li>
+            </ul>
+            <h3>Improvements</h3>
+            <ul>
+              <li>Update release notes for v0.3.0</li>
+            </ul>
+          </div>
+        </article>
 
-    <div class="release">
-      <div class="release-header">
-        <span class="release-version">v0.3.0</span>
-        <span class="release-date">May 15, 2026</span>
-        <span class="release-tag tag-fix">Fix</span>
-      </div>
-      <div class="release-body">
-        <h3>Bug Fixes</h3>
-        <ul>
-          <li>use PAT_TOKEN in release-notes to push to protected main branch</li>
-        </ul>
-      </div>
-    </div>
+        <article class="release">
+          <header class="release-header">
+            <h2 class="release-version" translate="no">v0.3.0</h2>
+            <time class="release-date" datetime="2026-05-15" data-locale-date>May 15, 2026</time>
+            <span class="release-tag tag-fix">Fix</span>
+          </header>
+          <div class="release-body">
+            <h3>Bug Fixes</h3>
+            <ul>
+              <li>Use <code translate="no">PAT_TOKEN</code> in release-notes to push to protected <span translate="no">main</span> branch</li>
+            </ul>
+          </div>
+        </article>
 
-      <div class="release">
-        <div class="release-header">
-          <span class="release-version">v0.1.0</span>
-          <span class="release-date">May 13, 2025</span>
-          <span class="release-tag tag-feature">Feature</span>
-        </div>
-        <div class="release-body">
-          <h3>What's New</h3>
-          <ul>
-            <li>Initial release of Awesome MCP</li>
-            <li>Google Docs, Sheets, Slides, Calendar, Drive, and Gmail integrations</li>
-            <li>ClickUp and Slack integrations</li>
-            <li>Multi-account support with per-instance access rules</li>
-            <li>Dashboard for managing connections and API keys</li>
-          </ul>
-        </div>
+        <article class="release">
+          <header class="release-header">
+            <h2 class="release-version" translate="no">v0.1.0</h2>
+            <time class="release-date" datetime="2025-05-13" data-locale-date>May 13, 2025</time>
+            <span class="release-tag tag-feature">Feature</span>
+          </header>
+          <div class="release-body">
+            <h3>What's New</h3>
+            <ul>
+              <li>Initial release of <span translate="no">Awesome MCP</span></li>
+              <li><span translate="no">Google Docs</span>, <span translate="no">Sheets</span>, <span translate="no">Slides</span>, <span translate="no">Calendar</span>, <span translate="no">Drive</span>, and <span translate="no">Gmail</span> integrations</li>
+              <li><span translate="no">ClickUp</span> and <span translate="no">Slack</span> integrations</li>
+              <li>Multi-account support with per-instance access rules</li>
+              <li>Dashboard for managing connections and API keys</li>
+            </ul>
+          </div>
+        </article>
       </div>
-    </div>
+    </main>
   </div>
+
+  <script>
+    (function formatDates() {
+      const fmt = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+      document.querySelectorAll('time[data-locale-date]').forEach(function (el) {
+        const iso = el.getAttribute('datetime');
+        if (!iso) return;
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return;
+        el.textContent = fmt.format(d);
+      });
+    })();
+  </script>
 </body>
 </html>

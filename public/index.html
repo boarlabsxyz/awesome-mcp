@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f5f5f5">
   <title>Google Docs MCP - Connect Google Services to AI Assistants</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -11,6 +12,28 @@
       background: #f5f5f5;
       color: #333;
       min-height: 100vh;
+    }
+
+    /* Shared a11y scaffolding */
+    :focus-visible {
+      outline: 2px solid #4285F4;
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+    .skip-link {
+      position: absolute;
+      left: -9999px;
+      top: 0;
+    }
+    .skip-link:focus {
+      left: 8px;
+      top: 8px;
+      z-index: 10000;
+      padding: 0.5rem 1rem;
+      background: #4285F4;
+      color: #fff;
+      border-radius: 6px;
+      text-decoration: none;
     }
 
     .container {
@@ -40,10 +63,22 @@
       text-decoration: none;
       font-size: 0.9rem;
       font-weight: 500;
-      transition: background 0.2s;
+      transition: background-color 0.2s;
+      touch-action: manipulation;
     }
     .nav-link:hover {
       background: #3367d6;
+    }
+    .nav-inline {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+    .nav-inline-link {
+      color: #555;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
     }
 
     /* Hero */
@@ -56,6 +91,7 @@
       font-weight: 700;
       margin-bottom: 1rem;
       line-height: 1.2;
+      text-wrap: balance;
     }
     .hero p {
       font-size: 1.15rem;
@@ -63,6 +99,7 @@
       max-width: 600px;
       margin: 0 auto 2rem;
       line-height: 1.6;
+      text-wrap: pretty;
     }
     .btn-cta {
       display: inline-block;
@@ -73,10 +110,20 @@
       text-decoration: none;
       font-size: 1.05rem;
       font-weight: 500;
-      transition: background 0.2s;
+      transition: background-color 0.2s;
+      touch-action: manipulation;
     }
     .btn-cta:hover {
       background: #3367d6;
+    }
+    .hero-secondary {
+      margin-top: 1rem;
+    }
+    .hero-secondary a {
+      color: #4285F4;
+      font-size: 0.95rem;
+      font-weight: 500;
+      text-decoration: none;
     }
 
     /* How it works */
@@ -87,6 +134,7 @@
       text-align: center;
       font-size: 1.5rem;
       margin-bottom: 2rem;
+      text-wrap: balance;
     }
     .steps {
       display: grid;
@@ -144,54 +192,66 @@
       font-size: 0.8rem;
       color: #aaa;
     }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+      }
+    }
   </style>
 </head>
 <body>
+  <a href="#main" class="skip-link">Skip to content</a>
   <div class="container">
-    <nav class="nav">
-      <a href="/" class="nav-brand">Google Docs MCP</a>
-      <div style="display:flex;gap:1rem;align-items:center;">
-        <a href="/integrations" style="color:#555;text-decoration:none;font-size:0.9rem;font-weight:500;">Integrations</a>
+    <nav class="nav" aria-label="Primary">
+      <a href="/" class="nav-brand" translate="no">Google Docs MCP</a>
+      <div class="nav-inline">
+        <a href="/integrations" class="nav-inline-link">Integrations</a>
         <a href="https://app.awesome-mcp.xyz/dashboard" class="nav-link">Dashboard</a>
       </div>
     </nav>
 
-    <section class="hero">
-      <h1>Connect Google Services to Your AI Assistant</h1>
-      <p>Use Google Docs, Sheets, Calendar, and Drive directly from Claude, ChatGPT, and other AI platforms via the Model Context Protocol.</p>
-      <a href="https://app.awesome-mcp.xyz/dashboard" class="btn-cta">Go to Dashboard</a>
-      <div style="margin-top:1rem;">
-        <a href="/integrations" style="color:#4285F4;font-size:0.95rem;font-weight:500;text-decoration:none;">See all integrations →</a>
-      </div>
-    </section>
+    <main id="main">
+      <section class="hero">
+        <h1>Connect Google Services to Your AI Assistant</h1>
+        <p>Use <span translate="no">Google Docs</span>, <span translate="no">Sheets</span>, <span translate="no">Calendar</span>, and <span translate="no">Drive</span> directly from <span translate="no">Claude</span>, <span translate="no">ChatGPT</span>, and other AI platforms via the Model Context Protocol.</p>
+        <a href="https://app.awesome-mcp.xyz/dashboard" class="btn-cta">Go to Dashboard</a>
+        <div class="hero-secondary">
+          <a href="/integrations">See all integrations →</a>
+        </div>
+      </section>
 
-    <section class="how-it-works">
-      <h2>How It Works</h2>
-      <div class="steps">
-        <div class="step">
-          <div class="step-number">1</div>
-          <h3>Sign In</h3>
-          <p>Create an account with your Google login. Quick and secure — no passwords to remember.</p>
+      <section class="how-it-works">
+        <h2>How It Works</h2>
+        <div class="steps">
+          <div class="step">
+            <div class="step-number" aria-hidden="true">1</div>
+            <h3>Sign In</h3>
+            <p>Create an account with your <span translate="no">Google</span> login. Quick and secure — no passwords to remember.</p>
+          </div>
+          <div class="step">
+            <div class="step-number" aria-hidden="true">2</div>
+            <h3>Connect Your Google Accounts</h3>
+            <p>Add one or more <span translate="no">Google</span> accounts from the dashboard. Each gets its own MCP connection URL.</p>
+          </div>
+          <div class="step">
+            <div class="step-number" aria-hidden="true">3</div>
+            <h3>Use in Claude or ChatGPT</h3>
+            <p>Copy your MCP URL into <span translate="no">Claude.ai</span>, <span translate="no">ChatGPT</span>, or any MCP-compatible client and start using <span translate="no">Google</span> tools.</p>
+          </div>
         </div>
-        <div class="step">
-          <div class="step-number">2</div>
-          <h3>Connect Your Google Accounts</h3>
-          <p>Add one or more Google accounts from the dashboard. Each gets its own MCP connection URL.</p>
-        </div>
-        <div class="step">
-          <div class="step-number">3</div>
-          <h3>Use in Claude or ChatGPT</h3>
-          <p>Copy your MCP URL into Claude.ai, ChatGPT, or any MCP-compatible client and start using Google tools.</p>
-        </div>
-      </div>
-    </section>
+      </section>
 
-    <section class="platforms">
-      <p>Works with <strong>Claude.ai</strong>, <strong>ChatGPT</strong>, and any MCP-compatible AI assistant.</p>
-    </section>
+      <section class="platforms">
+        <p>Works with <strong translate="no">Claude.ai</strong>, <strong translate="no">ChatGPT</strong>, and any MCP-compatible AI assistant.</p>
+      </section>
+    </main>
 
     <footer class="footer">
-      &copy; 2026 Google Docs MCP
+      &copy; 2026 <span translate="no">Google Docs MCP</span>
     </footer>
   </div>
 </body>
