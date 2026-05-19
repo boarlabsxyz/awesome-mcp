@@ -350,8 +350,8 @@
     }
     .sidebar-steps li {
       counter-increment: steps;
-      display: flex;
-      gap: 0.75rem;
+      position: relative;
+      padding-left: calc(22px + 0.75rem);
       margin-bottom: 0.85rem;
       font-size: 0.82rem;
       color: #888;
@@ -359,6 +359,9 @@
     }
     .sidebar-steps li::before {
       content: counter(steps);
+      position: absolute;
+      left: 0;
+      top: 0.05rem;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -369,8 +372,6 @@
       border-radius: 50%;
       font-size: 0.7rem;
       font-weight: 600;
-      flex-shrink: 0;
-      margin-top: 0.05rem;
     }
     .sidebar-steps li:last-child {
       margin-bottom: 0;
