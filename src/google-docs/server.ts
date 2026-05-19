@@ -306,6 +306,7 @@ function convertTableToMarkdown(table: any): string {
 
 server.addTool({
   name: 'listGoogleDocs',
+  annotations: { readOnlyHint: true },
   description: 'Lists Google Documents from your Google Drive and shared drives with optional filtering.',
   parameters: z.object({
     maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of documents to return (1-100).'),
@@ -317,6 +318,7 @@ server.addTool({
 
 server.addTool({
   name: 'searchGoogleDocs',
+  annotations: { readOnlyHint: true },
   description: 'Searches for Google Documents by name, content, or other criteria across My Drive and shared drives.',
   parameters: z.object({
     searchQuery: z.string().min(1).describe('Search term to find in document names or content.'),
@@ -329,6 +331,7 @@ server.addTool({
 
 server.addTool({
   name: 'getRecentGoogleDocs',
+  annotations: { readOnlyHint: true },
   description: 'Gets the most recently modified Google Documents from My Drive and shared drives.',
   parameters: z.object({
     maxResults: z.number().int().min(1).max(50).optional().default(10).describe('Maximum number of recent documents to return.'),
@@ -339,6 +342,7 @@ server.addTool({
 
 server.addTool({
   name: 'exportDocToPdf',
+  annotations: { readOnlyHint: false },
   description: 'Exports a Google Doc as a PDF file and saves it to Google Drive. Returns the PDF file ID, name, and link.',
   parameters: z.object({
     documentId: z.string().describe('The ID of the Google Document to export.'),
@@ -352,6 +356,7 @@ server.addTool({
 
 server.addTool({
 name: 'readGoogleDoc',
+annotations: { readOnlyHint: true },
 description: 'Reads the content of a specific Google Document, optionally returning structured data.',
 parameters: DocumentIdParameter.extend({
 format: z.enum(['text', 'json', 'markdown']).optional().default('text')
@@ -491,6 +496,7 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
 
 server.addTool({
 name: 'listDocumentTabs',
+annotations: { readOnlyHint: true },
 description: 'Lists all tabs in a Google Document, including their hierarchy, IDs, and structure.',
 parameters: DocumentIdParameter.extend({
   includeContent: z.boolean().optional().default(false)
@@ -588,6 +594,7 @@ execute: async (args, { log, session }) => {
 
 server.addTool({
 name: 'appendToGoogleDoc',
+annotations: { readOnlyHint: false },
 description: 'Appends text to the very end of a specific Google Document or tab.',
 parameters: DocumentIdParameter.extend({
 textToAppend: z.string().min(1).describe('The text to add to the end.'),
@@ -660,6 +667,7 @@ log.info(`Appending to Google Doc: ${args.documentId}${args.tabId ? ` (tab: ${ar
 
 server.addTool({
 name: 'insertText',
+annotations: { readOnlyHint: false },
 description: 'Inserts text at a specific index within the document body or a specific tab.',
 parameters: DocumentIdParameter.extend({
 textToInsert: z.string().min(1).describe('The text to insert.'),
@@ -704,6 +712,7 @@ throw new UserError(`Failed to insert text: ${error.message || 'Unknown error'}`
 
 server.addTool({
 name: 'deleteRange',
+annotations: { readOnlyHint: false, destructiveHint: true },
 description: 'Deletes content within a specified range (start index inclusive, end index exclusive) from the document or a specific tab.',
 parameters: DocumentIdParameter.extend({
   startIndex: z.number().int().min(1).describe('The starting index of the text range (inclusive, starts from 1).'),
@@ -758,6 +767,7 @@ try {
 
 server.addTool({
 name: 'applyTextStyle',
+annotations: { readOnlyHint: false },
 description: 'Applies character-level formatting (bold, color, font, etc.) to a specific range or found text.',
 parameters: ApplyTextStyleToolParameters,
 execute: async (args: ApplyTextStyleToolArgs, { log, session }) => {
@@ -806,6 +816,7 @@ let { startIndex, endIndex } = args.target as any; // Will be updated if target 
 
 server.addTool({
 name: 'applyParagraphStyle',
+annotations: { readOnlyHint: false },
 description: 'Applies paragraph-level formatting (alignment, spacing, named styles like Heading 1) to the paragraph(s) containing specific text, an index, or a range.',
 parameters: ApplyParagraphStyleToolParameters,
 execute: async (args: ApplyParagraphStyleToolArgs, { log, session }) => {
@@ -914,6 +925,7 @@ let endIndex: number | undefined;
 
 server.addTool({
 name: 'insertTable',
+annotations: { readOnlyHint: false },
 description: 'Inserts a new table with the specified dimensions at a given index.',
 parameters: DocumentIdParameter.extend({
 rows: z.number().int().min(1).describe('Number of rows for the new table.'),
@@ -937,6 +949,7 @@ throw new UserError(`Failed to insert table: ${error.message || 'Unknown error'}
 
 server.addTool({
 name: 'editTableCell',
+annotations: { readOnlyHint: false },
 description: 'Edits the content and/or basic style of a specific table cell. Requires knowing table start index.',
 parameters: DocumentIdParameter.extend({
 tableStartIndex: z.number().int().min(1).describe("The starting index of the TABLE element itself (tricky to find, may require reading structure first)."),
@@ -970,6 +983,7 @@ log.info(`Editing cell (${args.rowIndex}, ${args.columnIndex}) in table starting
 
 server.addTool({
 name: 'insertPageBreak',
+annotations: { readOnlyHint: false },
 description: 'Inserts a page break at the specified index.',
 parameters: DocumentIdParameter.extend({
 index: z.number().int().min(1).describe('The index (1-based) where the page break should be inserted.'),
@@ -997,6 +1011,7 @@ throw new UserError(`Failed to insert page break: ${error.message || 'Unknown er
 
 server.addTool({
 name: 'insertImageFromUrl',
+annotations: { readOnlyHint: false },
 description: 'Inserts an inline image into a Google Document from a publicly accessible URL.',
 parameters: DocumentIdParameter.extend({
 imageUrl: z.string().url().describe('Publicly accessible URL to the image (must be http:// or https://).'),
@@ -1034,6 +1049,7 @@ throw new UserError(`Failed to insert image: ${error.message || 'Unknown error'}
 
 server.addTool({
 name: 'insertLocalImage',
+annotations: { readOnlyHint: false },
 description: 'Inserts an image into a Google Document. Provide one of: (1) imageUrl — a public HTTP(S) URL to fetch, (2) driveFileId — ID of an image already in Google Drive, (3) localImagePath — absolute path for local/stdio deployments, or (4) imageBase64 + fileName — base64-encoded content for small images.',
 parameters: DocumentIdParameter.extend({
 imageUrl: z.string().optional().describe('Public HTTP(S) URL of the image to fetch and insert (preferred for remote deployments).'),
@@ -1137,6 +1153,7 @@ throw new UserError(`Failed to insert image: ${error.message || 'Unknown error'}
 
 server.addTool({
 name: 'fixListFormatting',
+annotations: { readOnlyHint: false },
 description: 'EXPERIMENTAL: Attempts to detect paragraphs that look like lists (e.g., starting with -, *, 1.) and convert them to proper Google Docs bulleted or numbered lists. Best used on specific sections.',
 parameters: DocumentIdParameter.extend({
 // Optional range to limit the scope, otherwise scans whole doc (potentially slow/risky)
@@ -1161,6 +1178,7 @@ throw new UserError(`Failed to fix list formatting: ${error.message || 'Unknown 
 
 server.addTool({
   name: 'listComments',
+  annotations: { readOnlyHint: true },
   description: 'Lists all comments in a Google Document.',
   parameters: DocumentIdParameter,
   execute: async (args, { log, session }) => {
@@ -1219,6 +1237,7 @@ server.addTool({
 
 server.addTool({
   name: 'getComment',
+  annotations: { readOnlyHint: true },
   description: 'Gets a specific comment with its full thread of replies.',
   parameters: DocumentIdParameter.extend({
     commentId: z.string().describe('The ID of the comment to retrieve')
@@ -1264,6 +1283,7 @@ server.addTool({
 
 server.addTool({
   name: 'addComment',
+  annotations: { readOnlyHint: false },
   description: 'Adds a comment to a Google Document with quoted text context. NOTE: Due to Google Drive API limitations, comments cannot be anchored to specific text positions in Google Docs. The comment will appear in the Comments panel with the quoted text displayed, but won\'t highlight text in the document body.',
   parameters: DocumentIdParameter.extend({
     startIndex: z.number().int().min(1).describe('The starting index of the text range (inclusive, starts from 1).'),
@@ -1332,6 +1352,7 @@ server.addTool({
 
 server.addTool({
   name: 'replyToComment',
+  annotations: { readOnlyHint: false },
   description: 'Adds a reply to an existing comment.',
   parameters: DocumentIdParameter.extend({
     commentId: z.string().describe('The ID of the comment to reply to'),
@@ -1363,6 +1384,7 @@ server.addTool({
 
 server.addTool({
   name: 'resolveComment',
+  annotations: { readOnlyHint: false },
   description: 'Marks a comment as resolved. NOTE: Due to Google API limitations, the Drive API does not support resolving comments on Google Docs files. This operation will attempt to update the comment but the resolved status may not persist in the UI. Comments can be resolved manually in the Google Docs interface.',
   parameters: DocumentIdParameter.extend({
     commentId: z.string().describe('The ID of the comment to resolve')
@@ -1415,6 +1437,7 @@ server.addTool({
 
 server.addTool({
   name: 'deleteComment',
+  annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Deletes a comment from the document.',
   parameters: DocumentIdParameter.extend({
     commentId: z.string().describe('The ID of the comment to delete')
@@ -1444,6 +1467,7 @@ server.addTool({
 // Example Stub:
 server.addTool({
 name: 'findElement',
+annotations: { readOnlyHint: true },
 description: 'Finds elements (paragraphs, tables, etc.) based on various criteria. (Not Implemented)',
 parameters: DocumentIdParameter.extend({
 // Define complex query parameters...
@@ -1460,6 +1484,7 @@ throw new NotImplementedError("Finding elements by complex criteria is not yet i
 // --- Preserve the existing formatMatchingText tool for backward compatibility ---
 server.addTool({
 name: 'formatMatchingText',
+annotations: { readOnlyHint: false },
 description: 'Finds specific text within a Google Document and applies character formatting (bold, italics, color, etc.) to the specified instance.',
 parameters: z.object({
   documentId: z.string().describe('The ID of the Google Document.'),
@@ -1533,6 +1558,7 @@ execute: async (args, { log, session }) => {
 
 server.addTool({
 name: 'findAndReplace',
+annotations: { readOnlyHint: false },
 description: 'Finds all occurrences of a text string in a Google Doc and replaces them. Returns the number of replacements made.',
 parameters: z.object({
   documentId: z.string().describe('The ID of the Google Document.'),
@@ -1579,6 +1605,7 @@ execute: async (args, { log, session }) => {
 
 server.addTool({
 name: 'inspectDocStructure',
+annotations: { readOnlyHint: true },
 description: 'Analyzes and returns the structure of a Google Doc: paragraph/table/section counts, headers/footers presence, tab hierarchy. Use detailed mode for element-by-element listing.',
 parameters: z.object({
   documentId: z.string().describe('The ID of the Google Document.'),
@@ -1608,6 +1635,7 @@ execute: async (args, { log, session }) => {
 
 server.addTool({
 name: 'importDocx',
+annotations: { readOnlyHint: false },
 description: 'Converts a .docx file already in Google Drive into a Google Doc. Drive auto-converts the format. Returns the new Google Doc ID and link.',
 parameters: z.object({
   fileId: z.string().describe('The Drive file ID of the .docx file to convert.'),
@@ -1653,6 +1681,7 @@ execute: async (args, { log, session }) => {
 
 server.addTool({
 name: 'batchUpdateDoc',
+annotations: { readOnlyHint: false },
 description: 'Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Index-based operations are automatically sorted in descending order to prevent index shifting.',
 parameters: z.object({
   documentId: z.string().describe('The ID of the Google Document.'),
@@ -1717,6 +1746,7 @@ execute: async (args, { log, session }) => {
 });
 server.addTool({
 name: 'importToGoogleDoc',
+annotations: { readOnlyHint: false },
 description: 'Import content (text, HTML, or markdown) into a new Google Doc. Google Drive auto-converts the content to Google Docs format.',
 parameters: z.object({
   title: z.string().describe('Title for the new Google Doc.'),

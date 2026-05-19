@@ -33,6 +33,7 @@ function getDriveClient(session?: UserSession): drive_v3.Drive {
 
 sheetsServer.addTool({
   name: 'readSpreadsheet',
+  annotations: { readOnlyHint: true },
   description: 'Reads data from a specific range in a Google Spreadsheet.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
@@ -71,6 +72,7 @@ sheetsServer.addTool({
 
 sheetsServer.addTool({
   name: 'writeSpreadsheet',
+  annotations: { readOnlyHint: false },
   description: 'Writes data to a specific range in a Google Spreadsheet. Overwrites existing data in the range.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
@@ -109,6 +111,7 @@ sheetsServer.addTool({
 
 sheetsServer.addTool({
   name: 'appendSpreadsheetRows',
+  annotations: { readOnlyHint: false },
   description: 'Appends rows of data to the end of a sheet in a Google Spreadsheet.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
@@ -145,6 +148,7 @@ sheetsServer.addTool({
 
 sheetsServer.addTool({
   name: 'clearSpreadsheetRange',
+  annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Clears all values from a specific range in a Google Spreadsheet.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
@@ -169,6 +173,7 @@ sheetsServer.addTool({
 
 sheetsServer.addTool({
   name: 'getSpreadsheetInfo',
+  annotations: { readOnlyHint: true },
   description: 'Gets detailed information about a Google Spreadsheet including all sheets/tabs.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
@@ -209,6 +214,7 @@ sheetsServer.addTool({
 
 sheetsServer.addTool({
   name: 'addSpreadsheetSheet',
+  annotations: { readOnlyHint: false },
   description: 'Adds a new sheet/tab to an existing Google Spreadsheet.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
@@ -237,6 +243,7 @@ sheetsServer.addTool({
 
 sheetsServer.addTool({
   name: 'createSpreadsheet',
+  annotations: { readOnlyHint: false },
   description: 'Creates a new Google Spreadsheet (works with shared drives).',
   parameters: z.object({
     title: z.string().min(1).describe('Title for the new spreadsheet.'),
@@ -300,6 +307,7 @@ sheetsServer.addTool({
 
 sheetsServer.addTool({
   name: 'listGoogleSheets',
+  annotations: { readOnlyHint: true },
   description: 'Lists Google Spreadsheets from your Google Drive and shared drives with optional filtering.',
   parameters: z.object({
     maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of spreadsheets to return (1-100).'),
@@ -357,6 +365,7 @@ sheetsServer.addTool({
 
 sheetsServer.addTool({
   name: 'findRowByValue',
+  annotations: { readOnlyHint: true },
   description: 'Search a column for a specific value and return the 1-based row number where it was found.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
@@ -381,6 +390,7 @@ sheetsServer.addTool({
 
 sheetsServer.addTool({
   name: 'readRowByField',
+  annotations: { readOnlyHint: true },
   description: 'Look up a row by searching a column for a value, then return the row as a named JSON object using header names from row 1.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
@@ -416,6 +426,7 @@ sheetsServer.addTool({
 
 sheetsServer.addTool({
   name: 'updateCellByFieldName',
+  annotations: { readOnlyHint: false },
   description: 'Find a row by searching a column for a value, then update a specific field (identified by header name) in that row.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
@@ -474,6 +485,7 @@ sheetsServer.addTool({
 
 sheetsServer.addTool({
   name: 'batchUpdateSpreadsheet',
+  annotations: { readOnlyHint: false },
   description: 'Apply multiple formatting operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, and column/row sizing.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
