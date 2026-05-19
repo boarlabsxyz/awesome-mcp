@@ -1114,7 +1114,7 @@
       const eslug = escapeAttr(instance.mcpSlug);
 
       return `
-        <div class="instance-row" data-instance-id="${eid}">
+        <div class="instance-row" data-instance-id="${eid}" data-instance-name="${ename}" data-mcp-slug="${eslug}">
           <div class="instance-icon" aria-hidden="true">
             ${mcpIcon}
           </div>
@@ -1128,10 +1128,10 @@
           </div>
           <div class="instance-row-actions">
             ${showReconnect
-              ? `<button class="btn-reconnect" type="button" onclick="reconnectInstance('${eid}', '${eslug}')">Reconnect</button>`
-              : `<button class="btn-copy" type="button" onclick="copyUrl('${eid}', this)">Copy URL</button>`}
-            ${instance.provider === 'slack' ? `<button class="btn-rename" type="button" onclick="openAccessRules('${eid}')">Access Rules</button>` : ''}
-            <button class="btn-delete" type="button" onclick="deleteInstance('${eid}', '${ename}')">Delete</button>
+              ? `<button class="btn-reconnect" type="button" data-action="reconnect">Reconnect</button>`
+              : `<button class="btn-copy" type="button" data-action="copy">Copy URL</button>`}
+            ${instance.provider === 'slack' ? `<button class="btn-rename" type="button" data-action="access-rules">Access Rules</button>` : ''}
+            <button class="btn-delete" type="button" data-action="delete">Delete</button>
           </div>
         </div>
       `;
@@ -1393,9 +1393,6 @@
           </div>
         </div>
       `;
-
-      // Attach delegated click handlers for chip-remove buttons
-      document.getElementById('accessRulesContent').addEventListener('click', handleAccessRulesClick);
     }
 
     function handleAccessRulesClick(e) {
@@ -1775,6 +1772,29 @@
         closeAccessRules();
       }
     });
+
+    // Delegated click handler for instance-row action buttons. Reads
+    // data-action / data-instance-id / data-instance-name / data-mcp-slug
+    // from the closest .instance-row so we don't interpolate user-supplied
+    // values into inline onclick strings (apostrophes broke that path).
+    document.getElementById('instanceList').addEventListener('click', function(e) {
+      const btn = e.target.closest('button[data-action]');
+      if (!btn) return;
+      const row = btn.closest('.instance-row');
+      if (!row) return;
+      const id = row.dataset.instanceId;
+      switch (btn.dataset.action) {
+        case 'reconnect':    reconnectInstance(id, row.dataset.mcpSlug); break;
+        case 'copy':         copyUrl(id, btn); break;
+        case 'access-rules': openAccessRules(id); break;
+        case 'delete':       deleteInstance(id, row.dataset.instanceName); break;
+      }
+    });
+
+    // Delegated click handler for access-rules chip-remove buttons.
+    // Attached once here instead of inside renderAccessRulesForm() to
+    // avoid relying on addEventListener's identical-listener dedupe.
+    document.getElementById('accessRulesContent').addEventListener('click', handleAccessRulesClick);
 
     // Initialize on page load
     init();
