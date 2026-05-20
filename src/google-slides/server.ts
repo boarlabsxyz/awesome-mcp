@@ -25,6 +25,7 @@ const slidesServer = new FastMCP<UserSession>({
 
 slidesServer.addTool({
   name: 'createPresentation',
+  annotations: { readOnlyHint: false },
   description: 'Create a new Google Slides presentation.',
   parameters: z.object({
     title: z.string().optional().default('Untitled Presentation')
@@ -37,6 +38,7 @@ slidesServer.addTool({
 
 slidesServer.addTool({
   name: 'getPresentation',
+  annotations: { readOnlyHint: true },
   description: 'Get presentation metadata, slide IDs, and text content from all slides.',
   parameters: z.object({
     presentationId: z.string().describe('The ID of the presentation to retrieve.'),
@@ -48,6 +50,7 @@ slidesServer.addTool({
 
 slidesServer.addTool({
   name: 'getPage',
+  annotations: { readOnlyHint: true },
   description: 'Get details of a specific slide including shapes, tables, and other elements.',
   parameters: z.object({
     presentationId: z.string().describe('The ID of the presentation.'),
@@ -60,6 +63,7 @@ slidesServer.addTool({
 
 slidesServer.addTool({
   name: 'getPageThumbnail',
+  annotations: { readOnlyHint: true },
   description: 'Get a PNG thumbnail URL for a specific slide.',
   parameters: z.object({
     presentationId: z.string().describe('The ID of the presentation.'),
@@ -74,6 +78,7 @@ slidesServer.addTool({
 
 slidesServer.addTool({
   name: 'batchUpdatePresentation',
+  annotations: { readOnlyHint: false },
   description: 'Apply multiple operations to a presentation (create slides, add shapes, insert text, delete objects, etc.). Pass an array of Google Slides API request objects.',
   parameters: z.object({
     presentationId: z.string().describe('The ID of the presentation to update.'),
@@ -86,6 +91,7 @@ slidesServer.addTool({
 
 slidesServer.addTool({
   name: 'listPresentationComments',
+  annotations: { readOnlyHint: true },
   description: 'List comments on a Google Slides presentation (via Drive API).',
   parameters: z.object({
     presentationId: z.string().describe('The ID of the presentation.'),

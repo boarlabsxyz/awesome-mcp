@@ -66,6 +66,7 @@ function formatTask(task: any): string {
 
 clickUpServer.addTool({
   name: 'getAuthorizedUser',
+  annotations: { readOnlyHint: true },
   description: 'Get information about the currently authenticated ClickUp user. Useful for debugging connections and getting your user ID.',
   parameters: z.object({}),
   execute: async (_args, { session }) => {
@@ -78,6 +79,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'listWorkspaces',
+  annotations: { readOnlyHint: true },
   description: 'List all accessible ClickUp workspaces (teams). Returns workspace IDs needed for other operations.',
   parameters: z.object({}),
   execute: async (_args, { session }) => {
@@ -93,6 +95,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'listSpaces',
+  annotations: { readOnlyHint: true },
   description: 'List all spaces in a ClickUp workspace.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
@@ -111,6 +114,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'listFolders',
+  annotations: { readOnlyHint: true },
   description: 'List all folders in a ClickUp space.',
   parameters: z.object({
     spaceId: z.string().describe('The space ID.'),
@@ -129,6 +133,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'listLists',
+  annotations: { readOnlyHint: true },
   description: 'List all lists in a ClickUp folder, or folderless lists in a space. Provide either folderId or spaceId.',
   parameters: z.object({
     folderId: z.string().optional().describe('The folder ID to list lists from.'),
@@ -153,6 +158,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'getTask',
+  annotations: { readOnlyHint: true },
   description: 'Get detailed information about a specific ClickUp task by its ID.',
   parameters: z.object({
     taskId: z.string().describe('The task ID (e.g., "abc123" or custom task ID).'),
@@ -173,6 +179,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'listTasks',
+  annotations: { readOnlyHint: true },
   description: 'List tasks in a ClickUp list with optional filters.',
   parameters: z.object({
     listId: z.string().describe('The list ID to get tasks from.'),
@@ -207,6 +214,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'createTask',
+  annotations: { readOnlyHint: false },
   description: 'Create a new task in a ClickUp list.',
   parameters: z.object({
     listId: z.string().describe('The list ID to create the task in.'),
@@ -243,6 +251,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'updateTask',
+  annotations: { readOnlyHint: false },
   description: 'Update an existing ClickUp task. Only provided fields will be changed.',
   parameters: z.object({
     taskId: z.string().describe('The task ID to update.'),
@@ -284,6 +293,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'deleteTask',
+  annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Delete a ClickUp task permanently.',
   parameters: z.object({
     taskId: z.string().describe('The task ID to delete.'),
@@ -297,6 +307,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'moveTask',
+  annotations: { readOnlyHint: false },
   description: 'Move a task to a different list.',
   parameters: z.object({
     taskId: z.string().describe('The task ID to move.'),
@@ -311,6 +322,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'addTaskComment',
+  annotations: { readOnlyHint: false },
   description: 'Add a comment to a ClickUp task. Supports markdown formatting: **bold**, *italic*, `inline code`.',
   parameters: z.object({
     taskId: z.string().describe('The task ID to comment on.'),
@@ -332,6 +344,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'getTaskComments',
+  annotations: { readOnlyHint: true },
   description: 'Get comments on a ClickUp task.',
   parameters: z.object({
     taskId: z.string().describe('The task ID to get comments for.'),
@@ -356,6 +369,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'searchTasks',
+  annotations: { readOnlyHint: true },
   description: 'Search for tasks across a ClickUp workspace. Supports filtering by name (client-side substring match) and/or custom fields. By default excludes closed/completed tasks — set includeClosed=true to include them.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID to search in.'),
@@ -379,6 +393,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'getAccessibleCustomFields',
+  annotations: { readOnlyHint: true },
   description: 'List all custom fields available on a ClickUp list. Use this to discover field IDs for filtering or setting values.',
   parameters: z.object({
     listId: z.string().describe('The list ID to get custom fields for.'),
@@ -404,6 +419,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'setCustomFieldValue',
+  annotations: { readOnlyHint: false },
   description: 'Set a custom field value on a ClickUp task. Use getAccessibleCustomFields first to find the field ID and type.',
   parameters: z.object({
     taskId: z.string().describe('The task ID.'),
@@ -419,6 +435,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'removeCustomFieldValue',
+  annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Remove/clear a custom field value from a ClickUp task.',
   parameters: z.object({
     taskId: z.string().describe('The task ID.'),
@@ -433,6 +450,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'getTaskMembers',
+  annotations: { readOnlyHint: true },
   description: 'List all members assigned to a ClickUp task.',
   parameters: z.object({
     taskId: z.string().describe('The task ID.'),
@@ -452,6 +470,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'createList',
+  annotations: { readOnlyHint: false },
   description: 'Create a new list in a ClickUp folder, or a folderless list in a space.',
   parameters: z.object({
     folderId: z.string().optional().describe('The folder ID (for a list inside a folder).'),
@@ -478,6 +497,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'createFolder',
+  annotations: { readOnlyHint: false },
   description: 'Create a new folder in a ClickUp space.',
   parameters: z.object({
     spaceId: z.string().describe('The space ID to create the folder in.'),
@@ -492,6 +512,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'createSpace',
+  annotations: { readOnlyHint: false },
   description: 'Create a new space in a ClickUp workspace.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
@@ -510,6 +531,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'updateList',
+  annotations: { readOnlyHint: false },
   description: 'Update properties of an existing ClickUp list.',
   parameters: z.object({
     listId: z.string().describe('The list ID to update.'),
@@ -532,6 +554,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'deleteList',
+  annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Delete a ClickUp list permanently.',
   parameters: z.object({
     listId: z.string().describe('The list ID to delete.'),
@@ -547,6 +570,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'listDocs',
+  annotations: { readOnlyHint: true },
   description: 'List ClickUp Docs in a workspace.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
@@ -564,6 +588,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'getDoc',
+  annotations: { readOnlyHint: true },
   description: 'Get a ClickUp Doc by ID, including its pages and their content (markdown).',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
@@ -610,6 +635,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'searchDocs',
+  annotations: { readOnlyHint: true },
   description: 'Search ClickUp Docs in a workspace by name. Optionally filter by creator, parent, or status.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
@@ -643,6 +669,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'createDoc',
+  annotations: { readOnlyHint: false },
   description: 'Create a new ClickUp Doc in a workspace. Optionally place it inside a Space, Folder, or List by providing parent ID and type.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
@@ -693,6 +720,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'getPage',
+  annotations: { readOnlyHint: true },
   description: 'Get a specific page from a ClickUp Doc, including its full content in markdown.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
@@ -715,6 +743,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'createPage',
+  annotations: { readOnlyHint: false },
   description: 'Create a new page in a ClickUp Doc.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
@@ -736,6 +765,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'editPage',
+  annotations: { readOnlyHint: false },
   description: 'Edit a page in a ClickUp Doc. Can replace, append, or prepend content.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
@@ -761,6 +791,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'listWorkspaceMembers',
+  annotations: { readOnlyHint: true },
   description: 'List all members of a ClickUp workspace. Useful for looking up user IDs by name when assigning tasks.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
@@ -781,6 +812,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'startTimeEntry',
+  annotations: { readOnlyHint: false },
   description: 'Start a time tracking entry for a task in ClickUp.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
@@ -801,6 +833,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'stopTimeEntry',
+  annotations: { readOnlyHint: false },
   description: 'Stop the currently running time tracking entry.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
@@ -814,6 +847,7 @@ clickUpServer.addTool({
 
 clickUpServer.addTool({
   name: 'getTimeEntries',
+  annotations: { readOnlyHint: true },
   description: 'Get time tracking entries for a workspace.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),

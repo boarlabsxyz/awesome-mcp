@@ -22,6 +22,7 @@ function getCalendarClient(session?: UserSession): calendar_v3.Calendar {
 
 calendarServer.addTool({
   name: 'listCalendars',
+  annotations: { readOnlyHint: true },
   description: 'Lists all calendars accessible to the user.',
   parameters: z.object({
     showHidden: z.boolean().optional().default(false)
@@ -63,6 +64,7 @@ calendarServer.addTool({
 
 calendarServer.addTool({
   name: 'listEvents',
+  annotations: { readOnlyHint: true },
   description: 'Lists events from a calendar within a specified date range.',
   parameters: z.object({
     calendarId: z.string().optional().default('primary')
@@ -137,6 +139,7 @@ calendarServer.addTool({
 
 calendarServer.addTool({
   name: 'getEvent',
+  annotations: { readOnlyHint: true },
   description: 'Gets detailed information about a specific calendar event.',
   parameters: z.object({
     calendarId: z.string().optional().default('primary')
@@ -201,6 +204,7 @@ calendarServer.addTool({
 
 calendarServer.addTool({
   name: 'createEvent',
+  annotations: { readOnlyHint: false },
   description: 'Creates a new calendar event.',
   parameters: z.object({
     calendarId: z.string().optional().default('primary')
@@ -261,6 +265,7 @@ calendarServer.addTool({
 
 calendarServer.addTool({
   name: 'updateEvent',
+  annotations: { readOnlyHint: false },
   description: 'Updates an existing calendar event.',
   parameters: z.object({
     calendarId: z.string().optional().default('primary')
@@ -329,6 +334,7 @@ calendarServer.addTool({
 
 calendarServer.addTool({
   name: 'deleteEvent',
+  annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Deletes a calendar event.',
   parameters: z.object({
     calendarId: z.string().optional().default('primary')

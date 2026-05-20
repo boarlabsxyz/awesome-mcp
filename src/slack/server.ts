@@ -27,6 +27,7 @@ function getTokenKey(session: UserSession): string {
 
 slackBotServer.addTool({
   name: 'listChannels',
+  annotations: { readOnlyHint: true },
   description: 'List Slack channels and DMs the bot is a member of. Includes public/private channels and 1-on-1 DMs. The bot only sees channels where it has been /invited.',
   parameters: z.object({
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
@@ -69,6 +70,7 @@ slackBotServer.addTool({
 
 slackBotServer.addTool({
   name: 'readChannelHistory',
+  annotations: { readOnlyHint: true },
   description: 'Read recent messages from a Slack channel. Returns messages in chronological order.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID (e.g., C01234ABCDE).'),
@@ -84,6 +86,7 @@ slackBotServer.addTool({
 
 slackBotServer.addTool({
   name: 'readThreadReplies',
+  annotations: { readOnlyHint: true },
   description: 'Read replies in a Slack thread. The first message is the thread parent.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID containing the thread.'),
@@ -98,6 +101,7 @@ slackBotServer.addTool({
 
 slackBotServer.addTool({
   name: 'postMessage',
+  annotations: { readOnlyHint: false },
   description: 'Post a message to a Slack channel. Requires SLACK_WRITES_ENABLED=true.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID to post to.'),
@@ -110,6 +114,7 @@ slackBotServer.addTool({
 
 slackBotServer.addTool({
   name: 'replyInThread',
+  annotations: { readOnlyHint: false },
   description: 'Reply to a thread in a Slack channel. Requires SLACK_WRITES_ENABLED=true.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID containing the thread.'),
@@ -123,6 +128,7 @@ slackBotServer.addTool({
 
 slackBotServer.addTool({
   name: 'listUsers',
+  annotations: { readOnlyHint: true },
   description: 'List workspace members. Use this to find a user by name and get their user ID for opening a DM.',
   parameters: z.object({
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
@@ -150,6 +156,7 @@ slackBotServer.addTool({
 
 slackBotServer.addTool({
   name: 'openDm',
+  annotations: { readOnlyHint: false },
   description: 'Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage.',
   parameters: z.object({
     userId: z.string().describe('The Slack user ID to open a DM with (e.g., U01234ABCDE).'),

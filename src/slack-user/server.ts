@@ -93,6 +93,7 @@ async function enforceAccess(client: SlackClient, session: UserSession, channelI
 
 slackUserServer.addTool({
   name: 'listChannels',
+  annotations: { readOnlyHint: true },
   description: 'List Slack channels and DMs you have access to, filtered by your access rules. Use the "search" parameter to find a specific channel by name without paginating.',
   parameters: z.object({
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
@@ -178,6 +179,7 @@ slackUserServer.addTool({
 
 slackUserServer.addTool({
   name: 'readChannelHistory',
+  annotations: { readOnlyHint: true },
   description: 'Read recent messages from a Slack channel. Access rules are enforced.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID (e.g., C01234ABCDE).'),
@@ -195,6 +197,7 @@ slackUserServer.addTool({
 
 slackUserServer.addTool({
   name: 'readThreadReplies',
+  annotations: { readOnlyHint: true },
   description: 'Read replies in a Slack thread. Access rules are enforced.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID containing the thread.'),
@@ -211,6 +214,7 @@ slackUserServer.addTool({
 
 slackUserServer.addTool({
   name: 'postMessage',
+  annotations: { readOnlyHint: false },
   description: 'Post a message to a Slack channel. Requires SLACK_WRITES_ENABLED=true. Access rules enforced.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID to post to.'),
@@ -225,6 +229,7 @@ slackUserServer.addTool({
 
 slackUserServer.addTool({
   name: 'replyInThread',
+  annotations: { readOnlyHint: false },
   description: 'Reply to a thread in a Slack channel. Requires SLACK_WRITES_ENABLED=true. Access rules enforced.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID containing the thread.'),
@@ -240,6 +245,7 @@ slackUserServer.addTool({
 
 slackUserServer.addTool({
   name: 'listUsers',
+  annotations: { readOnlyHint: true },
   description: 'List workspace members. Use this to find a user by name and get their user ID for opening a DM.',
   parameters: z.object({
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
@@ -267,6 +273,7 @@ slackUserServer.addTool({
 
 slackUserServer.addTool({
   name: 'openDm',
+  annotations: { readOnlyHint: false },
   description: 'Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage.',
   parameters: z.object({
     userId: z.string().describe('The Slack user ID to open a DM with (e.g., U01234ABCDE).'),

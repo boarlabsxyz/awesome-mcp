@@ -30,6 +30,7 @@ function getGmailClient(session?: UserSession): gmail_v1.Gmail {
 
 gmailServer.addTool({
   name: 'sendEmail',
+  annotations: { readOnlyHint: false },
   description: 'Send an email message.',
   parameters: z.object({
     to: z.string().describe('Recipient email address(es), comma-separated for multiple.'),
@@ -44,6 +45,7 @@ gmailServer.addTool({
 
 gmailServer.addTool({
   name: 'draftEmail',
+  annotations: { readOnlyHint: false },
   description: 'Create a draft email without sending it.',
   parameters: z.object({
     to: z.string().describe('Recipient email address(es), comma-separated for multiple.'),
@@ -58,6 +60,7 @@ gmailServer.addTool({
 
 gmailServer.addTool({
   name: 'readEmail',
+  annotations: { readOnlyHint: true },
   description: 'Read the full content of an email by its message ID.',
   parameters: z.object({
     messageId: z.string().describe('The Gmail message ID to read.'),
@@ -69,6 +72,7 @@ gmailServer.addTool({
 
 gmailServer.addTool({
   name: 'searchEmails',
+  annotations: { readOnlyHint: true },
   description: 'Search emails using Gmail query syntax (e.g., "from:user@example.com", "subject:hello", "is:unread", "newer_than:2d").',
   parameters: z.object({
     query: z.string().describe('Gmail search query string.'),
@@ -80,6 +84,7 @@ gmailServer.addTool({
 
 gmailServer.addTool({
   name: 'modifyEmail',
+  annotations: { readOnlyHint: false },
   description: 'Modify labels on a single email message (add or remove labels).',
   parameters: z.object({
     messageId: z.string().describe('The Gmail message ID to modify.'),
@@ -91,6 +96,7 @@ gmailServer.addTool({
 
 gmailServer.addTool({
   name: 'deleteEmail',
+  annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Move an email message to the trash.',
   parameters: z.object({
     messageId: z.string().describe('The Gmail message ID to trash.'),
@@ -102,6 +108,7 @@ gmailServer.addTool({
 
 gmailServer.addTool({
   name: 'batchModifyEmails',
+  annotations: { readOnlyHint: false },
   description: 'Modify labels on multiple email messages at once.',
   parameters: z.object({
     messageIds: z.array(z.string()).max(1000).describe('Array of Gmail message IDs to modify (max 1000).'),
@@ -113,6 +120,7 @@ gmailServer.addTool({
 
 gmailServer.addTool({
   name: 'batchDeleteEmails',
+  annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Move multiple email messages to the trash.',
   parameters: z.object({
     messageIds: z.array(z.string()).max(1000).describe('Array of Gmail message IDs to trash (max 1000).'),
@@ -124,6 +132,7 @@ gmailServer.addTool({
 
 gmailServer.addTool({
   name: 'listLabels',
+  annotations: { readOnlyHint: true },
   description: 'List all Gmail labels with their message and thread counts.',
   parameters: z.object({}),
   execute: async (_args, { log, session }) => handleListLabels(getGmailClient(session), log),
@@ -131,6 +140,7 @@ gmailServer.addTool({
 
 gmailServer.addTool({
   name: 'createLabel',
+  annotations: { readOnlyHint: false },
   description: 'Create a new Gmail label.',
   parameters: z.object({
     name: z.string().describe('The display name for the new label.'),
@@ -144,6 +154,7 @@ gmailServer.addTool({
 
 gmailServer.addTool({
   name: 'updateLabel',
+  annotations: { readOnlyHint: false },
   description: 'Update an existing Gmail label name or visibility settings.',
   parameters: z.object({
     labelId: z.string().describe('The label ID to update.'),
@@ -158,6 +169,7 @@ gmailServer.addTool({
 
 gmailServer.addTool({
   name: 'deleteLabel',
+  annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Delete a Gmail label. System labels (INBOX, SENT, etc.) cannot be deleted.',
   parameters: z.object({
     labelId: z.string().describe('The label ID to delete.'),
@@ -167,6 +179,7 @@ gmailServer.addTool({
 
 gmailServer.addTool({
   name: 'getOrCreateLabel',
+  annotations: { readOnlyHint: false },
   description: 'Get a label by name, creating it if it does not exist. Returns the label ID.',
   parameters: z.object({
     name: z.string().describe('The label name to find or create.'),
@@ -178,6 +191,7 @@ gmailServer.addTool({
 
 gmailServer.addTool({
   name: 'getAttachment',
+  annotations: { readOnlyHint: true },
   description: 'Download an email attachment. Returns the content as base64-encoded data.',
   parameters: z.object({
     messageId: z.string().describe('The Gmail message ID containing the attachment.'),

@@ -33,6 +33,7 @@ const driveServer = new FastMCP<UserSession>({
 
 driveServer.addTool({
   name: 'getDocumentInfo',
+  annotations: { readOnlyHint: true },
   description: 'Gets detailed information about a specific Google Document (works with shared drives).',
   parameters: DocumentIdParameter,
   execute: async (args, { log, session }) => handleGetDocumentInfo(getDriveClient(session), args, log),
@@ -40,6 +41,7 @@ driveServer.addTool({
 
 driveServer.addTool({
   name: 'createFolder',
+  annotations: { readOnlyHint: false },
   description: 'Creates a new folder in Google Drive or a shared drive.',
   parameters: z.object({
     name: z.string().min(1).describe('Name for the new folder.'),
@@ -50,6 +52,7 @@ driveServer.addTool({
 
 driveServer.addTool({
   name: 'listFolderContents',
+  annotations: { readOnlyHint: true },
   description: 'Lists the contents of a specific folder in Google Drive or a shared drive.',
   parameters: z.object({
     folderId: z.string().describe('ID of the folder to list contents of. Use "root" for the root Drive folder. For shared drives, use the shared drive ID.'),
@@ -62,6 +65,7 @@ driveServer.addTool({
 
 driveServer.addTool({
   name: 'getFolderInfo',
+  annotations: { readOnlyHint: true },
   description: 'Gets detailed information about a specific folder in Google Drive or a shared drive.',
   parameters: z.object({
     folderId: z.string().describe('ID of the folder to get information about.'),
@@ -71,6 +75,7 @@ driveServer.addTool({
 
 driveServer.addTool({
   name: 'moveFile',
+  annotations: { readOnlyHint: false },
   description: 'Moves a file or folder to a different location in Google Drive (works with shared drives).',
   parameters: z.object({
     fileId: z.string().describe('ID of the file or folder to move.'),
@@ -82,6 +87,7 @@ driveServer.addTool({
 
 driveServer.addTool({
   name: 'copyFile',
+  annotations: { readOnlyHint: false },
   description: 'Creates a copy of a Google Drive file or document (works with shared drives).',
   parameters: z.object({
     fileId: z.string().describe('ID of the file to copy.'),
@@ -93,6 +99,7 @@ driveServer.addTool({
 
 driveServer.addTool({
   name: 'renameFile',
+  annotations: { readOnlyHint: false },
   description: 'Renames a file or folder in Google Drive (works with shared drives).',
   parameters: z.object({
     fileId: z.string().describe('ID of the file or folder to rename.'),
@@ -103,6 +110,7 @@ driveServer.addTool({
 
 driveServer.addTool({
   name: 'deleteFile',
+  annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Permanently deletes a file or folder from Google Drive (works with shared drives).',
   parameters: z.object({
     fileId: z.string().describe('ID of the file or folder to delete.'),
@@ -113,6 +121,7 @@ driveServer.addTool({
 
 driveServer.addTool({
   name: 'createDocument',
+  annotations: { readOnlyHint: false },
   description: 'Creates a new Google Document (works with shared drives).',
   parameters: z.object({
     title: z.string().min(1).describe('Title for the new document.'),
@@ -125,6 +134,7 @@ driveServer.addTool({
 
 driveServer.addTool({
   name: 'createFromTemplate',
+  annotations: { readOnlyHint: false },
   description: 'Creates a new Google Document from an existing document template (works with shared drives).',
   parameters: z.object({
     templateId: z.string().describe('ID of the template document to copy from.'),
@@ -138,6 +148,7 @@ driveServer.addTool({
 
 driveServer.addTool({
   name: 'listSharedDrives',
+  annotations: { readOnlyHint: true },
   description: 'Lists shared drives (Team Drives) the user has access to.',
   parameters: z.object({
     maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of shared drives to return (1-100).'),
@@ -148,6 +159,7 @@ driveServer.addTool({
 
 driveServer.addTool({
   name: 'downloadDriveFile',
+  annotations: { readOnlyHint: true },
   description: 'Download/export a Google Drive file. For Google Workspace files (Docs, Sheets, Slides), exports to a chosen format (PDF, DOCX, XLSX, PPTX, CSV) and saves the exported file to Drive. For binary files, returns the direct download link.',
   parameters: z.object({
     fileId: z.string().describe('The Drive file ID to download/export.'),
@@ -159,6 +171,7 @@ driveServer.addTool({
 
 driveServer.addTool({
   name: 'getFilePermissions',
+  annotations: { readOnlyHint: true },
   description: 'Retrieve all permissions on a Google Drive file or folder. Shows who has access, their roles, and sharing status.',
   parameters: z.object({
     fileId: z.string().describe('The Drive file or folder ID.'),
@@ -168,6 +181,7 @@ driveServer.addTool({
 
 driveServer.addTool({
   name: 'shareDriveFile',
+  annotations: { readOnlyHint: false },
   description: 'Share a Google Drive file or folder by creating a permission. Can share with specific users/groups, a domain, or create an "anyone with the link" share.',
   parameters: z.object({
     fileId: z.string().describe('The Drive file or folder ID to share.'),
@@ -205,6 +219,7 @@ driveServer.addTool({
 
 driveServer.addTool({
   name: 'checkPublicAccess',
+  annotations: { readOnlyHint: true },
   description: 'Check whether a Google Drive file is publicly accessible ("anyone with the link"). Returns public/private status, file info, and permissions summary.',
   parameters: z.object({
     fileId: z.string().describe('The Drive file ID to check.'),
