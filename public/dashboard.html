@@ -80,6 +80,30 @@
       align-items: center;
       gap: 1rem;
     }
+    .header-nav {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .nav-link {
+      color: #888;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      padding: 0.4rem 0.6rem;
+      border-radius: 6px;
+      transition: background-color 0.2s, color 0.2s;
+      touch-action: manipulation;
+    }
+    .nav-link:hover {
+      background: #111;
+      color: #ededed;
+    }
+    .nav-separator {
+      width: 1px;
+      height: 1.25rem;
+      background: rgba(255,255,255,0.12);
+    }
     .user-info {
       display: flex;
       align-items: center;
@@ -769,6 +793,22 @@
         margin-top: 0.5rem;
         padding-left: 3.5rem;
       }
+      .header {
+        flex-wrap: wrap;
+        gap: 0.75rem;
+      }
+      .header-right {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+      .nav-separator {
+        display: none;
+      }
+    }
+    @media (max-width: 480px) {
+      .user-info {
+        display: none;
+      }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -787,6 +827,11 @@
     <div class="header">
       <a href="https://awesome-mcp.xyz" style="text-decoration:none;color:inherit;"><h1 translate="no">Awesome MCP</h1></a>
       <div class="header-right">
+        <nav class="header-nav" aria-label="Primary">
+          <a href="/integrations" class="nav-link">Integrations</a>
+          <a href="/updates" class="nav-link">Updates</a>
+        </nav>
+        <span class="nav-separator" aria-hidden="true"></span>
         <span class="user-info">
           <span id="userInfo"></span>
         </span>
