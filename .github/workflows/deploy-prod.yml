@@ -3,6 +3,13 @@ name: Deploy → Prod
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to deploy (defaults to main HEAD)
+        required: false
+        type: string
+        default: main
 
 jobs:
   deploy:
@@ -10,5 +17,5 @@ jobs:
     with:
       environment: prod
       railway_environment: production
-      ref: ${{ github.sha }}
+      ref: ${{ inputs.ref || github.sha }}
     secrets: inherit
