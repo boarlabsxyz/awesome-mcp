@@ -16,12 +16,12 @@ Create the following before enabling the e2e workflow. Once created, do **not** 
 
 | Field | Value |
 |---|---|
-| Title | `E2E Smoke Fixture Doc` |
-| Doc ID | _record here after creation_ |
+| Title | `E2E Smoke Fixture Doc` (human-readable only — the test does not use the title) |
+| Doc ID | _record here after creation — comes from the URL `docs.google.com/document/d/<ID>/edit`_ |
 | Sharing | Owned by the e2e Google account; not shared further |
 | Content | A short plain-text body containing the marker token `BANANA-PHONE-7714` on its own line. No formatting. |
 
-The marker is intentionally unique and unlikely to appear by chance — assertions look for it verbatim.
+The marker is intentionally unique and unlikely to appear by chance — assertions look for it verbatim. The `readGoogleDoc` MCP tool takes a `documentId`, not a title, so the **doc ID is what actually goes into the prompt** (via the `E2E_FIXTURE_DOC_ID` env var).
 
 ### Spreadsheet: smoke fixture (reserved for future tests)
 
@@ -35,10 +35,10 @@ The marker is intentionally unique and unlikely to appear by chance — assertio
 
 Set under **Settings → Secrets and variables → Actions → Variables**:
 
-| Variable | Example value |
-|---|---|
-| `E2E_FIXTURE_DOC_TITLE` | `E2E Smoke Fixture Doc` |
-| `E2E_FIXTURE_DOC_NEEDLE` | `BANANA-PHONE-7714` |
+| Variable | Example value | Used by |
+|---|---|---|
+| `E2E_FIXTURE_DOC_ID` | `1AbCdEfGh...` (from the Google Doc URL) | `readGoogleDoc.smoke.ts` prompt |
+| `E2E_FIXTURE_DOC_NEEDLE` | `BANANA-PHONE-7714` | `readGoogleDoc.smoke.ts` assertion |
 
 These are referenced by `.github/workflows/e2e-smoke.yml`.
 

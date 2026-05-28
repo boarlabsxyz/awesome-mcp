@@ -38,7 +38,7 @@ The GHA runner expects (1) and (2) to be running before a job fires.
 ```bash
 cd e2e
 npm ci
-E2E_FIXTURE_DOC_TITLE="E2E Smoke Fixture Doc" \
+E2E_FIXTURE_DOC_ID="<your-fixture-doc-id-from-fixtures.md>" \
 E2E_FIXTURE_DOC_NEEDLE="BANANA-PHONE-7714" \
 CLIENT=claude-desktop npm test
 

@@ -72,7 +72,7 @@ curl -sS http://127.0.0.1:9222/json/version
 # Run the smoke locally to validate AX selectors
 cd ~/awesome-mcp/e2e
 npm ci
-E2E_FIXTURE_DOC_TITLE="E2E Smoke Fixture Doc" \
+E2E_FIXTURE_DOC_ID="<your-fixture-doc-id>" \
 E2E_FIXTURE_DOC_NEEDLE="BANANA-PHONE-7714" \
 CLIENT=claude-desktop npm test
 ```

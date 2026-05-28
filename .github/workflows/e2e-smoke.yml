@@ -32,7 +32,7 @@ jobs:
       APPIUM_HOST: 127.0.0.1
       APPIUM_PORT: '4723'
       RESPONSE_TIMEOUT_MS: '120000'
-      E2E_FIXTURE_DOC_TITLE: ${{ vars.E2E_FIXTURE_DOC_TITLE }}
+      E2E_FIXTURE_DOC_ID: ${{ vars.E2E_FIXTURE_DOC_ID }}
       E2E_FIXTURE_DOC_NEEDLE: ${{ vars.E2E_FIXTURE_DOC_NEEDLE }}
     steps:
       - uses: actions/checkout@v4
@@ -80,7 +80,7 @@ jobs:
       ARTIFACTS_DIR: ${{ github.workspace }}/e2e/.artifacts
       CHATGPT_CDP_ENDPOINT: http://127.0.0.1:9222
       RESPONSE_TIMEOUT_MS: '120000'
-      E2E_FIXTURE_DOC_TITLE: ${{ vars.E2E_FIXTURE_DOC_TITLE }}
+      E2E_FIXTURE_DOC_ID: ${{ vars.E2E_FIXTURE_DOC_ID }}
       E2E_FIXTURE_DOC_NEEDLE: ${{ vars.E2E_FIXTURE_DOC_NEEDLE }}
     steps:
       - uses: actions/checkout@v4
