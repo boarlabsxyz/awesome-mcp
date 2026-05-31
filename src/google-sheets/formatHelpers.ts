@@ -258,5 +258,55 @@ export function operationToRequest(
         },
       };
     }
+
+    case 'updateSheetProperties': {
+      const sheetId = resolveSheetId(metadata, op.sheetName);
+      const properties: sheets_v4.Schema$SheetProperties = { sheetId };
+      const fields: string[] = [];
+      if (op.title !== undefined) {
+        properties.title = op.title;
+        fields.push('title');
+      }
+      if (op.index !== undefined) {
+        properties.index = op.index;
+        fields.push('index');
+      }
+      if (op.hidden !== undefined) {
+        properties.hidden = op.hidden;
+        fields.push('hidden');
+      }
+      if (op.tabColor !== undefined) {
+        properties.tabColorStyle = { rgbColor: toColor(op.tabColor) };
+        fields.push('tabColorStyle');
+      }
+      if (fields.length === 0) {
+        throw new UserError('updateSheetProperties requires at least one of: title, index, hidden, tabColor.');
+      }
+      return {
+        updateSheetProperties: {
+          properties,
+          fields: fields.join(','),
+        },
+      };
+    }
+
+    case 'deleteSheet': {
+      const sheetId = resolveSheetId(metadata, op.sheetName);
+      return { deleteSheet: { sheetId } };
+    }
+
+    case 'duplicateSheet': {
+      const sourceSheetId = resolveSheetId(metadata, op.sourceSheetName);
+      const req: sheets_v4.Schema$DuplicateSheetRequest = { sourceSheetId };
+      if (op.newSheetName !== undefined) req.newSheetName = op.newSheetName;
+      if (op.insertIndex !== undefined) req.insertSheetIndex = op.insertIndex;
+      return { duplicateSheet: req };
+    }
+
+    case 'addSheet': {
+      const properties: sheets_v4.Schema$SheetProperties = { title: op.title };
+      if (op.index !== undefined) properties.index = op.index;
+      return { addSheet: { properties } };
+    }
   }
 }

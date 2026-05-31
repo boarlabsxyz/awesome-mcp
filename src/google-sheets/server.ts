@@ -486,7 +486,7 @@ sheetsServer.addTool({
 sheetsServer.addTool({
   name: 'batchUpdateSpreadsheet',
   annotations: { readOnlyHint: false },
-  description: 'Apply multiple formatting operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, and column/row sizing.',
+  description: 'Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, column/row sizing, and tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet).',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
     operations: z.array(BatchUpdateOperationSchema).min(1).describe('Array of formatting operations to apply atomically.'),
@@ -504,7 +504,11 @@ sheetsServer.addTool({
       args.operations.forEach((op, i) => {
         try {
           requests.push(operationToRequest(op, metadata, batchState));
-          const target = 'range' in op ? op.range : ('sheetName' in op && op.sheetName) ? op.sheetName : '(first sheet)';
+          const target = 'range' in op ? op.range
+            : ('sheetName' in op && op.sheetName) ? op.sheetName
+            : ('sourceSheetName' in op && op.sourceSheetName) ? op.sourceSheetName
+            : ('title' in op && op.title) ? op.title
+            : '(first sheet)';
           summaries.push(`  ${i}. ${op.type} → ${target}`);
         } catch (e: any) {
           if (e instanceof UserError) {
