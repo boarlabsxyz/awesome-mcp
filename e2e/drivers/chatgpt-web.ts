@@ -77,8 +77,18 @@ export async function createChatGptWebDriver(): Promise<Driver> {
 }
 
 async function waitForResponseComplete(page: Page): Promise<string> {
-  // Streaming-complete heuristic: the stop button disappears from the DOM.
+  // Streaming heuristic: the stop button appears as soon as ChatGPT starts
+  // streaming a reply and disappears when the stream ends. Waiting only for
+  // disappearance races the network round-trip — the predicate is already
+  // true the instant we check, so we'd read the *previous* turn's assistant
+  // message. First wait for the button to appear so we know we're inside the
+  // current turn's stream, then wait for it to disappear.
   // SELECTOR-TODO: data-testid="stop-button" is the historical id; verify.
+  await page.waitForSelector('button[data-testid="stop-button"]', {
+    state: 'attached',
+    timeout: 15_000,
+  });
+
   await page.waitForFunction(
     () => !document.querySelector('button[data-testid="stop-button"]'),
     null,
