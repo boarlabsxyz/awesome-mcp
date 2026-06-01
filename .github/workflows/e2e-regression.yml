@@ -1,20 +1,20 @@
-name: E2E Smoke (Live Clients)
+name: E2E Regression (Nightly)
 
-# Runs after each successful dev deploy. Drives the real Claude Desktop and
-# ChatGPT clients against the dev MCP server via a self-hosted Mac Studio.
+# Runs the full e2e test glob (tests/**/*.smoke.ts) once per night against the
+# dev MCP. Independent of the deploy gate - failures here do NOT block prod
+# tagging. They post to Slack so the team sees them in the morning and can
+# triage from the forensics artifact on the run page.
 #
-# Claude Desktop is the blocking signal for prod promotion.
-# ChatGPT is advisory in v1 (continue-on-error) while OpenAI's MCP surface
-# is still shifting. Promote to blocking once flake rate is acceptable.
+# As Phase 3 adds more tests (one per Google Docs tool), this is the workflow
+# that exercises them. The deploy gate stays at the 1 read + 1 write minimum.
 
 on:
-  workflow_run:
-    workflows: ['Deploy → Dev']
-    types: [completed]
+  schedule:
+    - cron: '0 3 * * *'   # 03:00 UTC daily
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Git SHA to test (defaults to latest dev deploy)'
+        description: 'Git SHA to test (defaults to current main)'
         required: false
         type: string
 
@@ -23,9 +23,8 @@ permissions:
 
 jobs:
   claude-desktop:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: [self-hosted, macOS, mac-studio]
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       CLIENT: claude-desktop
       ARTIFACTS_DIR: ${{ github.workspace }}/e2e/.artifacts
@@ -41,7 +40,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.event.workflow_run.head_sha }}
+          ref: ${{ inputs.ref || 'main' }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -57,28 +57,38 @@ jobs:
         working-directory: e2e
         run: npm install
 
-      - name: Run smoke gate (1 read + 1 write)
+      - name: Run full regression (Claude Desktop)
+        id: tests
         working-directory: e2e
-        run: npm run test:gate
+        run: npm run test:full
 
       - name: Upload forensics bundle
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-claude-desktop-${{ inputs.ref || github.event.workflow_run.head_sha }}
+          name: e2e-regression-claude-desktop-${{ github.run_id }}
           path: e2e/.artifacts/**
           retention-days: 90
           if-no-files-found: warn
 
+      - name: Notify Slack on failure
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.E2E_SLACK_WEBHOOK_URL }}
+        run: |
+          curl --fail --silent --show-error -X POST -H 'Content-type: application/json' \
+            --data "$(cat <<EOF
+          {"text": ":rotating_light: E2E nightly regression FAILED (claude-desktop)\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\nSee forensics artifact for details."}
+          EOF
+          )" \
+            "$SLACK_WEBHOOK_URL"
+
   chatgpt-web:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: [self-hosted, macOS, mac-studio]
     needs: [claude-desktop]
-    # ADVISORY in v1: failures here do not block prod promotion. Remove this
-    # line and add the job name to create-tag.yml's required list once ChatGPT
-    # has shown a stable flake rate.
+    # Advisory regardless of the gate's status - same posture as the smoke job.
     continue-on-error: true
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       CLIENT: chatgpt-web
       ARTIFACTS_DIR: ${{ github.workspace }}/e2e/.artifacts
@@ -93,7 +103,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.event.workflow_run.head_sha }}
+          ref: ${{ inputs.ref || 'main' }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -109,15 +120,27 @@ jobs:
         working-directory: e2e
         run: npm install
 
-      - name: Run smoke gate (1 read + 1 write)
+      - name: Run full regression (ChatGPT web)
         working-directory: e2e
-        run: npm run test:gate
+        run: npm run test:full
 
       - name: Upload forensics bundle
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-chatgpt-web-${{ inputs.ref || github.event.workflow_run.head_sha }}
+          name: e2e-regression-chatgpt-web-${{ github.run_id }}
           path: e2e/.artifacts/**
           retention-days: 90
           if-no-files-found: warn
+
+      - name: Notify Slack on failure
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.E2E_SLACK_WEBHOOK_URL }}
+        run: |
+          curl --fail --silent --show-error -X POST -H 'Content-type: application/json' \
+            --data "$(cat <<EOF
+          {"text": ":warning: E2E nightly regression failed (chatgpt-web, advisory)\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}
+          EOF
+          )" \
+            "$SLACK_WEBHOOK_URL"
