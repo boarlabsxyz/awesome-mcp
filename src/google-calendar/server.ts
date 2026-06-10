@@ -5,6 +5,7 @@ import { calendar_v3 } from 'googleapis';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
+import { formatConferenceCompact, formatConferenceDetail } from './conferenceFormatter.js';
 
 const calendarServer = new FastMCP<UserSession>({
   name: 'Google Calendar MCP Server',
@@ -124,15 +125,7 @@ calendarServer.addTool({
         if (event.attendees && event.attendees.length > 0) {
           result += `   Attendees: ${event.attendees.map(a => a.email).join(', ')}\n`;
         }
-        if (event.hangoutLink) {
-          result += `   Meet: ${event.hangoutLink}\n`;
-        } else if (event.conferenceData?.entryPoints?.length) {
-          const video = event.conferenceData.entryPoints.find(ep => ep.entryPointType === 'video');
-          if (video?.uri) {
-            const name = event.conferenceData.conferenceSolution?.name || 'Conference';
-            result += `   ${name}: ${video.uri}\n`;
-          }
-        }
+        result += formatConferenceCompact(event);
         result += `   Status: ${event.status}\n\n`;
       });
 
@@ -197,23 +190,7 @@ calendarServer.addTool({
       if (event.recurrence) {
         result += `\n**Recurrence:** ${event.recurrence.join(', ')}\n`;
       }
-      if (event.hangoutLink) {
-        result += `\n**Hangout Link:** ${event.hangoutLink}\n`;
-      }
-      if (event.conferenceData) {
-        const conf = event.conferenceData;
-        if (conf.conferenceSolution?.name) {
-          result += `**Conference:** ${conf.conferenceSolution.name}\n`;
-        }
-        if (conf.entryPoints?.length) {
-          result += `**Conference Entry Points:**\n`;
-          conf.entryPoints.forEach(ep => {
-            const parts = [ep.entryPointType, ep.uri].filter(Boolean);
-            const line = parts.join(' ');
-            result += ep.label ? `  - ${line} (${ep.label})\n` : `  - ${line}\n`;
-          });
-        }
-      }
+      result += formatConferenceDetail(event);
       if (event.htmlLink) {
         result += `\n**Link:** ${event.htmlLink}\n`;
       }
