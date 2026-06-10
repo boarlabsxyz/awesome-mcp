@@ -5,6 +5,7 @@ import { calendar_v3 } from 'googleapis';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
+import { formatConferenceCompact, formatConferenceDetail } from './conferenceFormatter.js';
 
 const calendarServer = new FastMCP<UserSession>({
   name: 'Google Calendar MCP Server',
@@ -124,6 +125,7 @@ calendarServer.addTool({
         if (event.attendees && event.attendees.length > 0) {
           result += `   Attendees: ${event.attendees.map(a => a.email).join(', ')}\n`;
         }
+        result += formatConferenceCompact(event);
         result += `   Status: ${event.status}\n\n`;
       });
 
@@ -188,6 +190,7 @@ calendarServer.addTool({
       if (event.recurrence) {
         result += `\n**Recurrence:** ${event.recurrence.join(', ')}\n`;
       }
+      result += formatConferenceDetail(event);
       if (event.htmlLink) {
         result += `\n**Link:** ${event.htmlLink}\n`;
       }
