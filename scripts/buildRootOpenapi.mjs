@@ -89,6 +89,8 @@ const root = {
 
 const seenSchemas = new Set();
 const pathOwners = new Map();
+// method-level ownership: key is `${path} ${METHOD}` → source file.
+const methodOwners = new Map();
 
 const files = readdirSync(publicDir)
   .filter(f => f.startsWith('openapi-') && f.endsWith('.json'))
@@ -133,15 +135,22 @@ for (const file of files) {
     seenSchemas.add(finalName);
   }
 
-  // Merge paths.
+  // Merge paths. Iterate per method so we never silently overwrite an
+  // operation a previous spec already contributed for the same path.
   for (const [path, methods] of Object.entries(spec.paths ?? {})) {
-    if (root.paths[path]) {
-      const owner = pathOwners.get(path);
-      console.warn(`[buildRootOpenapi] Path collision: ${path} (already owned by ${owner}, second from ${file})`);
-      Object.assign(root.paths[path], methods);
-    } else {
-      root.paths[path] = methods;
+    if (!root.paths[path]) {
+      root.paths[path] = {};
       pathOwners.set(path, file);
+    }
+    for (const [method, operation] of Object.entries(methods ?? {})) {
+      const ownerKey = `${path} ${method.toUpperCase()}`;
+      if (root.paths[path][method] !== undefined) {
+        const owner = methodOwners.get(ownerKey) ?? pathOwners.get(path);
+        console.warn(`[buildRootOpenapi] Method collision: ${method.toUpperCase()} ${path} — kept entry from ${owner}, dropped duplicate from ${file}`);
+        continue;
+      }
+      root.paths[path][method] = operation;
+      methodOwners.set(ownerKey, file);
     }
   }
 }
