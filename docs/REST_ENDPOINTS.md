@@ -47,9 +47,9 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 |---|---|---|---|
 | `listGoogleSheets` | `GET /api/v1/sheets` | live | List spreadsheets |
 | `getSpreadsheetInfo` | `GET /api/v1/sheets/{spreadsheetId}` | live | Get spreadsheet metadata |
-| `readSpreadsheet` | `GET /api/v1/sheets/{spreadsheetId}/ranges?range={range}` | planned | Read a range from a spreadsheet — _GET sibling of the existing POST /api/v1/sheets/{id}/read._ |
-| `readRowByField` | `GET /api/v1/sheets/{spreadsheetId}/rows/{rowNumber}` | planned | Read a row by row number |
-| `findRowByValue` | `GET /api/v1/sheets/{spreadsheetId}/search` | planned | Find a row by column value (?col=&val=) |
+| `readSpreadsheet` | `GET /api/v1/sheets/{spreadsheetId}/ranges?range={range}` | live | Read a range from a spreadsheet — _GET sibling of the existing POST /api/v1/sheets/{id}/read._ |
+| `readRowByField` | `GET /api/v1/sheets/{spreadsheetId}/rows/{rowNumber}` | live | Read a row by row number |
+| `findRowByValue` | `GET /api/v1/sheets/{spreadsheetId}/search` | live | Find a row by column value (?col=&val=) |
 
 ### Google Calendar (`calendar`)
 
@@ -86,8 +86,8 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 |---|---|---|---|
 | `getPresentation` | `GET /api/v1/slides/{presentationId}` | live | Get presentation metadata |
 | `getPage` | `GET /api/v1/slides/{presentationId}/pages/{pageObjectId}` | live | Get a slide page |
-| `getPageThumbnail` | `GET /api/v1/slides/{presentationId}/pages/{pageObjectId}/thumbnail` | planned | Get a slide thumbnail (PNG URL) |
-| `listPresentationComments` | `GET /api/v1/slides/{presentationId}/comments` | planned | List comments on a presentation |
+| `getPageThumbnail` | `GET /api/v1/slides/{presentationId}/pages/{pageObjectId}/thumbnail` | live | Get a slide thumbnail (PNG URL) |
+| `listPresentationComments` | `GET /api/v1/slides/{presentationId}/comments` | live | List comments on a presentation |
 
 ### ClickUp (`clickup`)
 
@@ -107,8 +107,8 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `searchTasks` | `GET /api/v1/clickup/workspaces/{workspaceId}/tasks/search` | live | Search tasks across a workspace |
 | `listDocs` | `GET /api/v1/clickup/workspaces/{workspaceId}/docs` | live | List docs in a workspace |
 | `searchDocs` | `GET /api/v1/clickup/workspaces/{workspaceId}/docs/search` | live | Search docs in a workspace |
-| `getDoc` | `GET /api/v1/clickup/docs/{docId}` | planned | Get a ClickUp doc with its pages |
-| `getPage` | `GET /api/v1/clickup/docs/{docId}/pages/{pageId}` | planned | Get a page within a ClickUp doc — _operationId namespaced to avoid collision with Slides getPage._ |
+| `getDoc` | `GET /api/v1/clickup/docs/{docId}?workspaceId={workspaceId}` | live | Get a ClickUp doc with its pages — _Required query param: workspaceId._ |
+| `getPage` | `GET /api/v1/clickup/docs/{docId}/pages/{pageId}?workspaceId={workspaceId}` | live | Get a page within a ClickUp doc — _Required query param: workspaceId._ |
 | `listWorkspaceMembers` | `GET /api/v1/clickup/workspaces/{workspaceId}/members` | planned | List members of a workspace |
 | `getTimeEntries` | `GET /api/v1/clickup/workspaces/{workspaceId}/time` | live | List time entries |
 

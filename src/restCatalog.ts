@@ -39,9 +39,9 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   // -------- Google Sheets --------
   { service: 'sheets', method: 'GET', path: '/api/v1/sheets', summary: 'List spreadsheets', mcpToolName: 'listGoogleSheets', openapiOperationId: 'listSpreadsheets', status: 'live' },
   { service: 'sheets', method: 'GET', path: '/api/v1/sheets/{spreadsheetId}', summary: 'Get spreadsheet metadata', mcpToolName: 'getSpreadsheetInfo', openapiOperationId: 'getSpreadsheetInfo', status: 'live' },
-  { service: 'sheets', method: 'GET', path: '/api/v1/sheets/{spreadsheetId}/ranges?range={range}', summary: 'Read a range from a spreadsheet', mcpToolName: 'readSpreadsheet', openapiOperationId: 'readSpreadsheet', status: 'planned', notes: 'GET sibling of the existing POST /api/v1/sheets/{id}/read.' },
-  { service: 'sheets', method: 'GET', path: '/api/v1/sheets/{spreadsheetId}/rows/{rowNumber}', summary: 'Read a row by row number', mcpToolName: 'readRowByField', openapiOperationId: 'readRowByField', status: 'planned' },
-  { service: 'sheets', method: 'GET', path: '/api/v1/sheets/{spreadsheetId}/search', summary: 'Find a row by column value (?col=&val=)', mcpToolName: 'findRowByValue', openapiOperationId: 'findRowByValue', status: 'planned' },
+  { service: 'sheets', method: 'GET', path: '/api/v1/sheets/{spreadsheetId}/ranges?range={range}', summary: 'Read a range from a spreadsheet', mcpToolName: 'readSpreadsheet', openapiOperationId: 'readSpreadsheet', status: 'live', notes: 'GET sibling of the existing POST /api/v1/sheets/{id}/read.' },
+  { service: 'sheets', method: 'GET', path: '/api/v1/sheets/{spreadsheetId}/rows/{rowNumber}', summary: 'Read a row by row number', mcpToolName: 'readRowByField', openapiOperationId: 'readRowByField', status: 'live' },
+  { service: 'sheets', method: 'GET', path: '/api/v1/sheets/{spreadsheetId}/search', summary: 'Find a row by column value (?col=&val=)', mcpToolName: 'findRowByValue', openapiOperationId: 'findRowByValue', status: 'live' },
 
   // -------- Google Calendar --------
   { service: 'calendar', method: 'GET', path: '/api/v1/calendars', summary: 'List calendars', mcpToolName: 'listCalendars', openapiOperationId: 'listCalendars', status: 'live' },
@@ -66,8 +66,8 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   // -------- Google Slides --------
   { service: 'slides', method: 'GET', path: '/api/v1/slides/{presentationId}', summary: 'Get presentation metadata', mcpToolName: 'getPresentation', openapiOperationId: 'getPresentation', status: 'live' },
   { service: 'slides', method: 'GET', path: '/api/v1/slides/{presentationId}/pages/{pageObjectId}', summary: 'Get a slide page', mcpToolName: 'getPage', openapiOperationId: 'getPage', status: 'live' },
-  { service: 'slides', method: 'GET', path: '/api/v1/slides/{presentationId}/pages/{pageObjectId}/thumbnail', summary: 'Get a slide thumbnail (PNG URL)', mcpToolName: 'getPageThumbnail', openapiOperationId: 'getPageThumbnail', status: 'planned' },
-  { service: 'slides', method: 'GET', path: '/api/v1/slides/{presentationId}/comments', summary: 'List comments on a presentation', mcpToolName: 'listPresentationComments', openapiOperationId: 'listPresentationComments', status: 'planned' },
+  { service: 'slides', method: 'GET', path: '/api/v1/slides/{presentationId}/pages/{pageObjectId}/thumbnail', summary: 'Get a slide thumbnail (PNG URL)', mcpToolName: 'getPageThumbnail', openapiOperationId: 'getPageThumbnail', status: 'live' },
+  { service: 'slides', method: 'GET', path: '/api/v1/slides/{presentationId}/comments', summary: 'List comments on a presentation', mcpToolName: 'listPresentationComments', openapiOperationId: 'listPresentationComments', status: 'live' },
 
   // -------- ClickUp --------
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/user', summary: 'Get the authorized ClickUp user', mcpToolName: 'getAuthorizedUser', openapiOperationId: 'getAuthorizedUser', status: 'live' },
@@ -84,8 +84,8 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/workspaces/{workspaceId}/tasks/search', summary: 'Search tasks across a workspace', mcpToolName: 'searchTasks', openapiOperationId: 'searchTasks', status: 'live' },
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/workspaces/{workspaceId}/docs', summary: 'List docs in a workspace', mcpToolName: 'listDocs', openapiOperationId: 'listDocs', status: 'live' },
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/workspaces/{workspaceId}/docs/search', summary: 'Search docs in a workspace', mcpToolName: 'searchDocs', openapiOperationId: 'searchDocs', status: 'live' },
-  { service: 'clickup', method: 'GET', path: '/api/v1/clickup/docs/{docId}', summary: 'Get a ClickUp doc with its pages', mcpToolName: 'getDoc', openapiOperationId: 'getDoc', status: 'planned' },
-  { service: 'clickup', method: 'GET', path: '/api/v1/clickup/docs/{docId}/pages/{pageId}', summary: 'Get a page within a ClickUp doc', mcpToolName: 'getPage', openapiOperationId: 'getClickUpDocPage', status: 'planned', notes: 'operationId namespaced to avoid collision with Slides getPage.' },
+  { service: 'clickup', method: 'GET', path: '/api/v1/clickup/docs/{docId}?workspaceId={workspaceId}', summary: 'Get a ClickUp doc with its pages', mcpToolName: 'getDoc', openapiOperationId: 'getDoc', status: 'live', notes: 'Required query param: workspaceId.' },
+  { service: 'clickup', method: 'GET', path: '/api/v1/clickup/docs/{docId}/pages/{pageId}?workspaceId={workspaceId}', summary: 'Get a page within a ClickUp doc', mcpToolName: 'getPage', openapiOperationId: 'getClickUpDocPage', status: 'live', notes: 'Required query param: workspaceId.' },
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/workspaces/{workspaceId}/members', summary: 'List members of a workspace', mcpToolName: 'listWorkspaceMembers', openapiOperationId: 'listWorkspaceMembers', status: 'planned' },
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/workspaces/{workspaceId}/time', summary: 'List time entries', mcpToolName: 'getTimeEntries', openapiOperationId: 'getTimeEntries', status: 'live' },
 

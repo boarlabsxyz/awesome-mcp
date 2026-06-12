@@ -3590,6 +3590,200 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
     }
   });
 
+  // GET /api/v1/slides/:presentationId/pages/:pageObjectId/thumbnail - Slide thumbnail URL
+  app.get('/api/v1/slides/:presentationId/pages/:pageObjectId/thumbnail', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const slides = req.userSession!.googleSlides;
+      const thumbnailSize = (req.query.size ?? 'MEDIUM').toString().toUpperCase();
+      const response = await slides.presentations.pages.getThumbnail({
+        presentationId: req.params.presentationId as string,
+        pageObjectId: req.params.pageObjectId as string,
+        'thumbnailProperties.mimeType': 'PNG',
+        'thumbnailProperties.thumbnailSize': thumbnailSize,
+      });
+      res.json({
+        presentationId: req.params.presentationId,
+        pageObjectId: req.params.pageObjectId,
+        contentUrl: response.data.contentUrl,
+        width: response.data.width,
+        height: response.data.height,
+      });
+    } catch (err: any) {
+      if (err.code === 404) res.status(404).json({ error: 'Page or presentation not found' });
+      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to get thumbnail' });
+    }
+  });
+
+  // GET /api/v1/slides/:presentationId/comments - List comments on a presentation
+  app.get('/api/v1/slides/:presentationId/comments', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const response = await drive.comments.list({
+        fileId: req.params.presentationId as string,
+        fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime))',
+        pageSize: 100,
+      });
+      res.json({
+        presentationId: req.params.presentationId,
+        comments: response.data.comments || [],
+      });
+    } catch (err: any) {
+      if (err.code === 404) res.status(404).json({ error: 'Presentation not found' });
+      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to list comments' });
+    }
+  });
+
+  // GET /api/v1/sheets/:spreadsheetId/ranges - Read a range (GET sibling of POST .../read)
+  app.get('/api/v1/sheets/:spreadsheetId/ranges', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const range = (req.query.range ?? '').toString();
+      if (!range) {
+        res.status(400).json({ error: 'Query param `range` is required (e.g. range=Sheet1!A1:D10)' });
+        return;
+      }
+      const sheets = req.userSession!.googleSheets;
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: req.params.spreadsheetId as string,
+        range,
+      });
+      res.json({
+        spreadsheetId: req.params.spreadsheetId,
+        range: response.data.range,
+        majorDimension: response.data.majorDimension,
+        values: response.data.values || [],
+      });
+    } catch (err: any) {
+      if (err.code === 404) res.status(404).json({ error: 'Spreadsheet not found' });
+      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to read range' });
+    }
+  });
+
+  // GET /api/v1/sheets/:spreadsheetId/rows/:rowNumber - Read a single row
+  app.get('/api/v1/sheets/:spreadsheetId/rows/:rowNumber', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const rowNumber = parseInt(req.params.rowNumber as string, 10);
+      if (!Number.isInteger(rowNumber) || rowNumber < 1) {
+        res.status(400).json({ error: 'rowNumber must be a positive 1-based integer' });
+        return;
+      }
+      const sheetName = (req.query.sheet ?? '').toString();
+      const sheets = req.userSession!.googleSheets;
+      const range = sheetName ? `${sheetName}!${rowNumber}:${rowNumber}` : `${rowNumber}:${rowNumber}`;
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: req.params.spreadsheetId as string,
+        range,
+      });
+      const values = response.data.values?.[0] || [];
+      // If ?withHeaders=true, also fetch row 1 and pair them.
+      let asObject: Record<string, any> | undefined;
+      if (req.query.withHeaders === 'true') {
+        const headersRange = sheetName ? `${sheetName}!1:1` : '1:1';
+        const headersResp = await sheets.spreadsheets.values.get({
+          spreadsheetId: req.params.spreadsheetId as string,
+          range: headersRange,
+        });
+        const headers = (headersResp.data.values?.[0] || []).map(String);
+        asObject = {};
+        headers.forEach((h, i) => { asObject![h] = values[i] ?? null; });
+      }
+      res.json({
+        spreadsheetId: req.params.spreadsheetId,
+        rowNumber,
+        sheet: sheetName || null,
+        values,
+        ...(asObject ? { asObject } : {}),
+      });
+    } catch (err: any) {
+      if (err.code === 404) res.status(404).json({ error: 'Spreadsheet not found' });
+      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to read row' });
+    }
+  });
+
+  // GET /api/v1/sheets/:spreadsheetId/search - Find a row by column value
+  app.get('/api/v1/sheets/:spreadsheetId/search', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const col = (req.query.col ?? '').toString();
+      const val = (req.query.val ?? '').toString();
+      const sheetName = (req.query.sheet ?? '').toString();
+      if (!col || !val) {
+        res.status(400).json({ error: 'Query params `col` and `val` are required (e.g. col=A&val=foo)' });
+        return;
+      }
+      const sheets = req.userSession!.googleSheets;
+      const range = sheetName ? `${sheetName}!${col}:${col}` : `${col}:${col}`;
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: req.params.spreadsheetId as string,
+        range,
+      });
+      const rows = response.data.values || [];
+      let rowNumber: number | null = null;
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i][0] !== undefined && String(rows[i][0]) === val) {
+          rowNumber = i + 1;
+          break;
+        }
+      }
+      res.json({
+        spreadsheetId: req.params.spreadsheetId,
+        column: col,
+        searchValue: val,
+        sheet: sheetName || null,
+        rowNumber,
+        found: rowNumber !== null,
+      });
+    } catch (err: any) {
+      if (err.code === 404) res.status(404).json({ error: 'Spreadsheet not found' });
+      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to search' });
+    }
+  });
+
+  // GET /api/v1/clickup/docs/:docId - Get a ClickUp doc with its pages
+  app.get('/api/v1/clickup/docs/:docId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const workspaceId = (req.query.workspaceId ?? '').toString();
+      if (!workspaceId) {
+        res.status(400).json({ error: 'Query param `workspaceId` is required' });
+        return;
+      }
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const [doc, pages] = await Promise.all([
+        client.getDoc(workspaceId, req.params.docId as string),
+        client.getDocPages(workspaceId, req.params.docId as string).catch(() => []),
+      ]);
+      res.json({ doc, pages });
+    } catch (err: any) {
+      if (err.response?.status === 404 || err.status === 404) res.status(404).json({ error: 'Doc not found' });
+      else if (err.response?.status === 403 || err.status === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to get doc' });
+    }
+  });
+
+  // GET /api/v1/clickup/docs/:docId/pages/:pageId - Get a page within a ClickUp doc
+  app.get('/api/v1/clickup/docs/:docId/pages/:pageId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const workspaceId = (req.query.workspaceId ?? '').toString();
+      if (!workspaceId) {
+        res.status(400).json({ error: 'Query param `workspaceId` is required' });
+        return;
+      }
+      const contentFormat = (req.query.contentFormat ?? 'text/md').toString();
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const page = await client.getPage(workspaceId, req.params.docId as string, req.params.pageId as string, contentFormat);
+      res.json(page);
+    } catch (err: any) {
+      if (err.response?.status === 404 || err.status === 404) res.status(404).json({ error: 'Page not found' });
+      else if (err.response?.status === 403 || err.status === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to get page' });
+    }
+  });
+
   return app;
 }
 
