@@ -33,7 +33,24 @@ function generateToken(): string {
 
 const memoryStore = new Map<string, RestTokenRecord>();
 
+// Lookup only cleans the specific key it touches, so tokens minted but never
+// looked up would leak forever. Sweep expired entries periodically on mint
+// — deterministic, no timer lifecycle to manage.
+const SWEEP_EVERY_MINTS = 64;
+let mintsSinceLastSweep = 0;
+
+function memorySweep(): void {
+  const now = Date.now();
+  for (const [token, rec] of memoryStore) {
+    if (rec.expiresAt <= now) memoryStore.delete(token);
+  }
+}
+
 function memoryMint(userId: number): MintedRestToken {
+  if (++mintsSinceLastSweep >= SWEEP_EVERY_MINTS) {
+    mintsSinceLastSweep = 0;
+    memorySweep();
+  }
   const token = generateToken();
   const now = Date.now();
   memoryStore.set(token, {
