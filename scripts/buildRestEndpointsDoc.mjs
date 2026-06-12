@@ -82,7 +82,7 @@ lines.push('| `Accept: text/plain` or `?format=text` | Markdown rendering matchi
 lines.push('');
 lines.push('## Base URL');
 lines.push('');
-lines.push('```');
+lines.push('```text');
 lines.push(`${BASE_URL}/api/v1`);
 lines.push('```');
 lines.push('');

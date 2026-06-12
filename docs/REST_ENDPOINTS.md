@@ -22,7 +22,7 @@ The same endpoints also accept the permanent dashboard API key (for ChatGPT Cust
 
 ## Base URL
 
-```
+```text
 https://awesome-mcp.xyz/api/v1
 ```
 
