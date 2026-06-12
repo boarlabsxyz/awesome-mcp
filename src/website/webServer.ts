@@ -3753,9 +3753,11 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       }
       const { ClickUpClient } = await import('../clickup/apiHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      // Let getDocPages rejections propagate to the outer catch so a real
+      // failure is reported as 4xx/5xx, not masked as "no pages".
       const [doc, pages] = await Promise.all([
         client.getDoc(workspaceId, req.params.docId as string),
-        client.getDocPages(workspaceId, req.params.docId as string).catch(() => []),
+        client.getDocPages(workspaceId, req.params.docId as string),
       ]);
       res.json({ doc, pages });
     } catch (err: any) {
