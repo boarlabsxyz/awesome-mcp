@@ -81,8 +81,9 @@ describe('ClickUp server tools', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('should have registered all 34 tools', () => {
-    assert.equal(toolMap.size, 34);
+  it('should have registered all 36 tools', () => {
+    // 34 ClickUp-specific tools + 2 shared (getSecurityToken, listRestEndpoints).
+    assert.equal(toolMap.size, 36);
   });
 
   // === getClickUpClient / auth guard ===
