@@ -3714,8 +3714,25 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         res.status(400).json({ error: 'Query params `col` and `val` are required (e.g. col=A&val=foo)' });
         return;
       }
+      // Restrict `col` to A1-style column letters so it cannot expand the
+      // range (e.g. "A:Z") or inject sheet references like "A!Sheet2".
+      if (!/^[A-Z]+$/i.test(col)) {
+        res.status(400).json({ error: 'Query param `col` must be A1 column letters (e.g. A, B, AA).' });
+        return;
+      }
       const sheets = req.userSession!.googleSheets;
-      const range = sheetName ? `${sheetName}!${col}:${col}` : `${col}:${col}`;
+      // Cap the search window so an unbounded column read can't be triggered
+      // by a sparse value at row ~1M. Callers that need a different window
+      // can supply ?startRow= / ?maxRows= explicitly.
+      const MAX_ROWS = 10000;
+      const startRow = Math.max(parseInt((req.query.startRow ?? '1').toString(), 10) || 1, 1);
+      const maxRows = Math.min(
+        Math.max(parseInt((req.query.maxRows ?? String(MAX_ROWS)).toString(), 10) || MAX_ROWS, 1),
+        MAX_ROWS,
+      );
+      const endRow = startRow + maxRows - 1;
+      const colRange = `${col}${startRow}:${col}${endRow}`;
+      const range = sheetName ? `${sheetName}!${colRange}` : colRange;
       const response = await sheets.spreadsheets.values.get({
         spreadsheetId: req.params.spreadsheetId as string,
         range,
@@ -3724,7 +3741,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       let rowNumber: number | null = null;
       for (let i = 0; i < rows.length; i++) {
         if (rows[i][0] !== undefined && String(rows[i][0]) === val) {
-          rowNumber = i + 1;
+          rowNumber = startRow + i;
           break;
         }
       }
@@ -3733,6 +3750,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         column: col,
         searchValue: val,
         sheet: sheetName || null,
+        startRow,
+        maxRows,
         rowNumber,
         found: rowNumber !== null,
       });
