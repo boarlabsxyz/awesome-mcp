@@ -10,12 +10,17 @@ import * as SheetsHelpers from './apiHelpers.js';
 import { operationToRequest, createBatchState } from './formatHelpers.js';
 import { SharedDriveParameters, BatchUpdateOperationSchema } from '../types.js';
 import { buildSharedDriveParams } from '../google-drive/toolHandlers.js';
+import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 const sheetsServer = new FastMCP<UserSession>({
   name: 'Google Sheets MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-sheets'),
 });
+
+registerGetSecurityToken(sheetsServer);
+registerListRestEndpoints(sheetsServer);
 
 // --- Helper to get Sheets client within tools ---
 function getSheetsClient(session?: UserSession): sheets_v4.Sheets {

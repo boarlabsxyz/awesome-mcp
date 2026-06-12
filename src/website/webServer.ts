@@ -298,6 +298,7 @@ import { loadUsers, createOrUpdateUser, getUserByGoogleId, getUserByApiKey, getU
 import { loadClientCredentials } from '../auth.js';
 import { getOAuthState, deleteOAuthState, storeAuthCode, storeClient, getClient, exchangeAuthCode } from './oauthServer.js';
 import { createSession, getSession, deleteSession, Session } from './sessionStore.js';
+import { lookupRestToken } from './restTokenStore.js';
 import { clearSessionCache, createUserSession, createUserSessionFromConnection, UserSession } from '../userSession.js';
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
 import {
@@ -2079,6 +2080,16 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       } catch { /* not a valid JWT — try next */ }
     }
 
+    // Try short-lived REST token (5-min, minted by getSecurityToken MCP tool)
+    try {
+      const restUserId = await lookupRestToken(token);
+      if (restUserId !== null) {
+        await loadUsers();
+        const restUser = await getUserById(restUserId);
+        if (restUser) return restUser;
+      }
+    } catch { /* fall through */ }
+
     // Try API key (cheap local lookup before hitting Auth0)
     await loadUsers();
     const apiKeyUser = await getUserByApiKey(token);
@@ -2163,8 +2174,11 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
 
   // JSON body parser already added above for auth routes
 
-  // Serve OpenAPI specs
-  for (const spec of ['openapi', 'openapi-calendar', 'openapi-sheets', 'openapi-drive', 'openapi-gmail', 'openapi-slides', 'openapi-clickup']) {
+  // Serve OpenAPI specs.
+  // `openapi.json` is the combined REST data-plane spec (built by
+  // scripts/buildRootOpenapi.mjs). `openapi-docs.json` and the per-service
+  // siblings remain available for ChatGPT Custom Actions backward compat.
+  for (const spec of ['openapi', 'openapi-docs', 'openapi-calendar', 'openapi-sheets', 'openapi-drive', 'openapi-gmail', 'openapi-slides', 'openapi-clickup']) {
     app.get(`/${spec}.json`, (_req, res) => {
       res.sendFile(path.join(publicDir, `${spec}.json`));
     });
@@ -3380,6 +3394,199 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to stop time entry' });
+    }
+  });
+
+  // === REST Data Plane: extended GET endpoints ===
+  // These are passthrough siblings of read-only MCP tools that return bulk
+  // data. Catalogued in src/restCatalog.ts and discoverable via the
+  // listRestEndpoints MCP tool. Bearer is either the permanent apiKey or a
+  // 5-minute token from the getSecurityToken MCP tool.
+
+  // GET /api/v1/docs - List Google Docs (?q= triggers search)
+  app.get('/api/v1/docs', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const q = (req.query.q ?? '').toString();
+      const maxResults = Math.min(parseInt((req.query.maxResults ?? '50').toString(), 10) || 50, 1000);
+      const orderBy = (req.query.orderBy ?? 'modifiedTime').toString();
+      let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
+      if (q) {
+        const escaped = q.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        queryString += ` and (name contains '${escaped}' or fullText contains '${escaped}')`;
+      }
+      const response = await drive.files.list({
+        q: queryString,
+        pageSize: maxResults,
+        orderBy: orderBy === 'name' ? 'name' : orderBy,
+        fields: 'nextPageToken,files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress),driveId)',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+      res.json({ files: response.data.files || [], nextPageToken: response.data.nextPageToken });
+    } catch (err: any) {
+      if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to list docs' });
+    }
+  });
+
+  // GET /api/v1/docs/recent - Recent Google Docs
+  app.get('/api/v1/docs/recent', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const maxResults = Math.min(parseInt((req.query.maxResults ?? '20').toString(), 10) || 20, 200);
+      const response = await drive.files.list({
+        q: "mimeType='application/vnd.google-apps.document' and trashed=false",
+        pageSize: maxResults,
+        orderBy: 'modifiedTime desc',
+        fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName,emailAddress))',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+      res.json({ files: response.data.files || [] });
+    } catch (err: any) {
+      if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to list recent docs' });
+    }
+  });
+
+  // GET /api/v1/docs/:documentId/tabs - List tabs in a Google Doc
+  app.get('/api/v1/docs/:documentId/tabs', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const docs = req.userSession!.googleDocs;
+      const includeContent = req.query.includeContent === 'true';
+      const docResponse = await docs.documents.get({
+        documentId: req.params.documentId as string,
+        includeTabsContent: true,
+        fields: includeContent ? 'title,tabs' : 'title,tabs(tabProperties,childTabs)',
+      });
+      // Flatten the tab tree.
+      const flatten = (tabs: any[] = [], level = 0, out: any[] = []): any[] => {
+        for (const tab of tabs) {
+          out.push({
+            tabId: tab.tabProperties?.tabId,
+            title: tab.tabProperties?.title || null,
+            index: tab.tabProperties?.index ?? null,
+            level,
+          });
+          if (tab.childTabs?.length) flatten(tab.childTabs, level + 1, out);
+        }
+        return out;
+      };
+      const allTabs = flatten(docResponse.data.tabs as any[] || []);
+      res.json({
+        documentId: req.params.documentId,
+        title: docResponse.data.title || null,
+        tabCount: allTabs.length,
+        tabs: allTabs,
+      });
+    } catch (err: any) {
+      if (err.code === 404) res.status(404).json({ error: 'Document not found' });
+      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to list tabs' });
+    }
+  });
+
+  // GET /api/v1/drive/shared-drives - List shared drives
+  app.get('/api/v1/drive/shared-drives', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const maxResults = Math.min(parseInt((req.query.maxResults ?? '50').toString(), 10) || 50, 100);
+      const q = (req.query.q ?? '').toString();
+      const response = await drive.drives.list({
+        pageSize: maxResults,
+        q: q ? `name contains '${q.replace(/'/g, "\\'")}'` : undefined,
+        fields: 'nextPageToken,drives(id,name,createdTime,capabilities)',
+      });
+      res.json({ drives: response.data.drives || [], nextPageToken: response.data.nextPageToken });
+    } catch (err: any) {
+      if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to list shared drives' });
+    }
+  });
+
+  // GET /api/v1/drive/folders/:folderId - Get folder metadata
+  app.get('/api/v1/drive/folders/:folderId', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const response = await drive.files.get({
+        fileId: req.params.folderId as string,
+        supportsAllDrives: true,
+        fields: 'id,name,description,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName),shared,parents,driveId,mimeType',
+      });
+      if (response.data.mimeType !== 'application/vnd.google-apps.folder') {
+        res.status(400).json({ error: 'The specified ID does not belong to a folder.' });
+        return;
+      }
+      res.json(response.data);
+    } catch (err: any) {
+      if (err.code === 404) res.status(404).json({ error: 'Folder not found' });
+      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to get folder info' });
+    }
+  });
+
+  // GET /api/v1/drive/files/:fileId/permissions - List permissions on a file
+  app.get('/api/v1/drive/files/:fileId/permissions', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const response = await drive.permissions.list({
+        fileId: req.params.fileId as string,
+        supportsAllDrives: true,
+        fields: 'permissions(id,type,role,emailAddress,displayName,domain,allowFileDiscovery,deleted)',
+      });
+      res.json({ fileId: req.params.fileId, permissions: response.data.permissions || [] });
+    } catch (err: any) {
+      if (err.code === 404) res.status(404).json({ error: 'File not found' });
+      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to list permissions' });
+    }
+  });
+
+  // GET /api/v1/drive/files/:fileId/public - Check public accessibility
+  app.get('/api/v1/drive/files/:fileId/public', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const [meta, perms] = await Promise.all([
+        drive.files.get({
+          fileId: req.params.fileId as string,
+          supportsAllDrives: true,
+          fields: 'id,name,shared,webViewLink',
+        }),
+        drive.permissions.list({
+          fileId: req.params.fileId as string,
+          supportsAllDrives: true,
+          fields: 'permissions(type,role,domain,allowFileDiscovery)',
+        }),
+      ]);
+      const list = perms.data.permissions || [];
+      const anyone = list.find(p => p.type === 'anyone');
+      const domain = list.find(p => p.type === 'domain');
+      res.json({
+        fileId: meta.data.id,
+        name: meta.data.name,
+        shared: !!meta.data.shared,
+        webViewLink: meta.data.webViewLink,
+        publiclyAccessible: !!anyone,
+        anyoneAccess: anyone ? { role: anyone.role, discoverable: !!anyone.allowFileDiscovery } : null,
+        domainAccess: domain ? { domain: domain.domain, role: domain.role } : null,
+      });
+    } catch (err: any) {
+      if (err.code === 404) res.status(404).json({ error: 'File not found' });
+      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to check public access' });
+    }
+  });
+
+  // GET /api/v1/gmail/labels - List Gmail labels
+  app.get('/api/v1/gmail/labels', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const gmail = req.userSession!.googleGmail;
+      const response = await gmail.users.labels.list({ userId: 'me' });
+      res.json({ labels: response.data.labels || [] });
+    } catch (err: any) {
+      if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to list labels' });
     }
   });
 

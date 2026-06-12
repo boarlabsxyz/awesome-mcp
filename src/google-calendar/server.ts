@@ -5,12 +5,17 @@ import { calendar_v3 } from 'googleapis';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
+import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 const calendarServer = new FastMCP<UserSession>({
   name: 'Google Calendar MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-calendar'),
 });
+
+registerGetSecurityToken(calendarServer);
+registerListRestEndpoints(calendarServer);
 
 // --- Helper to get Calendar client within tools ---
 function getCalendarClient(session?: UserSession): calendar_v3.Calendar {

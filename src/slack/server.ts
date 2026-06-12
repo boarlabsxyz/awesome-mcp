@@ -5,12 +5,17 @@ import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { SlackClient } from './apiHelpers.js';
 import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handlePostMessage, handleReplyInThread } from './helpers.js';
+import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 export const slackBotServer = new FastMCP<UserSession>({
   name: 'Slack Bot MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'slack-bot'),
 });
+
+registerGetSecurityToken(slackBotServer);
+registerListRestEndpoints(slackBotServer);
 
 function getSlackClient(session?: UserSession): SlackClient {
   if (!session?.slackBotToken) {

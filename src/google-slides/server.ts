@@ -14,12 +14,17 @@ import {
   handleBatchUpdatePresentation,
   handleListPresentationComments,
 } from './toolHandlers.js';
+import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 const slidesServer = new FastMCP<UserSession>({
   name: 'Google Slides MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-slides'),
 });
+
+registerGetSecurityToken(slidesServer);
+registerListRestEndpoints(slidesServer);
 
 // === TOOL DEFINITIONS ===
 

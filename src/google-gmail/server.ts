@@ -13,12 +13,17 @@ import {
   handleListLabels, handleCreateLabel, handleUpdateLabel, handleDeleteLabel,
   handleGetOrCreateLabel, handleGetAttachment,
 } from './toolHandlers.js';
+import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 const gmailServer = new FastMCP<UserSession>({
   name: 'Gmail MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-gmail'),
 });
+
+registerGetSecurityToken(gmailServer);
+registerListRestEndpoints(gmailServer);
 
 // --- Helper to get Gmail client within tools ---
 function getGmailClient(session?: UserSession): gmail_v1.Gmail {

@@ -4,12 +4,17 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { ClickUpClient, markdownToCommentBlocks } from './apiHelpers.js';
+import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 export const clickUpServer = new FastMCP<UserSession>({
   name: 'ClickUp MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'clickup'),
 });
+
+registerGetSecurityToken(clickUpServer);
+registerListRestEndpoints(clickUpServer);
 
 function getClickUpClient(session?: UserSession): ClickUpClient {
   if (!session?.clickUpAccessToken) {

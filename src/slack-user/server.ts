@@ -8,12 +8,17 @@ import { SlackClient } from '../slack/apiHelpers.js';
 import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handlePostMessage, handleReplyInThread } from '../slack/helpers.js';
 import { assertAccess, fetchChannelMeta, filterChannelList, filterDmsByOrg, filterGroupDmsByRules } from './accessControl.js';
 import type { SlackAccessRules } from '../mcpConnectionStore.js';
+import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 export const slackUserServer = new FastMCP<UserSession>({
   name: 'Slack MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'slack'),
 });
+
+registerGetSecurityToken(slackUserServer);
+registerListRestEndpoints(slackUserServer);
 
 function getSlackUserClient(session?: UserSession): SlackClient {
   if (!session?.slackUserToken) {
