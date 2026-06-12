@@ -3790,6 +3790,27 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   // safely apply at the REST layer yet, so callers with only a slack-user
   // connection get a clear error from createServiceAuth's connection lookup.
 
+  // SlackClient throws UserError with the Slack error code or upstream HTTP
+  // status embedded in the message. Translate those to the right HTTP status
+  // so curl/jq consumers can branch on the response code instead of parsing
+  // the error string.
+  function mapSlackErrorToHttpStatus(err: any): number {
+    const msg = String(err?.message ?? '').toLowerCase();
+    const httpMatch = msg.match(/http error \((\d{3})\)/);
+    if (httpMatch) {
+      const code = parseInt(httpMatch[1], 10);
+      if (code === 401 || code === 403 || code === 404 || code === 429) return code;
+    }
+    if (msg.includes('rate limit') || msg.includes('ratelimited')) return 429;
+    if (msg.includes('invalid_auth') || msg.includes('not_authed') ||
+        msg.includes('token_revoked') || msg.includes('token_expired')) return 401;
+    if (msg.includes('missing_scope') || msg.includes('account_inactive') ||
+        msg.includes('no_permission')) return 403;
+    if (msg.includes('channel_not_found') || msg.includes('user_not_found') ||
+        msg.includes('thread_not_found') || msg.includes('not_in_channel')) return 404;
+    return 500;
+  }
+
   // GET /api/v1/slack/channels - List Slack channels and DMs
   app.get('/api/v1/slack/channels', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
@@ -3804,7 +3825,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       const result = await client.conversationsList(cursor, types);
       res.json({ channels: result.channels, nextCursor: result.response_metadata?.next_cursor || null });
     } catch (err: any) {
-      res.status(err.status === 401 ? 401 : 500).json({ error: err.message || 'Failed to list channels' });
+      res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || 'Failed to list channels' });
     }
   });
 
@@ -3831,7 +3852,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         nextCursor: result.response_metadata?.next_cursor || null,
       });
     } catch (err: any) {
-      res.status(err.status === 401 ? 401 : 500).json({ error: err.message || 'Failed to read history' });
+      res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || 'Failed to read history' });
     }
   });
 
@@ -3858,7 +3879,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         nextCursor: result.response_metadata?.next_cursor || null,
       });
     } catch (err: any) {
-      res.status(err.status === 401 ? 401 : 500).json({ error: err.message || 'Failed to read thread' });
+      res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || 'Failed to read thread' });
     }
   });
 
@@ -3875,7 +3896,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       const result = await client.usersList(req.query.cursor?.toString(), limit);
       res.json({ members: result.members, nextCursor: result.response_metadata?.next_cursor || null });
     } catch (err: any) {
-      res.status(err.status === 401 ? 401 : 500).json({ error: err.message || 'Failed to list users' });
+      res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || 'Failed to list users' });
     }
   });
 
