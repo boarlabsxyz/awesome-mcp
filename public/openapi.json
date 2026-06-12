@@ -4432,6 +4432,486 @@
           }
         }
       }
+    },
+    "/api/v1/docs": {
+      "get": {
+        "operationId": "listGoogleDocs",
+        "summary": "List Google Docs",
+        "description": "List Google Docs. Mirrors the MCP tool `listGoogleDocs`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "docs"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/docs/recent": {
+      "get": {
+        "operationId": "getRecentGoogleDocs",
+        "summary": "Recent Google Docs",
+        "description": "Recent Google Docs. Mirrors the MCP tool `getRecentGoogleDocs`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "docs"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/tabs": {
+      "get": {
+        "operationId": "listDocumentTabs",
+        "summary": "List tabs in a Google Doc",
+        "description": "List tabs in a Google Doc. Mirrors the MCP tool `listDocumentTabs`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "docs"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/sheets/{spreadsheetId}/ranges": {
+      "get": {
+        "operationId": "readSpreadsheet",
+        "summary": "Read a range from a spreadsheet",
+        "description": "Read a range from a spreadsheet. Mirrors the MCP tool `readSpreadsheet`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "sheets"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/sheets/{spreadsheetId}/rows/{rowNumber}": {
+      "get": {
+        "operationId": "readRowByField",
+        "summary": "Read a row by row number",
+        "description": "Read a row by row number. Mirrors the MCP tool `readRowByField`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "sheets"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/sheets/{spreadsheetId}/search": {
+      "get": {
+        "operationId": "findRowByValue",
+        "summary": "Find a row by column value (?col=&val=)",
+        "description": "Find a row by column value (?col=&val=). Mirrors the MCP tool `findRowByValue`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "sheets"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/drive/files/{fileId}/permissions": {
+      "get": {
+        "operationId": "getFilePermissions",
+        "summary": "List permissions on a file",
+        "description": "List permissions on a file. Mirrors the MCP tool `getFilePermissions`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "drive"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/drive/files/{fileId}/public": {
+      "get": {
+        "operationId": "checkPublicAccess",
+        "summary": "Check if a file is publicly accessible",
+        "description": "Check if a file is publicly accessible. Mirrors the MCP tool `checkPublicAccess`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "drive"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/drive/folders/{folderId}": {
+      "get": {
+        "operationId": "getFolderInfo",
+        "summary": "Get folder metadata",
+        "description": "Get folder metadata. Mirrors the MCP tool `getFolderInfo`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "drive"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/drive/shared-drives": {
+      "get": {
+        "operationId": "listSharedDrives",
+        "summary": "List shared drives",
+        "description": "List shared drives. Mirrors the MCP tool `listSharedDrives`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "drive"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/labels": {
+      "get": {
+        "operationId": "listLabels",
+        "summary": "List Gmail labels",
+        "description": "List Gmail labels. Mirrors the MCP tool `listLabels`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "gmail"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slides/{presentationId}/pages/{pageObjectId}/thumbnail": {
+      "get": {
+        "operationId": "getPageThumbnail",
+        "summary": "Get a slide thumbnail (PNG URL)",
+        "description": "Get a slide thumbnail (PNG URL). Mirrors the MCP tool `getPageThumbnail`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "slides"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slides/{presentationId}/comments": {
+      "get": {
+        "operationId": "listPresentationComments",
+        "summary": "List comments on a presentation",
+        "description": "List comments on a presentation. Mirrors the MCP tool `listPresentationComments`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "slides"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/lists/{listId}/fields": {
+      "get": {
+        "operationId": "getAccessibleCustomFields",
+        "summary": "List accessible custom fields on a list",
+        "description": "List accessible custom fields on a list. Mirrors the MCP tool `getAccessibleCustomFields`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "clickup"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/docs/{docId}": {
+      "get": {
+        "operationId": "getDoc",
+        "summary": "Get a ClickUp doc with its pages",
+        "description": "Get a ClickUp doc with its pages. Mirrors the MCP tool `getDoc`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "clickup"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/docs/{docId}/pages/{pageId}": {
+      "get": {
+        "operationId": "getClickUpDocPage",
+        "summary": "Get a page within a ClickUp doc",
+        "description": "Get a page within a ClickUp doc. Mirrors the MCP tool `getPage`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "clickup"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/channels": {
+      "get": {
+        "operationId": "listChannels",
+        "summary": "List Slack channels",
+        "description": "List Slack channels. Mirrors the MCP tool `listChannels`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/channels/{channelId}/messages": {
+      "get": {
+        "operationId": "readChannelHistory",
+        "summary": "Read recent messages in a channel",
+        "description": "Read recent messages in a channel. Mirrors the MCP tool `readChannelHistory`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/channels/{channelId}/threads/{threadTs}": {
+      "get": {
+        "operationId": "readThreadReplies",
+        "summary": "Read replies in a thread",
+        "description": "Read replies in a thread. Mirrors the MCP tool `readThreadReplies`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/users": {
+      "get": {
+        "operationId": "listSlackUsers",
+        "summary": "List Slack workspace users",
+        "description": "List Slack workspace users. Mirrors the MCP tool `listUsers`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
     }
   },
   "components": {

@@ -116,10 +116,10 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 
 | MCP tool | REST endpoint | Status | Summary |
 |---|---|---|---|
-| `listChannels` | `GET /api/v1/slack/channels` | planned | List Slack channels |
-| `readChannelHistory` | `GET /api/v1/slack/channels/{channelId}/messages` | planned | Read recent messages in a channel |
-| `readThreadReplies` | `GET /api/v1/slack/channels/{channelId}/threads/{threadTs}` | planned | Read replies in a thread |
-| `listUsers` | `GET /api/v1/slack/users` | planned | List Slack workspace users |
+| `listChannels` | `GET /api/v1/slack/channels` | live | List Slack channels — _Requires a slack-bot connection (slack-user not supported on REST)._ |
+| `readChannelHistory` | `GET /api/v1/slack/channels/{channelId}/messages` | live | Read recent messages in a channel |
+| `readThreadReplies` | `GET /api/v1/slack/channels/{channelId}/threads/{threadTs}` | live | Read replies in a thread |
+| `listUsers` | `GET /api/v1/slack/users` | live | List Slack workspace users |
 
 ## Status legend
 

@@ -146,6 +146,46 @@ for (const file of files) {
   }
 }
 
+// Fill in stub entries for endpoints listed in src/restCatalog.ts that aren't
+// yet in any per-service spec. Keeps the combined openapi.json complete even
+// when the per-service specs haven't caught up with the live route handlers.
+try {
+  const catalogPath = join(__dirname, '..', 'src', 'restCatalog.ts');
+  const catalogSrc = readFileSync(catalogPath, 'utf8');
+  const arrayMatch = catalogSrc.match(/REST_CATALOG[\s\S]*?=\s*\[([\s\S]*?)\];/);
+  if (arrayMatch) {
+    const entryRe = /\{\s*service:\s*'([^']+)',\s*method:\s*'([^']+)',\s*path:\s*'([^']+)',\s*summary:\s*'([^']+)',\s*mcpToolName:\s*'([^']+)',\s*openapiOperationId:\s*'([^']+)',\s*status:\s*'([^']+)'/g;
+    let m;
+    let stubs = 0;
+    while ((m = entryRe.exec(arrayMatch[1])) !== null) {
+      const [, service, method, rawPath, summary, mcpToolName, opId, status] = m;
+      // Strip the query-string template from the path (paths in OpenAPI are
+      // the URL path only; query params belong in `parameters`).
+      const pathOnly = rawPath.split('?')[0];
+      // Convert {param} placeholders to OpenAPI style (they already are).
+      if (root.paths[pathOnly]?.[method.toLowerCase()]) continue;
+      if (status === 'planned') continue; // don't list endpoints that aren't wired yet
+      root.paths[pathOnly] ??= {};
+      root.paths[pathOnly][method.toLowerCase()] = {
+        operationId: opId,
+        summary,
+        description: `${summary}. Mirrors the MCP tool \`${mcpToolName}\`. Returns upstream JSON by default; pass Accept: text/plain for markdown.`,
+        tags: [service],
+        responses: {
+          '200': { description: 'Success (raw upstream JSON or rendered text)' },
+          '401': { description: 'Missing or invalid bearer token' },
+          '403': { description: 'Permission denied' },
+          '404': { description: 'Resource not found' },
+        },
+      };
+      stubs++;
+    }
+    if (stubs > 0) console.log(`  Added ${stubs} stub entries from src/restCatalog.ts`);
+  }
+} catch (err) {
+  console.warn(`[buildRootOpenapi] catalog stub pass skipped: ${err.message}`);
+}
+
 writeFileSync(outPath, JSON.stringify(root, null, 2) + '\n');
 
 const pathCount = Object.keys(root.paths).length;

@@ -90,10 +90,10 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/workspaces/{workspaceId}/time', summary: 'List time entries', mcpToolName: 'getTimeEntries', openapiOperationId: 'getTimeEntries', status: 'live' },
 
   // -------- Slack --------
-  { service: 'slack', method: 'GET', path: '/api/v1/slack/channels', summary: 'List Slack channels', mcpToolName: 'listChannels', openapiOperationId: 'listChannels', status: 'planned' },
-  { service: 'slack', method: 'GET', path: '/api/v1/slack/channels/{channelId}/messages', summary: 'Read recent messages in a channel', mcpToolName: 'readChannelHistory', openapiOperationId: 'readChannelHistory', status: 'planned' },
-  { service: 'slack', method: 'GET', path: '/api/v1/slack/channels/{channelId}/threads/{threadTs}', summary: 'Read replies in a thread', mcpToolName: 'readThreadReplies', openapiOperationId: 'readThreadReplies', status: 'planned' },
-  { service: 'slack', method: 'GET', path: '/api/v1/slack/users', summary: 'List Slack workspace users', mcpToolName: 'listUsers', openapiOperationId: 'listSlackUsers', status: 'planned' },
+  { service: 'slack', method: 'GET', path: '/api/v1/slack/channels', summary: 'List Slack channels', mcpToolName: 'listChannels', openapiOperationId: 'listChannels', status: 'live', notes: 'Requires a slack-bot connection (slack-user not supported on REST).' },
+  { service: 'slack', method: 'GET', path: '/api/v1/slack/channels/{channelId}/messages', summary: 'Read recent messages in a channel', mcpToolName: 'readChannelHistory', openapiOperationId: 'readChannelHistory', status: 'live' },
+  { service: 'slack', method: 'GET', path: '/api/v1/slack/channels/{channelId}/threads/{threadTs}', summary: 'Read replies in a thread', mcpToolName: 'readThreadReplies', openapiOperationId: 'readThreadReplies', status: 'live' },
+  { service: 'slack', method: 'GET', path: '/api/v1/slack/users', summary: 'List Slack workspace users', mcpToolName: 'listUsers', openapiOperationId: 'listSlackUsers', status: 'live' },
 ];
 
 export function endpointsForTool(mcpToolName: string): RestEndpoint[] {

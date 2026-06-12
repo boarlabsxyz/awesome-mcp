@@ -2171,6 +2171,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   const requireGmailApiKey = createServiceAuth('google-gmail', 'gmail');
   const requireSlidesApiKey = createServiceAuth('google-slides', 'slides');
   const requireClickUpApiKey = createServiceAuth('clickup', 'clickup');
+  const requireSlackApiKey = createServiceAuth('slack-bot', 'slack');
 
   // JSON body parser already added above for auth routes
 
@@ -3781,6 +3782,100 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       if (err.response?.status === 404 || err.status === 404) res.status(404).json({ error: 'Page not found' });
       else if (err.response?.status === 403 || err.status === 403) res.status(403).json({ error: 'Permission denied' });
       else res.status(500).json({ error: err.message || 'Failed to get page' });
+    }
+  });
+
+  // Slack REST endpoints — require a slack-bot connection.
+  // slack-user (xoxp) connections have access-rules enforcement that we can't
+  // safely apply at the REST layer yet, so callers with only a slack-user
+  // connection get a clear error from createServiceAuth's connection lookup.
+
+  // GET /api/v1/slack/channels - List Slack channels and DMs
+  app.get('/api/v1/slack/channels', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      if (!req.userSession?.slackBotToken) {
+        res.status(403).json({ error: 'Slack-bot connection required for REST. Connect via the dashboard.' });
+        return;
+      }
+      const { SlackClient } = await import('../slack/apiHelpers.js');
+      const client = new SlackClient(req.userSession.slackBotToken);
+      const cursor = req.query.cursor?.toString();
+      const types = req.query.types?.toString();
+      const result = await client.conversationsList(cursor, types);
+      res.json({ channels: result.channels, nextCursor: result.response_metadata?.next_cursor || null });
+    } catch (err: any) {
+      res.status(err.status === 401 ? 401 : 500).json({ error: err.message || 'Failed to list channels' });
+    }
+  });
+
+  // GET /api/v1/slack/channels/:channelId/messages - Read recent messages
+  app.get('/api/v1/slack/channels/:channelId/messages', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      if (!req.userSession?.slackBotToken) {
+        res.status(403).json({ error: 'Slack-bot connection required for REST.' });
+        return;
+      }
+      const { SlackClient } = await import('../slack/apiHelpers.js');
+      const client = new SlackClient(req.userSession.slackBotToken);
+      const limit = Math.min(parseInt((req.query.limit ?? '50').toString(), 10) || 50, 200);
+      const result = await client.conversationsHistory(req.params.channelId as string, {
+        limit,
+        oldest: req.query.oldest?.toString(),
+        latest: req.query.latest?.toString(),
+        cursor: req.query.cursor?.toString(),
+      });
+      res.json({
+        channelId: req.params.channelId,
+        messages: result.messages,
+        hasMore: !!result.has_more,
+        nextCursor: result.response_metadata?.next_cursor || null,
+      });
+    } catch (err: any) {
+      res.status(err.status === 401 ? 401 : 500).json({ error: err.message || 'Failed to read history' });
+    }
+  });
+
+  // GET /api/v1/slack/channels/:channelId/threads/:threadTs - Read thread replies
+  app.get('/api/v1/slack/channels/:channelId/threads/:threadTs', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      if (!req.userSession?.slackBotToken) {
+        res.status(403).json({ error: 'Slack-bot connection required for REST.' });
+        return;
+      }
+      const { SlackClient } = await import('../slack/apiHelpers.js');
+      const client = new SlackClient(req.userSession.slackBotToken);
+      const limit = Math.min(parseInt((req.query.limit ?? '50').toString(), 10) || 50, 200);
+      const result = await client.conversationsReplies(
+        req.params.channelId as string,
+        req.params.threadTs as string,
+        { limit, cursor: req.query.cursor?.toString() },
+      );
+      res.json({
+        channelId: req.params.channelId,
+        threadTs: req.params.threadTs,
+        messages: result.messages,
+        hasMore: !!result.has_more,
+        nextCursor: result.response_metadata?.next_cursor || null,
+      });
+    } catch (err: any) {
+      res.status(err.status === 401 ? 401 : 500).json({ error: err.message || 'Failed to read thread' });
+    }
+  });
+
+  // GET /api/v1/slack/users - List workspace users
+  app.get('/api/v1/slack/users', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      if (!req.userSession?.slackBotToken) {
+        res.status(403).json({ error: 'Slack-bot connection required for REST.' });
+        return;
+      }
+      const { SlackClient } = await import('../slack/apiHelpers.js');
+      const client = new SlackClient(req.userSession.slackBotToken);
+      const limit = Math.min(parseInt((req.query.limit ?? '200').toString(), 10) || 200, 1000);
+      const result = await client.usersList(req.query.cursor?.toString(), limit);
+      res.json({ members: result.members, nextCursor: result.response_metadata?.next_cursor || null });
+    } catch (err: any) {
+      res.status(err.status === 401 ? 401 : 500).json({ error: err.message || 'Failed to list users' });
     }
   });
 
