@@ -1,0 +1,8 @@
+// src/__tests__/{{slug}}.test.ts
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { {{slugCamel}}Server } from '../{{slug}}/server.js';
+
+test('{{slug}} server is registered', () => {
+  assert.ok({{slugCamel}}Server, 'server should be defined');
+});

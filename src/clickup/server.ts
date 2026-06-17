@@ -448,6 +448,59 @@ clickUpServer.addTool({
   },
 });
 
+// === Tags ===
+
+clickUpServer.addTool({
+  name: 'listSpaceTags',
+  annotations: { readOnlyHint: true },
+  description: 'List all tags defined in a ClickUp space. Use this to discover tag names available for addTagToTask / removeTagFromTask.',
+  parameters: z.object({
+    spaceId: z.string().describe('The space ID.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    const result = await client.getSpaceTags(args.spaceId);
+    const tags = result.tags || [];
+    if (tags.length === 0) return 'No tags found in this space.';
+    return tags.map((t: any) => {
+      const parts = [`Tag: ${t.name}`];
+      if (t.tag_fg) parts.push(`  Foreground: ${t.tag_fg}`);
+      if (t.tag_bg) parts.push(`  Background: ${t.tag_bg}`);
+      return parts.join('\n');
+    }).join('\n\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'addTagToTask',
+  annotations: { readOnlyHint: false },
+  description: 'Add a tag to a ClickUp task. The tag must already exist in the task\'s space — use listSpaceTags to discover available tags. ClickUp\'s updateTask endpoint does not accept tags; this is the correct way to tag an existing task.',
+  parameters: z.object({
+    taskId: z.string().describe('The task ID.'),
+    tagName: z.string().min(1).describe('The tag name (must already exist in the task\'s space).'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    await client.addTagToTask(args.taskId, args.tagName);
+    return `Tag "${args.tagName}" added to task ${args.taskId}.`;
+  },
+});
+
+clickUpServer.addTool({
+  name: 'removeTagFromTask',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Remove a tag from a ClickUp task. Does not delete the tag from the space — only unassigns it from this task.',
+  parameters: z.object({
+    taskId: z.string().describe('The task ID.'),
+    tagName: z.string().min(1).describe('The tag name to remove from the task.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    await client.removeTagFromTask(args.taskId, args.tagName);
+    return `Tag "${args.tagName}" removed from task ${args.taskId}.`;
+  },
+});
+
 clickUpServer.addTool({
   name: 'getTaskMembers',
   annotations: { readOnlyHint: true },

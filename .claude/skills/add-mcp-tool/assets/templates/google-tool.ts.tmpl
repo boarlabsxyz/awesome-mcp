@@ -1,0 +1,20 @@
+{{serverConst}}.addTool({
+  name: '{{toolName}}',
+  {{readOnlyAnnotationLine}}
+  description: '{{description}}',
+  parameters: z.object({
+    {{zodFields}}
+  }),
+  execute: async (args, { log, session }) => {
+    const {{clientVar}} = get{{X}}Client(session);
+    log.info(`{{logBreadcrumb}}`);
+
+    try {
+      {{executeBody}}
+    } catch (error: any) {
+      log.error(`Error {{actionPhrase}}: ${error.message || error}`);
+      if (error.code === 403) throw new UserError('Permission denied. Make sure you have granted {{X}} access.');
+      throw new UserError(`Failed to {{actionPhrase}}: ${error.message || 'Unknown error'}`);
+    }
+  },
+});

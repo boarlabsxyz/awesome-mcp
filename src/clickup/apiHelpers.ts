@@ -241,6 +241,20 @@ export class ClickUpClient {
     return this.request('POST', `/task/${taskId}`, { list_id: listId });
   }
 
+  // === Tags ===
+
+  async getSpaceTags(spaceId: string): Promise<any> {
+    return this.request('GET', `/space/${spaceId}/tag`);
+  }
+
+  async addTagToTask(taskId: string, tagName: string): Promise<any> {
+    return this.request('POST', `/task/${taskId}/tag/${encodeURIComponent(tagName)}`);
+  }
+
+  async removeTagFromTask(taskId: string, tagName: string): Promise<any> {
+    return this.request('DELETE', `/task/${taskId}/tag/${encodeURIComponent(tagName)}`);
+  }
+
   // === Custom Fields ===
 
   async getAccessibleCustomFields(listId: string): Promise<any> {

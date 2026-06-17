@@ -1,0 +1,41 @@
+import { test, after } from 'node:test';
+import { runSmokeTest } from '../../runSmokeTest.ts';
+import { preface } from '../../promptTemplates.ts';
+import { {{scratchFactoryFn}}, trashFile, cleanupScratchFolder } from '../../setup/scratchFactory.ts';
+import type { ClientName } from '../../drivers/driver.ts';
+
+const CLIENT = (process.env.CLIENT ?? 'claude-desktop') as ClientName;
+
+after(async () => {
+  // Safety net: trash anything per-test teardown missed. Cheap, idempotent.
+  await cleanupScratchFolder();
+});
+
+test(`{{toolName}} {{behaviorLine}} (${CLIENT})`, { timeout: 240_000 }, async () => {
+  await runSmokeTest({
+    name: '{{toolName}}',
+    client: CLIENT,
+    mode: 'full',
+    setup: async () => {
+      const {{resourceIdField}} = await {{scratchFactoryFn}}('{{toolName}}-smoke', '{{initialContent}}');
+      const marker = `{{markerPrefix}}-${Date.now()}`;
+      return { {{resourceIdField}}, marker };
+    },
+    prompt: ({ {{resourceIdField}}, marker }) =>
+      [
+        preface('full') +
+          `Call the {{toolName}} MCP tool with {{writeParamCallSpec}}.`,
+        `Then call the {{readbackTool}} MCP tool with {{readbackParamSpec}}.`,
+        'Reply with exactly this format and nothing else:',
+        'OUTPUT_BEGIN<verbatim content after the write>OUTPUT_END',
+        'Do not paraphrase, summarize, or add commentary. Do not use markdown formatting.',
+      ].join('\n'),
+    assertions: ({ marker }) => ({
+      containsBetween: ['OUTPUT_BEGIN', 'OUTPUT_END'],
+      includes: ['{{initialContent}}', marker],
+    }),
+    teardown: async ({ {{resourceIdField}} }) => {
+      await trashFile({{resourceIdField}});
+    },
+  });
+});
