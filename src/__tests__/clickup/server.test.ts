@@ -81,8 +81,8 @@ describe('ClickUp server tools', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('should have registered all 34 tools', () => {
-    assert.equal(toolMap.size, 34);
+  it('should have registered all 37 tools', () => {
+    assert.equal(toolMap.size, 37);
   });
 
   // === getClickUpClient / auth guard ===
@@ -470,6 +470,48 @@ describe('ClickUp server tools', () => {
       const result = await callTool('searchTasks', { workspaceId: 'w1', query: 'nonexistent' });
       assert.ok(result.includes('No tasks found matching'));
       assert.ok(result.includes('nonexistent'));
+    });
+  });
+
+  describe('listSpaceTags', () => {
+    it('formats tags with foreground and background colors', async () => {
+      mockFetch([{
+        status: 200,
+        body: { tags: [{ name: 'bug', tag_fg: '#fff', tag_bg: '#f00' }, { name: 'wip' }] },
+      }]);
+      const result = await callTool('listSpaceTags', { spaceId: 's1' });
+      assert.ok(result.includes('Tag: bug'));
+      assert.ok(result.includes('#fff'));
+      assert.ok(result.includes('#f00'));
+      assert.ok(result.includes('Tag: wip'));
+    });
+
+    it('returns message when no tags', async () => {
+      mockFetch([{ status: 200, body: { tags: [] } }]);
+      const result = await callTool('listSpaceTags', { spaceId: 's1' });
+      assert.ok(result.includes('No tags'));
+    });
+  });
+
+  describe('addTagToTask', () => {
+    it('posts to the per-task tag endpoint and confirms', async () => {
+      const { calls } = mockFetch([{ status: 200, text: '' }]);
+      const result = await callTool('addTagToTask', { taskId: 't1', tagName: 'bug' });
+      assert.equal(calls[0].method, 'POST');
+      assert.equal(calls[0].url, 'https://api.clickup.com/api/v2/task/t1/tag/bug');
+      assert.ok(result.includes('bug'));
+      assert.ok(result.includes('t1'));
+    });
+  });
+
+  describe('removeTagFromTask', () => {
+    it('deletes via the per-task tag endpoint and confirms', async () => {
+      const { calls } = mockFetch([{ status: 200, text: '' }]);
+      const result = await callTool('removeTagFromTask', { taskId: 't1', tagName: 'bug' });
+      assert.equal(calls[0].method, 'DELETE');
+      assert.equal(calls[0].url, 'https://api.clickup.com/api/v2/task/t1/tag/bug');
+      assert.ok(result.includes('bug'));
+      assert.ok(result.includes('t1'));
     });
   });
 

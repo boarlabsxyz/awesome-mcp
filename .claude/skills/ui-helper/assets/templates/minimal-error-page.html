@@ -1,0 +1,19 @@
+<!--
+  Use in webServer.ts inline responses. Pattern matches src/website/webServer.ts:242
+  Substitute {{title}}, {{heading}}, {{message}}, {{linkHref}}, {{linkLabel}}.
+-->
+<html>
+<head>
+  <title>{{title}}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+    h1 { color: #c53030; }
+    a { color: #2563eb; }
+  </style>
+</head>
+<body>
+  <h1>{{heading}}</h1>
+  <p>{{message}}</p>
+  <p><a href="{{linkHref}}">{{linkLabel}}</a></p>
+</body>
+</html>

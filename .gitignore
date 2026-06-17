@@ -20,3 +20,7 @@ coverage/
 
 # User data
 data/
+
+# Claude Code local-only files (skills are checked in)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock

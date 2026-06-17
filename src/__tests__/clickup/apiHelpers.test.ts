@@ -200,6 +200,42 @@ describe('ClickUpClient', () => {
     });
   });
 
+  describe('tags', () => {
+    it('should list tags in a space', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { tags: [{ name: 'bug', tag_fg: '#fff', tag_bg: '#f00' }] } }]);
+      const client = new ClickUpClient('token');
+      const result = await client.getSpaceTags('space1');
+      assert.equal(calls[0].url, 'https://api.clickup.com/api/v2/space/space1/tag');
+      assert.equal(calls[0].method, 'GET');
+      assert.equal(result.tags[0].name, 'bug');
+    });
+
+    it('should add a tag to a task', async () => {
+      const { calls } = mockFetch([{ status: 200, text: '' }]);
+      const client = new ClickUpClient('token');
+      await client.addTagToTask('task1', 'bug');
+      assert.equal(calls[0].url, 'https://api.clickup.com/api/v2/task/task1/tag/bug');
+      assert.equal(calls[0].method, 'POST');
+    });
+
+    it('should url-encode tag names with spaces or special chars', async () => {
+      const { calls } = mockFetch([{ status: 200, text: '' }, { status: 200, text: '' }]);
+      const client = new ClickUpClient('token');
+      await client.addTagToTask('task1', 'high priority');
+      await client.removeTagFromTask('task1', 'needs review/qa');
+      assert.equal(calls[0].url, 'https://api.clickup.com/api/v2/task/task1/tag/high%20priority');
+      assert.equal(calls[1].url, 'https://api.clickup.com/api/v2/task/task1/tag/needs%20review%2Fqa');
+    });
+
+    it('should remove a tag from a task', async () => {
+      const { calls } = mockFetch([{ status: 200, text: '' }]);
+      const client = new ClickUpClient('token');
+      await client.removeTagFromTask('task1', 'bug');
+      assert.equal(calls[0].url, 'https://api.clickup.com/api/v2/task/task1/tag/bug');
+      assert.equal(calls[0].method, 'DELETE');
+    });
+  });
+
   describe('lists', () => {
     it('should create a list in folder', async () => {
       const { calls } = mockFetch([{ status: 200, body: { id: 'l1', name: 'New List' } }]);
