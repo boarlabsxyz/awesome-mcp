@@ -1,0 +1,62 @@
+<!-- App sticky header with blurred backdrop. Place inside .page-container as the first child. -->
+<header class="header">
+  <h1><a href="/dashboard" translate="no">{{brand}}</a></h1>
+  <div class="header-right">
+    <nav class="header-nav" aria-label="Primary">
+      <a href="/integrations" class="nav-link">Integrations</a>
+      <a href="/updates" class="nav-link">Updates</a>
+    </nav>
+    <span class="nav-separator" aria-hidden="true"></span>
+    <span class="user-info">{{userEmail}}</span>
+    <button class="btn-logout" type="button">Log out</button>
+  </div>
+</header>
+
+<style>
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  backdrop-filter: blur(12px);
+  background: rgba(0,0,0,0.8);
+}
+.header h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.header h1 a { color: inherit; text-decoration: none; }
+.header-right { display: flex; align-items: center; gap: 1rem; }
+.header-nav { display: flex; align-items: center; gap: 1rem; }
+.nav-link {
+  color: #888;
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  transition: background-color 0.2s, color 0.2s;
+  touch-action: manipulation;
+}
+.nav-link:hover { background: #111; color: #ededed; }
+.nav-separator { width: 1px; height: 1.25rem; background: rgba(255,255,255,0.12); }
+.user-info { display: flex; align-items: center; gap: 0.5rem; color: #888; font-size: 0.9rem; }
+.btn-logout {
+  padding: 0.5rem 1rem;
+  background: transparent;
+  color: #888;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+  touch-action: manipulation;
+}
+.btn-logout:hover { background: #111; color: #ededed; }
+</style>

@@ -1,0 +1,14 @@
+{{slugCamel}}Server.addTool({
+  name: '{{toolName}}',
+  description: '{{description}}',
+  parameters: z.object({ /* translated from source */ }),
+  // Adapted from {{githubUrl}}@{{sha}} {{sourcePath}}:{{sourceLine}}
+  execute: async (args, { session, log }) => {
+    // TODO: port the source body — non-trivial logic detected.
+    // Original source:
+    /*
+    {{originalBody}}
+    */
+    throw new UserError('Not yet implemented');
+  },
+});

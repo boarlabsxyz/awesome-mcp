@@ -1,0 +1,31 @@
+<!-- App labeled text input. Use inside modals or stacked forms. -->
+<div class="name-input-section">
+  <label for="{{id}}">{{label}}</label>
+  <input id="{{id}}" type="text" placeholder="{{placeholder}}" />
+  <p class="name-suggestion">{{hint}}</p>
+</div>
+
+<style>
+.name-input-section { margin-bottom: 1.5rem; }
+.name-input-section label {
+  display: block;
+  font-size: 0.85rem;
+  color: #888;
+  margin-bottom: 0.5rem;
+}
+.name-input-section input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  font-size: 1rem;
+  background: #111;
+  color: #ededed;
+}
+.name-input-section input:focus-visible { border-color: #0070f3; }
+.name-suggestion {
+  font-size: 0.8rem;
+  color: #666;
+  margin-top: 0.5rem;
+}
+</style>
