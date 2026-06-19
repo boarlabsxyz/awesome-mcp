@@ -7,8 +7,8 @@
   },
   "servers": [
     {
-      "url": "https://your-server-url.com",
-      "description": "Production server (update with your actual URL)"
+      "url": "https://awesome-mcp.xyz",
+      "description": "Production server"
     }
   ],
   "security": [
