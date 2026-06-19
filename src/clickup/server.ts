@@ -474,10 +474,10 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'addTagToTask',
   annotations: { readOnlyHint: false },
-  description: 'Add a tag to a ClickUp task. The tag must already exist in the task\'s space — use listSpaceTags to discover available tags. ClickUp\'s updateTask endpoint does not accept tags; this is the correct way to tag an existing task.',
+  description: 'Add a tag to a ClickUp task. If the tag does not already exist in the task\'s space, ClickUp auto-creates it on the fly — call listSpaceTags first when you want to reuse existing tags and avoid tag proliferation. ClickUp\'s updateTask endpoint does not accept tags; this is the correct way to tag an existing task.',
   parameters: z.object({
     taskId: z.string().describe('The task ID.'),
-    tagName: z.string().min(1).describe('The tag name (must already exist in the task\'s space).'),
+    tagName: z.string().min(1).describe('The tag name. ClickUp will auto-create it in the task\'s space if it does not already exist.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
