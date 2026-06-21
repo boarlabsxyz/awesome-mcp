@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.boarlabs.e2e.chrome</string>
+
+    <!-- Launches Chrome with the warmed e2e profile and CDP on port 9222.
+         The user-data-dir must already be logged into ChatGPT once manually
+         so Cloudflare doesn't challenge subsequent runs. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/Google Chrome.app/Contents/MacOS/Google Chrome</string>
+        <string>--remote-debugging-port=9222</string>
+        <string>--user-data-dir=__HOME__/e2e-chrome-profile</string>
+        <string>--no-first-run</string>
+        <string>--no-default-browser-check</string>
+        <string>https://chatgpt.com/</string>
+    </array>
+
+    <!-- Run once at login. Don't auto-restart - if Chrome crashes mid-test
+         we want the operator to investigate, not to spawn duplicate windows. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/chrome.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/chrome.err.log</string>
+</dict>
+</plist>
