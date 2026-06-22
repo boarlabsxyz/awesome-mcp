@@ -2979,13 +2979,23 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   });
 
   // GET /api/v1/gmail/messages/:messageId - Read email
+  // JSON by default (raw Gmail API payload). Accept: text/plain returns the
+  // same markdown rendering the readEmail MCP tool emits. The `?format=`
+  // query is forwarded to the Gmail API (full | metadata | minimal); for
+  // text rendering we force `full` so the body is available.
   app.get('/api/v1/gmail/messages/:messageId', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const gmail = req.userSession!.googleGmail;
-      const format = (req.query.format as string) || 'full';
+      const wantText = negotiateFormat(req) === 'text';
+      const gmailFormat = wantText ? 'full' : ((req.query.format as string) || 'full');
       const result = await gmail.users.messages.get({
-        userId: 'me', id: req.params.messageId as string, format: format as 'full' | 'metadata' | 'minimal',
+        userId: 'me', id: req.params.messageId as string, format: gmailFormat as 'full' | 'metadata' | 'minimal',
       });
+      if (wantText) {
+        const { renderEmail } = await import('../google-gmail/apiHelpers.js');
+        res.type('text/plain; charset=utf-8').send(renderEmail(result.data));
+        return;
+      }
       res.json(result.data);
     } catch (err: any) {
       res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to read email' });
@@ -3251,27 +3261,41 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   });
 
   // GET /api/v1/clickup/lists/:listId/tasks - List tasks
+  // JSON by default; Accept: text/plain (or ?format=text) returns the same
+  // markdown rendering the listTasks MCP tool emits.
   app.get('/api/v1/clickup/lists/:listId/tasks', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const { formatTaskList } = await import('../clickup/formatHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
       const params: any = {};
       if (req.query.page) params.page = parseInt(req.query.page as string);
       if (req.query.orderBy) params.order_by = req.query.orderBy;
       if (req.query.statuses) params.statuses = Array.isArray(req.query.statuses) ? req.query.statuses : [req.query.statuses];
       const result = await client.getTasks(req.params.listId as string, params);
-      res.json({ tasks: result.tasks || [] });
+      const tasks = result.tasks || [];
+      if (negotiateFormat(req) === 'text') {
+        res.type('text/plain; charset=utf-8').send(formatTaskList(tasks));
+        return;
+      }
+      res.json({ tasks });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to list tasks' });
     }
   });
 
   // GET /api/v1/clickup/tasks/:taskId - Get task
+  // JSON by default; Accept: text/plain returns the markdown rendering.
   app.get('/api/v1/clickup/tasks/:taskId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const { formatTask } = await import('../clickup/formatHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
       const result = await client.getTask(req.params.taskId as string);
+      if (negotiateFormat(req) === 'text') {
+        res.type('text/plain; charset=utf-8').send(formatTask(result));
+        return;
+      }
       res.json(result);
     } catch (err: any) {
       res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to get task' });
@@ -3735,11 +3759,24 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         spreadsheetId: req.params.spreadsheetId as string,
         range,
       });
+      const values = response.data.values || [];
+      if (negotiateFormat(req) === 'text') {
+        if (values.length === 0) {
+          res.type('text/plain; charset=utf-8').send(`Range ${range} is empty or does not exist.`);
+          return;
+        }
+        let body = `**Spreadsheet Range:** ${range}\n\n`;
+        values.forEach((row: any[], index: number) => {
+          body += `Row ${index + 1}: ${JSON.stringify(row)}\n`;
+        });
+        res.type('text/plain; charset=utf-8').send(body);
+        return;
+      }
       res.json({
         spreadsheetId: req.params.spreadsheetId,
         range: response.data.range,
         majorDimension: response.data.majorDimension,
-        values: response.data.values || [],
+        values,
       });
     } catch (err: any) {
       if (err.code === 404) res.status(404).json({ error: 'Spreadsheet not found' });

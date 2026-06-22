@@ -127,3 +127,31 @@ export function listAttachments(
   walk(payload);
   return attachments;
 }
+
+/**
+ * Render an email message as the markdown-style text the readEmail MCP tool
+ * emits. Extracted from handleReadEmail so the REST data plane can serve
+ * the same text representation when callers request Accept: text/plain.
+ */
+export function renderEmail(msg: gmail_v1.Schema$Message): string {
+  const headers = parseEmailHeaders(msg.payload?.headers);
+  let result = `**Email Details:**\n\n`;
+  result += `**Subject:** ${headers.subject || '(No subject)'}\n`;
+  result += `**From:** ${headers.from}\n`;
+  result += `**To:** ${headers.to}\n`;
+  result += `**Date:** ${headers.date}\n`;
+  result += `**Message ID:** ${msg.id}\n`;
+  result += `**Thread ID:** ${msg.threadId}\n`;
+  result += `**Labels:** ${msg.labelIds?.join(', ') || 'none'}\n`;
+
+  const body = extractBody(msg.payload);
+  if (body) result += `\n**Body:**\n\n${body}`;
+  const attachments = listAttachments(msg.payload);
+  if (attachments.length > 0) {
+    result += `\n\n**Attachments:**\n`;
+    attachments.forEach((att, i) => {
+      result += `${i + 1}. ${att.filename} (${att.mimeType}, ${att.size} bytes, ID: ${att.attachmentId})\n`;
+    });
+  }
+  return result;
+}
