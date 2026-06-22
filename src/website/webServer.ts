@@ -4032,7 +4032,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         bodyBuf = Buffer.from(resp.data as ArrayBuffer);
         outMime = sourceMime;
       }
-      const safeName = name.replace(/[^\w.\-]+/g, '_');
+      const safeName = name.replace(/[^\w.-]+/g, '_');
       res.setHeader('Content-Type', outMime);
       res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
       res.setHeader('Content-Length', String(bodyBuf.length));
