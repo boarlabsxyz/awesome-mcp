@@ -3986,6 +3986,110 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
     }
   });
 
+  // GET /api/v1/drive/files/:fileId/download - Stream file content
+  // Google native types are exported (?exportMime= to override the default).
+  // Other types are downloaded as-is via alt=media. Content-Type and a
+  // best-effort Content-Disposition header are set from upstream metadata.
+  app.get('/api/v1/drive/files/:fileId/download', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const fileId = req.params.fileId as string;
+      const meta = await drive.files.get({
+        fileId,
+        supportsAllDrives: true,
+        fields: 'id,name,mimeType,size',
+      });
+      const sourceMime = meta.data.mimeType || 'application/octet-stream';
+      const name = meta.data.name || 'download';
+      // Default export targets for Google native types when caller doesn't override.
+      const DEFAULT_EXPORTS: Record<string, string> = {
+        'application/vnd.google-apps.document': 'application/pdf',
+        'application/vnd.google-apps.spreadsheet': 'text/csv',
+        'application/vnd.google-apps.presentation': 'application/pdf',
+        'application/vnd.google-apps.drawing': 'image/png',
+      };
+      const isNative = sourceMime.startsWith('application/vnd.google-apps.');
+      const exportMime = req.query.exportMime?.toString() || (isNative ? DEFAULT_EXPORTS[sourceMime] : undefined);
+
+      let bodyBuf: Buffer;
+      let outMime: string;
+      if (isNative) {
+        if (!exportMime) {
+          res.status(400).json({ error: `No default export format for ${sourceMime}. Pass ?exportMime=...` });
+          return;
+        }
+        const resp = await drive.files.export(
+          { fileId, mimeType: exportMime },
+          { responseType: 'arraybuffer' },
+        );
+        bodyBuf = Buffer.from(resp.data as ArrayBuffer);
+        outMime = exportMime;
+      } else {
+        const resp = await drive.files.get(
+          { fileId, alt: 'media', supportsAllDrives: true },
+          { responseType: 'arraybuffer' },
+        );
+        bodyBuf = Buffer.from(resp.data as ArrayBuffer);
+        outMime = sourceMime;
+      }
+      const safeName = name.replace(/[^\w.\-]+/g, '_');
+      res.setHeader('Content-Type', outMime);
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+      res.setHeader('Content-Length', String(bodyBuf.length));
+      res.end(bodyBuf);
+    } catch (err: any) {
+      if (err.code === 404) res.status(404).json({ error: 'File not found' });
+      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to download file' });
+    }
+  });
+
+  // GET /api/v1/gmail/messages/:messageId/attachments/:attachmentId
+  // Returns Gmail's base64url-encoded attachment payload plus size. Callers
+  // decode the body locally (the message's part headers carry the mime type).
+  app.get('/api/v1/gmail/messages/:messageId/attachments/:attachmentId', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const gmail = req.userSession!.googleGmail;
+      const resp = await gmail.users.messages.attachments.get({
+        userId: 'me',
+        messageId: req.params.messageId as string,
+        id: req.params.attachmentId as string,
+      });
+      res.json({
+        messageId: req.params.messageId,
+        attachmentId: req.params.attachmentId,
+        size: resp.data.size ?? 0,
+        // base64url, exactly as Gmail returns it
+        data: resp.data.data ?? '',
+      });
+    } catch (err: any) {
+      if (err.code === 404) res.status(404).json({ error: 'Attachment or message not found' });
+      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to fetch attachment' });
+    }
+  });
+
+  // GET /api/v1/clickup/workspaces/:workspaceId/members
+  // ClickUp's API exposes members inside the team payload from getWorkspaces,
+  // so we fetch all teams and slice the matching one. Returns members[].
+  app.get('/api/v1/clickup/workspaces/:workspaceId/members', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.getWorkspaces();
+      const team = (result.teams || []).find((t: any) => String(t.id) === req.params.workspaceId);
+      if (!team) {
+        res.status(404).json({ error: 'Workspace not found or not accessible to this user' });
+        return;
+      }
+      res.json({ workspaceId: team.id, members: team.members || [] });
+    } catch (err: any) {
+      if (err.response?.status === 404 || err.status === 404) res.status(404).json({ error: 'Workspace not found' });
+      else if (err.response?.status === 403 || err.status === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to list workspace members' });
+    }
+  });
+
   return app;
 }
 

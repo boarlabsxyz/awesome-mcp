@@ -66,7 +66,7 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `getDocumentInfo` | `GET /api/v1/drive/files/{fileId}` | live | Get file metadata |
 | `getFilePermissions` | `GET /api/v1/drive/files/{fileId}/permissions` | live | List permissions on a file |
 | `checkPublicAccess` | `GET /api/v1/drive/files/{fileId}/public` | live | Check if a file is publicly accessible |
-| `downloadDriveFile` | `GET /api/v1/drive/files/{fileId}/download` | planned | Download or export a file — _Binary; supports ?exportMimeType= for Google native types._ |
+| `downloadDriveFile` | `GET /api/v1/drive/files/{fileId}/download` | live | Download or export a file — _Streams binary. Google native types are exported (default: PDF for docs/slides, CSV for sheets, PNG for drawings); override with ?exportMime=._ |
 | `getFolderInfo` | `GET /api/v1/drive/folders/{folderId}` | live | Get folder metadata |
 | `listFolderContents` | `GET /api/v1/drive/folders/{folderId}/contents` | live | List the contents of a folder |
 | `listSharedDrives` | `GET /api/v1/drive/shared-drives` | live | List shared drives |
@@ -77,7 +77,7 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 |---|---|---|---|
 | `searchEmails` | `GET /api/v1/gmail/messages?q={query}` | live | Search emails |
 | `readEmail` | `GET /api/v1/gmail/messages/{messageId}` | live | Read an email (JSON or markdown via Accept) |
-| `getAttachment` | `GET /api/v1/gmail/messages/{messageId}/attachments/{attachmentId}` | planned | Download an email attachment |
+| `getAttachment` | `GET /api/v1/gmail/messages/{messageId}/attachments/{attachmentId}` | live | Download an email attachment — _Returns Gmail base64url-encoded payload as JSON {size, data}; caller decodes._ |
 | `listLabels` | `GET /api/v1/gmail/labels` | live | List Gmail labels |
 
 ### Google Slides (`slides`)
@@ -109,7 +109,7 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `searchDocs` | `GET /api/v1/clickup/workspaces/{workspaceId}/docs/search` | live | Search docs in a workspace |
 | `getDoc` | `GET /api/v1/clickup/docs/{docId}?workspaceId={workspaceId}` | live | Get a ClickUp doc with its pages — _Required query param: workspaceId._ |
 | `getPage` | `GET /api/v1/clickup/docs/{docId}/pages/{pageId}?workspaceId={workspaceId}` | live | Get a page within a ClickUp doc — _Required query param: workspaceId._ |
-| `listWorkspaceMembers` | `GET /api/v1/clickup/workspaces/{workspaceId}/members` | planned | List members of a workspace |
+| `listWorkspaceMembers` | `GET /api/v1/clickup/workspaces/{workspaceId}/members` | live | List members of a workspace — _No dedicated ClickUp endpoint; derived from getWorkspaces team.members[]._ |
 | `getTimeEntries` | `GET /api/v1/clickup/workspaces/{workspaceId}/time` | live | List time entries |
 
 ### Slack (`slack`)

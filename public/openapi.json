@@ -4649,6 +4649,30 @@
         }
       }
     },
+    "/api/v1/drive/files/{fileId}/download": {
+      "get": {
+        "operationId": "downloadDriveFile",
+        "summary": "Download or export a file",
+        "description": "Download or export a file. Mirrors the MCP tool `downloadDriveFile`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "drive"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
     "/api/v1/drive/folders/{folderId}": {
       "get": {
         "operationId": "getFolderInfo",
@@ -4680,6 +4704,30 @@
         "description": "List shared drives. Mirrors the MCP tool `listSharedDrives`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
         "tags": [
           "drive"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/messages/{messageId}/attachments/{attachmentId}": {
+      "get": {
+        "operationId": "getAttachment",
+        "summary": "Download an email attachment",
+        "description": "Download an email attachment. Mirrors the MCP tool `getAttachment`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "gmail"
         ],
         "responses": {
           "200": {
@@ -4822,6 +4870,30 @@
         "operationId": "getClickUpDocPage",
         "summary": "Get a page within a ClickUp doc",
         "description": "Get a page within a ClickUp doc. Mirrors the MCP tool `getPage`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "clickup"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces/{workspaceId}/members": {
+      "get": {
+        "operationId": "listWorkspaceMembers",
+        "summary": "List members of a workspace",
+        "description": "List members of a workspace. Mirrors the MCP tool `listWorkspaceMembers`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
         "tags": [
           "clickup"
         ],

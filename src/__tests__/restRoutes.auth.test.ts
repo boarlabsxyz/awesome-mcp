@@ -41,6 +41,9 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/slack/channels/C123/messages',
   '/api/v1/slack/channels/C123/threads/1234.5678',
   '/api/v1/slack/users',
+  '/api/v1/drive/files/file-123/download',
+  '/api/v1/gmail/messages/m-1/attachments/a-1',
+  '/api/v1/clickup/workspaces/w-1/members',
 ];
 
 describe('REST data-plane: auth gate', () => {

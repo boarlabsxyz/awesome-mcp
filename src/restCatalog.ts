@@ -52,7 +52,7 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'drive', method: 'GET', path: '/api/v1/drive/files/{fileId}', summary: 'Get file metadata', mcpToolName: 'getDocumentInfo', openapiOperationId: 'getDocumentInfo', status: 'live' },
   { service: 'drive', method: 'GET', path: '/api/v1/drive/files/{fileId}/permissions', summary: 'List permissions on a file', mcpToolName: 'getFilePermissions', openapiOperationId: 'getFilePermissions', status: 'live' },
   { service: 'drive', method: 'GET', path: '/api/v1/drive/files/{fileId}/public', summary: 'Check if a file is publicly accessible', mcpToolName: 'checkPublicAccess', openapiOperationId: 'checkPublicAccess', status: 'live' },
-  { service: 'drive', method: 'GET', path: '/api/v1/drive/files/{fileId}/download', summary: 'Download or export a file', mcpToolName: 'downloadDriveFile', openapiOperationId: 'downloadDriveFile', status: 'planned', notes: 'Binary; supports ?exportMimeType= for Google native types.' },
+  { service: 'drive', method: 'GET', path: '/api/v1/drive/files/{fileId}/download', summary: 'Download or export a file', mcpToolName: 'downloadDriveFile', openapiOperationId: 'downloadDriveFile', status: 'live', notes: 'Streams binary. Google native types are exported (default: PDF for docs/slides, CSV for sheets, PNG for drawings); override with ?exportMime=.' },
   { service: 'drive', method: 'GET', path: '/api/v1/drive/folders/{folderId}', summary: 'Get folder metadata', mcpToolName: 'getFolderInfo', openapiOperationId: 'getFolderInfo', status: 'live' },
   { service: 'drive', method: 'GET', path: '/api/v1/drive/folders/{folderId}/contents', summary: 'List the contents of a folder', mcpToolName: 'listFolderContents', openapiOperationId: 'listFolderContents', status: 'live' },
   { service: 'drive', method: 'GET', path: '/api/v1/drive/shared-drives', summary: 'List shared drives', mcpToolName: 'listSharedDrives', openapiOperationId: 'listSharedDrives', status: 'live' },
@@ -60,7 +60,7 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   // -------- Gmail --------
   { service: 'gmail', method: 'GET', path: '/api/v1/gmail/messages?q={query}', summary: 'Search emails', mcpToolName: 'searchEmails', openapiOperationId: 'searchEmails', status: 'live' },
   { service: 'gmail', method: 'GET', path: '/api/v1/gmail/messages/{messageId}', summary: 'Read an email (JSON or markdown via Accept)', mcpToolName: 'readEmail', openapiOperationId: 'readEmail', status: 'live' },
-  { service: 'gmail', method: 'GET', path: '/api/v1/gmail/messages/{messageId}/attachments/{attachmentId}', summary: 'Download an email attachment', mcpToolName: 'getAttachment', openapiOperationId: 'getAttachment', status: 'planned' },
+  { service: 'gmail', method: 'GET', path: '/api/v1/gmail/messages/{messageId}/attachments/{attachmentId}', summary: 'Download an email attachment', mcpToolName: 'getAttachment', openapiOperationId: 'getAttachment', status: 'live', notes: 'Returns Gmail base64url-encoded payload as JSON {size, data}; caller decodes.' },
   { service: 'gmail', method: 'GET', path: '/api/v1/gmail/labels', summary: 'List Gmail labels', mcpToolName: 'listLabels', openapiOperationId: 'listLabels', status: 'live' },
 
   // -------- Google Slides --------
@@ -86,7 +86,7 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/workspaces/{workspaceId}/docs/search', summary: 'Search docs in a workspace', mcpToolName: 'searchDocs', openapiOperationId: 'searchDocs', status: 'live' },
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/docs/{docId}?workspaceId={workspaceId}', summary: 'Get a ClickUp doc with its pages', mcpToolName: 'getDoc', openapiOperationId: 'getDoc', status: 'live', notes: 'Required query param: workspaceId.' },
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/docs/{docId}/pages/{pageId}?workspaceId={workspaceId}', summary: 'Get a page within a ClickUp doc', mcpToolName: 'getPage', openapiOperationId: 'getClickUpDocPage', status: 'live', notes: 'Required query param: workspaceId.' },
-  { service: 'clickup', method: 'GET', path: '/api/v1/clickup/workspaces/{workspaceId}/members', summary: 'List members of a workspace', mcpToolName: 'listWorkspaceMembers', openapiOperationId: 'listWorkspaceMembers', status: 'planned' },
+  { service: 'clickup', method: 'GET', path: '/api/v1/clickup/workspaces/{workspaceId}/members', summary: 'List members of a workspace', mcpToolName: 'listWorkspaceMembers', openapiOperationId: 'listWorkspaceMembers', status: 'live', notes: 'No dedicated ClickUp endpoint; derived from getWorkspaces team.members[].' },
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/workspaces/{workspaceId}/time', summary: 'List time entries', mcpToolName: 'getTimeEntries', openapiOperationId: 'getTimeEntries', status: 'live' },
 
   // -------- Slack --------
