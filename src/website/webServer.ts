@@ -300,6 +300,7 @@ import { getOAuthState, deleteOAuthState, storeAuthCode, storeClient, getClient,
 import { createSession, getSession, deleteSession, Session } from './sessionStore.js';
 import { lookupRestToken } from './restTokenStore.js';
 import { mapSlackErrorToHttpStatus } from './slackErrorMapper.js';
+import { negotiateFormat } from './restContent.js';
 import { clearSessionCache, createUserSession, createUserSessionFromConnection, UserSession } from '../userSession.js';
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
 import {
@@ -2278,6 +2279,90 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       } else {
         res.status(500).json({ error: err.message || 'Failed to read document' });
       }
+    }
+  });
+
+  // GET /api/v1/docs/:documentId - Read a Google Doc with content negotiation.
+  // Accept: application/json (default) or ?format=json → raw upstream Docs API JSON.
+  // Accept: text/plain or ?format=text → extracted plain text body.
+  // Optional query: ?tabId=, ?maxLength=.
+  // Sibling of the legacy POST /api/v1/docs/read (which stays unchanged for
+  // ChatGPT Custom Actions backward compat).
+  app.get('/api/v1/docs/:documentId', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const documentId = req.params.documentId as string;
+      const tabId = req.query.tabId?.toString();
+      const maxLengthRaw = req.query.maxLength?.toString();
+      const maxLength = maxLengthRaw ? Math.max(parseInt(maxLengthRaw, 10) || 0, 0) : 0;
+      const wantText = negotiateFormat(req) === 'text';
+
+      const docs = req.userSession!.googleDocs;
+      const needsTabsContent = !!tabId;
+      const fields = wantText && !needsTabsContent
+        ? 'body(content(paragraph(elements(textRun(content))),table(tableRows(tableCells(content(paragraph(elements(textRun(content))))))))),title'
+        : '*';
+
+      const docResponse = await docs.documents.get({
+        documentId,
+        includeTabsContent: needsTabsContent,
+        fields,
+      });
+
+      let contentSource: any;
+      if (tabId) {
+        const targetTab = findTabById(docResponse.data, tabId);
+        if (!targetTab) {
+          res.status(404).json({ error: `Tab with ID "${tabId}" not found` });
+          return;
+        }
+        if (!targetTab.documentTab) {
+          res.status(400).json({ error: `Tab "${tabId}" does not have content` });
+          return;
+        }
+        contentSource = { body: targetTab.documentTab.body };
+      } else {
+        contentSource = docResponse.data;
+      }
+
+      if (!wantText) {
+        // Return raw upstream JSON. Apply maxLength as a character cap on the
+        // serialised payload if requested.
+        if (maxLength > 0) {
+          const serialised = JSON.stringify(contentSource);
+          if (serialised.length > maxLength) {
+            res.json({ truncated: true, originalLength: serialised.length, content: JSON.parse(serialised.substring(0, maxLength)) });
+            return;
+          }
+        }
+        res.json(contentSource);
+        return;
+      }
+
+      // Text rendering — walk paragraphs + tables.
+      let textContent = '';
+      contentSource.body?.content?.forEach((element: any) => {
+        element.paragraph?.elements?.forEach((pe: any) => {
+          if (pe.textRun?.content) textContent += pe.textRun.content;
+        });
+        element.table?.tableRows?.forEach((row: any) => {
+          row.tableCells?.forEach((cell: any) => {
+            cell.content?.forEach((cellElement: any) => {
+              cellElement.paragraph?.elements?.forEach((pe: any) => {
+                if (pe.textRun?.content) textContent += pe.textRun.content;
+              });
+            });
+          });
+        });
+      });
+      if (maxLength > 0 && textContent.length > maxLength) {
+        textContent = textContent.substring(0, maxLength);
+      }
+      res.type('text/plain; charset=utf-8').send(textContent);
+    } catch (err: any) {
+      console.error('Error reading doc:', err);
+      if (err.code === 404) res.status(404).json({ error: 'Document not found' });
+      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to read document' });
     }
   });
 

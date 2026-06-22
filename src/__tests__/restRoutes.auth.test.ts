@@ -23,6 +23,7 @@ if (!process.env.GOOGLE_CREDENTIALS) {
 const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/docs',
   '/api/v1/docs/recent',
+  '/api/v1/docs/doc-123',
   '/api/v1/docs/doc-123/tabs',
   '/api/v1/drive/shared-drives',
   '/api/v1/drive/folders/folder-123',

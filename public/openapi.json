@@ -4481,6 +4481,30 @@
         }
       }
     },
+    "/api/v1/docs/{documentId}": {
+      "get": {
+        "operationId": "readGoogleDoc",
+        "summary": "Read a Google Doc (JSON or text via Accept)",
+        "description": "Read a Google Doc (JSON or text via Accept). Mirrors the MCP tool `readGoogleDoc`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "docs"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
     "/api/v1/docs/{documentId}/tabs": {
       "get": {
         "operationId": "listDocumentTabs",

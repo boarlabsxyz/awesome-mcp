@@ -32,7 +32,7 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'docs', method: 'GET', path: '/api/v1/docs', summary: 'List Google Docs', mcpToolName: 'listGoogleDocs', openapiOperationId: 'listGoogleDocs', status: 'live' },
   { service: 'docs', method: 'GET', path: '/api/v1/docs?q={query}', summary: 'Search Google Docs', mcpToolName: 'searchGoogleDocs', openapiOperationId: 'searchGoogleDocs', status: 'live', notes: 'Same path as listGoogleDocs; presence of ?q triggers search.' },
   { service: 'docs', method: 'GET', path: '/api/v1/docs/recent', summary: 'Recent Google Docs', mcpToolName: 'getRecentGoogleDocs', openapiOperationId: 'getRecentGoogleDocs', status: 'live' },
-  { service: 'docs', method: 'GET', path: '/api/v1/docs/{documentId}', summary: 'Read a Google Doc (JSON or markdown via Accept)', mcpToolName: 'readGoogleDoc', openapiOperationId: 'readGoogleDoc', status: 'planned', notes: 'GET sibling of the existing POST /api/v1/docs/read.' },
+  { service: 'docs', method: 'GET', path: '/api/v1/docs/{documentId}', summary: 'Read a Google Doc (JSON or text via Accept)', mcpToolName: 'readGoogleDoc', openapiOperationId: 'readGoogleDoc', status: 'live', notes: 'GET sibling of the existing POST /api/v1/docs/read. Default returns raw upstream Docs JSON; Accept: text/plain returns extracted body text.' },
   { service: 'docs', method: 'GET', path: '/api/v1/docs/{documentId}/tabs', summary: 'List tabs in a Google Doc', mcpToolName: 'listDocumentTabs', openapiOperationId: 'listDocumentTabs', status: 'live' },
   { service: 'docs', method: 'GET', path: '/api/v1/docs/{documentId}/comments', summary: 'List comments on a Google Doc', mcpToolName: 'listComments', openapiOperationId: 'listComments', status: 'live' },
 

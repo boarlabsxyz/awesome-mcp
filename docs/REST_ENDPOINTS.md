@@ -37,7 +37,7 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `listGoogleDocs` | `GET /api/v1/docs` | live | List Google Docs |
 | `searchGoogleDocs` | `GET /api/v1/docs?q={query}` | live | Search Google Docs — _Same path as listGoogleDocs; presence of ?q triggers search._ |
 | `getRecentGoogleDocs` | `GET /api/v1/docs/recent` | live | Recent Google Docs |
-| `readGoogleDoc` | `GET /api/v1/docs/{documentId}` | planned | Read a Google Doc (JSON or markdown via Accept) — _GET sibling of the existing POST /api/v1/docs/read._ |
+| `readGoogleDoc` | `GET /api/v1/docs/{documentId}` | live | Read a Google Doc (JSON or text via Accept) — _GET sibling of the existing POST /api/v1/docs/read. Default returns raw upstream Docs JSON; Accept: text/plain returns extracted body text._ |
 | `listDocumentTabs` | `GET /api/v1/docs/{documentId}/tabs` | live | List tabs in a Google Doc |
 | `listComments` | `GET /api/v1/docs/{documentId}/comments` | live | List comments on a Google Doc |
 
