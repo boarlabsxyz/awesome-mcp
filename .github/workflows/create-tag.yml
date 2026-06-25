@@ -130,9 +130,12 @@ jobs:
 
       - name: Collect commits and parse ClickUp IDs
         id: commits
+        env:
+          # Pass via env + quoted shell var so a hostile tag name can't break out of the shell context.
+          RANGE: ${{ steps.range.outputs.range }}
         run: |
-          if [ -n "${{ steps.range.outputs.range }}" ]; then
-            git log ${{ steps.range.outputs.range }} --pretty=format:"%H%x1f%s%x1f%b%x1e" --no-merges > /tmp/commits_raw.txt
+          if [ -n "$RANGE" ]; then
+            git log "$RANGE" --pretty=format:"%H%x1f%s%x1f%b%x1e" --no-merges > /tmp/commits_raw.txt
           else
             git log --pretty=format:"%H%x1f%s%x1f%b%x1e" --no-merges > /tmp/commits_raw.txt
           fi
@@ -147,8 +150,8 @@ jobs:
             });
             fs.writeFileSync('/tmp/commits.txt', lines.join('\n'));
           "
-          if [ -n "${{ steps.range.outputs.range }}" ]; then
-            ALL_TEXT=$(git log ${{ steps.range.outputs.range }} --pretty=format:"%s %b")
+          if [ -n "$RANGE" ]; then
+            ALL_TEXT=$(git log "$RANGE" --pretty=format:"%s %b")
           else
             ALL_TEXT=$(git log --pretty=format:"%s %b")
           fi
