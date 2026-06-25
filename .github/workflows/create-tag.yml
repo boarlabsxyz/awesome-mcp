@@ -239,11 +239,26 @@ jobs:
     steps:
       - name: Create and push tag
         uses: actions/github-script@v7
+        env:
+          # Pass via env so workflow_dispatch values can't break out of the JS source literal.
+          TAG: ${{ inputs.tag }}
+          TAG_SHA: ${{ needs.update-release-notes.outputs.release_sha }}
         with:
           github-token: ${{ secrets.PAT_TOKEN }}
           script: |
-            const tag = '${{ inputs.tag }}';
-            const sha = '${{ needs.update-release-notes.outputs.release_sha }}';
+            const tag = process.env.TAG;
+            const sha = process.env.TAG_SHA;
+
+            // SemVer 2.0.0 with required leading "v": vMAJOR.MINOR.PATCH[-prerelease][+build]
+            const semver = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+            if (!semver.test(tag)) {
+              core.setFailed(`Tag "${tag}" is not a valid SemVer tag (e.g. v1.2.3 or v1.2.3-rc.1).`);
+              return;
+            }
+            if (!/^[0-9a-f]{40}$/.test(sha)) {
+              core.setFailed(`Refusing to tag: sha "${sha}" is not a 40-char commit hash.`);
+              return;
+            }
 
             await github.rest.git.createRef({
               owner: context.repo.owner,
