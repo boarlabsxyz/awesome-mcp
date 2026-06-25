@@ -2282,6 +2282,28 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
     }
   });
 
+  // GET /api/v1/docs/recent - Recent Google Docs (most-recently-modified).
+  // Registered BEFORE /api/v1/docs/:documentId so Express picks this static
+  // path first instead of treating "recent" as a documentId.
+  app.get('/api/v1/docs/recent', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const maxResults = Math.min(parseInt((req.query.maxResults ?? '20').toString(), 10) || 20, 200);
+      const response = await drive.files.list({
+        q: "mimeType='application/vnd.google-apps.document' and trashed=false",
+        pageSize: maxResults,
+        orderBy: 'modifiedTime desc',
+        fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName,emailAddress))',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+      res.json({ files: response.data.files || [] });
+    } catch (err: any) {
+      if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to list recent docs' });
+    }
+  });
+
   // GET /api/v1/docs/:documentId - Read a Google Doc with content negotiation.
   // Accept: application/json (default) or ?format=json → raw upstream Docs API JSON.
   // Accept: text/plain or ?format=text → extracted plain text body.
@@ -3538,26 +3560,6 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
     } catch (err: any) {
       if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
       else res.status(500).json({ error: err.message || 'Failed to list docs' });
-    }
-  });
-
-  // GET /api/v1/docs/recent - Recent Google Docs
-  app.get('/api/v1/docs/recent', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const drive = req.userSession!.googleDrive;
-      const maxResults = Math.min(parseInt((req.query.maxResults ?? '20').toString(), 10) || 20, 200);
-      const response = await drive.files.list({
-        q: "mimeType='application/vnd.google-apps.document' and trashed=false",
-        pageSize: maxResults,
-        orderBy: 'modifiedTime desc',
-        fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName,emailAddress))',
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true,
-      });
-      res.json({ files: response.data.files || [] });
-    } catch (err: any) {
-      if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to list recent docs' });
     }
   });
 
