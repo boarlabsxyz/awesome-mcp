@@ -301,6 +301,7 @@ import { createSession, getSession, deleteSession, Session } from './sessionStor
 import { lookupRestToken } from './restTokenStore.js';
 import { mapSlackErrorToHttpStatus } from './slackErrorMapper.js';
 import { negotiateFormat } from './restContent.js';
+import { sendUpstreamError } from './restUpstreamError.js';
 import { clearSessionCache, createUserSession, createUserSessionFromConnection, UserSession } from '../userSession.js';
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
 import {
@@ -2298,9 +2299,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         includeItemsFromAllDrives: true,
       });
       res.json({ files: response.data.files || [] });
-    } catch (err: any) {
-      if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to list recent docs' });
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to list recent docs' });
     }
   });
 
@@ -2380,11 +2380,9 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         textContent = textContent.substring(0, maxLength);
       }
       res.type('text/plain; charset=utf-8').send(textContent);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error reading doc:', err);
-      if (err.code === 404) res.status(404).json({ error: 'Document not found' });
-      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to read document' });
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to read document' });
     }
   });
 
@@ -3542,6 +3540,9 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   // listRestEndpoints MCP tool. Bearer is either the permanent apiKey or a
   // 5-minute token from the getSecurityToken MCP tool.
 
+  // sendUpstreamError lives in ./restUpstreamError.js so it's unit-testable
+  // in isolation and so each route's catch can stay a one-liner.
+
   // GET /api/v1/docs - List Google Docs (?q= triggers search)
   app.get('/api/v1/docs', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
@@ -3563,9 +3564,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         includeItemsFromAllDrives: true,
       });
       res.json({ files: response.data.files || [], nextPageToken: response.data.nextPageToken });
-    } catch (err: any) {
-      if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to list docs' });
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to list docs' });
     }
   });
 
@@ -3599,10 +3599,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         tabCount: allTabs.length,
         tabs: allTabs,
       });
-    } catch (err: any) {
-      if (err.code === 404) res.status(404).json({ error: 'Document not found' });
-      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to list tabs' });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to list tabs' });
     }
   });
 
@@ -3618,9 +3616,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         fields: 'nextPageToken,drives(id,name,createdTime,capabilities)',
       });
       res.json({ drives: response.data.drives || [], nextPageToken: response.data.nextPageToken });
-    } catch (err: any) {
-      if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to list shared drives' });
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to list shared drives' });
     }
   });
 
@@ -3638,10 +3635,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         return;
       }
       res.json(response.data);
-    } catch (err: any) {
-      if (err.code === 404) res.status(404).json({ error: 'Folder not found' });
-      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to get folder info' });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Folder not found', fallback: 'Failed to get folder info' });
     }
   });
 
@@ -3655,10 +3650,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         fields: 'permissions(id,type,role,emailAddress,displayName,domain,allowFileDiscovery,deleted)',
       });
       res.json({ fileId: req.params.fileId, permissions: response.data.permissions || [] });
-    } catch (err: any) {
-      if (err.code === 404) res.status(404).json({ error: 'File not found' });
-      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to list permissions' });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'File not found', fallback: 'Failed to list permissions' });
     }
   });
 
@@ -3690,10 +3683,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         anyoneAccess: anyone ? { role: anyone.role, discoverable: !!anyone.allowFileDiscovery } : null,
         domainAccess: domain ? { domain: domain.domain, role: domain.role } : null,
       });
-    } catch (err: any) {
-      if (err.code === 404) res.status(404).json({ error: 'File not found' });
-      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to check public access' });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'File not found', fallback: 'Failed to check public access' });
     }
   });
 
@@ -3703,9 +3694,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       const gmail = req.userSession!.googleGmail;
       const response = await gmail.users.labels.list({ userId: 'me' });
       res.json({ labels: response.data.labels || [] });
-    } catch (err: any) {
-      if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to list labels' });
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to list labels' });
     }
   });
 
@@ -3727,10 +3717,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         width: response.data.width,
         height: response.data.height,
       });
-    } catch (err: any) {
-      if (err.code === 404) res.status(404).json({ error: 'Page or presentation not found' });
-      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to get thumbnail' });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Page or presentation not found', fallback: 'Failed to get thumbnail' });
     }
   });
 
@@ -3747,10 +3735,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         presentationId: req.params.presentationId,
         comments: response.data.comments || [],
       });
-    } catch (err: any) {
-      if (err.code === 404) res.status(404).json({ error: 'Presentation not found' });
-      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to list comments' });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Presentation not found', fallback: 'Failed to list comments' });
     }
   });
 
@@ -3786,10 +3772,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         majorDimension: response.data.majorDimension,
         values,
       });
-    } catch (err: any) {
-      if (err.code === 404) res.status(404).json({ error: 'Spreadsheet not found' });
-      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to read range' });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to read range' });
     }
   });
 
@@ -3828,10 +3812,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         values,
         ...(asObject ? { asObject } : {}),
       });
-    } catch (err: any) {
-      if (err.code === 404) res.status(404).json({ error: 'Spreadsheet not found' });
-      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to read row' });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to read row' });
     }
   });
 
@@ -3886,10 +3868,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         rowNumber,
         found: rowNumber !== null,
       });
-    } catch (err: any) {
-      if (err.code === 404) res.status(404).json({ error: 'Spreadsheet not found' });
-      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to search' });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to search' });
     }
   });
 
@@ -3910,10 +3890,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         client.getDocPages(workspaceId, req.params.docId as string),
       ]);
       res.json({ doc, pages });
-    } catch (err: any) {
-      if (err.response?.status === 404 || err.status === 404) res.status(404).json({ error: 'Doc not found' });
-      else if (err.response?.status === 403 || err.status === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to get doc' });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Doc not found', fallback: 'Failed to get doc' });
     }
   });
 
@@ -3930,10 +3908,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
       const page = await client.getPage(workspaceId, req.params.docId as string, req.params.pageId as string, contentFormat);
       res.json(page);
-    } catch (err: any) {
-      if (err.response?.status === 404 || err.status === 404) res.status(404).json({ error: 'Page not found' });
-      else if (err.response?.status === 403 || err.status === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to get page' });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Page not found', fallback: 'Failed to get page' });
     }
   });
 
@@ -4121,10 +4097,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         // base64url, exactly as Gmail returns it
         data: resp.data.data ?? '',
       });
-    } catch (err: any) {
-      if (err.code === 404) res.status(404).json({ error: 'Attachment or message not found' });
-      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to fetch attachment' });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Attachment or message not found', fallback: 'Failed to fetch attachment' });
     }
   });
 
@@ -4142,10 +4116,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         return;
       }
       res.json({ workspaceId: team.id, members: team.members || [] });
-    } catch (err: any) {
-      if (err.response?.status === 404 || err.status === 404) res.status(404).json({ error: 'Workspace not found' });
-      else if (err.response?.status === 403 || err.status === 403) res.status(403).json({ error: 'Permission denied' });
-      else res.status(500).json({ error: err.message || 'Failed to list workspace members' });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Workspace not found', fallback: 'Failed to list workspace members' });
     }
   });
 

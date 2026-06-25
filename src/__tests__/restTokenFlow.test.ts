@@ -101,4 +101,62 @@ describe('REST data-plane: short-lived bearer end-to-end', () => {
       .set('Authorization', 'Bearer this-is-not-a-real-token');
     assert.equal(res.status, 401);
   });
+
+  // -------------------------------------------------------------------------
+  // 400-path validation tests. Each of these handlers rejects bad input
+  // BEFORE touching the upstream Google/ClickUp client, so they're testable
+  // without any network mocking.
+  // -------------------------------------------------------------------------
+
+  describe('400 validation paths', () => {
+    const bearer = () => `Bearer ${token}`;
+
+    it('GET /api/v1/sheets/{id}/ranges without ?range → 400', async () => {
+      const res = await request(app)
+        .get('/api/v1/sheets/sheet-1/ranges')
+        .set('Authorization', bearer());
+      assert.equal(res.status, 400);
+      assert.match(String(res.body.error), /range.*required/i);
+    });
+
+    it('GET /api/v1/sheets/{id}/rows/{rowNumber} with non-positive row → 400', async () => {
+      const res = await request(app)
+        .get('/api/v1/sheets/sheet-1/rows/0')
+        .set('Authorization', bearer());
+      assert.equal(res.status, 400);
+      assert.match(String(res.body.error), /positive.*1-based/i);
+    });
+
+    it('GET /api/v1/sheets/{id}/search without col/val → 400', async () => {
+      const res = await request(app)
+        .get('/api/v1/sheets/sheet-1/search')
+        .set('Authorization', bearer());
+      assert.equal(res.status, 400);
+      assert.match(String(res.body.error), /col.*val.*required/i);
+    });
+
+    it('GET /api/v1/sheets/{id}/search with non-A1 col → 400', async () => {
+      const res = await request(app)
+        .get('/api/v1/sheets/sheet-1/search?col=A:Z&val=foo')
+        .set('Authorization', bearer());
+      assert.equal(res.status, 400);
+      assert.match(String(res.body.error), /A1 column letters/i);
+    });
+
+    it('GET /api/v1/clickup/docs/{id} without ?workspaceId → 400', async () => {
+      const res = await request(app)
+        .get('/api/v1/clickup/docs/doc-1')
+        .set('Authorization', bearer());
+      assert.equal(res.status, 400);
+      assert.match(String(res.body.error), /workspaceId.*required/i);
+    });
+
+    it('GET /api/v1/clickup/docs/{id}/pages/{pageId} without ?workspaceId → 400', async () => {
+      const res = await request(app)
+        .get('/api/v1/clickup/docs/doc-1/pages/page-1')
+        .set('Authorization', bearer());
+      assert.equal(res.status, 400);
+      assert.match(String(res.body.error), /workspaceId.*required/i);
+    });
+  });
 });
