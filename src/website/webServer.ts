@@ -3003,15 +3003,21 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   // GET /api/v1/gmail/messages/:messageId - Read email
   // JSON by default (raw Gmail API payload). Accept: text/plain returns the
   // same markdown rendering the readEmail MCP tool emits. The `?format=`
-  // query is forwarded to the Gmail API (full | metadata | minimal); for
-  // text rendering we force `full` so the body is available.
+  // query selects the upstream Gmail detail level (full | metadata | minimal
+  // | raw); any non-Gmail value (e.g. a REST-negotiation `json`/`text`)
+  // falls back to `full`. For text rendering we always force `full` so the
+  // body is available.
   app.get('/api/v1/gmail/messages/:messageId', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const gmail = req.userSession!.googleGmail;
       const wantText = negotiateFormat(req) === 'text';
-      const gmailFormat = wantText ? 'full' : ((req.query.format as string) || 'full');
+      type GmailDetail = 'full' | 'metadata' | 'minimal' | 'raw';
+      const isGmailDetail = (v: string): v is GmailDetail =>
+        v === 'full' || v === 'metadata' || v === 'minimal' || v === 'raw';
+      const rawFormat = (req.query.format ?? '').toString();
+      const gmailFormat: GmailDetail = wantText || !isGmailDetail(rawFormat) ? 'full' : rawFormat;
       const result = await gmail.users.messages.get({
-        userId: 'me', id: req.params.messageId as string, format: gmailFormat as 'full' | 'metadata' | 'minimal',
+        userId: 'me', id: req.params.messageId as string, format: gmailFormat,
       });
       if (wantText) {
         const { renderEmail } = await import('../google-gmail/apiHelpers.js');
