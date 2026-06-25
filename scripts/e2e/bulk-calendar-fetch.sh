@@ -101,13 +101,20 @@ external=0
 for f in "$OUTDIR"/*.json; do
   [[ -f "$f" ]] || continue
   # The endpoint returns {events: [...]}. Each event has an attendees array.
+  # Domain match is exact string equality after split("@") so that '.' in the
+  # domain isn't treated as a regex wildcard (would match "examplexcom"), and
+  # attendees missing `.email` don't crash jq's test().
   i=$(jq --arg dom "$INTERNAL_DOMAIN" '
+    def domain_of: (. // "") | split("@")[1] // "" | ascii_downcase;
     [ .events[]?
-      | select((.attendees // []) | all(.email | test("@"+$dom+"$"; "i")))
+      | select((.attendees // [])
+          | all(.email | domain_of == ($dom | ascii_downcase)))
     ] | length' "$f")
   e=$(jq --arg dom "$INTERNAL_DOMAIN" '
+    def domain_of: (. // "") | split("@")[1] // "" | ascii_downcase;
     [ .events[]?
-      | select((.attendees // []) | any(.email | test("@"+$dom+"$"; "i") | not))
+      | select((.attendees // [])
+          | any(.email | domain_of != ($dom | ascii_downcase)))
     ] | length' "$f")
   internal=$((internal + i))
   external=$((external + e))
