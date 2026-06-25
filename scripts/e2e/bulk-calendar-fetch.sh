@@ -37,15 +37,21 @@ fi
 BASE_URL="${AWESOME_MCP_BASE_URL:-https://awesome-mcp.xyz}"
 INTERNAL_DOMAIN="${INTERNAL_DOMAIN:-example.com}"
 
-# Default week window: today's Monday 00:00Z to following Sunday 23:59:59Z.
+# Default week window: this calendar week's Monday 00:00Z → Sunday 23:59:59Z.
+# Compute by day-of-week offset so the result is deterministic on every day —
+# bare weekday names like `monday` mean "next occurrence" in GNU date, which
+# gave the wrong week when paired with `sunday` (especially when today was
+# Monday or Sunday).
 if [[ -z "${WEEK_START:-}" || -z "${WEEK_END:-}" ]]; then
-  # GNU date and BSD/macOS date have different syntax; try both.
-  if date -u -d 'monday -7 days' '+%Y-%m-%d' >/dev/null 2>&1; then
-    WEEK_START="$(date -u -d 'monday -7 days' '+%Y-%m-%dT00:00:00Z')"
-    WEEK_END="$(date -u -d 'sunday' '+%Y-%m-%dT23:59:59Z')"
+  dow=$(date -u +%u)              # 1=Mon, …, 7=Sun
+  mon_offset=$((dow - 1))         # days back to this week's Monday
+  sun_offset=$((7 - dow))         # days forward to this week's Sunday
+  if date -u -d "$mon_offset days ago" '+%Y-%m-%d' >/dev/null 2>&1; then
+    WEEK_START="$(date -u -d "$mon_offset days ago" '+%Y-%m-%dT00:00:00Z')"
+    WEEK_END="$(date -u -d "$sun_offset days" '+%Y-%m-%dT23:59:59Z')"
   else
-    WEEK_START="$(date -u -v-monday '+%Y-%m-%dT00:00:00Z')"
-    WEEK_END="$(date -u -v+sunday '+%Y-%m-%dT23:59:59Z')"
+    WEEK_START="$(date -u -v-"${mon_offset}"d '+%Y-%m-%dT00:00:00Z')"
+    WEEK_END="$(date -u -v+"${sun_offset}"d '+%Y-%m-%dT23:59:59Z')"
   fi
 fi
 
