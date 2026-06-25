@@ -118,7 +118,8 @@ function escapeHtml(text) {
 }
 
 function formatDate() {
-  return releaseDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  // timeZone: 'UTC' so a midnight-UTC --date never rolls back a day in west-of-UTC runners.
+  return releaseDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
 }
 
 function enrichWithTasks(entry, format) {
