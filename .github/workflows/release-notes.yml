@@ -55,7 +55,10 @@ jobs:
             echo "Tag ${CURRENT_TAG} does not exist."
             exit 1
           fi
-          PREVIOUS_TAG=$(git tag -l 'v*' --sort=-version:refname | grep -v "^${CURRENT_TAG}$" | head -1)
+          # Find the tag immediately preceding CURRENT_TAG in version order, not just the newest tag.
+          # On a manual rerun for an older tag (e.g. v0.5.0 with v0.6.x already shipped) the old
+          # "newest tag != current" logic would point at a newer tag, producing an empty range.
+          PREVIOUS_TAG=$(git tag -l 'v*' --sort=-version:refname | awk -v cur="$CURRENT_TAG" 'found {print; exit} $0 == cur {found=1}')
           # Use the tag's commit date as the release date so regenerated
           # output matches what create-tag.yml wrote into updates.html.
           TAG_DATE=$(git log -1 --format=%cI "${CURRENT_TAG}")
