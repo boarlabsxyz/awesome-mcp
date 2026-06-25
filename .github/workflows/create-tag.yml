@@ -198,6 +198,20 @@ jobs:
             const html = fs.readFileSync('public/updates.html', 'utf8');
             const block = fs.readFileSync('/tmp/release/updates-block.html', 'utf8');
             const marker = '<div id=\"releases\">';
+            if (!html.includes(marker)) {
+              console.error('Cannot inject: marker ' + marker + ' not found in public/updates.html');
+              process.exit(1);
+            }
+            const vMarker = 'class=\"release-version\">';
+            const vIdx = block.indexOf(vMarker);
+            if (vIdx !== -1) {
+              const vEnd = block.indexOf('<', vIdx + vMarker.length);
+              const version = block.slice(vIdx + vMarker.length, vEnd);
+              if (html.includes(vMarker + version + '<')) {
+                console.error('Release block for ' + version + ' is already in public/updates.html; refusing to insert duplicate.');
+                process.exit(1);
+              }
+            }
             const updated = html.replace(marker, marker + '\n' + block);
             fs.writeFileSync('public/updates.html', updated);
           "
