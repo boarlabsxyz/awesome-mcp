@@ -302,6 +302,9 @@ import { lookupRestToken } from './restTokenStore.js';
 import { mapSlackErrorToHttpStatus } from './slackErrorMapper.js';
 import { negotiateFormat } from './restContent.js';
 import { sendUpstreamError } from './restUpstreamError.js';
+import { qstr, qint } from '../util/queryParams.js';
+import { stripTrailingSlashes } from '../util/url.js';
+import { selectTabContent, extractDocBodyText, truncateJsonByLength } from './docContent.js';
 import { clearSessionCache, createUserSession, createUserSessionFromConnection, UserSession } from '../userSession.js';
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
 import {
@@ -350,7 +353,7 @@ export function computeEffectiveScopes(
   return declared;
 }
 
-const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
+const BASE_URL = stripTrailingSlashes(process.env.BASE_URL || 'http://localhost:8080');
 const COOKIE_SECRET = process.env.COOKIE_SECRET || 'dev-secret-change-me';
 const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
@@ -2289,7 +2292,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   app.get('/api/v1/docs/recent', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const drive = req.userSession!.googleDrive;
-      const maxResults = Math.min(parseInt((req.query.maxResults ?? '20').toString(), 10) || 20, 200);
+      const maxResults = qint(req.query.maxResults, 20, { max: 200 });
       const response = await drive.files.list({
         q: "mimeType='application/vnd.google-apps.document' and trashed=false",
         pageSize: maxResults,
@@ -2310,76 +2313,54 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   // Optional query: ?tabId=, ?maxLength=.
   // Sibling of the legacy POST /api/v1/docs/read (which stays unchanged for
   // ChatGPT Custom Actions backward compat).
+  // Doc-content fields used when only the body text is requested. Avoids
+  // pulling all the formatting metadata when the caller asked for text.
+  const DOC_TEXT_FIELDS =
+    'body(content(paragraph(elements(textRun(content))),table(tableRows(tableCells(content(paragraph(elements(textRun(content))))))))),title';
+
   app.get('/api/v1/docs/:documentId', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const documentId = req.params.documentId as string;
-      const tabId = req.query.tabId?.toString();
-      const maxLengthRaw = req.query.maxLength?.toString();
-      const maxLength = maxLengthRaw ? Math.max(parseInt(maxLengthRaw, 10) || 0, 0) : 0;
+      const tabId = qstr(req.query.tabId) || undefined;
+      const maxLength = Math.max(qint(req.query.maxLength, 0), 0);
       const wantText = negotiateFormat(req) === 'text';
 
       const docs = req.userSession!.googleDocs;
-      const needsTabsContent = !!tabId;
-      const fields = wantText && !needsTabsContent
-        ? 'body(content(paragraph(elements(textRun(content))),table(tableRows(tableCells(content(paragraph(elements(textRun(content))))))))),title'
-        : '*';
-
       const docResponse = await docs.documents.get({
         documentId,
-        includeTabsContent: needsTabsContent,
-        fields,
+        includeTabsContent: !!tabId,
+        fields: wantText && !tabId ? DOC_TEXT_FIELDS : '*',
       });
 
-      let contentSource: any;
-      if (tabId) {
-        const targetTab = findTabById(docResponse.data, tabId);
-        if (!targetTab) {
-          res.status(404).json({ error: `Tab with ID "${tabId}" not found` });
-          return;
-        }
-        if (!targetTab.documentTab) {
-          res.status(400).json({ error: `Tab "${tabId}" does not have content` });
-          return;
-        }
-        contentSource = { body: targetTab.documentTab.body };
-      } else {
-        contentSource = docResponse.data;
+      const selection = tabId
+        ? selectTabContent(docResponse.data as any, tabId)
+        : { kind: 'ok' as const, content: docResponse.data };
+      if (selection.kind === 'notFound') {
+        res.status(404).json({ error: selection.message });
+        return;
       }
-
-      if (!wantText) {
-        // Return raw upstream JSON. Apply maxLength as a character cap on the
-        // serialised payload if requested.
-        if (maxLength > 0) {
-          const serialised = JSON.stringify(contentSource);
-          if (serialised.length > maxLength) {
-            res.json({ truncated: true, originalLength: serialised.length, content: JSON.parse(serialised.substring(0, maxLength)) });
-            return;
-          }
-        }
-        res.json(contentSource);
+      if (selection.kind === 'badRequest') {
+        res.status(400).json({ error: selection.message });
         return;
       }
 
-      // Text rendering — walk paragraphs + tables.
-      let textContent = '';
-      contentSource.body?.content?.forEach((element: any) => {
-        element.paragraph?.elements?.forEach((pe: any) => {
-          if (pe.textRun?.content) textContent += pe.textRun.content;
-        });
-        element.table?.tableRows?.forEach((row: any) => {
-          row.tableCells?.forEach((cell: any) => {
-            cell.content?.forEach((cellElement: any) => {
-              cellElement.paragraph?.elements?.forEach((pe: any) => {
-                if (pe.textRun?.content) textContent += pe.textRun.content;
-              });
-            });
-          });
-        });
-      });
-      if (maxLength > 0 && textContent.length > maxLength) {
-        textContent = textContent.substring(0, maxLength);
+      if (wantText) {
+        let text = extractDocBodyText(selection.content as any);
+        if (maxLength > 0 && text.length > maxLength) text = text.substring(0, maxLength);
+        res.type('text/plain; charset=utf-8').send(text);
+        return;
       }
-      res.type('text/plain; charset=utf-8').send(textContent);
+
+      const result = truncateJsonByLength(selection.content, maxLength);
+      if (result.truncated) {
+        res.json({
+          truncated: true,
+          originalLength: result.originalLength,
+          truncatedJson: result.truncatedJson,
+        });
+        return;
+      }
+      res.json(result.payload);
     } catch (err) {
       console.error('Error reading doc:', err);
       sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to read document' });
@@ -3547,12 +3528,15 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   app.get('/api/v1/docs', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const drive = req.userSession!.googleDrive;
-      const q = (req.query.q ?? '').toString();
-      const maxResults = Math.min(parseInt((req.query.maxResults ?? '50').toString(), 10) || 50, 1000);
-      const orderBy = (req.query.orderBy ?? 'modifiedTime').toString();
+      const q = qstr(req.query.q);
+      const maxResults = qint(req.query.maxResults, 50, { max: 1000 });
+      const orderBy = qstr(req.query.orderBy, 'modifiedTime');
       let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
       if (q) {
-        const escaped = q.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        // Escape backslashes then single quotes so the value is safe to drop
+        // into a Drive query string literal. Use string-arg replaceAll to
+        // avoid the regex-escape gymnastics.
+        const escaped = q.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
         queryString += ` and (name contains '${escaped}' or fullText contains '${escaped}')`;
       }
       const response = await drive.files.list({
@@ -3608,8 +3592,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   app.get('/api/v1/drive/shared-drives', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const drive = req.userSession!.googleDrive;
-      const maxResults = Math.min(parseInt((req.query.maxResults ?? '50').toString(), 10) || 50, 100);
-      const q = (req.query.q ?? '').toString();
+      const maxResults = qint(req.query.maxResults, 50, { max: 100 });
+      const q = qstr(req.query.q);
       const response = await drive.drives.list({
         pageSize: maxResults,
         q: q ? `name contains '${q.replace(/'/g, "\\'")}'` : undefined,
@@ -3703,7 +3687,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   app.get('/api/v1/slides/:presentationId/pages/:pageObjectId/thumbnail', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const slides = req.userSession!.googleSlides;
-      const thumbnailSize = (req.query.size ?? 'MEDIUM').toString().toUpperCase();
+      const thumbnailSize = qstr(req.query.size, 'MEDIUM').toUpperCase();
       const response = await slides.presentations.pages.getThumbnail({
         presentationId: req.params.presentationId as string,
         pageObjectId: req.params.pageObjectId as string,
@@ -3743,7 +3727,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   // GET /api/v1/sheets/:spreadsheetId/ranges - Read a range (GET sibling of POST .../read)
   app.get('/api/v1/sheets/:spreadsheetId/ranges', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const range = (req.query.range ?? '').toString();
+      const range = qstr(req.query.range);
       if (!range) {
         res.status(400).json({ error: 'Query param `range` is required (e.g. range=Sheet1!A1:D10)' });
         return;
@@ -3780,12 +3764,12 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   // GET /api/v1/sheets/:spreadsheetId/rows/:rowNumber - Read a single row
   app.get('/api/v1/sheets/:spreadsheetId/rows/:rowNumber', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const rowNumber = parseInt(req.params.rowNumber as string, 10);
+      const rowNumber = Number.parseInt(req.params.rowNumber as string, 10);
       if (!Number.isInteger(rowNumber) || rowNumber < 1) {
         res.status(400).json({ error: 'rowNumber must be a positive 1-based integer' });
         return;
       }
-      const sheetName = (req.query.sheet ?? '').toString();
+      const sheetName = qstr(req.query.sheet);
       const sheets = req.userSession!.googleSheets;
       const range = sheetName ? `${sheetName}!${rowNumber}:${rowNumber}` : `${rowNumber}:${rowNumber}`;
       const response = await sheets.spreadsheets.values.get({
@@ -3820,9 +3804,9 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   // GET /api/v1/sheets/:spreadsheetId/search - Find a row by column value
   app.get('/api/v1/sheets/:spreadsheetId/search', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const col = (req.query.col ?? '').toString();
-      const val = (req.query.val ?? '').toString();
-      const sheetName = (req.query.sheet ?? '').toString();
+      const col = qstr(req.query.col);
+      const val = qstr(req.query.val);
+      const sheetName = qstr(req.query.sheet);
       if (!col || !val) {
         res.status(400).json({ error: 'Query params `col` and `val` are required (e.g. col=A&val=foo)' });
         return;
@@ -3838,11 +3822,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       // by a sparse value at row ~1M. Callers that need a different window
       // can supply ?startRow= / ?maxRows= explicitly.
       const MAX_ROWS = 10000;
-      const startRow = Math.max(parseInt((req.query.startRow ?? '1').toString(), 10) || 1, 1);
-      const maxRows = Math.min(
-        Math.max(parseInt((req.query.maxRows ?? String(MAX_ROWS)).toString(), 10) || MAX_ROWS, 1),
-        MAX_ROWS,
-      );
+      const startRow = qint(req.query.startRow, 1, { min: 1 });
+      const maxRows = qint(req.query.maxRows, MAX_ROWS, { min: 1, max: MAX_ROWS });
       const endRow = startRow + maxRows - 1;
       const colRange = `${col}${startRow}:${col}${endRow}`;
       const range = sheetName ? `${sheetName}!${colRange}` : colRange;
@@ -3876,7 +3857,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   // GET /api/v1/clickup/docs/:docId - Get a ClickUp doc with its pages
   app.get('/api/v1/clickup/docs/:docId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const workspaceId = (req.query.workspaceId ?? '').toString();
+      const workspaceId = qstr(req.query.workspaceId);
       if (!workspaceId) {
         res.status(400).json({ error: 'Query param `workspaceId` is required' });
         return;
@@ -3898,12 +3879,12 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   // GET /api/v1/clickup/docs/:docId/pages/:pageId - Get a page within a ClickUp doc
   app.get('/api/v1/clickup/docs/:docId/pages/:pageId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const workspaceId = (req.query.workspaceId ?? '').toString();
+      const workspaceId = qstr(req.query.workspaceId);
       if (!workspaceId) {
         res.status(400).json({ error: 'Query param `workspaceId` is required' });
         return;
       }
-      const contentFormat = (req.query.contentFormat ?? 'text/md').toString();
+      const contentFormat = qstr(req.query.contentFormat, 'text/md');
       const { ClickUpClient } = await import('../clickup/apiHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
       const page = await client.getPage(workspaceId, req.params.docId as string, req.params.pageId as string, contentFormat);
@@ -3927,8 +3908,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       }
       const { SlackClient } = await import('../slack/apiHelpers.js');
       const client = new SlackClient(req.userSession.slackBotToken);
-      const cursor = req.query.cursor?.toString();
-      const types = req.query.types?.toString();
+      const cursor = qstr(req.query.cursor) || undefined;
+      const types = qstr(req.query.types) || undefined;
       const result = await client.conversationsList(cursor, types);
       res.json({ channels: result.channels, nextCursor: result.response_metadata?.next_cursor || null });
     } catch (err: any) {
@@ -3945,12 +3926,12 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       }
       const { SlackClient } = await import('../slack/apiHelpers.js');
       const client = new SlackClient(req.userSession.slackBotToken);
-      const limit = Math.min(parseInt((req.query.limit ?? '50').toString(), 10) || 50, 200);
+      const limit = qint(req.query.limit, 50, { max: 200 });
       const result = await client.conversationsHistory(req.params.channelId as string, {
         limit,
-        oldest: req.query.oldest?.toString(),
-        latest: req.query.latest?.toString(),
-        cursor: req.query.cursor?.toString(),
+        oldest: qstr(req.query.oldest) || undefined,
+        latest: qstr(req.query.latest) || undefined,
+        cursor: qstr(req.query.cursor) || undefined,
       });
       res.json({
         channelId: req.params.channelId,
@@ -3972,11 +3953,11 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       }
       const { SlackClient } = await import('../slack/apiHelpers.js');
       const client = new SlackClient(req.userSession.slackBotToken);
-      const limit = Math.min(parseInt((req.query.limit ?? '50').toString(), 10) || 50, 200);
+      const limit = qint(req.query.limit, 50, { max: 200 });
       const result = await client.conversationsReplies(
         req.params.channelId as string,
         req.params.threadTs as string,
-        { limit, cursor: req.query.cursor?.toString() },
+        { limit, cursor: qstr(req.query.cursor) || undefined },
       );
       res.json({
         channelId: req.params.channelId,
@@ -3999,8 +3980,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       }
       const { SlackClient } = await import('../slack/apiHelpers.js');
       const client = new SlackClient(req.userSession.slackBotToken);
-      const limit = Math.min(parseInt((req.query.limit ?? '200').toString(), 10) || 200, 1000);
-      const result = await client.usersList(req.query.cursor?.toString(), limit);
+      const limit = qint(req.query.limit, 200, { max: 1000 });
+      const result = await client.usersList(qstr(req.query.cursor) || undefined, limit);
       res.json({ members: result.members, nextCursor: result.response_metadata?.next_cursor || null });
     } catch (err: any) {
       res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || 'Failed to list users' });
@@ -4030,7 +4011,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         'application/vnd.google-apps.drawing': 'image/png',
       };
       const isNative = sourceMime.startsWith('application/vnd.google-apps.');
-      const exportMime = req.query.exportMime?.toString() || (isNative ? DEFAULT_EXPORTS[sourceMime] : undefined);
+      const exportMime = qstr(req.query.exportMime) || (isNative ? DEFAULT_EXPORTS[sourceMime] : undefined);
 
       // Stream the upstream response straight to the client so multi-MB/GB
       // files don't get buffered in memory. Pipeline awaits completion and
@@ -4060,7 +4041,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         const size = Number(meta.data.size);
         if (Number.isFinite(size) && size > 0) knownSize = size;
       }
-      const safeName = name.replace(/[^\w.-]+/g, '_');
+      const safeName = name.replaceAll(/[^\w.-]+/g, '_');
       res.setHeader('Content-Type', outMime);
       res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
       if (knownSize !== undefined) res.setHeader('Content-Length', String(knownSize));

@@ -8,8 +8,9 @@ import { FastMCP, UserError } from 'fastmcp';
 import { z } from 'zod';
 import type { UserSession } from '../userSession.js';
 import { mintRestToken } from '../website/restTokenStore.js';
+import { stripTrailingSlashes } from '../util/url.js';
 
-const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
+const BASE_URL = stripTrailingSlashes(process.env.BASE_URL || 'http://localhost:8080');
 
 export function registerGetSecurityToken(server: FastMCP<UserSession>): void {
   server.addTool({

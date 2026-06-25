@@ -8,8 +8,9 @@ import { FastMCP } from 'fastmcp';
 import { z } from 'zod';
 import type { UserSession } from '../userSession.js';
 import { REST_CATALOG, RestService } from '../restCatalog.js';
+import { stripTrailingSlashes } from '../util/url.js';
 
-const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
+const BASE_URL = stripTrailingSlashes(process.env.BASE_URL || 'http://localhost:8080');
 
 const SERVICE_VALUES: [RestService, ...RestService[]] = [
   'docs', 'sheets', 'calendar', 'drive', 'gmail', 'slides', 'clickup', 'slack',

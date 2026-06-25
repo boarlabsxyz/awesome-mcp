@@ -11,7 +11,7 @@ export function mapSlackErrorToHttpStatus(err: unknown): number {
   const msg = String((err as { message?: unknown })?.message ?? '').toLowerCase();
   const httpMatch = msg.match(/http error \((\d{3})\)/);
   if (httpMatch) {
-    const code = parseInt(httpMatch[1], 10);
+    const code = Number.parseInt(httpMatch[1], 10);
     if (code === 401 || code === 403 || code === 404 || code === 429) return code;
   }
   if (msg.includes('rate limit') || msg.includes('ratelimited')) return 429;

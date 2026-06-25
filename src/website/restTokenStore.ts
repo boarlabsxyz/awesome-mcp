@@ -6,7 +6,7 @@
 // Storage mirrors sessionStore.ts: Redis-backed when DATABASE_URL is set,
 // in-memory Map otherwise.
 
-import * as crypto from 'crypto';
+import * as crypto from 'node:crypto';
 import { isDatabaseAvailable, getRedis } from '../db.js';
 
 export const REST_TOKEN_TTL_SECONDS = 5 * 60;
