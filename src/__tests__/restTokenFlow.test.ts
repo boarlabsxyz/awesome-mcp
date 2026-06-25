@@ -59,28 +59,40 @@ describe('REST data-plane: short-lived bearer end-to-end', () => {
     assert.ok(token.length > 0);
   });
 
+  // The downstream Google call always fails in this test (no real OAuth
+  // client), so we can't positively assert 2xx. Instead exclude every status
+  // that would mean the token DIDN'T make it past the auth/routing layer:
+  //   401 — resolveTokenToUser rejected the bearer
+  //   403 — auth middleware refused (e.g. user.id missing)
+  //   404 — route not registered (catches accidental regressions)
+  // Anything else (200, 500, 502 …) proves the gate accepted the bearer.
+  const REJECTED_STATUSES = new Set([401, 403, 404]);
+  function assertGatePassed(res: { status: number; body: unknown }, label: string) {
+    assert.ok(
+      !REJECTED_STATUSES.has(res.status),
+      `${label}: expected gate-passed status, got ${res.status} body=${JSON.stringify(res.body)}`,
+    );
+  }
+
   it('mintRestToken → /api/v1/calendars: bearer is accepted by the auth gate', async () => {
     const res = await request(app)
       .get('/api/v1/calendars')
       .set('Authorization', `Bearer ${token}`);
-    // 401 would mean resolveTokenToUser rejected the bearer. Anything else
-    // (200 if a session is built, 4xx/5xx if the downstream Google call
-    // fails) proves the token was accepted.
-    assert.notEqual(res.status, 401, `expected non-401, got ${res.status} body=${JSON.stringify(res.body)}`);
+    assertGatePassed(res, 'GET /api/v1/calendars');
   });
 
   it('mintRestToken → /api/v1/sheets: bearer is accepted by the auth gate', async () => {
     const res = await request(app)
       .get('/api/v1/sheets')
       .set('Authorization', `Bearer ${token}`);
-    assert.notEqual(res.status, 401, `expected non-401, got ${res.status}`);
+    assertGatePassed(res, 'GET /api/v1/sheets');
   });
 
   it('mintRestToken → /api/v1/drive/shared-drives: bearer is accepted', async () => {
     const res = await request(app)
       .get('/api/v1/drive/shared-drives')
       .set('Authorization', `Bearer ${token}`);
-    assert.notEqual(res.status, 401);
+    assertGatePassed(res, 'GET /api/v1/drive/shared-drives');
   });
 
   it('an unknown bearer is still 401 (control case)', async () => {
