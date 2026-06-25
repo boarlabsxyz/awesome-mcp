@@ -298,6 +298,13 @@ import { loadUsers, createOrUpdateUser, getUserByGoogleId, getUserByApiKey, getU
 import { loadClientCredentials } from '../auth.js';
 import { getOAuthState, deleteOAuthState, storeAuthCode, storeClient, getClient, exchangeAuthCode } from './oauthServer.js';
 import { createSession, getSession, deleteSession, Session } from './sessionStore.js';
+import { lookupRestToken } from './restTokenStore.js';
+import { mapSlackErrorToHttpStatus } from './slackErrorMapper.js';
+import { negotiateFormat } from './restContent.js';
+import { sendUpstreamError } from './restUpstreamError.js';
+import { qstr, qint } from '../util/queryParams.js';
+import { stripTrailingSlashes } from '../util/url.js';
+import { selectTabContent, extractDocBodyText, truncateJsonByLength } from './docContent.js';
 import { clearSessionCache, createUserSession, createUserSessionFromConnection, UserSession } from '../userSession.js';
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
 import {
@@ -346,7 +353,7 @@ export function computeEffectiveScopes(
   return declared;
 }
 
-const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
+const BASE_URL = stripTrailingSlashes(process.env.BASE_URL || 'http://localhost:8080');
 const COOKIE_SECRET = process.env.COOKIE_SECRET || 'dev-secret-change-me';
 const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
@@ -2079,6 +2086,16 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       } catch { /* not a valid JWT — try next */ }
     }
 
+    // Try short-lived REST token (5-min, minted by getSecurityToken MCP tool)
+    try {
+      const restUserId = await lookupRestToken(token);
+      if (restUserId !== null) {
+        await loadUsers();
+        const restUser = await getUserById(restUserId);
+        if (restUser) return restUser;
+      }
+    } catch { /* fall through */ }
+
     // Try API key (cheap local lookup before hitting Auth0)
     await loadUsers();
     const apiKeyUser = await getUserByApiKey(token);
@@ -2160,11 +2177,15 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   const requireGmailApiKey = createServiceAuth('google-gmail', 'gmail');
   const requireSlidesApiKey = createServiceAuth('google-slides', 'slides');
   const requireClickUpApiKey = createServiceAuth('clickup', 'clickup');
+  const requireSlackApiKey = createServiceAuth('slack-bot', 'slack');
 
   // JSON body parser already added above for auth routes
 
-  // Serve OpenAPI specs
-  for (const spec of ['openapi', 'openapi-calendar', 'openapi-sheets', 'openapi-drive', 'openapi-gmail', 'openapi-slides', 'openapi-clickup']) {
+  // Serve OpenAPI specs.
+  // `openapi.json` is the combined REST data-plane spec (built by
+  // scripts/buildRootOpenapi.mjs). `openapi-docs.json` and the per-service
+  // siblings remain available for ChatGPT Custom Actions backward compat.
+  for (const spec of ['openapi', 'openapi-docs', 'openapi-calendar', 'openapi-sheets', 'openapi-drive', 'openapi-gmail', 'openapi-slides', 'openapi-clickup']) {
     app.get(`/${spec}.json`, (_req, res) => {
       res.sendFile(path.join(publicDir, `${spec}.json`));
     });
@@ -2262,6 +2283,87 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       } else {
         res.status(500).json({ error: err.message || 'Failed to read document' });
       }
+    }
+  });
+
+  // GET /api/v1/docs/recent - Recent Google Docs (most-recently-modified).
+  // Registered BEFORE /api/v1/docs/:documentId so Express picks this static
+  // path first instead of treating "recent" as a documentId.
+  app.get('/api/v1/docs/recent', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const maxResults = qint(req.query.maxResults, 20, { max: 200 });
+      const response = await drive.files.list({
+        q: "mimeType='application/vnd.google-apps.document' and trashed=false",
+        pageSize: maxResults,
+        orderBy: 'modifiedTime desc',
+        fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName,emailAddress))',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+      res.json({ files: response.data.files || [] });
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to list recent docs' });
+    }
+  });
+
+  // GET /api/v1/docs/:documentId - Read a Google Doc with content negotiation.
+  // Accept: application/json (default) or ?format=json → raw upstream Docs API JSON.
+  // Accept: text/plain or ?format=text → extracted plain text body.
+  // Optional query: ?tabId=, ?maxLength=.
+  // Sibling of the legacy POST /api/v1/docs/read (which stays unchanged for
+  // ChatGPT Custom Actions backward compat).
+  // Doc-content fields used when only the body text is requested. Avoids
+  // pulling all the formatting metadata when the caller asked for text.
+  const DOC_TEXT_FIELDS =
+    'body(content(paragraph(elements(textRun(content))),table(tableRows(tableCells(content(paragraph(elements(textRun(content))))))))),title';
+
+  app.get('/api/v1/docs/:documentId', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const documentId = req.params.documentId as string;
+      const tabId = qstr(req.query.tabId) || undefined;
+      const maxLength = Math.max(qint(req.query.maxLength, 0), 0);
+      const wantText = negotiateFormat(req) === 'text';
+
+      const docs = req.userSession!.googleDocs;
+      const docResponse = await docs.documents.get({
+        documentId,
+        includeTabsContent: !!tabId,
+        fields: wantText && !tabId ? DOC_TEXT_FIELDS : '*',
+      });
+
+      const selection = tabId
+        ? selectTabContent(docResponse.data as any, tabId)
+        : { kind: 'ok' as const, content: docResponse.data };
+      if (selection.kind === 'notFound') {
+        res.status(404).json({ error: selection.message });
+        return;
+      }
+      if (selection.kind === 'badRequest') {
+        res.status(400).json({ error: selection.message });
+        return;
+      }
+
+      if (wantText) {
+        let text = extractDocBodyText(selection.content as any);
+        if (maxLength > 0 && text.length > maxLength) text = text.substring(0, maxLength);
+        res.type('text/plain; charset=utf-8').send(text);
+        return;
+      }
+
+      const result = truncateJsonByLength(selection.content, maxLength);
+      if (result.truncated) {
+        res.json({
+          truncated: true,
+          originalLength: result.originalLength,
+          truncatedJson: result.truncatedJson,
+        });
+        return;
+      }
+      res.json(result.payload);
+    } catch (err) {
+      console.error('Error reading doc:', err);
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to read document' });
     }
   });
 
@@ -2878,13 +2980,29 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   });
 
   // GET /api/v1/gmail/messages/:messageId - Read email
+  // JSON by default (raw Gmail API payload). Accept: text/plain returns the
+  // same markdown rendering the readEmail MCP tool emits. The `?format=`
+  // query selects the upstream Gmail detail level (full | metadata | minimal
+  // | raw); any non-Gmail value (e.g. a REST-negotiation `json`/`text`)
+  // falls back to `full`. For text rendering we always force `full` so the
+  // body is available.
   app.get('/api/v1/gmail/messages/:messageId', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const gmail = req.userSession!.googleGmail;
-      const format = (req.query.format as string) || 'full';
+      const wantText = negotiateFormat(req) === 'text';
+      type GmailDetail = 'full' | 'metadata' | 'minimal' | 'raw';
+      const isGmailDetail = (v: string): v is GmailDetail =>
+        v === 'full' || v === 'metadata' || v === 'minimal' || v === 'raw';
+      const rawFormat = (req.query.format ?? '').toString();
+      const gmailFormat: GmailDetail = wantText || !isGmailDetail(rawFormat) ? 'full' : rawFormat;
       const result = await gmail.users.messages.get({
-        userId: 'me', id: req.params.messageId as string, format: format as 'full' | 'metadata' | 'minimal',
+        userId: 'me', id: req.params.messageId as string, format: gmailFormat,
       });
+      if (wantText) {
+        const { renderEmail } = await import('../google-gmail/apiHelpers.js');
+        res.type('text/plain; charset=utf-8').send(renderEmail(result.data));
+        return;
+      }
       res.json(result.data);
     } catch (err: any) {
       res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to read email' });
@@ -3150,27 +3268,41 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   });
 
   // GET /api/v1/clickup/lists/:listId/tasks - List tasks
+  // JSON by default; Accept: text/plain (or ?format=text) returns the same
+  // markdown rendering the listTasks MCP tool emits.
   app.get('/api/v1/clickup/lists/:listId/tasks', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const { formatTaskList } = await import('../clickup/formatHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
       const params: any = {};
       if (req.query.page) params.page = parseInt(req.query.page as string);
       if (req.query.orderBy) params.order_by = req.query.orderBy;
       if (req.query.statuses) params.statuses = Array.isArray(req.query.statuses) ? req.query.statuses : [req.query.statuses];
       const result = await client.getTasks(req.params.listId as string, params);
-      res.json({ tasks: result.tasks || [] });
+      const tasks = result.tasks || [];
+      if (negotiateFormat(req) === 'text') {
+        res.type('text/plain; charset=utf-8').send(formatTaskList(tasks));
+        return;
+      }
+      res.json({ tasks });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to list tasks' });
     }
   });
 
   // GET /api/v1/clickup/tasks/:taskId - Get task
+  // JSON by default; Accept: text/plain returns the markdown rendering.
   app.get('/api/v1/clickup/tasks/:taskId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const { formatTask } = await import('../clickup/formatHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
       const result = await client.getTask(req.params.taskId as string);
+      if (negotiateFormat(req) === 'text') {
+        res.type('text/plain; charset=utf-8').send(formatTask(result));
+        return;
+      }
       res.json(result);
     } catch (err: any) {
       res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to get task' });
@@ -3380,6 +3512,593 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to stop time entry' });
+    }
+  });
+
+  // === REST Data Plane: extended GET endpoints ===
+  // These are passthrough siblings of read-only MCP tools that return bulk
+  // data. Catalogued in src/restCatalog.ts and discoverable via the
+  // listRestEndpoints MCP tool. Bearer is either the permanent apiKey or a
+  // 5-minute token from the getSecurityToken MCP tool.
+
+  // sendUpstreamError lives in ./restUpstreamError.js so it's unit-testable
+  // in isolation and so each route's catch can stay a one-liner.
+
+  // GET /api/v1/docs - List Google Docs (?q= triggers search)
+  app.get('/api/v1/docs', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const q = qstr(req.query.q);
+      const maxResults = qint(req.query.maxResults, 50, { max: 1000 });
+      const orderBy = qstr(req.query.orderBy, 'modifiedTime');
+      let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
+      if (q) {
+        // Escape backslashes then single quotes so the value is safe to drop
+        // into a Drive query string literal. Use string-arg replaceAll to
+        // avoid the regex-escape gymnastics.
+        const escaped = q.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+        queryString += ` and (name contains '${escaped}' or fullText contains '${escaped}')`;
+      }
+      const response = await drive.files.list({
+        q: queryString,
+        pageSize: maxResults,
+        orderBy: orderBy === 'name' ? 'name' : orderBy,
+        fields: 'nextPageToken,files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress),driveId)',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+      res.json({ files: response.data.files || [], nextPageToken: response.data.nextPageToken });
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to list docs' });
+    }
+  });
+
+  // GET /api/v1/docs/:documentId/tabs - List tabs in a Google Doc
+  app.get('/api/v1/docs/:documentId/tabs', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const docs = req.userSession!.googleDocs;
+      const includeContent = req.query.includeContent === 'true';
+      const docResponse = await docs.documents.get({
+        documentId: req.params.documentId as string,
+        includeTabsContent: true,
+        fields: includeContent ? 'title,tabs' : 'title,tabs(tabProperties,childTabs)',
+      });
+      // Flatten the tab tree.
+      const flatten = (tabs: any[] = [], level = 0, out: any[] = []): any[] => {
+        for (const tab of tabs) {
+          out.push({
+            tabId: tab.tabProperties?.tabId,
+            title: tab.tabProperties?.title || null,
+            index: tab.tabProperties?.index ?? null,
+            level,
+          });
+          if (tab.childTabs?.length) flatten(tab.childTabs, level + 1, out);
+        }
+        return out;
+      };
+      const allTabs = flatten(docResponse.data.tabs as any[] || []);
+      res.json({
+        documentId: req.params.documentId,
+        title: docResponse.data.title || null,
+        tabCount: allTabs.length,
+        tabs: allTabs,
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to list tabs' });
+    }
+  });
+
+  // GET /api/v1/drive/shared-drives - List shared drives
+  app.get('/api/v1/drive/shared-drives', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const maxResults = qint(req.query.maxResults, 50, { max: 100 });
+      const q = qstr(req.query.q);
+      const response = await drive.drives.list({
+        pageSize: maxResults,
+        q: q ? `name contains '${q.replace(/'/g, "\\'")}'` : undefined,
+        fields: 'nextPageToken,drives(id,name,createdTime,capabilities)',
+      });
+      res.json({ drives: response.data.drives || [], nextPageToken: response.data.nextPageToken });
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to list shared drives' });
+    }
+  });
+
+  // GET /api/v1/drive/folders/:folderId - Get folder metadata
+  app.get('/api/v1/drive/folders/:folderId', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const response = await drive.files.get({
+        fileId: req.params.folderId as string,
+        supportsAllDrives: true,
+        fields: 'id,name,description,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName),shared,parents,driveId,mimeType',
+      });
+      if (response.data.mimeType !== 'application/vnd.google-apps.folder') {
+        res.status(400).json({ error: 'The specified ID does not belong to a folder.' });
+        return;
+      }
+      res.json(response.data);
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Folder not found', fallback: 'Failed to get folder info' });
+    }
+  });
+
+  // GET /api/v1/drive/files/:fileId/permissions - List permissions on a file
+  app.get('/api/v1/drive/files/:fileId/permissions', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const response = await drive.permissions.list({
+        fileId: req.params.fileId as string,
+        supportsAllDrives: true,
+        fields: 'permissions(id,type,role,emailAddress,displayName,domain,allowFileDiscovery,deleted)',
+      });
+      res.json({ fileId: req.params.fileId, permissions: response.data.permissions || [] });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'File not found', fallback: 'Failed to list permissions' });
+    }
+  });
+
+  // GET /api/v1/drive/files/:fileId/public - Check public accessibility
+  app.get('/api/v1/drive/files/:fileId/public', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const [meta, perms] = await Promise.all([
+        drive.files.get({
+          fileId: req.params.fileId as string,
+          supportsAllDrives: true,
+          fields: 'id,name,shared,webViewLink',
+        }),
+        drive.permissions.list({
+          fileId: req.params.fileId as string,
+          supportsAllDrives: true,
+          fields: 'permissions(type,role,domain,allowFileDiscovery)',
+        }),
+      ]);
+      const list = perms.data.permissions || [];
+      const anyone = list.find(p => p.type === 'anyone');
+      const domain = list.find(p => p.type === 'domain');
+      res.json({
+        fileId: meta.data.id,
+        name: meta.data.name,
+        shared: !!meta.data.shared,
+        webViewLink: meta.data.webViewLink,
+        publiclyAccessible: !!anyone,
+        anyoneAccess: anyone ? { role: anyone.role, discoverable: !!anyone.allowFileDiscovery } : null,
+        domainAccess: domain ? { domain: domain.domain, role: domain.role } : null,
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'File not found', fallback: 'Failed to check public access' });
+    }
+  });
+
+  // GET /api/v1/gmail/labels - List Gmail labels
+  app.get('/api/v1/gmail/labels', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const gmail = req.userSession!.googleGmail;
+      const response = await gmail.users.labels.list({ userId: 'me' });
+      res.json({ labels: response.data.labels || [] });
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to list labels' });
+    }
+  });
+
+  // GET /api/v1/slides/:presentationId/pages/:pageObjectId/thumbnail - Slide thumbnail URL
+  app.get('/api/v1/slides/:presentationId/pages/:pageObjectId/thumbnail', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const slides = req.userSession!.googleSlides;
+      const thumbnailSize = qstr(req.query.size, 'MEDIUM').toUpperCase();
+      const response = await slides.presentations.pages.getThumbnail({
+        presentationId: req.params.presentationId as string,
+        pageObjectId: req.params.pageObjectId as string,
+        'thumbnailProperties.mimeType': 'PNG',
+        'thumbnailProperties.thumbnailSize': thumbnailSize,
+      });
+      res.json({
+        presentationId: req.params.presentationId,
+        pageObjectId: req.params.pageObjectId,
+        contentUrl: response.data.contentUrl,
+        width: response.data.width,
+        height: response.data.height,
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Page or presentation not found', fallback: 'Failed to get thumbnail' });
+    }
+  });
+
+  // GET /api/v1/slides/:presentationId/comments - List comments on a presentation
+  app.get('/api/v1/slides/:presentationId/comments', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const response = await drive.comments.list({
+        fileId: req.params.presentationId as string,
+        fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime))',
+        pageSize: 100,
+      });
+      res.json({
+        presentationId: req.params.presentationId,
+        comments: response.data.comments || [],
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Presentation not found', fallback: 'Failed to list comments' });
+    }
+  });
+
+  // GET /api/v1/sheets/:spreadsheetId/ranges - Read a range (GET sibling of POST .../read)
+  app.get('/api/v1/sheets/:spreadsheetId/ranges', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const range = qstr(req.query.range);
+      if (!range) {
+        res.status(400).json({ error: 'Query param `range` is required (e.g. range=Sheet1!A1:D10)' });
+        return;
+      }
+      const sheets = req.userSession!.googleSheets;
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: req.params.spreadsheetId as string,
+        range,
+      });
+      const values = response.data.values || [];
+      if (negotiateFormat(req) === 'text') {
+        if (values.length === 0) {
+          res.type('text/plain; charset=utf-8').send(`Range ${range} is empty or does not exist.`);
+          return;
+        }
+        let body = `**Spreadsheet Range:** ${range}\n\n`;
+        values.forEach((row: any[], index: number) => {
+          body += `Row ${index + 1}: ${JSON.stringify(row)}\n`;
+        });
+        res.type('text/plain; charset=utf-8').send(body);
+        return;
+      }
+      res.json({
+        spreadsheetId: req.params.spreadsheetId,
+        range: response.data.range,
+        majorDimension: response.data.majorDimension,
+        values,
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to read range' });
+    }
+  });
+
+  // GET /api/v1/sheets/:spreadsheetId/rows/:rowNumber - Read a single row
+  app.get('/api/v1/sheets/:spreadsheetId/rows/:rowNumber', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const rowNumber = Number.parseInt(req.params.rowNumber as string, 10);
+      if (!Number.isInteger(rowNumber) || rowNumber < 1) {
+        res.status(400).json({ error: 'rowNumber must be a positive 1-based integer' });
+        return;
+      }
+      const sheetName = qstr(req.query.sheet);
+      const sheets = req.userSession!.googleSheets;
+      const range = sheetName ? `${sheetName}!${rowNumber}:${rowNumber}` : `${rowNumber}:${rowNumber}`;
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: req.params.spreadsheetId as string,
+        range,
+      });
+      const values = response.data.values?.[0] || [];
+      // If ?withHeaders=true, also fetch row 1 and pair them.
+      let asObject: Record<string, any> | undefined;
+      if (req.query.withHeaders === 'true') {
+        const headersRange = sheetName ? `${sheetName}!1:1` : '1:1';
+        const headersResp = await sheets.spreadsheets.values.get({
+          spreadsheetId: req.params.spreadsheetId as string,
+          range: headersRange,
+        });
+        const headers = (headersResp.data.values?.[0] || []).map(String);
+        asObject = {};
+        headers.forEach((h, i) => { asObject![h] = values[i] ?? null; });
+      }
+      res.json({
+        spreadsheetId: req.params.spreadsheetId,
+        rowNumber,
+        sheet: sheetName || null,
+        values,
+        ...(asObject ? { asObject } : {}),
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to read row' });
+    }
+  });
+
+  // GET /api/v1/sheets/:spreadsheetId/search - Find a row by column value
+  app.get('/api/v1/sheets/:spreadsheetId/search', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const col = qstr(req.query.col);
+      const val = qstr(req.query.val);
+      const sheetName = qstr(req.query.sheet);
+      if (!col || !val) {
+        res.status(400).json({ error: 'Query params `col` and `val` are required (e.g. col=A&val=foo)' });
+        return;
+      }
+      // Restrict `col` to A1-style column letters so it cannot expand the
+      // range (e.g. "A:Z") or inject sheet references like "A!Sheet2".
+      if (!/^[A-Z]+$/i.test(col)) {
+        res.status(400).json({ error: 'Query param `col` must be A1 column letters (e.g. A, B, AA).' });
+        return;
+      }
+      const sheets = req.userSession!.googleSheets;
+      // Cap the search window so an unbounded column read can't be triggered
+      // by a sparse value at row ~1M. Callers that need a different window
+      // can supply ?startRow= / ?maxRows= explicitly.
+      const MAX_ROWS = 10000;
+      const startRow = qint(req.query.startRow, 1, { min: 1 });
+      const maxRows = qint(req.query.maxRows, MAX_ROWS, { min: 1, max: MAX_ROWS });
+      const endRow = startRow + maxRows - 1;
+      const colRange = `${col}${startRow}:${col}${endRow}`;
+      const range = sheetName ? `${sheetName}!${colRange}` : colRange;
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: req.params.spreadsheetId as string,
+        range,
+      });
+      const rows = response.data.values || [];
+      let rowNumber: number | null = null;
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i][0] !== undefined && String(rows[i][0]) === val) {
+          rowNumber = startRow + i;
+          break;
+        }
+      }
+      res.json({
+        spreadsheetId: req.params.spreadsheetId,
+        column: col,
+        searchValue: val,
+        sheet: sheetName || null,
+        startRow,
+        maxRows,
+        rowNumber,
+        found: rowNumber !== null,
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to search' });
+    }
+  });
+
+  // GET /api/v1/clickup/docs/:docId - Get a ClickUp doc with its pages
+  app.get('/api/v1/clickup/docs/:docId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const workspaceId = qstr(req.query.workspaceId);
+      if (!workspaceId) {
+        res.status(400).json({ error: 'Query param `workspaceId` is required' });
+        return;
+      }
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      // Let getDocPages rejections propagate to the outer catch so a real
+      // failure is reported as 4xx/5xx, not masked as "no pages".
+      const [doc, pages] = await Promise.all([
+        client.getDoc(workspaceId, req.params.docId as string),
+        client.getDocPages(workspaceId, req.params.docId as string),
+      ]);
+      res.json({ doc, pages });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Doc not found', fallback: 'Failed to get doc' });
+    }
+  });
+
+  // GET /api/v1/clickup/docs/:docId/pages/:pageId - Get a page within a ClickUp doc
+  app.get('/api/v1/clickup/docs/:docId/pages/:pageId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const workspaceId = qstr(req.query.workspaceId);
+      if (!workspaceId) {
+        res.status(400).json({ error: 'Query param `workspaceId` is required' });
+        return;
+      }
+      const contentFormat = qstr(req.query.contentFormat, 'text/md');
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const page = await client.getPage(workspaceId, req.params.docId as string, req.params.pageId as string, contentFormat);
+      res.json(page);
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Page not found', fallback: 'Failed to get page' });
+    }
+  });
+
+  // Slack REST endpoints — require a slack-bot connection.
+  // slack-user (xoxp) connections have access-rules enforcement that we can't
+  // safely apply at the REST layer yet, so callers with only a slack-user
+  // connection get a clear error from createServiceAuth's connection lookup.
+
+  // GET /api/v1/slack/channels - List Slack channels and DMs
+  app.get('/api/v1/slack/channels', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      if (!req.userSession?.slackBotToken) {
+        res.status(403).json({ error: 'Slack-bot connection required for REST. Connect via the dashboard.' });
+        return;
+      }
+      const { SlackClient } = await import('../slack/apiHelpers.js');
+      const client = new SlackClient(req.userSession.slackBotToken);
+      const cursor = qstr(req.query.cursor) || undefined;
+      const types = qstr(req.query.types) || undefined;
+      const result = await client.conversationsList(cursor, types);
+      res.json({ channels: result.channels, nextCursor: result.response_metadata?.next_cursor || null });
+    } catch (err: any) {
+      res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || 'Failed to list channels' });
+    }
+  });
+
+  // GET /api/v1/slack/channels/:channelId/messages - Read recent messages
+  app.get('/api/v1/slack/channels/:channelId/messages', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      if (!req.userSession?.slackBotToken) {
+        res.status(403).json({ error: 'Slack-bot connection required for REST.' });
+        return;
+      }
+      const { SlackClient } = await import('../slack/apiHelpers.js');
+      const client = new SlackClient(req.userSession.slackBotToken);
+      const limit = qint(req.query.limit, 50, { max: 200 });
+      const result = await client.conversationsHistory(req.params.channelId as string, {
+        limit,
+        oldest: qstr(req.query.oldest) || undefined,
+        latest: qstr(req.query.latest) || undefined,
+        cursor: qstr(req.query.cursor) || undefined,
+      });
+      res.json({
+        channelId: req.params.channelId,
+        messages: result.messages,
+        hasMore: !!result.has_more,
+        nextCursor: result.response_metadata?.next_cursor || null,
+      });
+    } catch (err: any) {
+      res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || 'Failed to read history' });
+    }
+  });
+
+  // GET /api/v1/slack/channels/:channelId/threads/:threadTs - Read thread replies
+  app.get('/api/v1/slack/channels/:channelId/threads/:threadTs', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      if (!req.userSession?.slackBotToken) {
+        res.status(403).json({ error: 'Slack-bot connection required for REST.' });
+        return;
+      }
+      const { SlackClient } = await import('../slack/apiHelpers.js');
+      const client = new SlackClient(req.userSession.slackBotToken);
+      const limit = qint(req.query.limit, 50, { max: 200 });
+      const result = await client.conversationsReplies(
+        req.params.channelId as string,
+        req.params.threadTs as string,
+        { limit, cursor: qstr(req.query.cursor) || undefined },
+      );
+      res.json({
+        channelId: req.params.channelId,
+        threadTs: req.params.threadTs,
+        messages: result.messages,
+        hasMore: !!result.has_more,
+        nextCursor: result.response_metadata?.next_cursor || null,
+      });
+    } catch (err: any) {
+      res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || 'Failed to read thread' });
+    }
+  });
+
+  // GET /api/v1/slack/users - List workspace users
+  app.get('/api/v1/slack/users', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      if (!req.userSession?.slackBotToken) {
+        res.status(403).json({ error: 'Slack-bot connection required for REST.' });
+        return;
+      }
+      const { SlackClient } = await import('../slack/apiHelpers.js');
+      const client = new SlackClient(req.userSession.slackBotToken);
+      const limit = qint(req.query.limit, 200, { max: 1000 });
+      const result = await client.usersList(qstr(req.query.cursor) || undefined, limit);
+      res.json({ members: result.members, nextCursor: result.response_metadata?.next_cursor || null });
+    } catch (err: any) {
+      res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || 'Failed to list users' });
+    }
+  });
+
+  // GET /api/v1/drive/files/:fileId/download - Stream file content
+  // Google native types are exported (?exportMime= to override the default).
+  // Other types are downloaded as-is via alt=media. Content-Type and a
+  // best-effort Content-Disposition header are set from upstream metadata.
+  app.get('/api/v1/drive/files/:fileId/download', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const fileId = req.params.fileId as string;
+      const meta = await drive.files.get({
+        fileId,
+        supportsAllDrives: true,
+        fields: 'id,name,mimeType,size',
+      });
+      const sourceMime = meta.data.mimeType || 'application/octet-stream';
+      const name = meta.data.name || 'download';
+      // Default export targets for Google native types when caller doesn't override.
+      const DEFAULT_EXPORTS: Record<string, string> = {
+        'application/vnd.google-apps.document': 'application/pdf',
+        'application/vnd.google-apps.spreadsheet': 'text/csv',
+        'application/vnd.google-apps.presentation': 'application/pdf',
+        'application/vnd.google-apps.drawing': 'image/png',
+      };
+      const isNative = sourceMime.startsWith('application/vnd.google-apps.');
+      const exportMime = qstr(req.query.exportMime) || (isNative ? DEFAULT_EXPORTS[sourceMime] : undefined);
+
+      // Stream the upstream response straight to the client so multi-MB/GB
+      // files don't get buffered in memory. Pipeline awaits completion and
+      // surfaces errors to the catch below.
+      let upstream: NodeJS.ReadableStream;
+      let outMime: string;
+      let knownSize: number | undefined;
+      if (isNative) {
+        if (!exportMime) {
+          res.status(400).json({ error: `No default export format for ${sourceMime}. Pass ?exportMime=...` });
+          return;
+        }
+        const resp = await drive.files.export(
+          { fileId, mimeType: exportMime },
+          { responseType: 'stream' },
+        );
+        upstream = resp.data as NodeJS.ReadableStream;
+        outMime = exportMime;
+        // Google Docs exports are generated on demand; no reliable upfront size.
+      } else {
+        const resp = await drive.files.get(
+          { fileId, alt: 'media', supportsAllDrives: true },
+          { responseType: 'stream' },
+        );
+        upstream = resp.data as NodeJS.ReadableStream;
+        outMime = sourceMime;
+        const size = Number(meta.data.size);
+        if (Number.isFinite(size) && size > 0) knownSize = size;
+      }
+      const safeName = name.replaceAll(/[^\w.-]+/g, '_');
+      res.setHeader('Content-Type', outMime);
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+      if (knownSize !== undefined) res.setHeader('Content-Length', String(knownSize));
+      const { pipeline } = await import('node:stream/promises');
+      await pipeline(upstream, res);
+    } catch (err: any) {
+      if (res.headersSent) {
+        // Mid-stream failure: response already committed; destroy the socket
+        // so the client sees a truncated transfer instead of a hang.
+        res.destroy(err);
+        return;
+      }
+      if (err.code === 404) res.status(404).json({ error: 'File not found' });
+      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to download file' });
+    }
+  });
+
+  // GET /api/v1/gmail/messages/:messageId/attachments/:attachmentId
+  // Returns Gmail's base64url-encoded attachment payload plus size. Callers
+  // decode the body locally (the message's part headers carry the mime type).
+  app.get('/api/v1/gmail/messages/:messageId/attachments/:attachmentId', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const gmail = req.userSession!.googleGmail;
+      const resp = await gmail.users.messages.attachments.get({
+        userId: 'me',
+        messageId: req.params.messageId as string,
+        id: req.params.attachmentId as string,
+      });
+      res.json({
+        messageId: req.params.messageId,
+        attachmentId: req.params.attachmentId,
+        size: resp.data.size ?? 0,
+        // base64url, exactly as Gmail returns it
+        data: resp.data.data ?? '',
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Attachment or message not found', fallback: 'Failed to fetch attachment' });
+    }
+  });
+
+  // GET /api/v1/clickup/workspaces/:workspaceId/members
+  // ClickUp's API exposes members inside the team payload from getWorkspaces,
+  // so we fetch all teams and slice the matching one. Returns members[].
+  app.get('/api/v1/clickup/workspaces/:workspaceId/members', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.getWorkspaces();
+      const team = (result.teams || []).find((t: any) => String(t.id) === req.params.workspaceId);
+      if (!team) {
+        res.status(404).json({ error: 'Workspace not found or not accessible to this user' });
+        return;
+      }
+      res.json({ workspaceId: team.id, members: team.members || [] });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Workspace not found', fallback: 'Failed to list workspace members' });
     }
   });
 

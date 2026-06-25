@@ -24,12 +24,17 @@ import {
   handleShareDriveFile,
   handleCheckPublicAccess,
 } from './toolHandlers.js';
+import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 const driveServer = new FastMCP<UserSession>({
   name: 'Google Drive MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-drive'),
 });
+
+registerGetSecurityToken(driveServer);
+registerListRestEndpoints(driveServer);
 
 driveServer.addTool({
   name: 'getDocumentInfo',

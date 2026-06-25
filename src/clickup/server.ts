@@ -4,12 +4,18 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { ClickUpClient, markdownToCommentBlocks } from './apiHelpers.js';
+import { formatTask, formatTaskList } from './formatHelpers.js';
+import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 export const clickUpServer = new FastMCP<UserSession>({
   name: 'ClickUp MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'clickup'),
 });
+
+registerGetSecurityToken(clickUpServer);
+registerListRestEndpoints(clickUpServer);
 
 function getClickUpClient(session?: UserSession): ClickUpClient {
   if (!session?.clickUpAccessToken) {
@@ -18,49 +24,9 @@ function getClickUpClient(session?: UserSession): ClickUpClient {
   return new ClickUpClient(session.clickUpAccessToken);
 }
 
-function formatCustomFieldValue(cf: any): string {
-  if (cf.value === null || cf.value === undefined) return '[empty]';
-  // Dropdown: value is the option orderindex, type_config.options has the labels
-  if (cf.type === 'drop_down' && cf.type_config?.options) {
-    const opt = cf.type_config.options.find((o: any) => String(o.orderindex) === String(cf.value));
-    return opt ? `${opt.name} (id: ${opt.id})` : String(cf.value);
-  }
-  // Labels: value is array of label UUIDs
-  if (cf.type === 'labels' && Array.isArray(cf.value) && cf.type_config?.options) {
-    return cf.value.map((uuid: string) => {
-      const opt = cf.type_config.options.find((o: any) => o.id === uuid);
-      return opt ? opt.label : uuid;
-    }).join(', ');
-  }
-  // Users: value is array of user objects
-  if (cf.type === 'users' && Array.isArray(cf.value)) {
-    return cf.value.map((u: any) => u.username || u.email || u.id).join(', ');
-  }
-  if (typeof cf.value === 'object') return JSON.stringify(cf.value);
-  return String(cf.value);
-}
-
-function formatTask(task: any): string {
-  const parts = [
-    `Task: ${task.name}`,
-    `  ID: ${task.id}`,
-    `  Status: ${task.status?.status || 'unknown'}`,
-  ];
-  if (task.priority) parts.push(`  Priority: ${task.priority.priority || task.priority}`);
-  if (task.assignees?.length) parts.push(`  Assignees: ${task.assignees.map((a: any) => a.username || a.email).join(', ')}`);
-  if (task.due_date) parts.push(`  Due: ${new Date(parseInt(task.due_date)).toISOString()}`);
-  if (task.description) parts.push(`  Description: ${task.description.substring(0, 200)}${task.description.length > 200 ? '...' : ''}`);
-  if (task.url) parts.push(`  URL: ${task.url}`);
-  if (task.list) parts.push(`  List: ${task.list.name} (${task.list.id})`);
-  if (task.tags?.length) parts.push(`  Tags: ${task.tags.map((t: any) => t.name).join(', ')}`);
-  if (task.custom_fields?.length) {
-    const cfParts = task.custom_fields
-      .filter((cf: any) => cf.value !== null && cf.value !== undefined)
-      .map((cf: any) => `    ${cf.name}: ${formatCustomFieldValue(cf)}`);
-    if (cfParts.length) parts.push(`  Custom Fields:\n${cfParts.join('\n')}`);
-  }
-  return parts.join('\n');
-}
+// formatTask / formatCustomFieldValue / formatTaskList moved to ./formatHelpers.js
+// so the REST data plane (webServer.ts) can reuse the same rendering when
+// callers request `Accept: text/plain` on /api/v1/clickup/tasks/* endpoints.
 
 // === Tier 1: Core Navigation ===
 
@@ -204,9 +170,7 @@ clickUpServer.addTool({
       include_closed: args.includeClosed,
       assignees: args.assignees,
     });
-    const tasks = result.tasks || [];
-    if (tasks.length === 0) return 'No tasks found.';
-    return tasks.map(formatTask).join('\n\n');
+    return formatTaskList(result.tasks || []);
   },
 });
 

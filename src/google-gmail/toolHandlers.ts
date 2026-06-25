@@ -2,7 +2,7 @@
 // Extracted tool handler logic for testability.
 import { gmail_v1 } from 'googleapis';
 import { UserError } from 'fastmcp';
-import { createRawEmail, parseEmailHeaders, formatEmailList, extractBody, listAttachments } from './apiHelpers.js';
+import { createRawEmail, formatEmailList, renderEmail } from './apiHelpers.js';
 
 type LogLike = { info: (msg: string) => void; error: (msg: string) => void };
 
@@ -68,27 +68,7 @@ export async function handleReadEmail(
     const response = await gmail.users.messages.get({
       userId: 'me', id: args.messageId, format: args.format as any,
     });
-    const msg = response.data;
-    const headers = parseEmailHeaders(msg.payload?.headers);
-    let result = `**Email Details:**\n\n`;
-    result += `**Subject:** ${headers.subject || '(No subject)'}\n`;
-    result += `**From:** ${headers.from}\n`;
-    result += `**To:** ${headers.to}\n`;
-    result += `**Date:** ${headers.date}\n`;
-    result += `**Message ID:** ${msg.id}\n`;
-    result += `**Thread ID:** ${msg.threadId}\n`;
-    result += `**Labels:** ${msg.labelIds?.join(', ') || 'none'}\n`;
-
-    const body = extractBody(msg.payload);
-    if (body) result += `\n**Body:**\n\n${body}`;
-    const attachments = listAttachments(msg.payload);
-    if (attachments.length > 0) {
-      result += `\n\n**Attachments:**\n`;
-      attachments.forEach((att, i) => {
-        result += `${i + 1}. ${att.filename} (${att.mimeType}, ${att.size} bytes, ID: ${att.attachmentId})\n`;
-      });
-    }
-    return result;
+    return renderEmail(response.data);
   } catch (error: any) {
     handleGmailError(error, log, 'reading email', {
       404: `Email not found (ID: ${args.messageId}).`,

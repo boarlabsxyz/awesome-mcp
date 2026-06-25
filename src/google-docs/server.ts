@@ -112,6 +112,11 @@ const server = new FastMCP<UserSession>({
   authenticate: createMcpAuthenticateHandler(MCP_SLUG),
 });
 
+import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
+registerGetSecurityToken(server);
+registerListRestEndpoints(server);
+
 // --- Helper to get Docs client within tools ---
 // In multi-user mode, session provides the client; in stdio mode, falls back to global client
 async function getDocsClient(session?: UserSession) {
