@@ -1,10 +1,23 @@
-name: Release Notes
+name: Release Notifications
+
+# Sends Slack + email announcements for a tag.
+#
+# Updating public/updates.html and deploying prod are NOT this workflow's job —
+# create-tag.yml writes the release block into main BEFORE the tag exists, and
+# the tag push triggers deploy-prod.yml on its own. Here we just regenerate the
+# Slack/email artifacts from the same commit range (using the tag's commit date
+# so output matches what create-tag wrote) and wait for human approval before
+# blasting them out.
 
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
+      tag:
+        description: 'Existing tag to (re)send notifications for'
+        required: true
+        type: string
       test:
         description: 'Test mode — send emails only to test addresses'
         required: false
@@ -15,10 +28,9 @@ permissions:
   contents: read
 
 jobs:
-  generate:
+  notify:
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.tags.outputs.current }}
+    environment: release-approval
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,13 +41,27 @@ jobs:
         with:
           node-version: 20
 
-      - name: Determine tag range
+      - name: Resolve tag and commit range
         id: tags
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
         run: |
-          CURRENT_TAG="${GITHUB_REF_NAME}"
+          if [ -n "${DISPATCH_TAG:-}" ]; then
+            CURRENT_TAG="$DISPATCH_TAG"
+          else
+            CURRENT_TAG="${GITHUB_REF_NAME}"
+          fi
+          if ! git rev-parse "refs/tags/${CURRENT_TAG}" >/dev/null 2>&1; then
+            echo "Tag ${CURRENT_TAG} does not exist."
+            exit 1
+          fi
           PREVIOUS_TAG=$(git tag -l 'v*' --sort=-version:refname | grep -v "^${CURRENT_TAG}$" | head -1)
+          # Use the tag's commit date as the release date so regenerated
+          # output matches what create-tag.yml wrote into updates.html.
+          TAG_DATE=$(git log -1 --format=%cI "${CURRENT_TAG}")
           echo "current=$CURRENT_TAG" >> "$GITHUB_OUTPUT"
           echo "previous=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
+          echo "date=$TAG_DATE" >> "$GITHUB_OUTPUT"
           if [ -n "$PREVIOUS_TAG" ]; then
             echo "range=${PREVIOUS_TAG}..${CURRENT_TAG}" >> "$GITHUB_OUTPUT"
           else
@@ -45,15 +71,11 @@ jobs:
       - name: Collect commits and parse ClickUp IDs
         id: commits
         run: |
-          # Use record separator (%x1e) between commits and unit separator (%x1f) between fields
-          # Then flatten each record to a single pipe-delimited line
-          # Non-merge commits are used for the changelog entries
           if [ -n "${{ steps.tags.outputs.range }}" ]; then
             git log ${{ steps.tags.outputs.range }} --pretty=format:"%H%x1f%s%x1f%b%x1e" --no-merges > /tmp/commits_raw.txt
           else
             git log --pretty=format:"%H%x1f%s%x1f%b%x1e" --no-merges > /tmp/commits_raw.txt
           fi
-          # Convert to one-line-per-commit
           node -e "
             const fs = require('fs');
             const raw = fs.readFileSync('/tmp/commits_raw.txt', 'utf8');
@@ -65,7 +87,6 @@ jobs:
             });
             fs.writeFileSync('/tmp/commits.txt', lines.join('\n'));
           "
-          # Scan ALL commits (including merges) for CU- IDs since PR merge commits often carry them
           if [ -n "${{ steps.tags.outputs.range }}" ]; then
             ALL_TEXT=$(git log ${{ steps.tags.outputs.range }} --pretty=format:"%s %b")
           else
@@ -96,36 +117,10 @@ jobs:
         run: |
           node .github/scripts/generate-release-notes.mjs \
             --tag "${{ steps.tags.outputs.current }}" \
+            --date "${{ steps.tags.outputs.date }}" \
             --commits /tmp/commits.txt \
             --tasks /tmp/task_map.txt \
             --output-dir /tmp/release
-
-      - name: Update updates.html
-        run: |
-          node -e "
-            const fs = require('fs');
-            const html = fs.readFileSync('public/updates.html', 'utf8');
-            const block = fs.readFileSync('/tmp/release/updates-block.html', 'utf8');
-            const marker = '<div id=\"releases\">';
-            const updated = html.replace(marker, marker + '\n' + block);
-            fs.writeFileSync('public/updates.html', updated);
-          "
-
-      - name: Commit and push updates.html
-        env:
-          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout main
-          git add public/updates.html
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "docs: update release notes for ${{ steps.tags.outputs.current }}"
-            git remote set-url origin "https://x-access-token:${PAT_TOKEN}@github.com/${{ github.repository }}.git"
-            git push origin main
-          fi
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -133,61 +128,6 @@ jobs:
           name: release-notes
           path: /tmp/release/
           retention-days: 30
-
-  publish:
-    needs: [generate]
-    runs-on: ubuntu-latest
-    environment: release-approval
-    steps:
-      - name: Download release artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: release-notes
-          path: /tmp/release/
-
-      - name: Redeploy prod with latest main
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.PAT_TOKEN }}
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const before = new Date().toISOString();
-
-            await github.rest.actions.createWorkflowDispatch({
-              owner, repo,
-              workflow_id: 'deploy-prod.yml',
-              ref: 'main',
-              inputs: { ref: 'main' }
-            });
-            console.log('Dispatched prod redeploy, waiting for completion...');
-
-            // Poll for the dispatched run to appear and complete
-            let runId = null;
-            for (let attempt = 0; attempt < 60; attempt++) {
-              await new Promise(r => setTimeout(r, 10000)); // 10s intervals
-              const { data: runs } = await github.rest.actions.listWorkflowRuns({
-                owner, repo,
-                workflow_id: 'deploy-prod.yml',
-                branch: 'main',
-                event: 'workflow_dispatch',
-                created: `>=${before}`,
-                per_page: 1,
-              });
-              if (runs.workflow_runs.length === 0) continue;
-              const run = runs.workflow_runs[0];
-              runId = run.id;
-              console.log(`Run ${runId}: status=${run.status}, conclusion=${run.conclusion}`);
-              if (run.status === 'completed') {
-                if (run.conclusion === 'success') {
-                  console.log('Prod deploy succeeded.');
-                  return;
-                }
-                core.setFailed(`Prod deploy failed: ${run.conclusion}. Skipping notifications.`);
-                return;
-              }
-            }
-            core.setFailed('Prod deploy timed out after 10 minutes.');
 
       - name: Post to Slack
         env:
@@ -209,7 +149,7 @@ jobs:
           if [ -f /tmp/release/email-body.html ]; then
             APP_URL="${{ vars.APP_URL }}"
             EMAIL_HTML=$(cat /tmp/release/email-body.html)
-            TAG="${{ needs.generate.outputs.tag }}"
+            TAG="${{ steps.tags.outputs.current }}"
             curl -s -X POST "${APP_URL}/api/internal/release-notify" \
               -H "Authorization: Bearer ${INTERNAL_API_KEY}" \
               -H "Content-Type: application/json" \
