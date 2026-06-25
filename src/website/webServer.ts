@@ -4056,8 +4056,12 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       const isNative = sourceMime.startsWith('application/vnd.google-apps.');
       const exportMime = req.query.exportMime?.toString() || (isNative ? DEFAULT_EXPORTS[sourceMime] : undefined);
 
-      let bodyBuf: Buffer;
+      // Stream the upstream response straight to the client so multi-MB/GB
+      // files don't get buffered in memory. Pipeline awaits completion and
+      // surfaces errors to the catch below.
+      let upstream: NodeJS.ReadableStream;
       let outMime: string;
+      let knownSize: number | undefined;
       if (isNative) {
         if (!exportMime) {
           res.status(400).json({ error: `No default export format for ${sourceMime}. Pass ?exportMime=...` });
@@ -4065,24 +4069,34 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         }
         const resp = await drive.files.export(
           { fileId, mimeType: exportMime },
-          { responseType: 'arraybuffer' },
+          { responseType: 'stream' },
         );
-        bodyBuf = Buffer.from(resp.data as ArrayBuffer);
+        upstream = resp.data as NodeJS.ReadableStream;
         outMime = exportMime;
+        // Google Docs exports are generated on demand; no reliable upfront size.
       } else {
         const resp = await drive.files.get(
           { fileId, alt: 'media', supportsAllDrives: true },
-          { responseType: 'arraybuffer' },
+          { responseType: 'stream' },
         );
-        bodyBuf = Buffer.from(resp.data as ArrayBuffer);
+        upstream = resp.data as NodeJS.ReadableStream;
         outMime = sourceMime;
+        const size = Number(meta.data.size);
+        if (Number.isFinite(size) && size > 0) knownSize = size;
       }
       const safeName = name.replace(/[^\w.-]+/g, '_');
       res.setHeader('Content-Type', outMime);
       res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
-      res.setHeader('Content-Length', String(bodyBuf.length));
-      res.end(bodyBuf);
+      if (knownSize !== undefined) res.setHeader('Content-Length', String(knownSize));
+      const { pipeline } = await import('node:stream/promises');
+      await pipeline(upstream, res);
     } catch (err: any) {
+      if (res.headersSent) {
+        // Mid-stream failure: response already committed; destroy the socket
+        // so the client sees a truncated transfer instead of a hang.
+        res.destroy(err);
+        return;
+      }
       if (err.code === 404) res.status(404).json({ error: 'File not found' });
       else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
       else res.status(500).json({ error: err.message || 'Failed to download file' });
