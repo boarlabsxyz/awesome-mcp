@@ -16,11 +16,25 @@ const tag = getArg('tag');
 const commitsFile = getArg('commits');
 const tasksFile = getArg('tasks');
 const outputDir = getArg('output-dir');
+const dateArg = getArg('date');
 
 if (!tag || !commitsFile || !outputDir) {
-  console.error('Usage: generate-release-notes.mjs --tag <tag> --commits <file> --tasks <file> --output-dir <dir>');
+  console.error('Usage: generate-release-notes.mjs --tag <tag> --commits <file> --tasks <file> --output-dir <dir> [--date <ISO>]');
   process.exit(1);
 }
+
+// Resolve the release date once: explicit --date (ISO 8601) wins, else now.
+// Fixing this up front makes the workflow output reproducible across runs
+// (e.g. release-notes.yml regenerating notes for a tag the next day).
+const releaseDate = (() => {
+  if (!dateArg) return new Date();
+  const d = new Date(dateArg);
+  if (isNaN(d.getTime())) {
+    console.error(`Invalid --date "${dateArg}"`);
+    process.exit(1);
+  }
+  return d;
+})();
 
 // --- Parse inputs ---
 function parseCommits(file) {
@@ -104,7 +118,8 @@ function escapeHtml(text) {
 }
 
 function formatDate() {
-  return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  // timeZone: 'UTC' so a midnight-UTC --date never rolls back a day in west-of-UTC runners.
+  return releaseDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
 }
 
 function enrichWithTasks(entry, format) {
