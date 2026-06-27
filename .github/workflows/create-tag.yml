@@ -94,12 +94,29 @@ jobs:
     outputs:
       release_sha: ${{ steps.commit.outputs.sha }}
     steps:
+      # Fail fast with an actionable message before checkout. Without this,
+      # an empty PAT_TOKEN surfaces as the cryptic "could not read Username
+      # for 'https://github.com'" from git inside actions/checkout's fetch.
+      - name: Verify PAT_TOKEN secret is configured
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          if [ -z "${PAT_TOKEN:-}" ]; then
+            echo "::error::Required secret PAT_TOKEN is missing or empty."
+            echo "::error::Add a Personal Access Token with repo write access (Fine-grained: Contents=Read+Write; Classic: 'repo' scope) under Settings → Secrets and variables → Actions → Secrets, named PAT_TOKEN."
+            echo "::error::If you defined it as an environment-scoped secret (e.g. on 'release-approval'), expose it at the repo level too — this job runs without an environment."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: main
+          # Use the PAT for fetch so the rest of the job can rely on the
+          # same credentials it will use for the push below.
+          token: ${{ secrets.PAT_TOKEN }}
           # We rewrite the remote URL with PAT_TOKEN below before pushing,
-          # so don't let checkout leave a GITHUB_TOKEN extraheader behind.
+          # so don't let checkout leave a stale extraheader behind.
           persist-credentials: false
 
       - uses: actions/setup-node@v4
