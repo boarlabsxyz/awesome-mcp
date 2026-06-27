@@ -2071,6 +2071,12 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   // Register all shared routes (auth, dashboard, connect, API, admin, catalogs)
   registerSharedRoutes(app);
 
+  registerRestApiRoutes(app);
+
+  return app;
+}
+
+function registerRestApiRoutes(app: express.Express): void {
   // === REST API for ChatGPT Integration ===
 
   /**
@@ -4101,9 +4107,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       sendUpstreamError(res, err, { notFound: 'Workspace not found', fallback: 'Failed to list workspace members' });
     }
   });
-
-  return app;
 }
+
 
 // Helper function to find a tab by ID in a document
 function findTabById(doc: any, tabId: string): any {
@@ -4156,6 +4161,10 @@ export function createWebOnlyApp(): express.Express {
 
   // Register all shared routes (auth, dashboard, connect, API, admin, catalogs)
   registerSharedRoutes(app);
+  // REST data plane (/api/v1/*). Same routes the all-in-one createWebApp
+  // mounts — kept reachable in MCP_MODE=web (multi-service Railway split)
+  // where the website pod runs this factory instead of createWebApp.
+  registerRestApiRoutes(app);
 
   return app;
 }
