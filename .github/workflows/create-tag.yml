@@ -98,9 +98,9 @@ jobs:
         with:
           fetch-depth: 0
           ref: main
-          # PAT_TOKEN is needed to push to main (branch protection bypass).
-          token: ${{ secrets.PAT_TOKEN }}
-          persist-credentials: true
+          # We rewrite the remote URL with PAT_TOKEN below before pushing,
+          # so don't let checkout leave a GITHUB_TOKEN extraheader behind.
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -220,6 +220,7 @@ jobs:
         id: commit
         env:
           TAG: ${{ inputs.tag }}
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -229,6 +230,9 @@ jobs:
             echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           else
             git commit -m "docs: release notes for ${TAG}"
+            # Mirror release-notes.yml's known-working push pattern: embed PAT in the
+            # remote URL right before push instead of relying on a persisted extraheader.
+            git remote set-url origin "https://x-access-token:${PAT_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
             git push origin main
             echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           fi
