@@ -1,0 +1,117 @@
+name: E2E Smoke (Live Clients)
+
+# Runs after each successful dev deploy. Drives the real Claude Desktop and
+# ChatGPT clients against the dev MCP server via a self-hosted Mac Studio.
+#
+# Claude Desktop is the blocking signal for prod promotion.
+# ChatGPT is advisory in v1 (continue-on-error) while OpenAI's MCP surface
+# is still shifting. Promote to blocking once flake rate is acceptable.
+
+on:
+  workflow_run:
+    workflows: ['Deploy → Dev']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git SHA to test (defaults to latest dev deploy)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  claude-desktop:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: [self-hosted, macOS, mac-studio]
+    timeout-minutes: 30
+    env:
+      CLIENT: claude-desktop
+      ARTIFACTS_DIR: ${{ github.workspace }}/e2e/.artifacts
+      APPIUM_HOST: 127.0.0.1
+      APPIUM_PORT: '4723'
+      RESPONSE_TIMEOUT_MS: '120000'
+      E2E_FIXTURE_DOC_ID: ${{ vars.E2E_FIXTURE_DOC_ID }}
+      E2E_FIXTURE_DOC_NEEDLE: ${{ vars.E2E_FIXTURE_DOC_NEEDLE }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.ref || github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
+      - name: Pre-flight - Appium reachable
+        run: |
+          curl --fail --silent --show-error --max-time 5 \
+            "http://${APPIUM_HOST}:${APPIUM_PORT}/status" \
+            | head -c 300
+
+      - name: Install e2e deps
+        working-directory: e2e
+        run: npm install
+
+      - name: Run Claude Desktop smoke tests
+        working-directory: e2e
+        run: npm test
+
+      - name: Upload forensics bundle
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-claude-desktop-${{ inputs.ref || github.event.workflow_run.head_sha }}
+          path: e2e/.artifacts/**
+          retention-days: 90
+          if-no-files-found: warn
+
+  chatgpt-web:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: [self-hosted, macOS, mac-studio]
+    needs: [claude-desktop]
+    # ADVISORY in v1: failures here do not block prod promotion. Remove this
+    # line and add the job name to create-tag.yml's required list once ChatGPT
+    # has shown a stable flake rate.
+    continue-on-error: true
+    timeout-minutes: 30
+    env:
+      CLIENT: chatgpt-web
+      ARTIFACTS_DIR: ${{ github.workspace }}/e2e/.artifacts
+      CHATGPT_CDP_ENDPOINT: http://127.0.0.1:9222
+      RESPONSE_TIMEOUT_MS: '120000'
+      E2E_FIXTURE_DOC_ID: ${{ vars.E2E_FIXTURE_DOC_ID }}
+      E2E_FIXTURE_DOC_NEEDLE: ${{ vars.E2E_FIXTURE_DOC_NEEDLE }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.ref || github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
+      - name: Pre-flight - Chrome CDP reachable
+        run: |
+          curl --fail --silent --show-error --max-time 5 \
+            "${CHATGPT_CDP_ENDPOINT}/json/version" \
+            | head -c 300
+
+      - name: Install e2e deps
+        working-directory: e2e
+        run: npm install
+
+      - name: Run ChatGPT web smoke tests
+        working-directory: e2e
+        run: npm test
+
+      - name: Upload forensics bundle
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-chatgpt-web-${{ inputs.ref || github.event.workflow_run.head_sha }}
+          path: e2e/.artifacts/**
+          retention-days: 90
+          if-no-files-found: warn

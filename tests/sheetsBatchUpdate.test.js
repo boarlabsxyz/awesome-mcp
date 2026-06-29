@@ -278,6 +278,112 @@ describe('operationToRequest', () => {
       /endRow/
     );
   });
+
+  it('updateSheetProperties renames a tab (title-only)', () => {
+    const req = operationToRequest(
+      { type: 'updateSheetProperties', sheetName: 'Sheet1', title: 'Summary' },
+      metadata
+    );
+    assert.strictEqual(req.updateSheetProperties.properties.sheetId, 0);
+    assert.strictEqual(req.updateSheetProperties.properties.title, 'Summary');
+    assert.strictEqual(req.updateSheetProperties.fields, 'title');
+  });
+
+  it('updateSheetProperties builds fields mask from provided properties only', () => {
+    const req = operationToRequest(
+      {
+        type: 'updateSheetProperties',
+        sheetName: 'Finance',
+        title: 'Q1',
+        index: 0,
+        hidden: true,
+        tabColor: '#FF0000',
+      },
+      metadata
+    );
+    const props = req.updateSheetProperties.properties;
+    assert.strictEqual(props.sheetId, 42);
+    assert.strictEqual(props.title, 'Q1');
+    assert.strictEqual(props.index, 0);
+    assert.strictEqual(props.hidden, true);
+    assert.strictEqual(props.tabColorStyle.rgbColor.red, 1);
+    assert.strictEqual(
+      req.updateSheetProperties.fields,
+      'title,index,hidden,tabColorStyle'
+    );
+  });
+
+  it('updateSheetProperties throws on unknown sheet name', () => {
+    assert.throws(
+      () =>
+        operationToRequest(
+          { type: 'updateSheetProperties', sheetName: 'Nope', title: 'X' },
+          metadata
+        ),
+      /not found/
+    );
+  });
+
+  it('updateSheetProperties throws when no mutating field supplied', () => {
+    assert.throws(
+      () =>
+        operationToRequest(
+          { type: 'updateSheetProperties', sheetName: 'Sheet1' },
+          metadata
+        ),
+      /at least one/
+    );
+  });
+
+  it('deleteSheet resolves sheetName and produces deleteSheet request', () => {
+    const req = operationToRequest(
+      { type: 'deleteSheet', sheetName: 'Finance' },
+      metadata
+    );
+    assert.deepStrictEqual(req, { deleteSheet: { sheetId: 42 } });
+  });
+
+  it('duplicateSheet populates source, new name, and insert index', () => {
+    const req = operationToRequest(
+      {
+        type: 'duplicateSheet',
+        sourceSheetName: 'Finance',
+        newSheetName: 'Finance copy',
+        insertIndex: 2,
+      },
+      metadata
+    );
+    assert.strictEqual(req.duplicateSheet.sourceSheetId, 42);
+    assert.strictEqual(req.duplicateSheet.newSheetName, 'Finance copy');
+    assert.strictEqual(req.duplicateSheet.insertSheetIndex, 2);
+  });
+
+  it('duplicateSheet omits optional fields when not provided', () => {
+    const req = operationToRequest(
+      { type: 'duplicateSheet', sourceSheetName: 'Sheet1' },
+      metadata
+    );
+    assert.strictEqual(req.duplicateSheet.sourceSheetId, 0);
+    assert.strictEqual(req.duplicateSheet.newSheetName, undefined);
+    assert.strictEqual(req.duplicateSheet.insertSheetIndex, undefined);
+  });
+
+  it('addSheet builds request with title only', () => {
+    const req = operationToRequest(
+      { type: 'addSheet', title: 'NewTab' },
+      metadata
+    );
+    assert.deepStrictEqual(req, { addSheet: { properties: { title: 'NewTab' } } });
+  });
+
+  it('addSheet honors explicit insertion index', () => {
+    const req = operationToRequest(
+      { type: 'addSheet', title: 'NewTab', index: 1 },
+      metadata
+    );
+    assert.strictEqual(req.addSheet.properties.title, 'NewTab');
+    assert.strictEqual(req.addSheet.properties.index, 1);
+  });
 });
 
 describe('conditionalFormat indices (createBatchState)', () => {
@@ -410,6 +516,57 @@ describe('BatchUpdateOperationSchema validation', () => {
       type: 'conditionalFormat',
       range: 'A1',
       rule: { kind: 'boolean', condition: 'BLANK' },
+    });
+    assert.strictEqual(good.success, true);
+  });
+
+  it('updateSheetProperties accepts sheetName + title', () => {
+    const result = BatchUpdateOperationSchema.safeParse({
+      type: 'updateSheetProperties',
+      sheetName: 'Sheet1',
+      title: 'Summary',
+    });
+    assert.strictEqual(result.success, true);
+  });
+
+  it('updateSheetProperties rejects invalid tabColor hex', () => {
+    const result = BatchUpdateOperationSchema.safeParse({
+      type: 'updateSheetProperties',
+      sheetName: 'Sheet1',
+      tabColor: 'not-a-color',
+    });
+    assert.strictEqual(result.success, false);
+  });
+
+  it('deleteSheet requires sheetName', () => {
+    const bad = BatchUpdateOperationSchema.safeParse({ type: 'deleteSheet' });
+    assert.strictEqual(bad.success, false);
+
+    const good = BatchUpdateOperationSchema.safeParse({
+      type: 'deleteSheet',
+      sheetName: 'Sheet1',
+    });
+    assert.strictEqual(good.success, true);
+  });
+
+  it('duplicateSheet requires sourceSheetName', () => {
+    const bad = BatchUpdateOperationSchema.safeParse({ type: 'duplicateSheet' });
+    assert.strictEqual(bad.success, false);
+
+    const good = BatchUpdateOperationSchema.safeParse({
+      type: 'duplicateSheet',
+      sourceSheetName: 'Sheet1',
+    });
+    assert.strictEqual(good.success, true);
+  });
+
+  it('addSheet requires title', () => {
+    const bad = BatchUpdateOperationSchema.safeParse({ type: 'addSheet' });
+    assert.strictEqual(bad.success, false);
+
+    const good = BatchUpdateOperationSchema.safeParse({
+      type: 'addSheet',
+      title: 'NewTab',
     });
     assert.strictEqual(good.success, true);
   });

@@ -407,6 +407,33 @@ const RowHeightOp = z.object({
   pixels: z.number().int().min(1),
 });
 
+const UpdateSheetPropertiesOp = z.object({
+  type: z.literal('updateSheetProperties'),
+  sheetName: z.string().describe('Existing tab name (resolved server-side to sheetId).'),
+  title: z.string().optional().describe('New tab name.'),
+  index: z.number().int().min(0).optional().describe('New 0-based tab position.'),
+  hidden: z.boolean().optional().describe('Hide or unhide the tab.'),
+  tabColor: hexColor.optional().describe('Tab color as hex (e.g. "#FF0000").'),
+});
+
+const DeleteSheetOp = z.object({
+  type: z.literal('deleteSheet'),
+  sheetName: z.string().describe('Tab name to delete (resolved server-side to sheetId).'),
+});
+
+const DuplicateSheetOp = z.object({
+  type: z.literal('duplicateSheet'),
+  sourceSheetName: z.string().describe('Tab name to duplicate.'),
+  newSheetName: z.string().optional().describe('Title for the new tab.'),
+  insertIndex: z.number().int().min(0).optional().describe('0-based position for the new tab.'),
+});
+
+const AddSheetOp = z.object({
+  type: z.literal('addSheet'),
+  title: z.string().describe('Title of the new tab.'),
+  index: z.number().int().min(0).optional().describe('0-based insertion position.'),
+});
+
 export const BatchUpdateOperationSchema = z.discriminatedUnion('type', [
   NumberFormatOp,
   TextStyleOp,
@@ -418,6 +445,10 @@ export const BatchUpdateOperationSchema = z.discriminatedUnion('type', [
   UnmergeCellsOp,
   ColumnWidthOp,
   RowHeightOp,
+  UpdateSheetPropertiesOp,
+  DeleteSheetOp,
+  DuplicateSheetOp,
+  AddSheetOp,
 ]);
 
 export type BatchUpdateOperation = z.infer<typeof BatchUpdateOperationSchema>;
