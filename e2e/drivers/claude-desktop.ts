@@ -101,9 +101,25 @@ async function handleFirstCallPermissionPrompt(browser: Browser): Promise<void> 
 
 async function waitForResponseComplete(browser: Browser): Promise<string> {
   const deadline = Date.now() + RESPONSE_TIMEOUT_MS;
-  // Streaming-complete signal: the "Stop generating" button disappears.
+  // Streaming heuristic: the "Stop generating" button appears as soon as
+  // Claude starts streaming a reply and disappears when the stream ends.
+  // Waiting only for disappearance races the network round-trip — the
+  // predicate is already true the instant we check, so we'd read the
+  // *previous* turn's assistant message. First poll for the button to
+  // appear so we know we're inside the current turn's stream, then poll
+  // for it to disappear.
   // SELECTOR-TODO: validate the AX label; Anthropic may localize it.
   const stopSelector = '//XCUIElementTypeButton[@AXTitle="Stop generating"]';
+  while (Date.now() < deadline) {
+    const stopButton = await browser.$(stopSelector);
+    if (await stopButton.isExisting()) {
+      break;
+    }
+    await browser.pause(POLL_INTERVAL_MS);
+  }
+  if (Date.now() >= deadline) {
+    throw new Error(`Claude Desktop response did not complete within ${RESPONSE_TIMEOUT_MS}ms`);
+  }
   while (Date.now() < deadline) {
     const stopButton = await browser.$(stopSelector);
     if (!(await stopButton.isExisting())) {
