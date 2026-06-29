@@ -174,6 +174,53 @@
       <div id="releases">
     <div class="release">
       <div class="release-header">
+        <span class="release-version">v0.7.0</span>
+        <span class="release-date">June 29, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>final 3 endpoints — drive download, gmail attachment, clickup members</li>
+          <li>GET /api/v1/docs/{id} with Accept-based content negotiation</li>
+          <li>add 4 slack-bot GET endpoints + catalog-driven spec stubs</li>
+          <li>add 7 more GET endpoints — slides, sheets, clickup docs</li>
+          <li>REST data plane with short-lived bearer for bulk reads</li>
+        </ul>
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>paginate validate-ci check_runs and pick best per name</li>
+          <li>probe actual PAT write capability in preflight</li>
+          <li>validate PAT_TOKEN against GitHub API in preflight</li>
+          <li>preflight PAT_TOKEN and use it for checkout fetch</li>
+          <li>push to main with PAT embedded in remote URL</li>
+          <li>mount REST data plane in createWebOnlyApp too</li>
+          <li>resolve PREVIOUS_TAG relative to CURRENT_TAG</li>
+          <li>pass tag inputs via env and validate SemVer + sha shape</li>
+          <li>guard marker + duplicate before injecting into updates.html</li>
+          <li>pass commit range via env to block shell injection</li>
+          <li>render release date in UTC</li>
+          <li>stream drive downloads instead of buffering into memory</li>
+          <li>whitelist gmail ?format= against the upstream Gmail detail set</li>
+          <li>register /api/v1/docs/recent before /docs/:documentId</li>
+          <li>compute default week range by day-of-week offset</li>
+          <li>exact-match calendar attendee domains and tolerate missing emails</li>
+          <li>tag the docs commit so prod /updates ships in the first deploy</li>
+          <li>drop unnecessary backslash in download filename regex</li>
+          <li>replace placeholder server URL across all per-service specs</li>
+          <li>add tag management tools</li>
+          <li>bound and validate the sheets search range</li>
+          <li>stop swallowing getDocPages errors in clickup GET /docs/{id}</li>
+          <li>map slack error codes to proper HTTP status</li>
+          <li>sweep expired in-memory tokens to prevent leak</li>
+          <li>warn-and-skip on per-method openapi collision</li>
+          <li>set language on REST_ENDPOINTS.md base-URL fence</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
         <span class="release-version">v0.6.2</span>
         <span class="release-date">June 10, 2026</span>
         <span class="release-tag tag-fix">Fix</span>
