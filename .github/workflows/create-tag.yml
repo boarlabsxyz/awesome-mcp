@@ -59,17 +59,30 @@ jobs:
         with:
           script: |
             const sha = '${{ steps.resolve.outputs.sha }}';
-            const { data: checkRuns } = await github.rest.checks.listForRef({
+            // Paginate. With the default per_page of 30, repeated Create Tag
+            // dispatches against the same SHA accumulate check_runs and push
+            // the required CI checks off the first page, leaving validate-ci
+            // to (incorrectly) report them as "missing".
+            const checkRuns = await github.paginate(github.rest.checks.listForRef, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               ref: sha,
-              filter: 'latest'
+              filter: 'latest',
+              per_page: 100,
             });
 
             const required = ['lint', 'typecheck', 'test', 'build'];
+            // Multiple suites can produce a check_run with the same name on
+            // the same commit. Prefer the most successful conclusion per name
+            // so a later failed dispatch on the same SHA can't mask a passed
+            // CI run that happened earlier.
+            const rank = { success: 4, neutral: 3, skipped: 2, cancelled: 1, failure: 0, timed_out: 0, action_required: 0 };
             const results = {};
-            for (const run of checkRuns.check_runs) {
-              results[run.name] = run.conclusion;
+            for (const run of checkRuns) {
+              const prev = results[run.name];
+              if (!prev || (rank[run.conclusion] ?? 0) > (rank[prev] ?? 0)) {
+                results[run.name] = run.conclusion;
+              }
             }
 
             console.log('Check results:', JSON.stringify(results, null, 2));
