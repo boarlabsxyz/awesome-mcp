@@ -128,19 +128,38 @@ jobs:
             echo "::error::PAT_TOKEN preflight against api.github.com returned unexpected HTTP ${REPO_STATUS}."
             exit 1
           fi
-          # Also confirm the token has write access — read-only PATs will fail
-          # the push later with a separate cryptic error.
-          PERMS=$(curl -sS \
+          # permissions.push reflects the USER's repo role, not the PAT's effective
+          # capability — a repo admin with a Contents=Read-only fine-grained PAT
+          # will still see push=true here.
+          REPO_JSON=$(curl -sS \
             -H "Authorization: Bearer ${PAT_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}" \
-            | grep -o '"push"[[:space:]]*:[[:space:]]*true' || true)
-          if [ -z "$PERMS" ]; then
-            echo "::error::PAT_TOKEN authenticates against ${GITHUB_REPOSITORY} but lacks push permission."
-            echo "::error::Grant 'Contents: Read and write' (fine-grained) or the full 'repo' scope (classic)."
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}")
+          if ! echo "$REPO_JSON" | grep -q '"push"[[:space:]]*:[[:space:]]*true'; then
+            echo "::error::PAT_TOKEN's user lacks push permission on ${GITHUB_REPOSITORY}."
+            echo "::error::Either the user is a read-only collaborator, or the PAT belongs to a different user."
             exit 1
           fi
-          echo "PAT_TOKEN preflight OK (api.github.com 200, push=true)."
+          # Write probe: do a no-op PATCH on the repo description. If the PAT
+          # can't write (fine-grained PAT with Contents=Read-only, classic PAT
+          # missing 'repo' scope), GitHub returns a JSON object with a "message"
+          # field like "Resource not accessible by personal access token".
+          # A successful no-op PATCH returns the full repo object (no "message").
+          DESC=$(echo "$REPO_JSON" | jq -r '.description // ""')
+          WRITE_PROBE=$(curl -sS -X PATCH \
+            -H "Authorization: Bearer ${PAT_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -d "$(jq -n --arg d "$DESC" '{description: $d}')" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}")
+          if echo "$WRITE_PROBE" | jq -e 'type=="object" and has("message") and (has("full_name") | not)' >/dev/null 2>&1; then
+            WRITE_ERR=$(echo "$WRITE_PROBE" | jq -r '.message')
+            echo "::error::PAT_TOKEN failed write probe: ${WRITE_ERR}"
+            echo "::error::The token's user has push role on the repo, but the PAT itself can't write."
+            echo "::error::Fine-grained PAT: set 'Repository permissions → Contents: Read and write' on ${GITHUB_REPOSITORY}, regenerate, and update the PAT_TOKEN secret."
+            echo "::error::Classic PAT: enable the full 'repo' scope, regenerate, and update the PAT_TOKEN secret."
+            exit 1
+          fi
+          echo "PAT_TOKEN preflight OK (api 200, user push=true, write probe succeeded)."
 
       - uses: actions/checkout@v4
         with:
