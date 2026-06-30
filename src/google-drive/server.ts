@@ -24,7 +24,7 @@ import {
   handleShareDriveFile,
   handleCheckPublicAccess,
 } from './toolHandlers.js';
-import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 const driveServer = new FastMCP<UserSession>({
@@ -33,7 +33,7 @@ const driveServer = new FastMCP<UserSession>({
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-drive'),
 });
 
-registerGetSecurityToken(driveServer);
+registerMintRestBearerForCurl(driveServer);
 registerListRestEndpoints(driveServer);
 
 driveServer.addTool({
@@ -58,7 +58,7 @@ driveServer.addTool({
 driveServer.addTool({
   name: 'listFolderContents',
   annotations: { readOnlyHint: true },
-  description: 'Lists the contents of a specific folder in Google Drive or a shared drive. For large folders prefer REST: GET /api/v1/drive/folders/{folderId}/contents.',
+  description: 'Lists the contents of a specific folder in Google Drive or a shared drive.',
   parameters: z.object({
     folderId: z.string().describe('ID of the folder to list contents of. Use "root" for the root Drive folder. For shared drives, use the shared drive ID.'),
     includeSubfolders: z.boolean().optional().default(true).describe('Whether to include subfolders in results.'),
@@ -225,7 +225,7 @@ driveServer.addTool({
 driveServer.addTool({
   name: 'checkPublicAccess',
   annotations: { readOnlyHint: true },
-  description: 'Check whether a Google Drive file is publicly accessible ("anyone with the link"). Returns public/private status, file info, and permissions summary.',
+  description: 'List the file\'s direct permissions and report whether an "anyone with link" grant exists on the file itself. Does NOT follow folder-inherited, domain-wide, or shared-drive policies, so a file inside a public folder may report private here.',
   parameters: z.object({
     fileId: z.string().describe('The Drive file ID to check.'),
   }),

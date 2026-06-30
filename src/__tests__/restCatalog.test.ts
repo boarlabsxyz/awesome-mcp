@@ -62,7 +62,7 @@ describe('restCatalog', () => {
       const hint = restHintForTool('listCalendars');
       assert.ok(hint);
       assert.ok(hint!.includes('REST: GET'));
-      assert.ok(hint!.includes('getSecurityToken'));
+      assert.ok(hint!.includes('mintRestBearerForCurl'));
     });
 
     it('returns null for an unknown tool', () => {

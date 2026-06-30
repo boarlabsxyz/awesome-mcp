@@ -5,7 +5,7 @@ import { calendar_v3 } from 'googleapis';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
-import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 import { formatConferenceCompact, formatConferenceDetail } from './conferenceFormatter.js';
 
@@ -15,7 +15,7 @@ const calendarServer = new FastMCP<UserSession>({
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-calendar'),
 });
 
-registerGetSecurityToken(calendarServer);
+registerMintRestBearerForCurl(calendarServer);
 registerListRestEndpoints(calendarServer);
 
 // --- Helper to get Calendar client within tools ---
@@ -71,7 +71,7 @@ calendarServer.addTool({
 calendarServer.addTool({
   name: 'listEvents',
   annotations: { readOnlyHint: true },
-  description: 'Lists events from a calendar within a specified date range. For multi-calendar / multi-week bulk reads prefer REST: GET /api/v1/calendars/{calendarId}/events.',
+  description: 'Lists events from a calendar within a specified date range.',
   parameters: z.object({
     calendarId: z.string().optional().default('primary')
       .describe('The calendar ID. Use "primary" for the user\'s primary calendar.'),
@@ -225,7 +225,7 @@ calendarServer.addTool({
     timeZone: z.string().optional().describe('Time zone (e.g., "America/New_York"). Defaults to calendar\'s time zone.'),
     attendees: z.array(z.string()).optional().describe('List of attendee email addresses.'),
     sendUpdates: z.enum(['all', 'externalOnly', 'none']).optional().default('none')
-      .describe('Whether to send email notifications to attendees.'),
+      .describe('Whether to send email notifications to attendees. Default "none" — attendees are NOT notified unless you pass "all" or "externalOnly".'),
   }),
   execute: async (args, { log, session }) => {
     const calendar = getCalendarClient(session);
@@ -286,7 +286,7 @@ calendarServer.addTool({
     endDateTime: z.string().optional().describe('New end time in ISO 8601 format.'),
     timeZone: z.string().optional().describe('Time zone for the start/end times.'),
     sendUpdates: z.enum(['all', 'externalOnly', 'none']).optional().default('none')
-      .describe('Whether to send email notifications to attendees.'),
+      .describe('Whether to send email notifications to attendees. Default "none" — attendees are NOT notified unless you pass "all" or "externalOnly".'),
   }),
   execute: async (args, { log, session }) => {
     const calendar = getCalendarClient(session);
@@ -349,7 +349,7 @@ calendarServer.addTool({
       .describe('The calendar ID. Use "primary" for the user\'s primary calendar.'),
     eventId: z.string().describe('The event ID to delete.'),
     sendUpdates: z.enum(['all', 'externalOnly', 'none']).optional().default('none')
-      .describe('Whether to send email notifications to attendees.'),
+      .describe('Whether to send email notifications to attendees. Default "none" — attendees are NOT notified unless you pass "all" or "externalOnly".'),
   }),
   execute: async (args, { log, session }) => {
     const calendar = getCalendarClient(session);

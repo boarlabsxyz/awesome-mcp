@@ -21,10 +21,13 @@ export function registerListRestEndpoints(server: FastMCP<UserSession>): void {
     name: 'listRestEndpoints',
     annotations: { readOnlyHint: true },
     description:
-      `List REST data-plane endpoints under ${BASE_URL}/api/v1/*. Use to ` +
-      'discover the GET URL for a given MCP read tool when you want to fetch ' +
-      'bulk data via curl + a bearer from getSecurityToken instead of an MCP ' +
-      'tool result. Optional `service` narrows the result to one provider.',
+      'ESCAPE HATCH companion to mintRestBearerForCurl — only useful if YOU ' +
+      '(the client) can run shell commands like curl. The regular MCP tools ' +
+      'work without any of this; do NOT call this as a routine discovery step. ' +
+      `Lists REST data-plane endpoints under ${BASE_URL}/api/v1/* so a ` +
+      'shell-capable client can fetch bulk responses straight to disk instead ' +
+      'of through the LLM context window. Optional `service` narrows the ' +
+      'result to one provider.',
     parameters: z.object({
       service: z.enum(SERVICE_VALUES).optional().describe('Restrict to one service.'),
     }),
@@ -36,7 +39,7 @@ export function registerListRestEndpoints(server: FastMCP<UserSession>): void {
         {
           baseUrl: `${BASE_URL}/api/v1`,
           count: entries.length,
-          auth: 'Authorization: Bearer <token from getSecurityToken>',
+          auth: 'Authorization: Bearer <token from mintRestBearerForCurl>',
           endpoints: entries.map(e => ({
             service: e.service,
             method: e.method,

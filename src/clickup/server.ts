@@ -5,7 +5,7 @@ import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { ClickUpClient, markdownToCommentBlocks } from './apiHelpers.js';
 import { formatTask, formatTaskList } from './formatHelpers.js';
-import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 export const clickUpServer = new FastMCP<UserSession>({
@@ -14,7 +14,7 @@ export const clickUpServer = new FastMCP<UserSession>({
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'clickup'),
 });
 
-registerGetSecurityToken(clickUpServer);
+registerMintRestBearerForCurl(clickUpServer);
 registerListRestEndpoints(clickUpServer);
 
 function getClickUpClient(session?: UserSession): ClickUpClient {
@@ -384,7 +384,7 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'setCustomFieldValue',
   annotations: { readOnlyHint: false },
-  description: 'Set a custom field value on a ClickUp task. Use getAccessibleCustomFields first to find the field ID and type. Value shape depends on field type: text/email/phone → string; number → number; drop_down → option orderindex (int) or option ID; users → array of user IDs; labels → array of label UUIDs; date → unix ms.',
+  description: 'Set a custom field value on a ClickUp task. Use getAccessibleCustomFields first to find the field ID and type. Value shape depends on field type: text/email/phone → string; number → number; drop_down → option orderindex (int); users → array of user IDs; labels → array of label UUIDs; date → unix ms. NOTE: drop_down uses orderindex here, but searchTasks custom_fields filter uses the option UUID — getAccessibleCustomFields returns both.',
   parameters: z.object({
     taskId: z.string().describe('The task ID.'),
     fieldId: z.string().describe('The custom field ID (from getAccessibleCustomFields).'),

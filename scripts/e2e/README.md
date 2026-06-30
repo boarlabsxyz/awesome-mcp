@@ -8,7 +8,7 @@ End-to-end check for the user-story acceptance scenario:
 
 ## How it works
 
-1. From any MCP session, call the `getSecurityToken` MCP tool. It returns a
+1. From any MCP session, call the `mintRestBearerForCurl` MCP tool. It returns a
    5-minute bearer scoped to the calling user.
 2. Run `bulk-calendar-fetch.sh <token>`. It parallel-fetches 16 calendar IDs
    via `GET /api/v1/calendars/{id}/events`, saves each response to disk, then
@@ -23,7 +23,7 @@ End-to-end check for the user-story acceptance scenario:
 $EDITOR scripts/e2e/calendar-ids.example.txt
 
 # Mint a token in your MCP client (Claude, Inspector, etc.):
-#   getSecurityToken()
+#   mintRestBearerForCurl()
 # Copy the `token` field.
 
 ./scripts/e2e/bulk-calendar-fetch.sh "$TOKEN"

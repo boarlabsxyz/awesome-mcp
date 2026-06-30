@@ -1,6 +1,6 @@
 // Short-lived bearer tokens for the REST data plane (`/api/v1/*`).
 //
-// Minted by the `getSecurityToken` MCP tool. Verified by `resolveTokenToUser`
+// Minted by the `mintRestBearerForCurl` MCP tool. Verified by `resolveTokenToUser`
 // in webServer.ts so every existing endpoint accepts these tokens too.
 //
 // Storage mirrors sessionStore.ts: Redis-backed when DATABASE_URL is set,

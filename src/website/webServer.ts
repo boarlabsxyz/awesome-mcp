@@ -2092,7 +2092,7 @@ function registerRestApiRoutes(app: express.Express): void {
       } catch { /* not a valid JWT — try next */ }
     }
 
-    // Try short-lived REST token (5-min, minted by getSecurityToken MCP tool)
+    // Try short-lived REST token (5-min, minted by mintRestBearerForCurl MCP tool)
     try {
       const restUserId = await lookupRestToken(token);
       if (restUserId !== null) {
@@ -3525,7 +3525,7 @@ function registerRestApiRoutes(app: express.Express): void {
   // These are passthrough siblings of read-only MCP tools that return bulk
   // data. Catalogued in src/restCatalog.ts and discoverable via the
   // listRestEndpoints MCP tool. Bearer is either the permanent apiKey or a
-  // 5-minute token from the getSecurityToken MCP tool.
+  // 5-minute token from the mintRestBearerForCurl MCP tool.
 
   // sendUpstreamError lives in ./restUpstreamError.js so it's unit-testable
   // in isolation and so each route's catch can stay a one-liner.

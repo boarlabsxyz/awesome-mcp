@@ -5,7 +5,7 @@ import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { SlackClient } from './apiHelpers.js';
 import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handlePostMessage, handleReplyInThread } from './helpers.js';
-import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 export const slackBotServer = new FastMCP<UserSession>({
@@ -14,7 +14,7 @@ export const slackBotServer = new FastMCP<UserSession>({
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'slack-bot'),
 });
 
-registerGetSecurityToken(slackBotServer);
+registerMintRestBearerForCurl(slackBotServer);
 registerListRestEndpoints(slackBotServer);
 
 function getSlackClient(session?: UserSession): SlackClient {
@@ -76,7 +76,7 @@ slackBotServer.addTool({
 slackBotServer.addTool({
   name: 'readChannelHistory',
   annotations: { readOnlyHint: true },
-  description: 'Read recent messages from a Slack channel. Returns messages in chronological order. For long histories prefer REST: GET /api/v1/slack/channels/{channelId}/messages.',
+  description: 'Read recent messages from a Slack channel. Returns messages in chronological order.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID (e.g., C01234ABCDE).'),
     limit: z.number().optional().default(20).describe('Number of messages to return (1-100, default 20).'),
@@ -107,7 +107,7 @@ slackBotServer.addTool({
 slackBotServer.addTool({
   name: 'postMessage',
   annotations: { readOnlyHint: false },
-  description: 'Post a message to a Slack channel. Requires SLACK_WRITES_ENABLED=true.',
+  description: 'Post a message to a Slack channel.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID to post to.'),
     text: z.string().describe('Message text (supports Slack markdown/mrkdwn).'),
@@ -120,7 +120,7 @@ slackBotServer.addTool({
 slackBotServer.addTool({
   name: 'replyInThread',
   annotations: { readOnlyHint: false },
-  description: 'Reply to a thread in a Slack channel. Requires SLACK_WRITES_ENABLED=true.',
+  description: 'Reply to a thread in a Slack channel.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID containing the thread.'),
     threadTs: z.string().describe('The timestamp of the parent message to reply to.'),

@@ -108,5 +108,5 @@ export function restHintForTool(mcpToolName: string): string | null {
   const eps = endpointsForTool(mcpToolName);
   if (eps.length === 0) return null;
   const ep = eps[0];
-  return `REST: ${ep.method} ${ep.path} (call getSecurityToken for a 5-min bearer).`;
+  return `REST: ${ep.method} ${ep.path} (call mintRestBearerForCurl for a 5-min bearer).`;
 }
