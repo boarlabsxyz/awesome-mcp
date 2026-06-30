@@ -362,7 +362,7 @@ server.addTool({
 server.addTool({
 name: 'readGoogleDoc',
 annotations: { readOnlyHint: true },
-description: 'Reads the content of a specific Google Document, optionally returning structured data.',
+description: 'Reads the content of a specific Google Document, optionally returning structured data. For large docs prefer REST: GET /api/v1/docs/{documentId} (mint a bearer with getSecurityToken).',
 parameters: DocumentIdParameter.extend({
 format: z.enum(['text', 'json', 'markdown']).optional().default('text')
 .describe("Output format: 'text' (plain text), 'json' (raw API structure, complex), 'markdown' (experimental conversion)."),
@@ -600,7 +600,7 @@ execute: async (args, { log, session }) => {
 server.addTool({
 name: 'appendToGoogleDoc',
 annotations: { readOnlyHint: false },
-description: 'Appends text to the very end of a specific Google Document or tab.',
+description: 'Appends text to the very end of a specific Google Document or tab. Equivalent to insertText at the document end; use this when you do not know the end index.',
 parameters: DocumentIdParameter.extend({
 textToAppend: z.string().min(1).describe('The text to add to the end.'),
 addNewlineIfNeeded: z.boolean().optional().default(true).describe("Automatically add a newline before the appended text if the doc doesn't end with one."),
@@ -673,7 +673,7 @@ log.info(`Appending to Google Doc: ${args.documentId}${args.tabId ? ` (tab: ${ar
 server.addTool({
 name: 'insertText',
 annotations: { readOnlyHint: false },
-description: 'Inserts text at a specific index within the document body or a specific tab.',
+description: 'Inserts text at a specific 1-based index within the document body or a specific tab. For end-of-document inserts where you do not have an index, prefer appendToGoogleDoc.',
 parameters: DocumentIdParameter.extend({
 textToInsert: z.string().min(1).describe('The text to insert.'),
 index: z.number().int().min(1).describe('The index (1-based) where the text should be inserted.'),
@@ -773,7 +773,7 @@ try {
 server.addTool({
 name: 'applyTextStyle',
 annotations: { readOnlyHint: false },
-description: 'Applies character-level formatting (bold, color, font, etc.) to a specific range or found text.',
+description: 'Applies character-level formatting to a specific range or found text. Supported style keys: bold, italic, underline, strikethrough, fontSize, fontFamily, foregroundColor, backgroundColor, link.',
 parameters: ApplyTextStyleToolParameters,
 execute: async (args: ApplyTextStyleToolArgs, { log, session }) => {
 const docs = await getDocsClient(session);

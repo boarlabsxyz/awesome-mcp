@@ -71,7 +71,7 @@ calendarServer.addTool({
 calendarServer.addTool({
   name: 'listEvents',
   annotations: { readOnlyHint: true },
-  description: 'Lists events from a calendar within a specified date range.',
+  description: 'Lists events from a calendar within a specified date range. For multi-calendar / multi-week bulk reads prefer REST: GET /api/v1/calendars/{calendarId}/events.',
   parameters: z.object({
     calendarId: z.string().optional().default('primary')
       .describe('The calendar ID. Use "primary" for the user\'s primary calendar.'),

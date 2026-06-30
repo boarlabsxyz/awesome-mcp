@@ -66,7 +66,7 @@ gmailServer.addTool({
 gmailServer.addTool({
   name: 'readEmail',
   annotations: { readOnlyHint: true },
-  description: 'Read the full content of an email by its message ID.',
+  description: 'Read the full content of an email by its message ID. For bulk reads prefer REST: GET /api/v1/gmail/messages/{messageId} (mint a bearer with getSecurityToken).',
   parameters: z.object({
     messageId: z.string().describe('The Gmail message ID to read.'),
     format: z.enum(['full', 'metadata', 'minimal']).optional().default('full')
@@ -78,7 +78,7 @@ gmailServer.addTool({
 gmailServer.addTool({
   name: 'searchEmails',
   annotations: { readOnlyHint: true },
-  description: 'Search emails using Gmail query syntax (e.g., "from:user@example.com", "subject:hello", "is:unread", "newer_than:2d").',
+  description: 'Search emails using Gmail query syntax (e.g., "from:user@example.com", "subject:hello", "is:unread", "newer_than:2d"). For large result sets prefer REST: GET /api/v1/gmail/messages?q={query}.',
   parameters: z.object({
     query: z.string().describe('Gmail search query string.'),
     maxResults: z.number().min(1).max(50).optional().default(10).describe('Maximum number of results to return (1-50).'),
@@ -90,7 +90,7 @@ gmailServer.addTool({
 gmailServer.addTool({
   name: 'modifyEmail',
   annotations: { readOnlyHint: false },
-  description: 'Modify labels on a single email message (add or remove labels).',
+  description: 'Modify labels on a single email message (add or remove labels). For more than one message, prefer batchModifyEmails.',
   parameters: z.object({
     messageId: z.string().describe('The Gmail message ID to modify.'),
     addLabelIds: z.array(z.string()).optional().describe('Label IDs to add to the message.'),
@@ -114,7 +114,7 @@ gmailServer.addTool({
 gmailServer.addTool({
   name: 'batchModifyEmails',
   annotations: { readOnlyHint: false },
-  description: 'Modify labels on multiple email messages at once.',
+  description: 'Modify labels on multiple email messages at once (single atomic request). For a single message, modifyEmail is simpler. Limit: 1000 message IDs per call.',
   parameters: z.object({
     messageIds: z.array(z.string()).max(1000).describe('Array of Gmail message IDs to modify (max 1000).'),
     addLabelIds: z.array(z.string()).optional().describe('Label IDs to add to all messages.'),
