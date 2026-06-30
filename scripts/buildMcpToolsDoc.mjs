@@ -111,17 +111,101 @@ function extractDescription(block) {
   return evalStringExpr(m[1]);
 }
 
-/** Evaluate a JS expression that is a concatenation of literal strings.
- *  Template literals can reference `BASE_URL` (used by the shared MCP tools);
- *  we substitute a generic placeholder so the doc isn't tied to one host. */
+/** Parse a description expression that is a concatenation of string literals.
+ *  Accepts: single-quoted, double-quoted, and template literals joined by `+`.
+ *  Template literals may interpolate ONLY `${BASE_URL}`, which is replaced
+ *  with a generic placeholder so the doc isn't tied to one host. Anything
+ *  else (arbitrary identifiers, function calls, other interpolations) is
+ *  rejected — even though descriptions come from our own source tree, doc
+ *  generation runs in CI and on developer machines, so this stays purely
+ *  data-driven instead of eval-ing source text. */
 function evalStringExpr(expr) {
-  try {
-    // The expression is trusted (it's from our own source tree).
-    // eslint-disable-next-line no-new-func
-    const out = new Function('BASE_URL', `return (${expr})`)('<base>');
-    return typeof out === 'string' ? out.replace(/\s+/g, ' ').trim() : null;
-  } catch {
-    return null;
+  const parts = [];
+  let i = 0;
+  let expectString = true;
+  while (i < expr.length) {
+    const ch = expr[i];
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') { i++; continue; }
+    if (expectString) {
+      if (ch === "'" || ch === '"') {
+        const r = parseQuotedString(expr, i, ch);
+        if (!r) return null;
+        parts.push(r.value);
+        i = r.next;
+      } else if (ch === '`') {
+        const r = parseTemplateLiteral(expr, i);
+        if (!r) return null;
+        parts.push(r.value);
+        i = r.next;
+      } else {
+        return null;
+      }
+      expectString = false;
+    } else {
+      if (ch !== '+') return null;
+      i++;
+      expectString = true;
+    }
+  }
+  if (expectString || parts.length === 0) return null;
+  return parts.join('').replace(/\s+/g, ' ').trim();
+}
+
+function parseQuotedString(s, start, quote) {
+  let i = start + 1;
+  let out = '';
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === '\\') {
+      const next = s[i + 1];
+      if (next === undefined) return null;
+      out += decodeEscape(next);
+      i += 2;
+    } else if (ch === quote) {
+      return { value: out, next: i + 1 };
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return null;
+}
+
+function parseTemplateLiteral(s, start) {
+  let i = start + 1;
+  let out = '';
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === '\\') {
+      const next = s[i + 1];
+      if (next === undefined) return null;
+      out += decodeEscape(next);
+      i += 2;
+    } else if (ch === '`') {
+      return { value: out, next: i + 1 };
+    } else if (ch === '$' && s[i + 1] === '{') {
+      const end = s.indexOf('}', i + 2);
+      if (end === -1) return null;
+      if (s.slice(i + 2, end).trim() !== 'BASE_URL') return null;
+      out += '<base>';
+      i = end + 1;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return null;
+}
+
+function decodeEscape(c) {
+  switch (c) {
+    case 'n': return '\n';
+    case 't': return '\t';
+    case 'r': return '\r';
+    case 'b': return '\b';
+    case 'f': return '\f';
+    case '0': return '\0';
+    default: return c;
   }
 }
 

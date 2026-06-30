@@ -66,7 +66,7 @@ gmailServer.addTool({
 gmailServer.addTool({
   name: 'readEmail',
   annotations: { readOnlyHint: true },
-  description: 'Read the full content of an email by its message ID. For bulk reads prefer REST: GET /api/v1/gmail/messages/{messageId} (mint a bearer with mintRestBearerForCurl).',
+  description: 'Read the full content of an email by its message ID.',
   parameters: z.object({
     messageId: z.string().describe('The Gmail message ID to read.'),
     format: z.enum(['full', 'metadata', 'minimal']).optional().default('full')
@@ -78,7 +78,7 @@ gmailServer.addTool({
 gmailServer.addTool({
   name: 'searchEmails',
   annotations: { readOnlyHint: true },
-  description: 'Search emails using Gmail query syntax (e.g., "from:user@example.com", "subject:hello", "is:unread", "newer_than:2d"). For large result sets prefer REST: GET /api/v1/gmail/messages?q={query}.',
+  description: 'Search emails using Gmail query syntax (e.g., "from:user@example.com", "subject:hello", "is:unread", "newer_than:2d").',
   parameters: z.object({
     query: z.string().describe('Gmail search query string.'),
     maxResults: z.number().min(1).max(50).optional().default(10).describe('Maximum number of results to return (1-50).'),

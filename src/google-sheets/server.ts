@@ -39,7 +39,7 @@ function getDriveClient(session?: UserSession): drive_v3.Drive {
 sheetsServer.addTool({
   name: 'readSpreadsheet',
   annotations: { readOnlyHint: true },
-  description: 'Reads data from a specific range in a Google Spreadsheet. For large ranges prefer REST: GET /api/v1/sheets/{spreadsheetId}/ranges?range={range}.',
+  description: 'Reads data from a specific range in a Google Spreadsheet.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
     range: z.string().describe('A1 notation range to read (e.g., "A1:B10" or "Sheet1!A1:B10").'),
@@ -432,7 +432,7 @@ sheetsServer.addTool({
 sheetsServer.addTool({
   name: 'updateCellByFieldName',
   annotations: { readOnlyHint: false },
-  description: 'Find a row by searching a column for a value, then update a specific field (identified by header name) in that row.',
+  description: 'Find a row by searching a column for a value, then update a specific field (identified by header name) in that row. Assumes row 1 contains the header names.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
     searchColumn: z.string().describe('Column letter to search in (e.g., "A").'),

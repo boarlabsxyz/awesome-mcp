@@ -362,7 +362,7 @@ server.addTool({
 server.addTool({
 name: 'readGoogleDoc',
 annotations: { readOnlyHint: true },
-description: 'Reads the content of a specific Google Document, optionally returning structured data. For large docs prefer REST: GET /api/v1/docs/{documentId} (mint a bearer with mintRestBearerForCurl).',
+description: 'Reads the content of a specific Google Document, optionally returning structured data.',
 parameters: DocumentIdParameter.extend({
 format: z.enum(['text', 'json', 'markdown']).optional().default('text')
 .describe("Output format: 'text' (plain text), 'json' (raw API structure, complex), 'markdown' (experimental conversion)."),
@@ -955,7 +955,7 @@ throw new UserError(`Failed to insert table: ${error.message || 'Unknown error'}
 server.addTool({
 name: 'editTableCell',
 annotations: { readOnlyHint: false },
-description: 'Edits the content and/or basic style of a specific table cell. Requires knowing table start index.',
+description: 'NOT IMPLEMENTED — always throws. Editing table cells requires non-trivial index calculation that has not been built yet. Use batchUpdateDoc with raw insert/delete requests if you need to modify table contents.',
 parameters: DocumentIdParameter.extend({
 tableStartIndex: z.number().int().min(1).describe("The starting index of the TABLE element itself (tricky to find, may require reading structure first)."),
 rowIndex: z.number().int().min(0).describe("Row index (0-based)."),
@@ -1473,7 +1473,7 @@ server.addTool({
 server.addTool({
 name: 'findElement',
 annotations: { readOnlyHint: true },
-description: 'Finds elements (paragraphs, tables, etc.) based on various criteria. (Not Implemented)',
+description: 'NOT IMPLEMENTED — always throws. For text search use findAndReplace or formatMatchingText; for structure exploration use inspectDocStructure.',
 parameters: DocumentIdParameter.extend({
 // Define complex query parameters...
 textQuery: z.string().optional(),

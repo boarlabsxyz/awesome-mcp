@@ -85,7 +85,7 @@ export function formatMessage(msg: any, userNames: Map<string, string>, channelI
 
 export function assertWritesEnabled(): void {
   if (process.env.SLACK_WRITES_ENABLED !== 'true') {
-    throw new UserError('Slack writes are disabled. Set SLACK_WRITES_ENABLED=true to enable posting messages.');
+    throw new UserError('Slack posting is disabled for this deployment. The operator must enable Slack writes before this tool can be used.');
   }
 }
 
