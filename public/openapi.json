@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "awesome-mcp REST Data Plane",
-    "description": "Combined catalog of REST passthrough endpoints across every service wired into this awesome-mcp instance. Use the getSecurityToken MCP tool to mint a 5-minute bearer token, then GET these URLs to fetch bulk responses directly to disk without burning LLM context.",
+    "description": "Combined catalog of REST passthrough endpoints across every service wired into this awesome-mcp instance. Use the mintRestBearerForCurl MCP tool to mint a 5-minute bearer token, then GET these URLs to fetch bulk responses directly to disk without burning LLM context.",
     "version": "1.0.0"
   },
   "servers": [
@@ -5015,7 +5015,7 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Bearer token from the getSecurityToken MCP tool (5-minute TTL) or a permanent dashboard API key."
+        "description": "Bearer token from the mintRestBearerForCurl MCP tool (5-minute TTL) or a permanent dashboard API key."
       }
     },
     "schemas": {

@@ -8,7 +8,7 @@ import { SlackClient } from '../slack/apiHelpers.js';
 import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handlePostMessage, handleReplyInThread } from '../slack/helpers.js';
 import { assertAccess, fetchChannelMeta, filterChannelList, filterDmsByOrg, filterGroupDmsByRules } from './accessControl.js';
 import type { SlackAccessRules } from '../mcpConnectionStore.js';
-import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 export const slackUserServer = new FastMCP<UserSession>({
@@ -17,7 +17,7 @@ export const slackUserServer = new FastMCP<UserSession>({
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'slack'),
 });
 
-registerGetSecurityToken(slackUserServer);
+registerMintRestBearerForCurl(slackUserServer);
 registerListRestEndpoints(slackUserServer);
 
 function getSlackUserClient(session?: UserSession): SlackClient {
@@ -220,7 +220,7 @@ slackUserServer.addTool({
 slackUserServer.addTool({
   name: 'postMessage',
   annotations: { readOnlyHint: false },
-  description: 'Post a message to a Slack channel. Requires SLACK_WRITES_ENABLED=true. Access rules enforced.',
+  description: 'Post a message to a Slack channel.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID to post to.'),
     text: z.string().describe('Message text (supports Slack markdown/mrkdwn).'),
@@ -235,7 +235,7 @@ slackUserServer.addTool({
 slackUserServer.addTool({
   name: 'replyInThread',
   annotations: { readOnlyHint: false },
-  description: 'Reply to a thread in a Slack channel. Requires SLACK_WRITES_ENABLED=true. Access rules enforced.',
+  description: 'Reply to a thread in a Slack channel.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID containing the thread.'),
     threadTs: z.string().describe('The timestamp of the parent message to reply to.'),

@@ -14,7 +14,7 @@ import {
   handleBatchUpdatePresentation,
   handleListPresentationComments,
 } from './toolHandlers.js';
-import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 const slidesServer = new FastMCP<UserSession>({
@@ -23,7 +23,7 @@ const slidesServer = new FastMCP<UserSession>({
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-slides'),
 });
 
-registerGetSecurityToken(slidesServer);
+registerMintRestBearerForCurl(slidesServer);
 registerListRestEndpoints(slidesServer);
 
 // === TOOL DEFINITIONS ===

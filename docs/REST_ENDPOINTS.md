@@ -8,7 +8,7 @@ Every MCP tool response flows through the LLM's tool-result channel — every by
 
 ## Auth
 
-1. From any MCP session, call the `getSecurityToken` MCP tool — it returns a 5-minute bearer.
+1. From any MCP session, call the `mintRestBearerForCurl` MCP tool — it returns a 5-minute bearer.
 2. Pass it as `Authorization: Bearer <token>` against the URLs below.
 
 The same endpoints also accept the permanent dashboard API key (for ChatGPT Custom Actions backward compatibility).

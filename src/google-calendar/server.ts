@@ -5,7 +5,7 @@ import { calendar_v3 } from 'googleapis';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
-import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 import { formatConferenceCompact, formatConferenceDetail } from './conferenceFormatter.js';
 
@@ -15,7 +15,7 @@ const calendarServer = new FastMCP<UserSession>({
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-calendar'),
 });
 
-registerGetSecurityToken(calendarServer);
+registerMintRestBearerForCurl(calendarServer);
 registerListRestEndpoints(calendarServer);
 
 // --- Helper to get Calendar client within tools ---

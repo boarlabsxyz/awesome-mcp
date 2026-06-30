@@ -83,7 +83,7 @@ describe('ClickUp server tools', () => {
 
   it('should have registered all 39 tools', () => {
     // 37 ClickUp-specific tools (incl. tag-management) + 2 shared
-    // (getSecurityToken, listRestEndpoints) registered on every FastMCP server.
+    // (mintRestBearerForCurl, listRestEndpoints) registered on every FastMCP server.
     assert.equal(toolMap.size, 39);
   });
 

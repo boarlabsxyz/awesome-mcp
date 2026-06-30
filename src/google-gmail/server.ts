@@ -13,7 +13,7 @@ import {
   handleListLabels, handleCreateLabel, handleUpdateLabel, handleDeleteLabel,
   handleGetOrCreateLabel, handleGetAttachment,
 } from './toolHandlers.js';
-import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 const gmailServer = new FastMCP<UserSession>({
@@ -22,7 +22,7 @@ const gmailServer = new FastMCP<UserSession>({
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-gmail'),
 });
 
-registerGetSecurityToken(gmailServer);
+registerMintRestBearerForCurl(gmailServer);
 registerListRestEndpoints(gmailServer);
 
 // --- Helper to get Gmail client within tools ---
@@ -66,7 +66,7 @@ gmailServer.addTool({
 gmailServer.addTool({
   name: 'readEmail',
   annotations: { readOnlyHint: true },
-  description: 'Read the full content of an email by its message ID. For bulk reads prefer REST: GET /api/v1/gmail/messages/{messageId} (mint a bearer with getSecurityToken).',
+  description: 'Read the full content of an email by its message ID. For bulk reads prefer REST: GET /api/v1/gmail/messages/{messageId} (mint a bearer with mintRestBearerForCurl).',
   parameters: z.object({
     messageId: z.string().describe('The Gmail message ID to read.'),
     format: z.enum(['full', 'metadata', 'minimal']).optional().default('full')

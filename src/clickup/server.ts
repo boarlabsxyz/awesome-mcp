@@ -5,7 +5,7 @@ import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { ClickUpClient, markdownToCommentBlocks } from './apiHelpers.js';
 import { formatTask, formatTaskList } from './formatHelpers.js';
-import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 export const clickUpServer = new FastMCP<UserSession>({
@@ -14,7 +14,7 @@ export const clickUpServer = new FastMCP<UserSession>({
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'clickup'),
 });
 
-registerGetSecurityToken(clickUpServer);
+registerMintRestBearerForCurl(clickUpServer);
 registerListRestEndpoints(clickUpServer);
 
 function getClickUpClient(session?: UserSession): ClickUpClient {

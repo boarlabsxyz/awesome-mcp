@@ -19,12 +19,12 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 
 ## Shared (every server)
 
-Source: `src/sharedTools/getSecurityToken.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered on every FastMCP server).
+Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered on every FastMCP server).
 
 | Tool | Description | REST |
 |---|---|---|
-| `getSecurityToken` | Mint a 5-minute bearer token for the REST data plane. Use it as `Authorization: Bearer <token>` against the GET endpoints under <base>/api/v1/* so bulk responses can be saved directly to disk with curl/jq instead of flowing through the LLM context window. Call listRestEndpoints for the catalog of available URLs. | — |
-| `listRestEndpoints` | List REST data-plane endpoints under <base>/api/v1/*. Use to discover the GET URL for a given MCP read tool when you want to fetch bulk data via curl + a bearer from getSecurityToken instead of an MCP tool result. Optional `service` narrows the result to one provider. | — |
+| `mintRestBearerForCurl` | ESCAPE HATCH — do NOT call this as a routine auth step. The regular MCP tools (readGoogleDoc, listGoogleDocs, listChannels, etc.) work without any token; you are already authenticated via the MCP session. Only call this if YOU (the client) can run shell commands like curl, and you specifically want to fetch a large/bulk response straight to disk instead of through the LLM context window. The minted bearer is valid 5 minutes against GET <base>/api/v1/* (see listRestEndpoints). If you cannot exec shell, this token is useless to you — skip it. | — |
+| `listRestEndpoints` | List REST data-plane endpoints under <base>/api/v1/*. Use to discover the GET URL for a given MCP read tool when you want to fetch bulk data via curl + a bearer from mintRestBearerForCurl instead of an MCP tool result. Optional `service` narrows the result to one provider. | — |
 
 ## Google Docs
 
@@ -36,7 +36,7 @@ Source: `src/google-docs/server.ts` — 30 tools.
 | `searchGoogleDocs` | Searches for Google Documents by name, content, or other criteria across My Drive and shared drives. | `GET /api/v1/docs?q={query}` |
 | `getRecentGoogleDocs` | Gets the most recently modified Google Documents from My Drive and shared drives. | `GET /api/v1/docs/recent` |
 | `exportDocToPdf` | Exports a Google Doc as a PDF file and saves it to Google Drive. Returns the PDF file ID, name, and link. | — |
-| `readGoogleDoc` | Reads the content of a specific Google Document, optionally returning structured data. For large docs prefer REST: GET /api/v1/docs/{documentId} (mint a bearer with getSecurityToken). | `GET /api/v1/docs/{documentId}` |
+| `readGoogleDoc` | Reads the content of a specific Google Document, optionally returning structured data. For large docs prefer REST: GET /api/v1/docs/{documentId} (mint a bearer with mintRestBearerForCurl). | `GET /api/v1/docs/{documentId}` |
 | `listDocumentTabs` | Lists all tabs in a Google Document, including their hierarchy, IDs, and structure. | `GET /api/v1/docs/{documentId}/tabs` |
 | `appendToGoogleDoc` | Appends text to the very end of a specific Google Document or tab. Equivalent to insertText at the document end; use this when you do not know the end index. | — |
 | `insertText` | Inserts text at a specific 1-based index within the document body or a specific tab. For end-of-document inserts where you do not have an index, prefer appendToGoogleDoc. | — |
@@ -125,7 +125,7 @@ Source: `src/google-gmail/server.ts` — 14 tools.
 |---|---|---|
 | `sendEmail` | Send an email message. | — |
 | `draftEmail` | Create a draft email without sending it. | — |
-| `readEmail` | Read the full content of an email by its message ID. For bulk reads prefer REST: GET /api/v1/gmail/messages/{messageId} (mint a bearer with getSecurityToken). | `GET /api/v1/gmail/messages/{messageId}` |
+| `readEmail` | Read the full content of an email by its message ID. For bulk reads prefer REST: GET /api/v1/gmail/messages/{messageId} (mint a bearer with mintRestBearerForCurl). | `GET /api/v1/gmail/messages/{messageId}` |
 | `searchEmails` | Search emails using Gmail query syntax (e.g., "from:user@example.com", "subject:hello", "is:unread", "newer_than:2d"). For large result sets prefer REST: GET /api/v1/gmail/messages?q={query}. | `GET /api/v1/gmail/messages?q={query}` |
 | `modifyEmail` | Modify labels on a single email message (add or remove labels). For more than one message, prefer batchModifyEmails. | — |
 | `deleteEmail` | Move an email message to the trash. | — |
@@ -204,8 +204,8 @@ Source: `src/slack/server.ts` — 7 tools.
 | `listChannels` | List Slack channels and DMs the bot is a member of. Includes public/private channels and 1-on-1 DMs. The bot only sees channels where it has been /invited. | `GET /api/v1/slack/channels` |
 | `readChannelHistory` | Read recent messages from a Slack channel. Returns messages in chronological order. For long histories prefer REST: GET /api/v1/slack/channels/{channelId}/messages. | `GET /api/v1/slack/channels/{channelId}/messages` |
 | `readThreadReplies` | Read replies in a Slack thread. The first message is the thread parent. | `GET /api/v1/slack/channels/{channelId}/threads/{threadTs}` |
-| `postMessage` | Post a message to a Slack channel. Requires SLACK_WRITES_ENABLED=true. | — |
-| `replyInThread` | Reply to a thread in a Slack channel. Requires SLACK_WRITES_ENABLED=true. | — |
+| `postMessage` | Post a message to a Slack channel. | — |
+| `replyInThread` | Reply to a thread in a Slack channel. | — |
 | `listUsers` | List workspace members. Use this to find a user by name and get their user ID for opening a DM. | `GET /api/v1/slack/users` |
 | `openDm` | Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage. | — |
 
@@ -218,8 +218,8 @@ Source: `src/slack-user/server.ts` — 7 tools.
 | `listChannels` | List Slack channels and DMs you have access to, filtered by your access rules. Use the "search" parameter to find a specific channel by name without paginating. | — |
 | `readChannelHistory` | Read recent messages from a Slack channel. Access rules are enforced. | — |
 | `readThreadReplies` | Read replies in a Slack thread. Access rules are enforced. | — |
-| `postMessage` | Post a message to a Slack channel. Requires SLACK_WRITES_ENABLED=true. Access rules enforced. | — |
-| `replyInThread` | Reply to a thread in a Slack channel. Requires SLACK_WRITES_ENABLED=true. Access rules enforced. | — |
+| `postMessage` | Post a message to a Slack channel. | — |
+| `replyInThread` | Reply to a thread in a Slack channel. | — |
 | `listUsers` | List workspace members. Use this to find a user by name and get their user ID for opening a DM. | — |
 | `openDm` | Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage. | — |
 

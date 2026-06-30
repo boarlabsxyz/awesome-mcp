@@ -112,9 +112,9 @@ const server = new FastMCP<UserSession>({
   authenticate: createMcpAuthenticateHandler(MCP_SLUG),
 });
 
-import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
-registerGetSecurityToken(server);
+registerMintRestBearerForCurl(server);
 registerListRestEndpoints(server);
 
 // --- Helper to get Docs client within tools ---
@@ -362,7 +362,7 @@ server.addTool({
 server.addTool({
 name: 'readGoogleDoc',
 annotations: { readOnlyHint: true },
-description: 'Reads the content of a specific Google Document, optionally returning structured data. For large docs prefer REST: GET /api/v1/docs/{documentId} (mint a bearer with getSecurityToken).',
+description: 'Reads the content of a specific Google Document, optionally returning structured data. For large docs prefer REST: GET /api/v1/docs/{documentId} (mint a bearer with mintRestBearerForCurl).',
 parameters: DocumentIdParameter.extend({
 format: z.enum(['text', 'json', 'markdown']).optional().default('text')
 .describe("Output format: 'text' (plain text), 'json' (raw API structure, complex), 'markdown' (experimental conversion)."),

@@ -25,7 +25,7 @@ const outPath = join(outDir, 'MCP_TOOLS.md');
 // REST sibling. Entries with autoRegistered=true are the shared tools that
 // every FastMCP server registers via the registerX helpers.
 const SERVICES = [
-  ['src/sharedTools/getSecurityToken.ts', 'Shared (every server)', null, true],
+  ['src/sharedTools/mintRestBearerForCurl.ts', 'Shared (every server)', null, true],
   ['src/sharedTools/listRestEndpoints.ts','Shared (every server)', null, true],
   ['src/google-docs/server.ts',           'Google Docs',           'docs'],
   ['src/google-sheets/server.ts',         'Google Sheets',         'sheets'],

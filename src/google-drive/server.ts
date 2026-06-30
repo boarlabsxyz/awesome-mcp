@@ -24,7 +24,7 @@ import {
   handleShareDriveFile,
   handleCheckPublicAccess,
 } from './toolHandlers.js';
-import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 const driveServer = new FastMCP<UserSession>({
@@ -33,7 +33,7 @@ const driveServer = new FastMCP<UserSession>({
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-drive'),
 });
 
-registerGetSecurityToken(driveServer);
+registerMintRestBearerForCurl(driveServer);
 registerListRestEndpoints(driveServer);
 
 driveServer.addTool({

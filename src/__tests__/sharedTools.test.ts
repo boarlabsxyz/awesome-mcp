@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { UserError } from 'fastmcp';
-import { registerGetSecurityToken } from '../sharedTools/getSecurityToken.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 import { REST_CATALOG } from '../restCatalog.js';
 
@@ -20,17 +20,17 @@ function makeStubServer() {
   };
 }
 
-describe('sharedTools.getSecurityToken', () => {
-  it('registers a tool named getSecurityToken', () => {
+describe('sharedTools.mintRestBearerForCurl', () => {
+  it('registers a tool named mintRestBearerForCurl', () => {
     const stub = makeStubServer();
-    registerGetSecurityToken(stub as any);
+    registerMintRestBearerForCurl(stub as any);
     assert.equal(stub.tools.length, 1);
-    assert.equal(stub.tools[0].name, 'getSecurityToken');
+    assert.equal(stub.tools[0].name, 'mintRestBearerForCurl');
   });
 
   it('execute throws UserError when session has no userId', async () => {
     const stub = makeStubServer();
-    registerGetSecurityToken(stub as any);
+    registerMintRestBearerForCurl(stub as any);
     const tool = stub.tools[0];
     await assert.rejects(
       () => tool.execute({}, { session: undefined }),
@@ -44,7 +44,7 @@ describe('sharedTools.getSecurityToken', () => {
 
   it('execute returns a JSON payload with token + expiresAt when session has userId', async () => {
     const stub = makeStubServer();
-    registerGetSecurityToken(stub as any);
+    registerMintRestBearerForCurl(stub as any);
     const tool = stub.tools[0];
     const result = await tool.execute({}, { session: { userId: 42 } });
     const payload = JSON.parse(result);
