@@ -76,7 +76,7 @@ slackBotServer.addTool({
 slackBotServer.addTool({
   name: 'readChannelHistory',
   annotations: { readOnlyHint: true },
-  description: 'Read recent messages from a Slack channel. Returns messages in chronological order.',
+  description: 'Read recent messages from a Slack channel. Returns messages in chronological order. For long histories prefer REST: GET /api/v1/slack/channels/{channelId}/messages.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID (e.g., C01234ABCDE).'),
     limit: z.number().optional().default(20).describe('Number of messages to return (1-100, default 20).'),

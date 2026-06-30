@@ -384,7 +384,7 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'setCustomFieldValue',
   annotations: { readOnlyHint: false },
-  description: 'Set a custom field value on a ClickUp task. Use getAccessibleCustomFields first to find the field ID and type.',
+  description: 'Set a custom field value on a ClickUp task. Use getAccessibleCustomFields first to find the field ID and type. Value shape depends on field type: text/email/phone → string; number → number; drop_down → option orderindex (int) or option ID; users → array of user IDs; labels → array of label UUIDs; date → unix ms.',
   parameters: z.object({
     taskId: z.string().describe('The task ID.'),
     fieldId: z.string().describe('The custom field ID (from getAccessibleCustomFields).'),

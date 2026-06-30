@@ -58,7 +58,7 @@ driveServer.addTool({
 driveServer.addTool({
   name: 'listFolderContents',
   annotations: { readOnlyHint: true },
-  description: 'Lists the contents of a specific folder in Google Drive or a shared drive.',
+  description: 'Lists the contents of a specific folder in Google Drive or a shared drive. For large folders prefer REST: GET /api/v1/drive/folders/{folderId}/contents.',
   parameters: z.object({
     folderId: z.string().describe('ID of the folder to list contents of. Use "root" for the root Drive folder. For shared drives, use the shared drive ID.'),
     includeSubfolders: z.boolean().optional().default(true).describe('Whether to include subfolders in results.'),
@@ -93,7 +93,7 @@ driveServer.addTool({
 driveServer.addTool({
   name: 'copyFile',
   annotations: { readOnlyHint: false },
-  description: 'Creates a copy of a Google Drive file or document (works with shared drives).',
+  description: 'Creates a copy of an existing Google Drive file or document (works with shared drives). For a brand-new blank document, use createDocument instead.',
   parameters: z.object({
     fileId: z.string().describe('ID of the file to copy.'),
     newName: z.string().optional().describe('Name for the copied file. If not provided, will use "Copy of [original name]".'),
@@ -187,7 +187,7 @@ driveServer.addTool({
 driveServer.addTool({
   name: 'shareDriveFile',
   annotations: { readOnlyHint: false },
-  description: 'Share a Google Drive file or folder by creating a permission. Can share with specific users/groups, a domain, or create an "anyone with the link" share.',
+  description: 'Share a Google Drive file or folder by creating a permission. Required fields by type: type=user|group → emailAddress; type=domain → domain; type=anyone → no extra field.',
   parameters: z.object({
     fileId: z.string().describe('The Drive file or folder ID to share.'),
     role: z.enum(['reader', 'writer', 'commenter']).describe('The access role to grant.'),

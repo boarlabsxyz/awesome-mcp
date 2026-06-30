@@ -39,7 +39,7 @@ function getDriveClient(session?: UserSession): drive_v3.Drive {
 sheetsServer.addTool({
   name: 'readSpreadsheet',
   annotations: { readOnlyHint: true },
-  description: 'Reads data from a specific range in a Google Spreadsheet.',
+  description: 'Reads data from a specific range in a Google Spreadsheet. For large ranges prefer REST: GET /api/v1/sheets/{spreadsheetId}/ranges?range={range}.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
     range: z.string().describe('A1 notation range to read (e.g., "A1:B10" or "Sheet1!A1:B10").'),
