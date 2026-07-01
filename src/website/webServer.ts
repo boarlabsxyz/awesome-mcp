@@ -4254,6 +4254,14 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
     }
   };
 
+  // REST data plane (/api/v1/*). Same routes createWebApp / createWebOnlyApp
+  // mount — kept reachable in MCP_MODE=mcp (per-service Railway subdomains
+  // like google-calendar.awesome-mcp.xyz) so bearers minted by the shared
+  // mintRestBearerForCurl tool actually work on the subdomain they were
+  // minted from. Registered BEFORE the /mcp proxy so the /api/v1/* prefix
+  // is matched against the concrete routes rather than falling through.
+  registerRestApiRoutes(app);
+
   app.use(['/mcp', '/sse'], mcpOnlyMiddleware);
   const mcpProxy = createProxyMiddleware({
     target: `http://127.0.0.1:${internalMcpPort}`,
