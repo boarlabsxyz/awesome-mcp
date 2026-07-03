@@ -2,6 +2,8 @@
 
 Operator notes for setting up the e2e runner. Run these on the Mac Studio that will host the smoke tests.
 
+> Setting up remotely? See [TAILSCALE.md](./TAILSCALE.md) — everything below can be driven over the tailnet after a one-time console visit to install Tailscale.
+
 ## Prerequisites
 
 - macOS user account dedicated to e2e (e.g. `mcpe2e`).

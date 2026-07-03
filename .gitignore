@@ -20,3 +20,6 @@ coverage/
 
 # User data
 data/
+
+# Claude Code local settings (may embed credentials in allowlist entries)
+.claude/
