@@ -34,6 +34,9 @@ export function formatTask(task: any): string {
   if (task.priority) parts.push(`  Priority: ${task.priority.priority || task.priority}`);
   if (task.assignees?.length) parts.push(`  Assignees: ${task.assignees.map((a: any) => a.username || a.email).join(', ')}`);
   if (task.due_date) parts.push(`  Due: ${new Date(parseInt(task.due_date)).toISOString()}`);
+  if (task.date_closed) parts.push(`  Closed: ${new Date(parseInt(task.date_closed)).toISOString()}`);
+  if (task.date_created) parts.push(`  Created: ${new Date(parseInt(task.date_created)).toISOString()}`);
+  if (task.date_updated) parts.push(`  Updated: ${new Date(parseInt(task.date_updated)).toISOString()}`);
   if (task.description) parts.push(`  Description: ${task.description.substring(0, 200)}${task.description.length > 200 ? '...' : ''}`);
   if (task.url) parts.push(`  URL: ${task.url}`);
   if (task.list) parts.push(`  List: ${task.list.name} (${task.list.id})`);
