@@ -11,6 +11,7 @@ const ROUTE_SCOPE_MAP: Record<string, string> = {
   clickup: 'mcp:clickup',
   'slack-bot': 'mcp:slack-bot',
   slack: 'mcp:slack',
+  outline: 'mcp:outline',
 };
 
 /** All supported MCP scopes (single source of truth). */
@@ -27,6 +28,7 @@ const SLUG_SCOPE_MAP: Record<string, string> = {
   'clickup': 'mcp:clickup',
   'slack-bot': 'mcp:slack-bot',
   'slack': 'mcp:slack',
+  'outline': 'mcp:outline',
 };
 
 /** Return the scope for a given MCP_SLUG, or all scopes if unknown. */

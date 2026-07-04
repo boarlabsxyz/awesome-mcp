@@ -16,6 +16,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [ClickUp](#clickup) (37)
 - [Slack (bot)](#slack-bot-) (7)
 - [Slack (user)](#slack-user-) (7)
+- [Outline](#outline) (27)
 
 ## Shared (every server)
 
@@ -223,6 +224,40 @@ Source: `src/slack-user/server.ts` — 7 tools.
 | `listUsers` | List workspace members. Use this to find a user by name and get their user ID for opening a DM. | — |
 | `openDm` | Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage. | — |
 
+## Outline
+
+Source: `src/outline/server.ts` — 27 tools.
+
+| Tool | Description | REST |
+|---|---|---|
+| `getDocument` | Retrieves an Outline document by ID and returns its title and markdown content. | — |
+| `exportDocument` | Exports an Outline document as plain markdown text. | — |
+| `searchDocuments` | Full-text search across Outline documents. Supports collection filter and status filter (draft/archived/published). | — |
+| `getDocumentIdFromTitle` | Find an Outline document ID by title. Prefers exact matches, falls back to best partial match. | — |
+| `listRecentlyUpdatedDocuments` | Lists Outline documents ordered by most recent change (newest first). Coarse time window: day/week/month/year. | — |
+| `getDocumentBacklinks` | Lists all Outline documents that link to a given document. | — |
+| `listArchivedDocuments` | Lists all archived Outline documents. | — |
+| `listTrash` | Lists all Outline documents currently in the trash. | — |
+| `createDocument` | Creates a new Outline document in a collection. Optionally publishes immediately, sets an icon, or nests under a parent. | — |
+| `updateDocument` | Updates an Outline document. Replaces title/content unless append=true. | — |
+| `moveDocument` | Moves an Outline document to a different collection and/or under a different parent. Must specify at least one destination. | — |
+| `archiveDocument` | Archives an Outline document (removes from collections but keeps searchable). | — |
+| `unarchiveDocument` | Unarchives a previously archived Outline document. | — |
+| `restoreDocument` | Restores an Outline document from the trash back to active status. | — |
+| `deleteDocument` | Moves an Outline document to trash. Set permanent=true to skip trash and delete immediately (irreversible). | — |
+| `listCollections` | Lists all Outline collections in the workspace. | — |
+| `getCollectionStructure` | Returns the hierarchical document tree for an Outline collection. | — |
+| `createCollection` | Creates a new Outline collection. | — |
+| `updateCollection` | Updates an Outline collection's name, description, or color. Provide at least one field. | — |
+| `deleteCollection` | Permanently deletes an Outline collection AND all documents in it. This cannot be undone. | — |
+| `exportCollection` | Starts an async export of an Outline collection. Returns a file operation ID and status. | — |
+| `exportAllCollections` | Starts an async export of the entire Outline workspace. Returns a file operation ID and status. | — |
+| `listDocumentComments` | Lists comments on an Outline document (paginated). | — |
+| `getComment` | Retrieves a single Outline comment by ID. | — |
+| `addComment` | Adds a comment on an Outline document, or replies to an existing comment. | — |
+| `listDocumentAttachments` | Lists attachment IDs referenced in an Outline document by parsing its markdown for /api/attachments.redirect links. | — |
+| `getAttachmentUrl` | Resolves an Outline attachment ID to a signed download URL by following the /api/attachments.redirect redirect. | — |
+
 ---
 
-**Grand total: 136 tools across 10 sections.**
+**Grand total: 163 tools across 11 sections.**
