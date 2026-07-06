@@ -81,11 +81,17 @@ This is the part future contributors are most likely to miss, so do it in this o
 
 **a. `src/auth/scopeMap.ts`** — add an entry to both `ROUTE_SCOPE_MAP` (route → scope) and `SLUG_SCOPE_MAP` (slug → scope). The scope value is `mcp:<slug>` — except for slugs prefixed `google-`, where the convention is to drop the prefix (`google-sheets` → `mcp:sheets`). Match the existing entries.
 
-**b. `src/google-docs/server.ts`** — this file holds the dispatch ternary that picks which MCP server boots when `MCP_SLUG` is set (around line 1852). Two edits:
+Then update `src/__tests__/auth/scopeMap.test.ts` — the "should contain all N scopes" test hard-codes `ALL_SCOPES.length` and enumerates every scope by name. Bump the count in both the `it(...)` title and the assertion, add `assert.ok(ALL_SCOPES.includes('mcp:<slug>'))`, and add `assert.deepEqual(getScopesForSlug('<slug>'), ['mcp:<slug>'])` to the known-slugs test. Miss this and CI stays red — the typecheck won't catch it.
+
+**b. `src/google-docs/server.ts`** — two runtime modes to wire. The mcp-only dispatch is critical; the combined mode is only needed if that deployment mode is in use.
+
+**mcp-only mode** (`MCP_MODE=mcp`, one MCP per service): find the dispatch ternary around line 1852. Two edits:
 - Add `import { <slugCamel>Server } from '../<slug>/server.js';` near the other server imports at the top.
 - Add a branch to the ternary: `: MCP_SLUG === "<slug>" ? <slugCamel>Server`.
 
 Without this, the new server compiles but never runs — the symptom is the wrong MCP responding on the route.
+
+**web+mcp combined mode** (all MCPs in one process, ~line 1934+): NOT wired by default. If the user runs the combined mode, they also need an `<SLUG>_MCP_PORT` constant, an `<slugCamel>Server.start({ ... port: <SLUG>_MCP_PORT ... })` block, an extended `createWebApp(...)` signature that accepts the new port, and a matching proxy route in `src/website/webServer.ts`. Ask the user whether they want the combined mode wired now; if not, flag it as a manual follow-up in step 9 so `/<slug>` doesn't silently 404 later.
 
 **c. `src/userSession.ts`** — third-party only:
 - Add the token field to the `UserSession` interface (group with the existing third-party fields).
@@ -94,6 +100,8 @@ Without this, the new server compiles but never runs — the symptom is the wron
 If the user picked a new Google API, also add the client field to `UserSession`, instantiate it via `google.<api>({ version: '<v>', auth: oauthClient })` in the two real-session factories, and null-default it in the third-party-only factory.
 
 **d. `data/mcp-catalog.json`** — append a new entry. Compute the next id by reading the file (`max(id) + 1`). Both timestamps use `new Date().toISOString()`. Use the shapes below.
+
+Note: `data/mcp-catalog.json` is gitignored — this edit is local-only and will NOT show up in the PR. The prod catalog is seeded/managed separately (admin dashboard flow or migration script). Mention this in the final report so the user knows the entry needs to reach prod through a different path.
 
 Google entry:
 ```json
@@ -131,23 +139,59 @@ Third-party entry — same shape plus `provider`, `oauthAuthorizationUrl`, `oaut
 }
 ```
 
-### 6. Update `CLAUDE.md`
+### 6. Wire the REST catalog and doc generators
 
-- Add a row to the Tool Categories table.
-- Add a row to the Source Files table pointing at `src/<slug>/server.ts`.
+The two markdown docs under `docs/` are generated. Both need the new service registered before regeneration.
+
+**a. `src/restCatalog.ts`** — add the slug to the `RestService` union type. Then append entries for every *read-only* tool (annotations `readOnlyHint: true`). Mark each `status: 'planned'` unless you're also wiring the actual `/api/v1/<slug>/*` routes in `src/website/webServer.ts` right now (usually you aren't — that's a follow-up). `openapiOperationId` values must be unique globally, so prefix common names with the service (`getComment` → `getOutlineComment`).
+
+**b. `scripts/buildMcpToolsDoc.mjs`** — append a row to the `SERVICES` array: `['src/<slug>/server.ts', '<Display Name>', '<slug>']` (or `null` as the third field if this server has no REST siblings at all).
+
+**c. `scripts/buildRestEndpointsDoc.mjs`** — add the slug to `SERVICE_TITLE` and append it to `SERVICE_ORDER`. Skip this if there are no REST entries in step 6a.
+
+**d. Regenerate.** Run:
+```
+node scripts/buildMcpToolsDoc.mjs
+node scripts/buildRestEndpointsDoc.mjs
+```
+Both are idempotent. `docs/MCP_TOOLS.md` and `docs/REST_ENDPOINTS.md` update in place. The MCP_TOOLS.md REST column intentionally shows `—` for `planned` entries — the cross-ref only fires once you flip status to `live`.
+
+### 7. Update `CLAUDE.md` (lightly)
+
+`CLAUDE.md` is manually maintained and its "N tools" header is usually stale relative to auto-generated `docs/MCP_TOOLS.md` — don't waste effort keeping the exact count in sync. What's worth adding:
+
+- A row in the Source Files table pointing at `src/<slug>/server.ts` (and `apiHelpers.ts` for third-party).
 - If the source repo flagged any tools as unimplemented or had known limitations, surface them under Known Limitations so the user doesn't get bitten later.
 
-### 7. Verify
+Skip the Tool Categories row and the tool-count bump — `docs/MCP_TOOLS.md` is authoritative for both.
 
-Run `npm run typecheck`. Surface failures verbatim. Don't reach for `as any` or `// @ts-ignore` — the typechecker is catching the kind of cross-file slip this skill exists to prevent.
+### 8. Verify
 
-### 8. Report and offer the next step
+Run both:
+```
+npm run typecheck
+npm test
+```
+
+Two failure modes get caught here that the typechecker won't:
+- The scopeMap unit test (`src/__tests__/auth/scopeMap.test.ts`) hard-codes `ALL_SCOPES.length`. If step 5a's test edit was missed, this fails with `expected 9, actual 10` (or similar). Fix by bumping the count and adding the new-slug assertions.
+- The doc generators can silently produce a table without the new service if the SERVICES/SERVICE_ORDER entries are missing. Spot-check `docs/MCP_TOOLS.md` for the new section.
+
+Don't reach for `as any` or `// @ts-ignore` if typecheck fails — the typechecker is catching the kind of cross-file slip this skill exists to prevent.
+
+### 9. Report and offer the next step
 
 End with a tight summary:
 - Files created and patched (one bullet each, with path).
 - Number of tools generated, split into fully translated vs TODO-stubbed.
 - Source repo + commit sha if used.
-- Anything the user still has to do manually (set env vars, add OAuth scopes in the provider console, register a new route in `webServer.ts` if a new Google API was introduced).
+- Anything the user still has to do manually. The common list:
+  - Set env vars (base URL, API key defaults) if the server reads any.
+  - Add OAuth scopes / register the app in the provider console.
+  - Wire a new route in `webServer.ts` if a new Google API was introduced.
+  - Wire web+mcp combined mode (port constant, `.start()` call, `createWebApp` signature, proxy route) if skipped in step 5b.
+  - Wire the planned REST routes in `webServer.ts` and flip `status: 'planned'` → `'live'` in `src/restCatalog.ts`, then re-run the doc generators.
+  - Reseed the prod `mcp-catalog.json` — the local edit was gitignored.
 
 Then offer the soft chain:
 
@@ -169,6 +213,11 @@ Each of these is here because we've seen the failure mode in the wild or it prod
 - **Typecheck fails after scaffolding** — surface errors. Don't delete the new files; the user will likely fix them in place.
 - **Tool name collisions between ported tools** — rename the second occurrence with a numeric suffix and flag in the report. Two tools with the same name silently shadow each other.
 - **More than ~30 tools in the source** — confirm with the user before generating. This is a big diff and worth pausing for.
+- **`scopeMap.test.ts` hard-codes the scope count** — `assert.equal(ALL_SCOPES.length, N)`. Adding a scope makes it `N+1` and CI turns red on `npm test`. Typecheck passes; only the test suite catches this. Always update the test in step 5a alongside `scopeMap.ts`.
+- **`data/mcp-catalog.json` is gitignored** — the catalog edit is local-only. Don't be surprised when it's absent from the PR diff. Prod catalog is seeded through a separate path — call this out in the final report.
+- **Web+mcp combined mode wiring is separate** — the dispatch ternary in `MCP_MODE=mcp` covers per-service deployment; the combined mode has its own port constants, `.start()` calls, `createWebApp` signature, and proxy routes in `webServer.ts`. If the user runs the combined mode and you only wired the ternary, `/<slug>` silently 404s.
+- **REST catalog entries default to `planned`** — until the actual `/api/v1/<slug>/*` routes are wired in `webServer.ts`, marking anything `live` is a lie. The doc generator honors the status: `planned` entries show `—` in `docs/MCP_TOOLS.md`'s REST column, which is correct behavior.
+- **`CLAUDE.md` tool count drifts** — it's manually maintained. Don't try to keep it exact; `docs/MCP_TOOLS.md` is authoritative and auto-regenerates.
 
 ## Conventions reference
 
