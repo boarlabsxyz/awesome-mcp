@@ -749,6 +749,24 @@
               "type": "string"
             },
             "description": "Comma-separated list of statuses to filter by"
+          },
+          {
+            "name": "closedAfter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only return tasks closed at/after this time (ISO string or Unix ms). Forces include_closed=true and auto-paginates up to 2000 tasks, filtering locally on date_closed."
+          },
+          {
+            "name": "closedBefore",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only return tasks closed at/before this time (ISO string or Unix ms). Forces include_closed=true and auto-paginates up to 2000 tasks, filtering locally on date_closed."
           }
         ],
         "responses": {
@@ -1287,6 +1305,24 @@
               "type": "string"
             },
             "description": "JSON-encoded custom field filters"
+          },
+          {
+            "name": "closedAfter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only return tasks closed at/after this time (ISO string or Unix ms). Forces include_closed=true and auto-paginates up to 2000 tasks, filtering locally on date_closed."
+          },
+          {
+            "name": "closedBefore",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only return tasks closed at/before this time (ISO string or Unix ms). Forces include_closed=true and auto-paginates up to 2000 tasks, filtering locally on date_closed."
           }
         ],
         "responses": {

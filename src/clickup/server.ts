@@ -3,7 +3,13 @@ import { FastMCP, UserError } from 'fastmcp';
 import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
-import { ClickUpClient, markdownToCommentBlocks } from './apiHelpers.js';
+import {
+  ClickUpClient,
+  collectTasksInCloseWindow,
+  formatCloseWindowCapMessage,
+  markdownToCommentBlocks,
+  parseCloseWindow,
+} from './apiHelpers.js';
 import { formatTask, formatTaskList } from './formatHelpers.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
@@ -146,20 +152,47 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'listTasks',
   annotations: { readOnlyHint: true },
-  description: 'List tasks in a ClickUp list with optional filters.',
+  description: 'List tasks in a ClickUp list with optional filters. To query tasks closed within a window, set closedAfter and/or closedBefore — the tool then forces include_closed, auto-paginates up to 2000 tasks, and filters locally on date_closed (ClickUp\'s REST API has no server-side close-date filter).',
   parameters: z.object({
     listId: z.string().describe('The list ID to get tasks from.'),
     archived: z.boolean().optional().default(false).describe('Include archived tasks.'),
-    page: z.number().int().min(0).optional().describe('Page number (0-based). Each page returns up to 100 tasks.'),
+    page: z.number().int().min(0).optional().describe('Page number (0-based). Each page returns up to 100 tasks. Ignored when closedAfter/closedBefore is set.'),
     orderBy: z.enum(['id', 'created', 'updated', 'due_date']).optional().describe('Field to order by.'),
     reverse: z.boolean().optional().default(false).describe('Reverse the order.'),
     subtasks: z.boolean().optional().default(false).describe('Include subtasks.'),
     statuses: z.array(z.string()).optional().describe('Filter by status names.'),
-    includeClosed: z.boolean().optional().default(false).describe('Include closed tasks.'),
+    includeClosed: z.boolean().optional().default(false).describe('Include closed tasks. Automatically forced true when closedAfter/closedBefore is set.'),
     assignees: z.array(z.string()).optional().describe('Filter by assignee user IDs.'),
+    closedAfter: z.string().optional().describe('Only return tasks closed at/after this time. ISO string or Unix ms. Enables auto-pagination + local date_closed filtering.'),
+    closedBefore: z.string().optional().describe('Only return tasks closed at/before this time. ISO string or Unix ms. Enables auto-pagination + local date_closed filtering.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
+    const win = parseCloseWindow(args.closedAfter, args.closedBefore);
+    if (win.error) throw new UserError(win.error);
+
+    if (win.from !== undefined || win.to !== undefined) {
+      const { tasks, pagesScanned, hitCap } = await collectTasksInCloseWindow(
+        async (page) => {
+          const res = await client.getTasks(args.listId, {
+            archived: args.archived,
+            page,
+            order_by: args.orderBy,
+            reverse: args.reverse,
+            subtasks: args.subtasks,
+            statuses: args.statuses,
+            include_closed: true,
+            assignees: args.assignees,
+          });
+          return res.tasks || [];
+        },
+        win.from,
+        win.to,
+      );
+      if (hitCap) throw new UserError(formatCloseWindowCapMessage(pagesScanned));
+      return formatTaskList(tasks);
+    }
+
     const result = await client.getTasks(args.listId, {
       archived: args.archived,
       page: args.page,
@@ -334,20 +367,44 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'searchTasks',
   annotations: { readOnlyHint: true },
-  description: 'Search for tasks across a ClickUp workspace. Supports filtering by name (client-side substring match) and/or custom fields. By default excludes closed/completed tasks — set includeClosed=true to include them.',
+  description: 'Search for tasks across a ClickUp workspace. Supports filtering by name (client-side substring match) and/or custom fields. By default excludes closed/completed tasks — set includeClosed=true to include them. To query tasks closed within a window, set closedAfter and/or closedBefore — the tool then forces include_closed, auto-paginates up to 2000 tasks, and filters locally on date_closed (ClickUp\'s REST API has no server-side close-date filter).',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID to search in.'),
     query: z.string().describe('Filter by task name (case-insensitive substring match). Use empty string to skip name filtering.'),
-    page: z.number().int().min(0).optional().describe('Page number (0-based). Results limited to 100 per page.'),
-    includeClosed: z.boolean().optional().default(false).describe('Include closed/completed tasks in results.'),
+    page: z.number().int().min(0).optional().describe('Page number (0-based). Results limited to 100 per page. Ignored when closedAfter/closedBefore is set.'),
+    includeClosed: z.boolean().optional().default(false).describe('Include closed/completed tasks in results. Automatically forced true when closedAfter/closedBefore is set.'),
     custom_fields: z.array(z.object({
       field_id: z.string().describe('The custom field ID.'),
       operator: z.enum(['=', '<', '>', '>=', '<=', '!=', 'IS NULL', 'IS NOT NULL', 'RANGE', 'ANY', 'ALL', 'NOT ANY', 'NOT ALL']).describe('Comparison operator.'),
       value: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional().describe('Value to compare against. Use an array for ANY/ALL operators. For dropdown fields, use the option UUID (id from getAccessibleCustomFields), not orderindex or label.'),
     })).optional().describe('Filter by custom fields. Each entry needs field_id, operator, and optionally value.'),
+    closedAfter: z.string().optional().describe('Only return tasks closed at/after this time. ISO string or Unix ms. Enables auto-pagination + local date_closed filtering.'),
+    closedBefore: z.string().optional().describe('Only return tasks closed at/before this time. ISO string or Unix ms. Enables auto-pagination + local date_closed filtering.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
+    const win = parseCloseWindow(args.closedAfter, args.closedBefore);
+    if (win.error) throw new UserError(win.error);
+
+    if (win.from !== undefined || win.to !== undefined) {
+      // Pass empty query to bypass client.searchTasks's client-side name filter so
+      // the loop's "page < 100 → stop" heuristic sees the raw ClickUp page size,
+      // not the name-filtered subset. We re-apply the name filter after collecting.
+      const { tasks, pagesScanned, hitCap } = await collectTasksInCloseWindow(
+        async (page) => {
+          const res = await client.searchTasks(args.workspaceId, '', page, args.custom_fields, true);
+          return res.tasks || [];
+        },
+        win.from,
+        win.to,
+      );
+      if (hitCap) throw new UserError(formatCloseWindowCapMessage(pagesScanned));
+      const q = args.query.toLowerCase();
+      const filtered = args.query ? tasks.filter((t: any) => t.name?.toLowerCase().includes(q)) : tasks;
+      if (filtered.length === 0) return `No tasks found${args.query ? ` matching "${args.query}"` : ''} closed in window.`;
+      return `Found ${filtered.length} task(s) closed in window:\n\n` + filtered.map(formatTask).join('\n\n');
+    }
+
     const result = await client.searchTasks(args.workspaceId, args.query, args.page, args.custom_fields, args.includeClosed);
     const tasks = result.tasks || [];
     if (tasks.length === 0) return `No tasks found${args.query ? ` matching "${args.query}"` : ''}.`;

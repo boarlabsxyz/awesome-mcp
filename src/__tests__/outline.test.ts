@@ -194,8 +194,8 @@ describe('formatCollectionStructure', () => {
     ]);
     assert.match(out, /# Collection Structure/);
     assert.match(out, /- Root \(ID: r1\)/);
-    assert.match(out, /  - Child 1 \(ID: c1\)/);
-    assert.match(out, /    - Grand \(ID: g1\)/);
+    assert.match(out, / {2}- Child 1 \(ID: c1\)/);
+    assert.match(out, / {4}- Grand \(ID: g1\)/);
   });
 
   test('missing title falls back to Untitled', () => {

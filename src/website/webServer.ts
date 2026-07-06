@@ -3278,15 +3278,39 @@ function registerRestApiRoutes(app: express.Express): void {
   // markdown rendering the listTasks MCP tool emits.
   app.get('/api/v1/clickup/lists/:listId/tasks', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const {
+        ClickUpClient,
+        collectTasksInCloseWindow,
+        formatCloseWindowCapMessage,
+        parseCloseWindow,
+      } = await import('../clickup/apiHelpers.js');
       const { formatTaskList } = await import('../clickup/formatHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
       const params: any = {};
       if (req.query.page) params.page = parseInt(req.query.page as string);
       if (req.query.orderBy) params.order_by = req.query.orderBy;
       if (req.query.statuses) params.statuses = Array.isArray(req.query.statuses) ? req.query.statuses : [req.query.statuses];
-      const result = await client.getTasks(req.params.listId as string, params);
-      const tasks = result.tasks || [];
+
+      const win = parseCloseWindow(req.query.closedAfter as string | undefined, req.query.closedBefore as string | undefined);
+      if (win.error) { res.status(400).json({ error: win.error }); return; }
+
+      let tasks: any[];
+      if (win.from !== undefined || win.to !== undefined) {
+        const listId = req.params.listId as string;
+        const winParams = { ...params, include_closed: true };
+        delete winParams.page;
+        const collected = await collectTasksInCloseWindow(
+          async (page) => (await client.getTasks(listId, { ...winParams, page })).tasks || [],
+          win.from,
+          win.to,
+        );
+        if (collected.hitCap) { res.status(400).json({ error: formatCloseWindowCapMessage(collected.pagesScanned) }); return; }
+        tasks = collected.tasks;
+      } else {
+        const result = await client.getTasks(req.params.listId as string, params);
+        tasks = result.tasks || [];
+      }
+
       if (negotiateFormat(req) === 'text') {
         res.type('text/plain; charset=utf-8').send(formatTaskList(tasks));
         return;
@@ -3419,8 +3443,33 @@ function registerRestApiRoutes(app: express.Express): void {
       const query = req.query.query as string || '';
       const page = req.query.page ? parseInt(req.query.page as string) : undefined;
       const customFields = req.query.custom_fields ? JSON.parse(req.query.custom_fields as string) : undefined;
-      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const {
+        ClickUpClient,
+        collectTasksInCloseWindow,
+        formatCloseWindowCapMessage,
+        parseCloseWindow,
+      } = await import('../clickup/apiHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+
+      const win = parseCloseWindow(req.query.closedAfter as string | undefined, req.query.closedBefore as string | undefined);
+      if (win.error) { res.status(400).json({ error: win.error }); return; }
+
+      if (win.from !== undefined || win.to !== undefined) {
+        const workspaceId = req.params.workspaceId as string;
+        // Bypass client.searchTasks's client-side name filter during pagination so
+        // the loop's "page < 100 → stop" heuristic sees raw ClickUp page sizes.
+        const collected = await collectTasksInCloseWindow(
+          async (p) => (await client.searchTasks(workspaceId, '', p, customFields, true)).tasks || [],
+          win.from,
+          win.to,
+        );
+        if (collected.hitCap) { res.status(400).json({ error: formatCloseWindowCapMessage(collected.pagesScanned) }); return; }
+        const q = query.toLowerCase();
+        const filtered = query ? collected.tasks.filter((t: any) => t.name?.toLowerCase().includes(q)) : collected.tasks;
+        res.json({ tasks: filtered });
+        return;
+      }
+
       const result = await client.searchTasks(req.params.workspaceId as string, query, page, customFields);
       res.json({ tasks: result.tasks || [] });
     } catch (err: any) {

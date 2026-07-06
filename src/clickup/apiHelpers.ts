@@ -62,6 +62,80 @@ export function markdownToCommentBlocks(markdown: string): CommentBlock[] {
   return blocks;
 }
 
+// Parse an ISO-string or Unix-ms-string timestamp into an epoch-ms number.
+// Returns NaN when the input cannot be interpreted as either. The Date
+// constructor's string mode does not accept digit-only strings — it returns
+// Invalid Date — so callers passing Unix ms as a JSON string need explicit
+// numeric-string handling first.
+export function parseTimestampInput(input: string): number {
+  const trimmed = input.trim();
+  if (/^-?\d+$/.test(trimmed)) return Number(trimmed);
+  return new Date(trimmed).getTime();
+}
+
+// Parse and validate a close-date window from the closedAfter/closedBefore
+// parameter pair. Result-typed rather than throwing so both MCP and REST
+// callers can surface the error message in their preferred shape (UserError
+// vs. HTTP 400 body).
+export function parseCloseWindow(
+  closedAfter?: string,
+  closedBefore?: string,
+): { from?: number; to?: number; error?: string } {
+  let from: number | undefined;
+  let to: number | undefined;
+  if (closedAfter) {
+    from = parseTimestampInput(closedAfter);
+    if (Number.isNaN(from)) return { error: `Invalid closedAfter: ${closedAfter}` };
+  }
+  if (closedBefore) {
+    to = parseTimestampInput(closedBefore);
+    if (Number.isNaN(to)) return { error: `Invalid closedBefore: ${closedBefore}` };
+  }
+  return { from, to };
+}
+
+// The exact user-facing message emitted when close-window pagination hits its
+// safety cap. Kept as a helper so the string stays consistent across the four
+// call sites (two MCP tools + two REST handlers) and stays covered by tests.
+export function formatCloseWindowCapMessage(pagesScanned: number): string {
+  return `Exceeded 2000-task pagination cap while scanning ${pagesScanned} pages. Narrow closedAfter/closedBefore and retry.`;
+}
+
+// Client-side pagination + filter for tasks closed within a window.
+//
+// ClickUp's Get Tasks / team-task-filter endpoints don't support
+// date_closed_gt/lt or a "date done" sort. To answer "tasks closed within
+// window X" we page through include_closed=true results and filter locally
+// on `date_closed`. Bounded by `maxPages` so a wide window can't loop forever.
+//
+// `fetchPage(page)` should return the 100-task page for that index.
+// `hitCap` is true when we exhausted maxPages without seeing a partial page,
+// which means more matches likely exist and the caller should narrow the window.
+export async function collectTasksInCloseWindow(
+  fetchPage: (page: number) => Promise<any[]>,
+  from: number | undefined,
+  to: number | undefined,
+  maxPages = 20,
+): Promise<{ tasks: any[]; pagesScanned: number; hitCap: boolean }> {
+  const collected: any[] = [];
+  let pagesScanned = 0;
+  let hitCap = true;
+  for (let p = 0; p < maxPages; p++) {
+    const tasks = await fetchPage(p);
+    pagesScanned = p + 1;
+    for (const t of tasks) {
+      if (!t.date_closed) continue;
+      const dc = parseInt(t.date_closed);
+      if (Number.isNaN(dc)) continue;
+      if (from !== undefined && dc < from) continue;
+      if (to !== undefined && dc > to) continue;
+      collected.push(t);
+    }
+    if (tasks.length < 100) { hitCap = false; break; }
+  }
+  return { tasks: collected, pagesScanned, hitCap };
+}
+
 export class ClickUpClient {
   constructor(private accessToken: string) {}
 
