@@ -36,6 +36,7 @@ const SERVICES = [
   ['src/clickup/server.ts',               'ClickUp',               'clickup'],
   ['src/slack/server.ts',                 'Slack (bot)',           'slack'],
   ['src/slack-user/server.ts',            'Slack (user)',          null],
+  ['src/outline/server.ts',               'Outline',               'outline'],
 ];
 
 // ---------------------------------------------------------------------------

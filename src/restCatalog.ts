@@ -14,7 +14,8 @@ export type RestService =
   | 'gmail'
   | 'slides'
   | 'clickup'
-  | 'slack';
+  | 'slack'
+  | 'outline';
 
 export interface RestEndpoint {
   service: RestService;
@@ -94,6 +95,24 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'slack', method: 'GET', path: '/api/v1/slack/channels/{channelId}/messages', summary: 'Read recent messages in a channel', mcpToolName: 'readChannelHistory', openapiOperationId: 'readChannelHistory', status: 'live' },
   { service: 'slack', method: 'GET', path: '/api/v1/slack/channels/{channelId}/threads/{threadTs}', summary: 'Read replies in a thread', mcpToolName: 'readThreadReplies', openapiOperationId: 'readThreadReplies', status: 'live' },
   { service: 'slack', method: 'GET', path: '/api/v1/slack/users', summary: 'List Slack workspace users', mcpToolName: 'listUsers', openapiOperationId: 'listSlackUsers', status: 'live' },
+
+  // -------- Outline --------
+  // Catalog-only for now: the MCP tools are shipping in src/outline/server.ts, but
+  // the /api/v1/outline/* REST siblings are not yet wired in webServer.ts. Flip
+  // to status: 'live' as each route lands.
+  { service: 'outline', method: 'GET', path: '/api/v1/outline/documents/{documentId}', summary: 'Read an Outline document', mcpToolName: 'getDocument', openapiOperationId: 'getOutlineDocument', status: 'planned' },
+  { service: 'outline', method: 'GET', path: '/api/v1/outline/documents/{documentId}/export', summary: 'Export an Outline document as plain markdown', mcpToolName: 'exportDocument', openapiOperationId: 'exportOutlineDocument', status: 'planned' },
+  { service: 'outline', method: 'GET', path: '/api/v1/outline/documents/search?q={query}', summary: 'Search Outline documents', mcpToolName: 'searchDocuments', openapiOperationId: 'searchOutlineDocuments', status: 'planned' },
+  { service: 'outline', method: 'GET', path: '/api/v1/outline/documents/recent', summary: 'List recently updated Outline documents', mcpToolName: 'listRecentlyUpdatedDocuments', openapiOperationId: 'listRecentlyUpdatedOutlineDocuments', status: 'planned' },
+  { service: 'outline', method: 'GET', path: '/api/v1/outline/documents/{documentId}/backlinks', summary: 'List documents that link to a given Outline document', mcpToolName: 'getDocumentBacklinks', openapiOperationId: 'getOutlineDocumentBacklinks', status: 'planned' },
+  { service: 'outline', method: 'GET', path: '/api/v1/outline/documents/archived', summary: 'List archived Outline documents', mcpToolName: 'listArchivedDocuments', openapiOperationId: 'listArchivedOutlineDocuments', status: 'planned' },
+  { service: 'outline', method: 'GET', path: '/api/v1/outline/documents/trash', summary: 'List Outline documents in the trash', mcpToolName: 'listTrash', openapiOperationId: 'listOutlineTrash', status: 'planned' },
+  { service: 'outline', method: 'GET', path: '/api/v1/outline/collections', summary: 'List Outline collections', mcpToolName: 'listCollections', openapiOperationId: 'listOutlineCollections', status: 'planned' },
+  { service: 'outline', method: 'GET', path: '/api/v1/outline/collections/{collectionId}/structure', summary: 'Get the hierarchical document tree for an Outline collection', mcpToolName: 'getCollectionStructure', openapiOperationId: 'getOutlineCollectionStructure', status: 'planned' },
+  { service: 'outline', method: 'GET', path: '/api/v1/outline/documents/{documentId}/comments', summary: 'List comments on an Outline document', mcpToolName: 'listDocumentComments', openapiOperationId: 'listOutlineDocumentComments', status: 'planned' },
+  { service: 'outline', method: 'GET', path: '/api/v1/outline/comments/{commentId}', summary: 'Get a single Outline comment', mcpToolName: 'getComment', openapiOperationId: 'getOutlineComment', status: 'planned' },
+  { service: 'outline', method: 'GET', path: '/api/v1/outline/documents/{documentId}/attachments', summary: 'List attachments referenced in an Outline document', mcpToolName: 'listDocumentAttachments', openapiOperationId: 'listOutlineDocumentAttachments', status: 'planned' },
+  { service: 'outline', method: 'GET', path: '/api/v1/outline/attachments/{attachmentId}/url', summary: 'Resolve an Outline attachment ID to a signed download URL', mcpToolName: 'getAttachmentUrl', openapiOperationId: 'getOutlineAttachmentUrl', status: 'planned' },
 ];
 
 export function endpointsForTool(mcpToolName: string): RestEndpoint[] {

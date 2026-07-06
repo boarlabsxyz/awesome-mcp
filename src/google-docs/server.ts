@@ -45,6 +45,7 @@ import { driveServer } from '../google-drive/server.js';
 import { clickUpServer } from '../clickup/server.js';
 import { slackBotServer } from '../slack/server.js';
 import { slackUserServer } from '../slack-user/server.js';
+import { outlineServer } from '../outline/server.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 
 // Global clients for stdio (single-user) mode
@@ -1862,6 +1863,7 @@ async function startServer() {
                          : MCP_SLUG === "clickup"         ? clickUpServer
                          : MCP_SLUG === "slack-bot"        ? slackBotServer
                          : MCP_SLUG === "slack"           ? slackUserServer
+                         : MCP_SLUG === "outline"         ? outlineServer
                          : server; // default: google-docs
 
         mcpToStart.start({

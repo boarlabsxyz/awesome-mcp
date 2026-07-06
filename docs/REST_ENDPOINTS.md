@@ -8,7 +8,7 @@ Every MCP tool response flows through the LLM's tool-result channel — every by
 
 ## Auth
 
-1. From any MCP session, call the `mintRestBearerForCurl` MCP tool — it returns a 5-minute bearer.
+1. From any MCP session, call the `getSecurityToken` MCP tool — it returns a 5-minute bearer.
 2. Pass it as `Authorization: Bearer <token>` against the URLs below.
 
 The same endpoints also accept the permanent dashboard API key (for ChatGPT Custom Actions backward compatibility).
@@ -121,9 +121,27 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `readThreadReplies` | `GET /api/v1/slack/channels/{channelId}/threads/{threadTs}` | live | Read replies in a thread |
 | `listUsers` | `GET /api/v1/slack/users` | live | List Slack workspace users |
 
+### Outline (`outline`)
+
+| MCP tool | REST endpoint | Status | Summary |
+|---|---|---|---|
+| `getDocument` | `GET /api/v1/outline/documents/{documentId}` | planned | Read an Outline document |
+| `exportDocument` | `GET /api/v1/outline/documents/{documentId}/export` | planned | Export an Outline document as plain markdown |
+| `searchDocuments` | `GET /api/v1/outline/documents/search?q={query}` | planned | Search Outline documents |
+| `listRecentlyUpdatedDocuments` | `GET /api/v1/outline/documents/recent` | planned | List recently updated Outline documents |
+| `getDocumentBacklinks` | `GET /api/v1/outline/documents/{documentId}/backlinks` | planned | List documents that link to a given Outline document |
+| `listArchivedDocuments` | `GET /api/v1/outline/documents/archived` | planned | List archived Outline documents |
+| `listTrash` | `GET /api/v1/outline/documents/trash` | planned | List Outline documents in the trash |
+| `listCollections` | `GET /api/v1/outline/collections` | planned | List Outline collections |
+| `getCollectionStructure` | `GET /api/v1/outline/collections/{collectionId}/structure` | planned | Get the hierarchical document tree for an Outline collection |
+| `listDocumentComments` | `GET /api/v1/outline/documents/{documentId}/comments` | planned | List comments on an Outline document |
+| `getComment` | `GET /api/v1/outline/comments/{commentId}` | planned | Get a single Outline comment |
+| `listDocumentAttachments` | `GET /api/v1/outline/documents/{documentId}/attachments` | planned | List attachments referenced in an Outline document |
+| `getAttachmentUrl` | `GET /api/v1/outline/attachments/{attachmentId}/url` | planned | Resolve an Outline attachment ID to a signed download URL |
+
 ## Status legend
 
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 51 endpoints.
+Catalog size: 64 endpoints.
