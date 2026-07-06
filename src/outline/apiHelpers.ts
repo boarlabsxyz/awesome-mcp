@@ -71,16 +71,29 @@ export class OutlineClient {
     body?: unknown,
     init?: { redirect?: RequestRedirect },
   ): Promise<{ data?: T; ok: boolean; status: number; finalUrl?: string; json?: any }> {
-    const res = await fetch(`${BASE_URL}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      redirect: init?.redirect ?? 'follow',
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+    let res: Response;
+    try {
+      res = await fetch(`${BASE_URL}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        redirect: init?.redirect ?? 'follow',
+        signal: controller.signal,
+      });
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        throw new Error(`Outline API ${method} ${path} timed out after 30000ms`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       const err: any = new Error(`Outline API ${method} ${path} failed: ${res.status} ${text}`);
