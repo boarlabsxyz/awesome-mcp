@@ -77,8 +77,8 @@ describe('scopeMap', () => {
   });
 
   describe('ALL_SCOPES', () => {
-    it('should contain all 9 scopes', () => {
-      assert.equal(ALL_SCOPES.length, 9);
+    it('should contain all 10 scopes', () => {
+      assert.equal(ALL_SCOPES.length, 10);
       assert.ok(ALL_SCOPES.includes('mcp:docs'));
       assert.ok(ALL_SCOPES.includes('mcp:calendar'));
       assert.ok(ALL_SCOPES.includes('mcp:sheets'));
@@ -88,6 +88,7 @@ describe('scopeMap', () => {
       assert.ok(ALL_SCOPES.includes('mcp:clickup'));
       assert.ok(ALL_SCOPES.includes('mcp:slack-bot'));
       assert.ok(ALL_SCOPES.includes('mcp:slack'));
+      assert.ok(ALL_SCOPES.includes('mcp:outline'));
     });
   });
 
@@ -102,6 +103,7 @@ describe('scopeMap', () => {
       assert.deepEqual(getScopesForSlug('clickup'), ['mcp:clickup']);
       assert.deepEqual(getScopesForSlug('slack-bot'), ['mcp:slack-bot']);
       assert.deepEqual(getScopesForSlug('slack'), ['mcp:slack']);
+      assert.deepEqual(getScopesForSlug('outline'), ['mcp:outline']);
     });
 
     it('should return all scopes for unknown slugs', () => {
