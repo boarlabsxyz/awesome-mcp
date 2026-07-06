@@ -62,6 +62,41 @@ export function markdownToCommentBlocks(markdown: string): CommentBlock[] {
   return blocks;
 }
 
+// Client-side pagination + filter for tasks closed within a window.
+//
+// ClickUp's Get Tasks / team-task-filter endpoints don't support
+// date_closed_gt/lt or a "date done" sort. To answer "tasks closed within
+// window X" we page through include_closed=true results and filter locally
+// on `date_closed`. Bounded by `maxPages` so a wide window can't loop forever.
+//
+// `fetchPage(page)` should return the 100-task page for that index.
+// `hitCap` is true when we exhausted maxPages without seeing a partial page,
+// which means more matches likely exist and the caller should narrow the window.
+export async function collectTasksInCloseWindow(
+  fetchPage: (page: number) => Promise<any[]>,
+  from: number | undefined,
+  to: number | undefined,
+  maxPages = 20,
+): Promise<{ tasks: any[]; pagesScanned: number; hitCap: boolean }> {
+  const collected: any[] = [];
+  let pagesScanned = 0;
+  let hitCap = true;
+  for (let p = 0; p < maxPages; p++) {
+    const tasks = await fetchPage(p);
+    pagesScanned = p + 1;
+    for (const t of tasks) {
+      if (!t.date_closed) continue;
+      const dc = parseInt(t.date_closed);
+      if (Number.isNaN(dc)) continue;
+      if (from !== undefined && dc < from) continue;
+      if (to !== undefined && dc > to) continue;
+      collected.push(t);
+    }
+    if (tasks.length < 100) { hitCap = false; break; }
+  }
+  return { tasks: collected, pagesScanned, hitCap };
+}
+
 export class ClickUpClient {
   constructor(private accessToken: string) {}
 

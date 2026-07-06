@@ -3278,15 +3278,36 @@ function registerRestApiRoutes(app: express.Express): void {
   // markdown rendering the listTasks MCP tool emits.
   app.get('/api/v1/clickup/lists/:listId/tasks', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const { ClickUpClient, collectTasksInCloseWindow } = await import('../clickup/apiHelpers.js');
       const { formatTaskList } = await import('../clickup/formatHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
       const params: any = {};
       if (req.query.page) params.page = parseInt(req.query.page as string);
       if (req.query.orderBy) params.order_by = req.query.orderBy;
       if (req.query.statuses) params.statuses = Array.isArray(req.query.statuses) ? req.query.statuses : [req.query.statuses];
-      const result = await client.getTasks(req.params.listId as string, params);
-      const tasks = result.tasks || [];
+
+      const from = req.query.closedAfter ? new Date(req.query.closedAfter as string).getTime() : undefined;
+      const to = req.query.closedBefore ? new Date(req.query.closedBefore as string).getTime() : undefined;
+      if (from !== undefined && Number.isNaN(from)) { res.status(400).json({ error: `Invalid closedAfter: ${req.query.closedAfter}` }); return; }
+      if (to !== undefined && Number.isNaN(to)) { res.status(400).json({ error: `Invalid closedBefore: ${req.query.closedBefore}` }); return; }
+
+      let tasks: any[];
+      if (from !== undefined || to !== undefined) {
+        const listId = req.params.listId as string;
+        const winParams = { ...params, include_closed: true };
+        delete winParams.page;
+        const collected = await collectTasksInCloseWindow(
+          async (page) => (await client.getTasks(listId, { ...winParams, page })).tasks || [],
+          from,
+          to,
+        );
+        if (collected.hitCap) { res.status(400).json({ error: `Exceeded 2000-task pagination cap while scanning ${collected.pagesScanned} pages. Narrow closedAfter/closedBefore and retry.` }); return; }
+        tasks = collected.tasks;
+      } else {
+        const result = await client.getTasks(req.params.listId as string, params);
+        tasks = result.tasks || [];
+      }
+
       if (negotiateFormat(req) === 'text') {
         res.type('text/plain; charset=utf-8').send(formatTaskList(tasks));
         return;
@@ -3419,8 +3440,30 @@ function registerRestApiRoutes(app: express.Express): void {
       const query = req.query.query as string || '';
       const page = req.query.page ? parseInt(req.query.page as string) : undefined;
       const customFields = req.query.custom_fields ? JSON.parse(req.query.custom_fields as string) : undefined;
-      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const { ClickUpClient, collectTasksInCloseWindow } = await import('../clickup/apiHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+
+      const from = req.query.closedAfter ? new Date(req.query.closedAfter as string).getTime() : undefined;
+      const to = req.query.closedBefore ? new Date(req.query.closedBefore as string).getTime() : undefined;
+      if (from !== undefined && Number.isNaN(from)) { res.status(400).json({ error: `Invalid closedAfter: ${req.query.closedAfter}` }); return; }
+      if (to !== undefined && Number.isNaN(to)) { res.status(400).json({ error: `Invalid closedBefore: ${req.query.closedBefore}` }); return; }
+
+      if (from !== undefined || to !== undefined) {
+        const workspaceId = req.params.workspaceId as string;
+        // Bypass client.searchTasks's client-side name filter during pagination so
+        // the loop's "page < 100 → stop" heuristic sees raw ClickUp page sizes.
+        const collected = await collectTasksInCloseWindow(
+          async (p) => (await client.searchTasks(workspaceId, '', p, customFields, true)).tasks || [],
+          from,
+          to,
+        );
+        if (collected.hitCap) { res.status(400).json({ error: `Exceeded 2000-task pagination cap while scanning ${collected.pagesScanned} pages. Narrow closedAfter/closedBefore and retry.` }); return; }
+        const q = query.toLowerCase();
+        const filtered = query ? collected.tasks.filter((t: any) => t.name?.toLowerCase().includes(q)) : collected.tasks;
+        res.json({ tasks: filtered });
+        return;
+      }
+
       const result = await client.searchTasks(req.params.workspaceId as string, query, page, customFields);
       res.json({ tasks: result.tasks || [] });
     } catch (err: any) {
