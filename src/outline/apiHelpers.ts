@@ -2,6 +2,9 @@
 // Adapted from https://github.com/Vortiago/mcp-outline@e699cd5d16a983c7bcb4e67c3cf213608df7eeac
 // (endpoints and payloads correspond to Outline's public REST API)
 
+import { UserError } from 'fastmcp';
+import { UserSession } from '../userSession.js';
+
 const BASE_URL = process.env.OUTLINE_BASE_URL || 'https://wiki-dev.gluzdov.com';
 
 export type OutlineDocument = {
@@ -475,4 +478,50 @@ export function formatAttachmentList(
     lines.push('');
   });
   return lines.join('\n').trimEnd();
+}
+
+// ==== Session + error helpers used by every Outline tool executor ====
+
+export type OutlineToolLog = {
+  info: (msg: string) => void;
+  error: (msg: string) => void;
+};
+
+/** Extract the OutlineClient from a session, or throw a not-connected UserError. */
+export function getOutlineClient(session?: UserSession): OutlineClient {
+  if (!session?.outlineAccessToken) {
+    throw new UserError('Outline not connected. Visit the dashboard to connect your Outline account.');
+  }
+  return new OutlineClient(session.outlineAccessToken);
+}
+
+/** Translate an API/network error into a `UserError` with the given prefix. */
+export function mapOutlineError(prefix: string, error: any, log: OutlineToolLog): never {
+  log.error(`${prefix}: ${error?.message ?? error}`);
+  if (error?.status === 401 || error?.status === 403) {
+    throw new UserError(`${prefix}: not authorized. Check that your Outline token has access.`);
+  }
+  if (error?.status === 404) {
+    throw new UserError(`${prefix}: not found.`);
+  }
+  throw new UserError(`${prefix}: ${error?.message ?? 'Unknown error'}`);
+}
+
+/**
+ * Wrap a tool body with the standard client-fetch + error-mapping pattern.
+ * `getOutlineClient` runs BEFORE the callback so a missing token is surfaced
+ * verbatim (no double-wrapping via mapOutlineError).
+ */
+export async function withOutlineClient<T>(
+  prefix: string,
+  session: UserSession | undefined,
+  log: OutlineToolLog,
+  fn: (client: OutlineClient) => Promise<T>,
+): Promise<T> {
+  const client = getOutlineClient(session);
+  try {
+    return await fn(client);
+  } catch (error: any) {
+    mapOutlineError(prefix, error, log);
+  }
 }
