@@ -62,6 +62,45 @@ export function markdownToCommentBlocks(markdown: string): CommentBlock[] {
   return blocks;
 }
 
+// Parse an ISO-string or Unix-ms-string timestamp into an epoch-ms number.
+// Returns NaN when the input cannot be interpreted as either. The Date
+// constructor's string mode does not accept digit-only strings — it returns
+// Invalid Date — so callers passing Unix ms as a JSON string need explicit
+// numeric-string handling first.
+export function parseTimestampInput(input: string): number {
+  const trimmed = input.trim();
+  if (/^-?\d+$/.test(trimmed)) return Number(trimmed);
+  return new Date(trimmed).getTime();
+}
+
+// Parse and validate a close-date window from the closedAfter/closedBefore
+// parameter pair. Result-typed rather than throwing so both MCP and REST
+// callers can surface the error message in their preferred shape (UserError
+// vs. HTTP 400 body).
+export function parseCloseWindow(
+  closedAfter?: string,
+  closedBefore?: string,
+): { from?: number; to?: number; error?: string } {
+  let from: number | undefined;
+  let to: number | undefined;
+  if (closedAfter) {
+    from = parseTimestampInput(closedAfter);
+    if (Number.isNaN(from)) return { error: `Invalid closedAfter: ${closedAfter}` };
+  }
+  if (closedBefore) {
+    to = parseTimestampInput(closedBefore);
+    if (Number.isNaN(to)) return { error: `Invalid closedBefore: ${closedBefore}` };
+  }
+  return { from, to };
+}
+
+// The exact user-facing message emitted when close-window pagination hits its
+// safety cap. Kept as a helper so the string stays consistent across the four
+// call sites (two MCP tools + two REST handlers) and stays covered by tests.
+export function formatCloseWindowCapMessage(pagesScanned: number): string {
+  return `Exceeded 2000-task pagination cap while scanning ${pagesScanned} pages. Narrow closedAfter/closedBefore and retry.`;
+}
+
 // Client-side pagination + filter for tasks closed within a window.
 //
 // ClickUp's Get Tasks / team-task-filter endpoints don't support

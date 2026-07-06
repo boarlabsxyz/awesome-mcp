@@ -3,7 +3,13 @@ import { FastMCP, UserError } from 'fastmcp';
 import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
-import { ClickUpClient, collectTasksInCloseWindow, markdownToCommentBlocks } from './apiHelpers.js';
+import {
+  ClickUpClient,
+  collectTasksInCloseWindow,
+  formatCloseWindowCapMessage,
+  markdownToCommentBlocks,
+  parseCloseWindow,
+} from './apiHelpers.js';
 import { formatTask, formatTaskList } from './formatHelpers.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
@@ -162,12 +168,10 @@ clickUpServer.addTool({
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
-    const from = args.closedAfter ? new Date(args.closedAfter).getTime() : undefined;
-    const to = args.closedBefore ? new Date(args.closedBefore).getTime() : undefined;
-    if (from !== undefined && Number.isNaN(from)) throw new UserError(`Invalid closedAfter: ${args.closedAfter}`);
-    if (to !== undefined && Number.isNaN(to)) throw new UserError(`Invalid closedBefore: ${args.closedBefore}`);
+    const win = parseCloseWindow(args.closedAfter, args.closedBefore);
+    if (win.error) throw new UserError(win.error);
 
-    if (from !== undefined || to !== undefined) {
+    if (win.from !== undefined || win.to !== undefined) {
       const { tasks, pagesScanned, hitCap } = await collectTasksInCloseWindow(
         async (page) => {
           const res = await client.getTasks(args.listId, {
@@ -182,12 +186,10 @@ clickUpServer.addTool({
           });
           return res.tasks || [];
         },
-        from,
-        to,
+        win.from,
+        win.to,
       );
-      if (hitCap) {
-        throw new UserError(`Exceeded 2000-task pagination cap while scanning ${pagesScanned} pages. Narrow closedAfter/closedBefore and retry.`);
-      }
+      if (hitCap) throw new UserError(formatCloseWindowCapMessage(pagesScanned));
       return formatTaskList(tasks);
     }
 
@@ -381,12 +383,10 @@ clickUpServer.addTool({
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
-    const from = args.closedAfter ? new Date(args.closedAfter).getTime() : undefined;
-    const to = args.closedBefore ? new Date(args.closedBefore).getTime() : undefined;
-    if (from !== undefined && Number.isNaN(from)) throw new UserError(`Invalid closedAfter: ${args.closedAfter}`);
-    if (to !== undefined && Number.isNaN(to)) throw new UserError(`Invalid closedBefore: ${args.closedBefore}`);
+    const win = parseCloseWindow(args.closedAfter, args.closedBefore);
+    if (win.error) throw new UserError(win.error);
 
-    if (from !== undefined || to !== undefined) {
+    if (win.from !== undefined || win.to !== undefined) {
       // Pass empty query to bypass client.searchTasks's client-side name filter so
       // the loop's "page < 100 → stop" heuristic sees the raw ClickUp page size,
       // not the name-filtered subset. We re-apply the name filter after collecting.
@@ -395,12 +395,10 @@ clickUpServer.addTool({
           const res = await client.searchTasks(args.workspaceId, '', page, args.custom_fields, true);
           return res.tasks || [];
         },
-        from,
-        to,
+        win.from,
+        win.to,
       );
-      if (hitCap) {
-        throw new UserError(`Exceeded 2000-task pagination cap while scanning ${pagesScanned} pages. Narrow closedAfter/closedBefore and retry.`);
-      }
+      if (hitCap) throw new UserError(formatCloseWindowCapMessage(pagesScanned));
       const q = args.query.toLowerCase();
       const filtered = args.query ? tasks.filter((t: any) => t.name?.toLowerCase().includes(q)) : tasks;
       if (filtered.length === 0) return `No tasks found${args.query ? ` matching "${args.query}"` : ''} closed in window.`;
