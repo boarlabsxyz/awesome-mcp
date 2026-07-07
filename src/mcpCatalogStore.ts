@@ -439,6 +439,29 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
+  // Outline MCP (non-Google provider, direct OAuth to Outline)
+  const outlineClientId     = process.env.OUTLINE_CLIENT_ID || null;
+  const outlineClientSecret = process.env.OUTLINE_CLIENT_SECRET || null;
+  const outlineBaseUrl      = process.env.OUTLINE_BASE_URL || 'https://wiki-dev.gluzdov.com';
+  const outlineMcpUrl       = normalizeUrl(process.env.OUTLINE_MCP_URL, '/outline');
+
+  await createMcpCatalog({
+    slug: 'outline',
+    name: 'Outline Wiki MCP',
+    description: 'Read, write, and manage Outline wiki documents and collections',
+    iconUrl: null,
+    mcpUrl: outlineMcpUrl,
+    provider: 'outline',
+    scopes: [],
+    googleClientId: outlineClientId,
+    googleClientSecret: outlineClientSecret,
+    oauthAuthorizationUrl: `${outlineBaseUrl}/oauth/authorize`,
+    oauthTokenUrl:         `${outlineBaseUrl}/oauth/token`,
+    oauthScopes: ['read'],
+    isLocal: !process.env.OUTLINE_MCP_URL,
+    isActive: true,
+  });
+
   // Slack Bot MCP (bot-token provider — no OAuth, user pastes xoxb- token)
   const slackBotMcpUrl = normalizeUrl(process.env.SLACK_BOT_MCP_URL, '/slack-bot');
 
@@ -476,27 +499,6 @@ export async function seedDefaultCatalogs(): Promise<void> {
     oauthTokenUrl: 'https://slack.com/api/oauth.v2.access',
     oauthScopes: ['channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'im:write', 'mpim:history', 'mpim:read', 'mpim:write', 'chat:write', 'users:read', 'team:read'],
     isLocal: !process.env.SLACK_USER_MCP_URL,
-    isActive: true,
-  });
-
-  // Outline MCP (Auth0-brokered bearer token — connect flow handles the OAuth
-  // roundtrip itself, so oauthAuthorizationUrl / oauthTokenUrl stay empty).
-  const outlineMcpUrl = normalizeUrl(process.env.OUTLINE_MCP_URL, '/outline');
-
-  await createMcpCatalog({
-    slug: 'outline',
-    name: 'Outline Wiki MCP',
-    description: 'Read, write, and manage Outline wiki documents and collections',
-    iconUrl: null,
-    mcpUrl: outlineMcpUrl,
-    provider: 'outline',
-    scopes: [],
-    googleClientId: null,
-    googleClientSecret: null,
-    oauthAuthorizationUrl: '',
-    oauthTokenUrl: '',
-    oauthScopes: [],
-    isLocal: !process.env.OUTLINE_MCP_URL,
     isActive: true,
   });
 

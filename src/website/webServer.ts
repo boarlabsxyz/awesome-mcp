@@ -307,6 +307,7 @@ import { stripTrailingSlashes } from '../util/url.js';
 import { selectTabContent, extractDocBodyText, truncateJsonByLength } from './docContent.js';
 import { clearSessionCache, createUserSession, createUserSessionFromConnection, UserSession } from '../userSession.js';
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
+import { exchangeOutlineOauthCode, buildOutlineInstanceName } from '../outline/oauthCallback.js';
 import {
   connectMcp,
   getMcpConnection,
@@ -381,8 +382,8 @@ export function computeTokenStatus(
   expiryDate: number | null;
   isExpired: boolean;
 } {
-  // ClickUp and Slack tokens are long-lived (no refresh needed, no expiry)
-  if (provider === 'clickup' || provider === 'slack-bot' || provider === 'slack') {
+  // ClickUp, Slack, and Outline tokens are long-lived (no refresh needed, no expiry)
+  if (provider === 'clickup' || provider === 'slack-bot' || provider === 'slack' || provider === 'outline') {
     return { hasRefreshToken: false, expiryDate: null, isExpired: false };
   }
   return {
@@ -1004,6 +1005,47 @@ function registerSharedRoutes(app: express.Express): void {
           );
           console.error(`User ${user.id} connected ClickUp MCP: ${connection.instanceId}`);
         }
+      } else if (provider === 'outline') {
+        // Outline OAuth 2.0 authorization_code exchange, plus a best-effort
+        // /api/auth.info fetch for email + team name. See src/outline/oauthCallback.ts.
+        const outlineBaseUrl = process.env.OUTLINE_BASE_URL || 'https://wiki-dev.gluzdov.com';
+        const exchange = await exchangeOutlineOauthCode({
+          tokenUrl: mcp.oauthTokenUrl || `${outlineBaseUrl}/oauth/token`,
+          code,
+          clientId: client_id,
+          clientSecret: client_secret,
+          redirectUri,
+          baseUrl: outlineBaseUrl,
+        });
+        if (!exchange.ok) {
+          console.error(`[MCP Connect] ${exchange.logMessage}`);
+          res.status(exchange.status).send(exchange.userMessage);
+          return;
+        }
+        console.error(`[MCP Connect] Outline user email: ${exchange.email}, team: ${exchange.teamName}`);
+
+        const outlineProviderTokens = { access_token: exchange.accessToken };
+        const emptyGoogleTokensForOutline = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const outlineInstanceName = buildOutlineInstanceName({
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          providedInstanceName: stateData.instanceName,
+          teamName: exchange.teamName,
+          email: exchange.email,
+        });
+
+        const outlineConnections = await getUserConnectedMcps(user.id);
+        const existingOutline = outlineConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === outlineInstanceName);
+
+        if (existingOutline) {
+          console.error(`User ${user.id} already has ${mcpSlug} for ${exchange.email}: ${existingOutline.instanceId}`);
+          res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingOutline.instanceName));
+          return;
+        }
+        connection = await createMcpInstance(
+          user.id, mcpSlug, outlineInstanceName, emptyGoogleTokensForOutline, null,
+          'outline', outlineProviderTokens, exchange.email
+        );
+        console.error(`User ${user.id} connected Outline MCP: ${connection.instanceId}`);
       } else {
         // Google OAuth (default)
         const oauthClient = new OAuth2Client(client_id, client_secret, redirectUri);
@@ -2155,6 +2197,10 @@ function registerRestApiRoutes(app: express.Express): void {
             // Slack User uses its own session with slackUserToken + allowedChannels
             const { createSlackUserSession } = await import('../userSession.js');
             req.userSession = createSlackUserSession(user, connection);
+          } else if (connection.provider === 'outline') {
+            // Outline uses its own session with outlineAccessToken
+            const { createOutlineSession } = await import('../userSession.js');
+            req.userSession = createOutlineSession(user, connection);
           } else {
             const mcp = await getMcpCatalog(connection.mcpSlug);
             const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
