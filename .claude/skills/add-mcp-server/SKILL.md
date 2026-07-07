@@ -99,9 +99,36 @@ Without this, the new server compiles but never runs — the symptom is the wron
 
 If the user picked a new Google API, also add the client field to `UserSession`, instantiate it via `google.<api>({ version: '<v>', auth: oauthClient })` in the two real-session factories, and null-default it in the third-party-only factory.
 
-**d. `data/mcp-catalog.json`** — append a new entry. Compute the next id by reading the file (`max(id) + 1`). Both timestamps use `new Date().toISOString()`. Use the shapes below.
+**d. `src/mcpCatalogStore.ts` — `seedDefaultCatalogs()`** — this is the *authoritative* seed. It runs on every boot against whatever backend is active (Postgres in dev/prod, JSON file locally when `DATABASE_URL` is unset) and `INSERT … ON CONFLICT DO UPDATE`s the row for each slug. **A new server that skips this step will silently vanish from `/api/v1/catalogs` and the dashboard on every fresh environment**, even after the code, scopeMap, dispatch router, and session token field are all wired correctly — we hit exactly that in #63/#68 with the Outline connector.
 
-Note: `data/mcp-catalog.json` is gitignored — this edit is local-only and will NOT show up in the PR. The prod catalog is seeded/managed separately (admin dashboard flow or migration script). Mention this in the final report so the user knows the entry needs to reach prod through a different path.
+Add a `createMcpCatalog({...})` block alongside the existing providers at the bottom of `seedDefaultCatalogs()`. Use an env-configurable URL following the pattern of the other in-process connectors:
+
+```ts
+const <slugCamel>McpUrl = normalizeUrl(process.env.<SLUG_UPPER>_MCP_URL, '/<route>');
+
+await createMcpCatalog({
+  slug: '<slug>',
+  name: '<display-name>',
+  description: '<description>',
+  iconUrl: <'url' or null>,
+  mcpUrl: <slugCamel>McpUrl,
+  provider: '<slug>',                       // third-party only
+  scopes: [<google-api-scope-urls>],        // Google only, [] for third-party
+  googleClientId: <slugCamel>ClientId,      // env-derived, null for third-party without OAuth proxy
+  googleClientSecret: <slugCamel>ClientSecret,
+  oauthAuthorizationUrl: '<url or empty>',  // third-party only
+  oauthTokenUrl: '<url or empty>',          // third-party only
+  oauthScopes: [...],                       // Google: userinfo + api scopes; third-party: provider scopes or []
+  isLocal: !process.env.<SLUG_UPPER>_MCP_URL,
+  isActive: true,
+});
+```
+
+For third-party connectors whose OAuth is brokered out-of-band (e.g. Outline via Auth0), `oauthAuthorizationUrl` and `oauthTokenUrl` stay empty strings — the connect flow doesn't consult them. That's fine, but call it out in the report so the user knows why those fields look sparse.
+
+**e. `data/mcp-catalog.json`** — append a matching entry for local-file-backend usage. Compute the next id by reading the file (`max(id) + 1`). Both timestamps use `new Date().toISOString()`. Use the shapes below.
+
+Note: `data/mcp-catalog.json` is gitignored — this edit is local-only and will NOT show up in the PR. It's the fallback backend for `DATABASE_URL`-less local dev; `seedDefaultCatalogs()` (step 5d) is what actually lands the row in every real environment. Mention both edits in the final report so the user isn't confused about why the JSON change isn't in the diff.
 
 Google entry:
 ```json
@@ -191,7 +218,8 @@ End with a tight summary:
   - Wire a new route in `webServer.ts` if a new Google API was introduced.
   - Wire web+mcp combined mode (port constant, `.start()` call, `createWebApp` signature, proxy route) if skipped in step 5b.
   - Wire the planned REST routes in `webServer.ts` and flip `status: 'planned'` → `'live'` in `src/restCatalog.ts`, then re-run the doc generators.
-  - Reseed the prod `mcp-catalog.json` — the local edit was gitignored.
+  - Set the `<SLUG_UPPER>_MCP_URL` env var in each Railway service that runs the combined web app (dev/prod). Without it the catalog seeds `isLocal: true` and the mcpUrl defaults to the relative `/<route>`, which works only in single-service `MCP_MODE=all` deployments.
+  - `data/mcp-catalog.json` was edited locally but is gitignored — the PR contains the `seedDefaultCatalogs()` edit, which is what actually seeds dev/prod. Both are correct; just mention them so the user isn't surprised.
 
 Then offer the soft chain:
 
