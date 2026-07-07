@@ -257,4 +257,25 @@ describe('authenticateRequest', () => {
     await authenticateRequest(req, 'google-docs', deps);
     assert.equal((deps.getUserById as any).mock.calls.length, 1);
   });
+
+  it('routes outline connections through createOutlineSession', async () => {
+    const outlineConnection = { ...fakeConnection, mcpSlug: 'outline', provider: 'outline' };
+    const deps = makeDeps({
+      getMcpConnectionByInstanceId: mock.fn(async () => outlineConnection),
+    });
+    await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.inst1' }), 'outline', deps);
+    assert.equal((deps.createOutlineSession as any).mock.calls.length, 1);
+    assert.equal((deps.createUserSessionFromConnection as any).mock.calls.length, 0);
+    assert.equal((deps.createClickUpSession as any).mock.calls.length, 0);
+  });
+
+  it('routes clickup connections through createClickUpSession (regression guard)', async () => {
+    const clickUpConnection = { ...fakeConnection, mcpSlug: 'clickup', provider: 'clickup' };
+    const deps = makeDeps({
+      getMcpConnectionByInstanceId: mock.fn(async () => clickUpConnection),
+    });
+    await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.inst1' }), 'clickup', deps);
+    assert.equal((deps.createClickUpSession as any).mock.calls.length, 1);
+    assert.equal((deps.createOutlineSession as any).mock.calls.length, 0);
+  });
 });
