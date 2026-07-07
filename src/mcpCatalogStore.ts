@@ -224,25 +224,14 @@ function mapRowToEntry(row: any): McpCatalogEntry {
 
 // ---------- Public API ----------
 
-// Slugs that must not appear on the dashboard and must not be connectable via
-// the OAuth flow, regardless of the `is_active` column in the underlying store.
-// Used to keep incomplete connectors out of the public surface without having
-// to deactivate the DB row (which would also drop token records for anyone who
-// already connected). Filtered in the public API so both file- and DB-backed
-// stores get the same behavior.
-const HIDDEN_SLUGS = new Set<string>(['outline']);
-
-export function isHiddenSlug(slug: string): boolean {
-  return HIDDEN_SLUGS.has(slug);
-}
-
 export async function listMcpCatalogs(): Promise<McpCatalogEntry[]> {
-  const entries = isDatabaseAvailable() ? await dbListMcpCatalogs() : await fileListMcpCatalogs();
-  return entries.filter(e => !HIDDEN_SLUGS.has(e.slug));
+  if (isDatabaseAvailable()) {
+    return dbListMcpCatalogs();
+  }
+  return fileListMcpCatalogs();
 }
 
 export async function getMcpCatalog(slug: string): Promise<McpCatalogEntry | null> {
-  if (HIDDEN_SLUGS.has(slug)) return null;
   if (isDatabaseAvailable()) {
     return dbGetMcpCatalog(slug);
   }
