@@ -3477,6 +3477,68 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // GET /api/v1/clickup/workspaces/:workspaceId/tasks/filter - Filtered team tasks
+  // Thin wrapper over ClickUp's server-side filter endpoint. Query params mirror
+  // the filterTeamTasks MCP tool 1:1, with camelCase names matching the tool's
+  // Zod schema. Date params accept ISO or Unix ms strings and are normalized via
+  // parseTimestampInput. Repeat a query param (assignees=a&assignees=b) to pass
+  // an array. custom_fields is a JSON-encoded string.
+  app.get('/api/v1/clickup/workspaces/:workspaceId/tasks/filter', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient, parseTimestampInput } = await import('../clickup/apiHelpers.js');
+      const { formatTaskList } = await import('../clickup/formatHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+
+      const toArr = (v: any): string[] | undefined => {
+        if (v === undefined) return undefined;
+        return Array.isArray(v) ? (v as string[]) : [v as string];
+      };
+      const parseTs = (v: any, field: string): number | undefined => {
+        if (v === undefined) return undefined;
+        const ts = parseTimestampInput(v as string);
+        if (Number.isNaN(ts)) throw new Error(`Invalid ${field}: ${v}`);
+        return ts;
+      };
+
+      let params: any;
+      try {
+        params = {
+          page: req.query.page !== undefined ? parseInt(req.query.page as string) : undefined,
+          order_by: req.query.orderBy as string | undefined,
+          reverse: req.query.reverse === 'true',
+          subtasks: req.query.subtasks === 'true',
+          include_closed: req.query.includeClosed === 'true',
+          assignees: toArr(req.query.assignees),
+          statuses: toArr(req.query.statuses),
+          tags: toArr(req.query.tags),
+          space_ids: toArr(req.query.spaceIds),
+          project_ids: toArr(req.query.projectIds),
+          list_ids: toArr(req.query.listIds),
+          date_created_gt: parseTs(req.query.dateCreatedGt, 'dateCreatedGt'),
+          date_created_lt: parseTs(req.query.dateCreatedLt, 'dateCreatedLt'),
+          date_updated_gt: parseTs(req.query.dateUpdatedGt, 'dateUpdatedGt'),
+          date_updated_lt: parseTs(req.query.dateUpdatedLt, 'dateUpdatedLt'),
+          due_date_gt: parseTs(req.query.dueDateGt, 'dueDateGt'),
+          due_date_lt: parseTs(req.query.dueDateLt, 'dueDateLt'),
+          custom_fields: req.query.custom_fields ? JSON.parse(req.query.custom_fields as string) : undefined,
+        };
+      } catch (e: any) {
+        res.status(400).json({ error: e.message });
+        return;
+      }
+
+      const result = await client.filterTeamTasks(req.params.workspaceId as string, params);
+      const tasks = result.tasks || [];
+      if (negotiateFormat(req) === 'text') {
+        res.type('text/plain; charset=utf-8').send(formatTaskList(tasks));
+        return;
+      }
+      res.json({ tasks });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to filter tasks' });
+    }
+  });
+
   // GET /api/v1/clickup/tasks/:taskId/comments - Get comments
   app.get('/api/v1/clickup/tasks/:taskId/comments', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {

@@ -345,6 +345,55 @@ export class ClickUpClient {
 
   // === Search ===
 
+  // Thin passthrough of ClickUp's "Get Filtered Team Tasks"
+  // (GET /api/v2/team/{team_id}/task). Forwards every filter ClickUp actually
+  // honors — no client-side filtering, no query munging. Callers that want
+  // "closed since T" should pass date_updated_gt=T (closing bumps
+  // date_updated) and partition on date_closed themselves; ClickUp does not
+  // support date_closed_gt/lt or date_done_gt/lt on this endpoint.
+  async filterTeamTasks(teamId: string, params?: {
+    page?: number;
+    order_by?: string;
+    reverse?: boolean;
+    subtasks?: boolean;
+    include_closed?: boolean;
+    assignees?: string[];
+    statuses?: string[];
+    tags?: string[];
+    space_ids?: string[];
+    project_ids?: string[];
+    list_ids?: string[];
+    date_created_gt?: number;
+    date_created_lt?: number;
+    date_updated_gt?: number;
+    date_updated_lt?: number;
+    due_date_gt?: number;
+    due_date_lt?: number;
+    custom_fields?: Array<{ field_id: string; operator: string; value?: any }>;
+  }): Promise<any> {
+    const sp = new URLSearchParams();
+    if (params?.page !== undefined) sp.set('page', String(params.page));
+    if (params?.order_by) sp.set('order_by', params.order_by);
+    if (params?.reverse) sp.set('reverse', 'true');
+    if (params?.subtasks) sp.set('subtasks', 'true');
+    if (params?.include_closed) sp.set('include_closed', 'true');
+    params?.assignees?.forEach(a => sp.append('assignees[]', a));
+    params?.statuses?.forEach(s => sp.append('statuses[]', s));
+    params?.tags?.forEach(t => sp.append('tags[]', t));
+    params?.space_ids?.forEach(id => sp.append('space_ids[]', id));
+    params?.project_ids?.forEach(id => sp.append('project_ids[]', id));
+    params?.list_ids?.forEach(id => sp.append('list_ids[]', id));
+    if (params?.date_created_gt !== undefined) sp.set('date_created_gt', String(params.date_created_gt));
+    if (params?.date_created_lt !== undefined) sp.set('date_created_lt', String(params.date_created_lt));
+    if (params?.date_updated_gt !== undefined) sp.set('date_updated_gt', String(params.date_updated_gt));
+    if (params?.date_updated_lt !== undefined) sp.set('date_updated_lt', String(params.date_updated_lt));
+    if (params?.due_date_gt !== undefined) sp.set('due_date_gt', String(params.due_date_gt));
+    if (params?.due_date_lt !== undefined) sp.set('due_date_lt', String(params.due_date_lt));
+    if (params?.custom_fields?.length) sp.set('custom_fields', JSON.stringify(params.custom_fields));
+    const qs = sp.toString();
+    return this.request('GET', `/team/${teamId}/task${qs ? '?' + qs : ''}`);
+  }
+
   async searchTasks(teamId: string, query: string, page?: number, customFields?: Array<{ field_id: string; operator: string; value?: any }>, includeClosed?: boolean): Promise<any> {
     const params = new URLSearchParams();
     if (page !== undefined) params.set('page', String(page));
