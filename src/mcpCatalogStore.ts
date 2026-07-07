@@ -479,5 +479,26 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
+  // Outline MCP (Auth0-brokered bearer token — connect flow handles the OAuth
+  // roundtrip itself, so oauthAuthorizationUrl / oauthTokenUrl stay empty).
+  const outlineMcpUrl = normalizeUrl(process.env.OUTLINE_MCP_URL, '/outline');
+
+  await createMcpCatalog({
+    slug: 'outline',
+    name: 'Outline Wiki MCP',
+    description: 'Read, write, and manage Outline wiki documents and collections',
+    iconUrl: null,
+    mcpUrl: outlineMcpUrl,
+    provider: 'outline',
+    scopes: [],
+    googleClientId: null,
+    googleClientSecret: null,
+    oauthAuthorizationUrl: '',
+    oauthTokenUrl: '',
+    oauthScopes: [],
+    isLocal: !process.env.OUTLINE_MCP_URL,
+    isActive: true,
+  });
+
   console.error('Default MCP catalog entries seeded.');
 }
