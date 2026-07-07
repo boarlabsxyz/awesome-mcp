@@ -1,7 +1,7 @@
 // src/mcpAuthenticate.ts
 // Shared authenticate handler for all MCP servers.
 import http from 'http';
-import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession, createSlackBotSession, createSlackUserSession } from './userSession.js';
+import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession, createSlackBotSession, createSlackUserSession, createOutlineSession } from './userSession.js';
 import { loadUsers, getUserByApiKey, getUserById } from './userStore.js';
 import { loadClientCredentials } from './auth.js';
 import { getMcpConnection, getMcpConnectionByInstanceId } from './mcpConnectionStore.js';
@@ -21,6 +21,7 @@ export interface AuthDeps {
   createClickUpSession: (user: any, conn: any) => UserSession;
   createSlackBotSession: (user: any, conn: any) => UserSession;
   createSlackUserSession: (user: any, conn: any) => UserSession;
+  createOutlineSession: (user: any, conn: any) => UserSession;
 }
 
 /** Default dependencies wired to real implementations. */
@@ -37,6 +38,7 @@ const defaultDeps: AuthDeps = {
   createClickUpSession,
   createSlackBotSession,
   createSlackUserSession,
+  createOutlineSession,
 };
 
 /** Create a session from a verified connection. */
@@ -49,6 +51,9 @@ async function sessionFromConnection(user: any, connection: any, deps: AuthDeps)
   }
   if (connection.provider === 'slack') {
     return deps.createSlackUserSession(user, connection);
+  }
+  if (connection.provider === 'outline') {
+    return deps.createOutlineSession(user, connection);
   }
   const mcp = await deps.getMcpCatalog(connection.mcpSlug);
   const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret

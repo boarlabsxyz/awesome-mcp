@@ -381,8 +381,8 @@ export function computeTokenStatus(
   expiryDate: number | null;
   isExpired: boolean;
 } {
-  // ClickUp and Slack tokens are long-lived (no refresh needed, no expiry)
-  if (provider === 'clickup' || provider === 'slack-bot' || provider === 'slack') {
+  // ClickUp, Slack, and Outline tokens are long-lived (no refresh needed, no expiry)
+  if (provider === 'clickup' || provider === 'slack-bot' || provider === 'slack' || provider === 'outline') {
     return { hasRefreshToken: false, expiryDate: null, isExpired: false };
   }
   return {
@@ -1003,6 +1003,101 @@ function registerSharedRoutes(app: express.Express): void {
             'clickup', providerTokens, providerEmail
           );
           console.error(`User ${user.id} connected ClickUp MCP: ${connection.instanceId}`);
+        }
+      } else if (provider === 'outline') {
+        // Outline OAuth 2.0: exchange code for access_token (standard authorization_code grant)
+        const tokenUrl = mcp.oauthTokenUrl || 'https://wiki-dev.gluzdov.com/oauth/token';
+        const outlineController = new AbortController();
+        const outlineTokenTimeout = setTimeout(() => outlineController.abort(), 15_000);
+        let outlineTokenResponse: globalThis.Response;
+        try {
+          outlineTokenResponse = await fetch(tokenUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+              grant_type: 'authorization_code',
+              code,
+              client_id,
+              client_secret,
+              redirect_uri: redirectUri,
+            }).toString(),
+            signal: outlineController.signal,
+          });
+        } catch (fetchErr: any) {
+          clearTimeout(outlineTokenTimeout);
+          const msg = fetchErr.name === 'AbortError' ? 'Outline token exchange timed out.' : `Outline token exchange failed: ${fetchErr.message}`;
+          console.error(`[MCP Connect] ${msg}`);
+          res.status(502).send(`${msg} Please try again.`);
+          return;
+        } finally {
+          clearTimeout(outlineTokenTimeout);
+        }
+
+        if (!outlineTokenResponse.ok) {
+          const errText = await outlineTokenResponse.text();
+          console.error(`[MCP Connect] Outline token exchange failed: ${errText}`);
+          res.status(500).send('Outline token exchange failed. Please try again.');
+          return;
+        }
+
+        const outlineTokenData = await outlineTokenResponse.json() as { access_token?: string };
+        const outlineAccessToken = outlineTokenData.access_token;
+        if (!outlineAccessToken) {
+          console.error('[MCP Connect] Outline token response missing access_token:', outlineTokenData);
+          res.status(500).send('Outline returned no access token. Please try again.');
+          return;
+        }
+
+        // Fetch Outline user info for email + team name (used in instance naming)
+        const outlineBaseUrl = process.env.OUTLINE_BASE_URL || 'https://wiki-dev.gluzdov.com';
+        let outlineProviderEmail: string | null = null;
+        let outlineTeamName: string | null = null;
+        try {
+          const userController = new AbortController();
+          const userTimeout = setTimeout(() => userController.abort(), 10_000);
+          const userResponse = await fetch(`${outlineBaseUrl}/api/auth.info`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${outlineAccessToken}`, 'Content-Type': 'application/json' },
+            signal: userController.signal,
+          });
+          clearTimeout(userTimeout);
+          if (userResponse.ok) {
+            const userData = await userResponse.json() as { data?: { user?: { email?: string }; team?: { name?: string } } };
+            outlineProviderEmail = userData.data?.user?.email || null;
+            outlineTeamName = userData.data?.team?.name || null;
+            console.error(`[MCP Connect] Outline user email: ${outlineProviderEmail}, team: ${outlineTeamName}`);
+          }
+        } catch (emailErr) {
+          console.error('[MCP Connect] Could not fetch Outline user info:', emailErr);
+        }
+
+        const outlineProviderTokens = { access_token: outlineAccessToken };
+        const emptyGoogleTokensForOutline = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+
+        // Auto-generate instance name: Service Name (team or email)
+        const outlineServiceName = mcp.name.replace(' MCP', '').trim();
+        let outlineInstanceName: string;
+        if (stateData.instanceName) {
+          outlineInstanceName = stateData.instanceName;
+        } else if (outlineTeamName) {
+          outlineInstanceName = `${outlineServiceName} (${outlineTeamName})`;
+        } else {
+          outlineInstanceName = outlineProviderEmail ? `${outlineServiceName} (${outlineProviderEmail})` : outlineServiceName;
+        }
+
+        const outlineConnections = await getUserConnectedMcps(user.id);
+        const existingOutline = outlineConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === outlineInstanceName);
+
+        if (existingOutline) {
+          console.error(`User ${user.id} already has ${mcpSlug} for ${outlineProviderEmail}: ${existingOutline.instanceId}`);
+          res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingOutline.instanceName));
+          return;
+        } else {
+          connection = await createMcpInstance(
+            user.id, mcpSlug, outlineInstanceName, emptyGoogleTokensForOutline, null,
+            'outline', outlineProviderTokens, outlineProviderEmail
+          );
+          console.error(`User ${user.id} connected Outline MCP: ${connection.instanceId}`);
         }
       } else {
         // Google OAuth (default)
@@ -2155,6 +2250,10 @@ function registerRestApiRoutes(app: express.Express): void {
             // Slack User uses its own session with slackUserToken + allowedChannels
             const { createSlackUserSession } = await import('../userSession.js');
             req.userSession = createSlackUserSession(user, connection);
+          } else if (connection.provider === 'outline') {
+            // Outline uses its own session with outlineAccessToken
+            const { createOutlineSession } = await import('../userSession.js');
+            req.userSession = createOutlineSession(user, connection);
           } else {
             const mcp = await getMcpCatalog(connection.mcpSlug);
             const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
