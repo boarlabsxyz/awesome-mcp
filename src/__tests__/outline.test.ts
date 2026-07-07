@@ -545,6 +545,28 @@ describe('getOutlineClient', () => {
     const client = getOutlineClient({ outlineAccessToken: 't' } as any);
     assert.ok(client instanceof OutlineClient);
   });
+
+  test('picks up per-session outlineBaseUrl on the returned client', () => {
+    const client = getOutlineClient({ outlineAccessToken: 't', outlineBaseUrl: 'https://wiki.example.com' } as any);
+    assert.equal(client.baseUrl, 'https://wiki.example.com');
+  });
+
+  test('falls back to the module default when session omits outlineBaseUrl', () => {
+    const client = getOutlineClient({ outlineAccessToken: 't' } as any);
+    assert.match(client.baseUrl, /^https?:\/\//);
+  });
+});
+
+describe('OutlineClient baseUrl normalization', () => {
+  test('trailing slashes are stripped so the request URL never doubles up', () => {
+    const c = new OutlineClient('t', 'https://wiki.example.com///');
+    assert.equal(c.baseUrl, 'https://wiki.example.com');
+  });
+
+  test('constructor param wins over the module default', () => {
+    const c = new OutlineClient('t', 'https://custom.example.com');
+    assert.equal(c.baseUrl, 'https://custom.example.com');
+  });
 });
 
 describe('mapOutlineError', () => {

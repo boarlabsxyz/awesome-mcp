@@ -439,10 +439,29 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
-  // Outline MCP (non-Google provider, direct OAuth to Outline)
+  // Outline MCP
+  //
+  // Two auth flows are supported and the seed picks between them based on
+  // whether an OAuth App has been provisioned (i.e. OUTLINE_CLIENT_ID is set):
+  //
+  //   OAuth flow    — admin creates an OAuth App on the Outline instance
+  //                   (Settings → API → Applications). Sets OUTLINE_CLIENT_ID
+  //                   + OUTLINE_CLIENT_SECRET + OUTLINE_BASE_URL. Dashboard
+  //                   shows the "Connect" button, /connect/outline runs the
+  //                   authorization_code exchange (webServer.ts).
+  //   Paste-token   — no admin. Each user creates a Personal API Key in
+  //                   Outline (Settings → API Keys → New API Key) and pastes
+  //                   { baseUrl, token } into the dashboard's connect form.
+  //                   Router validates via POST <baseUrl>/api/auth.info.
+  //                   This is the reference implementation's model.
+  //
+  // If OAuth env vars aren't set the OAuth URLs stay blank, which routes the
+  // dashboard through the paste-token flow (empty oauthAuthorizationUrl → the
+  // direct-token connect-token endpoint).
   const outlineClientId     = process.env.OUTLINE_CLIENT_ID || null;
   const outlineClientSecret = process.env.OUTLINE_CLIENT_SECRET || null;
-  const outlineBaseUrl      = process.env.OUTLINE_BASE_URL || 'https://wiki-dev.gluzdov.com';
+  const outlineOauthEnabled = !!(outlineClientId && outlineClientSecret && process.env.OUTLINE_BASE_URL);
+  const outlineOauthBaseUrl = process.env.OUTLINE_BASE_URL || '';
   const outlineMcpUrl       = normalizeUrl(process.env.OUTLINE_MCP_URL, '/outline');
 
   await createMcpCatalog({
@@ -455,9 +474,9 @@ export async function seedDefaultCatalogs(): Promise<void> {
     scopes: [],
     googleClientId: outlineClientId,
     googleClientSecret: outlineClientSecret,
-    oauthAuthorizationUrl: `${outlineBaseUrl}/oauth/authorize`,
-    oauthTokenUrl:         `${outlineBaseUrl}/oauth/token`,
-    oauthScopes: ['read'],
+    oauthAuthorizationUrl: outlineOauthEnabled ? `${outlineOauthBaseUrl}/oauth/authorize` : '',
+    oauthTokenUrl:         outlineOauthEnabled ? `${outlineOauthBaseUrl}/oauth/token`     : '',
+    oauthScopes: outlineOauthEnabled ? ['read'] : [],
     isLocal: !process.env.OUTLINE_MCP_URL,
     isActive: true,
   });
