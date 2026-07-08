@@ -308,6 +308,7 @@ import { selectTabContent, extractDocBodyText, truncateJsonByLength } from './do
 import { clearSessionCache, createUserSession, createUserSessionFromConnection, UserSession } from '../userSession.js';
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
 import { exchangeOutlineOauthCode, buildOutlineInstanceName } from '../outline/oauthCallback.js';
+import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceNameFromToken } from '../outline/connectToken.js';
 import {
   connectMcp,
   getMcpConnection,
@@ -1024,7 +1025,10 @@ function registerSharedRoutes(app: express.Express): void {
         }
         console.error(`[MCP Connect] Outline user email: ${exchange.email}, team: ${exchange.teamName}`);
 
-        const outlineProviderTokens = { access_token: exchange.accessToken };
+        // Persist baseUrl alongside the token so tool calls can locate the
+        // right Outline instance regardless of which env var is set on the MCP
+        // service later (matches the paste-token flow's shape).
+        const outlineProviderTokens = { access_token: exchange.accessToken, baseUrl: outlineBaseUrl };
         const emptyGoogleTokensForOutline = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
         const outlineInstanceName = buildOutlineInstanceName({
           serviceName: mcp.name.replace(' MCP', '').trim(),
@@ -1191,6 +1195,38 @@ function registerSharedRoutes(app: express.Express): void {
           console.error('[connect-token] Slack token validation failed:', err);
           res.status(502).json({ error: 'Failed to validate Slack token. Check the token and try again.' });
         }
+        return;
+      }
+
+      if (mcpSlug === 'outline') {
+        // Outline paste-token flow: the request body carries { token, baseUrl,
+        // instanceName? }. We validate the pair by calling <baseUrl>/api/auth.info,
+        // then store baseUrl alongside the access_token so tool calls hit the
+        // right instance.
+        const { baseUrl } = req.body as { baseUrl?: string };
+        const validate = await validateOutlineToken({ baseUrl: baseUrl ?? '', token });
+        if (!validate.ok) {
+          console.error(`[connect-token] ${validate.logMessage}`);
+          res.status(validate.status).json({ error: validate.userMessage });
+          return;
+        }
+
+        const providerEmail = validate.email;
+        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const providerTokens = { access_token: token, baseUrl: validate.baseUrl };
+        const outlineInstanceName = buildOutlineInstanceNameFromToken({
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          providedInstanceName: instanceName,
+          teamName: validate.teamName,
+          email: providerEmail,
+        });
+
+        const connection = await createMcpInstance(
+          user.id, mcpSlug, outlineInstanceName, emptyGoogleTokens, null,
+          'outline', providerTokens, providerEmail
+        );
+        console.error(`User ${user.id} connected Outline MCP: ${connection.instanceId} (${validate.baseUrl})`);
+        res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
         return;
       }
 

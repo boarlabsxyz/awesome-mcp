@@ -5,7 +5,13 @@
 import { UserError } from 'fastmcp';
 import { UserSession } from '../userSession.js';
 
-const BASE_URL = process.env.OUTLINE_BASE_URL || 'https://wiki-dev.gluzdov.com';
+/**
+ * Default base URL used only when no per-connection URL is stored and no
+ * OUTLINE_BASE_URL env var is set. In production, either the user provides the
+ * URL when pasting their API key, or (for OAuth deployments) the seed writes
+ * the env var into the catalog.
+ */
+const DEFAULT_BASE_URL = process.env.OUTLINE_BASE_URL || 'https://wiki-dev.gluzdov.com';
 
 export type OutlineDocument = {
   id: string;
@@ -66,7 +72,13 @@ export type DateFilter = 'day' | 'week' | 'month' | 'year';
 export type ExportFormat = 'outline-markdown' | 'json' | 'html';
 
 export class OutlineClient {
-  constructor(private token: string) {}
+  /** Base URL of the Outline instance this client talks to (no trailing slash). */
+  public readonly baseUrl: string;
+
+  constructor(private token: string, baseUrl?: string) {
+    // Strip trailing slashes so `${baseUrl}${path}` never doubles up.
+    this.baseUrl = (baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
+  }
 
   private async request<T>(
     method: string,
@@ -78,7 +90,7 @@ export class OutlineClient {
     const timeout = setTimeout(() => controller.abort(), 30_000);
     let res: Response;
     try {
-      res = await fetch(`${BASE_URL}${path}`, {
+      res = await fetch(`${this.baseUrl}${path}`, {
         method,
         headers: {
           Authorization: `Bearer ${this.token}`,
@@ -492,7 +504,7 @@ export function getOutlineClient(session?: UserSession): OutlineClient {
   if (!session?.outlineAccessToken) {
     throw new UserError('Outline not connected. Visit the dashboard to connect your Outline account.');
   }
-  return new OutlineClient(session.outlineAccessToken);
+  return new OutlineClient(session.outlineAccessToken, session.outlineBaseUrl);
 }
 
 /** Translate an API/network error into a `UserError` with the given prefix. */
