@@ -909,9 +909,16 @@
           <p class="name-suggestion" id="nameSuggestion">Tip: Use a name that helps you identify which <span translate="no">Google</span> account this is for.</p>
         </div>
 
-        <!-- Token input for direct-token providers (e.g., Slack) -->
+        <!-- URL input for providers that need a base URL (e.g., Outline self-hosted) -->
+        <div id="urlInputSection" class="name-input-section" style="display:none;">
+          <label for="urlInput">Instance URL</label>
+          <input type="url" id="urlInput" placeholder="https://wiki.example.com" autocomplete="off" spellcheck="false" />
+          <p class="name-suggestion" id="urlHint">The URL where your instance lives (no trailing slash).</p>
+        </div>
+
+        <!-- Token input for direct-token providers (e.g., Slack, Outline) -->
         <div id="tokenInputSection" class="name-input-section" style="display:none;">
-          <label for="tokenInput">Bot Token</label>
+          <label id="tokenLabel" for="tokenInput">Bot Token</label>
           <input type="password" id="tokenInput" placeholder="xoxb-…" autocomplete="off" spellcheck="false" />
           <p class="name-suggestion" id="tokenHint">
             Create a <span translate="no">Slack</span> App, add bot scopes (<code translate="no">channels:history</code>, <code translate="no">channels:read</code>, <code translate="no">groups:history</code>, <code translate="no">groups:read</code>, <code translate="no">chat:write</code>, <code translate="no">users:read</code>), install to workspace, then paste the Bot User OAuth Token here. The bot only sees channels where it's been /invited.
@@ -1239,7 +1246,10 @@
       selectedMcpType = catalogs.find(c => c.slug === slug);
       if (!selectedMcpType) return;
 
-      const isTokenProvider = selectedMcpType.provider === 'slack-bot';
+      const provider = selectedMcpType.provider;
+      // Any provider without an OAuth authorize URL goes through /api/connect-token.
+      // Currently: slack-bot (single-field token paste) and outline (URL + API key paste).
+      const isTokenProvider = provider === 'slack-bot' || provider === 'outline';
 
       // For OAuth providers, skip naming step — name is auto-generated on the backend
       if (!isTokenProvider) {
@@ -1248,7 +1258,7 @@
         return;
       }
 
-      // Token providers (Slack Bot) still need Step 2 for token input
+      // Token providers (Slack Bot, Outline) still need Step 2 for token input
       document.getElementById('step1').classList.remove('active');
       document.getElementById('step2').classList.add('active');
       document.getElementById('addToolModalTitle').textContent = `Add ${selectedMcpType.name}`;
@@ -1265,6 +1275,32 @@
       document.getElementById('connectTokenBtn').style.display = '';
       document.getElementById('tokenInputSection').style.display = '';
       document.getElementById('tokenInput').value = '';
+
+      // Per-provider label / placeholder / hint / URL visibility.
+      const tokenLabel = document.getElementById('tokenLabel');
+      const tokenInput = document.getElementById('tokenInput');
+      const tokenHint = document.getElementById('tokenHint');
+      const urlSection = document.getElementById('urlInputSection');
+      const urlInput = document.getElementById('urlInput');
+      if (provider === 'outline') {
+        tokenLabel.textContent = 'API Key';
+        tokenInput.placeholder = 'ol_pat_…';
+        tokenHint.innerHTML =
+          'In Outline: <strong>Settings → API Keys → New API Key</strong>. ' +
+          'Paste the generated token here. The key is scoped to your own user and can be revoked at any time.';
+        urlSection.style.display = '';
+        urlInput.value = '';
+      } else {
+        tokenLabel.textContent = 'Bot Token';
+        tokenInput.placeholder = 'xoxb-…';
+        tokenHint.innerHTML =
+          'Create a <span translate="no">Slack</span> App, add bot scopes (<code translate="no">channels:history</code>, ' +
+          '<code translate="no">channels:read</code>, <code translate="no">groups:history</code>, ' +
+          '<code translate="no">groups:read</code>, <code translate="no">chat:write</code>, ' +
+          '<code translate="no">users:read</code>), install to workspace, then paste the Bot User OAuth Token here. ' +
+          "The bot only sees channels where it's been /invited.";
+        urlSection.style.display = 'none';
+      }
 
       document.getElementById('nameSuggestion').textContent = 'Tip: Use a name like "Engineering" or "My Startup" to identify the workspace.';
 
@@ -1291,18 +1327,30 @@
       if (!name) { alert('Please enter a name for this instance'); return; }
       if (!selectedMcpType) { alert('Please select an MCP type'); return; }
       const token = document.getElementById('tokenInput').value.trim();
-      if (!token) { alert('Please enter a bot token'); return; }
+      if (!token) {
+        alert(selectedMcpType.provider === 'outline' ? 'Please enter your Outline API key' : 'Please enter a bot token');
+        return;
+      }
+
+      // Providers that need a per-connection base URL (currently: outline).
+      let baseUrl;
+      if (selectedMcpType.provider === 'outline') {
+        baseUrl = document.getElementById('urlInput').value.trim();
+        if (!baseUrl) { alert('Please enter the Outline instance URL'); return; }
+      }
 
       const btn = document.getElementById('connectTokenBtn');
       btn.disabled = true;
       btn.textContent = 'Connecting…';
 
       try {
+        const body = { mcpSlug: selectedMcpType.slug, token, instanceName: name };
+        if (baseUrl) body.baseUrl = baseUrl;
         const response = await fetch('/api/connect-token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({ mcpSlug: selectedMcpType.slug, token, instanceName: name }),
+          body: JSON.stringify(body),
         });
         const data = await response.json();
         if (!response.ok) {
