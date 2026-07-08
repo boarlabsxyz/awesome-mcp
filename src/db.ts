@@ -141,6 +141,61 @@ ALTER TABLE mcp_catalog
   ADD COLUMN IF NOT EXISTS oauth_token_url VARCHAR(2048);
 `;
 
+// ClickUp task-event webhook subscriptions.
+// One row per (user, workspace) — per-user scoping keeps a departing user's
+// creator-binding failure to their own digest rather than everyone's. The
+// shared_secret is stored as-is: it's issued per-webhook by ClickUp and is
+// only ever used HMAC-side for verifying inbound POSTs; we don't send it back
+// out to the caller.
+const CREATE_CLICKUP_WEBHOOK_SUBSCRIPTIONS_TABLE = `
+CREATE TABLE IF NOT EXISTS clickup_webhook_subscriptions (
+  id                   SERIAL PRIMARY KEY,
+  user_id              INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  workspace_id         VARCHAR(100) NOT NULL,
+  clickup_webhook_id   VARCHAR(100) NOT NULL,
+  shared_secret        VARCHAR(255) NOT NULL,
+  events               JSONB NOT NULL,
+  status               VARCHAR(20) NOT NULL DEFAULT 'active',
+  fail_count           INTEGER NOT NULL DEFAULT 0,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, workspace_id),
+  UNIQUE(clickup_webhook_id)
+);
+`;
+
+// Normalized task-event store. One row per history_item (a single ClickUp
+// webhook POST can carry several: e.g. moving a task also fires a status
+// change). from_val / to_val are stringified for querying; raw_payload keeps
+// the full history_item for anything the routine needs later.
+const CREATE_CLICKUP_TASK_EVENTS_TABLE = `
+CREATE TABLE IF NOT EXISTS clickup_task_events (
+  id                BIGSERIAL PRIMARY KEY,
+  subscription_id   INTEGER NOT NULL REFERENCES clickup_webhook_subscriptions(id) ON DELETE CASCADE,
+  workspace_id      VARCHAR(100) NOT NULL,
+  task_id           VARCHAR(100) NOT NULL,
+  event_type        VARCHAR(50) NOT NULL,
+  field             VARCHAR(50),
+  from_val          TEXT,
+  to_val            TEXT,
+  actor_id          VARCHAR(100),
+  actor_username    VARCHAR(255),
+  occurred_at       BIGINT NOT NULL,
+  received_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  raw_payload       JSONB NOT NULL
+);
+`;
+
+const CREATE_CLICKUP_EVENTS_WORKSPACE_TASK_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_clickup_events_ws_task_time
+  ON clickup_task_events(workspace_id, task_id, occurred_at DESC);
+`;
+
+const CREATE_CLICKUP_EVENTS_SUBSCRIPTION_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_clickup_events_sub_time
+  ON clickup_task_events(subscription_id, occurred_at DESC);
+`;
+
 // Add unique constraint on instance_id (each instance must be unique)
 const ADD_INSTANCE_ID_UNIQUE_CONSTRAINT = `
 DO $$
@@ -247,7 +302,25 @@ export async function initDatabase(): Promise<void> {
     await pool.query(ALTER_MCP_CATALOG_ADD_PROVIDER_COLUMNS);
     console.error('MCP catalog provider columns ensured.');
 
+    // ClickUp webhook subscriptions + task event store (PR1: schema + ingestion)
+    await pool.query(CREATE_CLICKUP_WEBHOOK_SUBSCRIPTIONS_TABLE);
+    console.error('ClickUp webhook subscriptions table ensured.');
+    await pool.query(CREATE_CLICKUP_TASK_EVENTS_TABLE);
+    console.error('ClickUp task events table ensured.');
+    await pool.query(CREATE_CLICKUP_EVENTS_WORKSPACE_TASK_INDEX);
+    await pool.query(CREATE_CLICKUP_EVENTS_SUBSCRIPTION_INDEX);
+    console.error('ClickUp task events indexes ensured.');
+
     dbAvailable = true;
+
+    // Kick off the retention scheduler now that dbAvailable=true. Dynamic
+    // import to avoid a boot-time cycle with the clickup module.
+    try {
+      const { startTaskEventRetentionScheduler } = await import('./clickup/taskEventStore.js');
+      startTaskEventRetentionScheduler();
+    } catch (err: any) {
+      console.error('[db] failed to start ClickUp event retention scheduler:', err?.message || err);
+    }
   } catch (err) {
     console.error('Failed to connect to database(s), falling back to file storage:', err);
     await cleanupPartial();

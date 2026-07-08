@@ -13,7 +13,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Drive](#google-drive) (15)
 - [Gmail](#gmail) (14)
 - [Google Slides](#google-slides) (6)
-- [ClickUp](#clickup) (37)
+- [ClickUp](#clickup) (38)
 - [Slack (bot)](#slack-bot-) (7)
 - [Slack (user)](#slack-user-) (7)
 - [Outline](#outline) (27)
@@ -154,7 +154,7 @@ Source: `src/google-slides/server.ts` — 6 tools.
 
 ## ClickUp
 
-Source: `src/clickup/server.ts` — 37 tools.
+Source: `src/clickup/server.ts` — 38 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -164,14 +164,14 @@ Source: `src/clickup/server.ts` — 37 tools.
 | `listFolders` | List all folders in a ClickUp space. | `GET /api/v1/clickup/spaces/{spaceId}/folders` |
 | `listLists` | List all lists in a ClickUp folder, or folderless lists in a space. Provide either folderId or spaceId. | — |
 | `getTask` | Get detailed information about a specific ClickUp task by its ID. | `GET /api/v1/clickup/tasks/{taskId}` |
-| `listTasks` | List tasks in a ClickUp list with optional filters. | `GET /api/v1/clickup/lists/{listId}/tasks` |
+| `listTasks` | List tasks in a ClickUp list with optional filters. To query tasks closed within a window, set closedAfter and/or closedBefore — the tool then forces include_closed, auto-paginates up to 2000 tasks, and filters locally on date_closed (ClickUp's REST API has no server-side close-date filter). | `GET /api/v1/clickup/lists/{listId}/tasks` |
 | `createTask` | Create a new task in a ClickUp list. | — |
 | `updateTask` | Update an existing ClickUp task. Only provided fields will be changed. | — |
 | `deleteTask` | Delete a ClickUp task permanently. | — |
 | `moveTask` | Move a task to a different list. | — |
 | `addTaskComment` | Add a comment to a ClickUp task. Supports markdown formatting: **bold**, *italic*, `inline code`. | — |
 | `getTaskComments` | Get comments on a ClickUp task. | `GET /api/v1/clickup/tasks/{taskId}/comments` |
-| `searchTasks` | Search for tasks across a ClickUp workspace. Supports filtering by name (client-side substring match) and/or custom fields. By default excludes closed/completed tasks — set includeClosed=true to include them. | `GET /api/v1/clickup/workspaces/{workspaceId}/tasks/search` |
+| `searchTasks` | Search for tasks across a ClickUp workspace. Supports filtering by name (client-side substring match) and/or custom fields. By default excludes closed/completed tasks — set includeClosed=true to include them. To query tasks closed within a window, set closedAfter and/or closedBefore — the tool then forces include_closed, auto-paginates up to 2000 tasks, and filters locally on date_closed (ClickUp's REST API has no server-side close-date filter). | `GET /api/v1/clickup/workspaces/{workspaceId}/tasks/search` |
 | `getAccessibleCustomFields` | List all custom fields available on a ClickUp list. Use this to discover field IDs for filtering or setting values. | `GET /api/v1/clickup/lists/{listId}/fields` |
 | `setCustomFieldValue` | Set a custom field value on a ClickUp task. Use getAccessibleCustomFields first to find the field ID and type. Value shape depends on field type: text/email/phone → string; number → number; drop_down → option orderindex (int); users → array of user IDs; labels → array of label UUIDs; date → unix ms. NOTE: drop_down uses orderindex here, but searchTasks custom_fields filter uses the option UUID — getAccessibleCustomFields returns both. | — |
 | `removeCustomFieldValue` | Remove/clear a custom field value from a ClickUp task. | — |
@@ -179,6 +179,7 @@ Source: `src/clickup/server.ts` — 37 tools.
 | `addTagToTask` | Add a tag to a ClickUp task. If the tag does not already exist in the task's space, ClickUp auto-creates it on the fly — call listSpaceTags first when you want to reuse existing tags and avoid tag proliferation. ClickUp's updateTask endpoint does not accept tags; this is the correct way to tag an existing task. | — |
 | `removeTagFromTask` | Remove a tag from a ClickUp task. Does not delete the tag from the space — only unassigns it from this task. | — |
 | `getTaskMembers` | List all members assigned to a ClickUp task. | `GET /api/v1/clickup/tasks/{taskId}/members` |
+| `subscribeToTaskEvents` | Subscribe this user's digest routine to ClickUp task events for a workspace. Creates a webhook on ClickUp's side and stores its shared secret so the ingestion endpoint can verify inbound POSTs. IDEMPOTENT: re-calling with the same (user, workspace) returns the existing subscription without hitting ClickUp again. Default event bundle is `taskCreated`, `taskStatusUpdated`, `taskAssigneeUpdated`, `taskMoved`, `taskDeleted` — deliberately excludes `taskUpdated` (firehose, redundant with the pull-side `date_updated_gt` filter on filterTeamTasks). Requires the BASE_URL env var so ClickUp can call back. Once subscribed, the event store accrues from this moment forward — history queries against events before this timestamp fall back to the `date_updated + current status` approximation. | — |
 | `createList` | Create a new list in a ClickUp folder, or a folderless list in a space. | — |
 | `createFolder` | Create a new folder in a ClickUp space. | — |
 | `createSpace` | Create a new space in a ClickUp workspace. | — |
@@ -260,4 +261,4 @@ Source: `src/outline/server.ts` — 27 tools.
 
 ---
 
-**Grand total: 163 tools across 11 sections.**
+**Grand total: 164 tools across 11 sections.**
