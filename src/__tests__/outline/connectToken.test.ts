@@ -152,6 +152,39 @@ describe('validateOutlineToken — network', () => {
     assert.equal(calls[0].url, 'https://wiki.example.com/api/auth.info');
     assert.equal(calls[0].init.method, 'POST');
     assert.equal((calls[0].init.headers as any).Authorization, 'Bearer ol_pat_abc');
+    // SSRF hardening — regression guard. If this ever changes, a 302 from
+    // Outline could redirect the token onto a private host.
+    assert.equal((calls[0].init as any).redirect, 'error');
+  });
+
+  test('redirect thrown by fetch → 400 with a specific message', async () => {
+    // Simulates the TypeError undici throws when redirect:'error' meets a 3xx.
+    // Match on `message`, `cause.message`, or both — we handle either.
+    const { fetch: mockFetch } = makeMockFetch(() => {
+      const err: any = new TypeError('fetch failed');
+      err.cause = { message: 'unexpected redirect' };
+      throw err;
+    });
+    const result = await validateOutlineToken({ ...goodInput(), fetchImpl: mockFetch });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.status, 400);
+    assert.match(result.userMessage, /redirected/i);
+    assert.match(result.logMessage, /blocked at redirect/i);
+  });
+
+  test('redirect keyword in outer message (no cause) also routes to 400', async () => {
+    // Defensive: some runtimes put the redirect signal on `err.message`
+    // directly rather than `err.cause.message`.
+    const { fetch: mockFetch } = makeMockFetch(() => {
+      const err: any = new TypeError('redirect not allowed');
+      throw err;
+    });
+    const result = await validateOutlineToken({ ...goodInput(), fetchImpl: mockFetch });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.status, 400);
+    assert.match(result.userMessage, /redirected/i);
   });
 
   test('trailing slashes on baseUrl are stripped', async () => {

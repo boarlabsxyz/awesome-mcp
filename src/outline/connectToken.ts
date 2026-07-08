@@ -177,14 +177,31 @@ export async function validateOutlineToken(input: ValidateInput): Promise<Valida
           'Content-Type': 'application/json',
         },
         signal: controller.signal,
+        // SSRF hardening: refuse to follow redirects. checkBaseUrl only
+        // verifies the URL the user pasted — the target server could still
+        // 302 the request to a private host (metadata endpoint, RFC1918
+        // subnet, etc.), leaking the API key. redirect:'error' makes fetch
+        // throw on any 3xx, matching the intent that the token only reach
+        // the URL the user typed.
+        redirect: 'error',
       });
     } catch (err: any) {
       if (err?.name === 'AbortError') return timedOut();
+      const message = err?.message ?? String(err);
+      const cause = err?.cause?.message ?? '';
+      if (/redirect/i.test(message) || /redirect/i.test(cause)) {
+        return {
+          ok: false,
+          status: 400,
+          userMessage: 'Outline URL redirected to another host. Paste the final URL directly.',
+          logMessage: `Outline auth.info blocked at redirect: ${message}${cause ? ` (cause: ${cause})` : ''}`,
+        };
+      }
       return {
         ok: false,
         status: 502,
         userMessage: `Could not reach Outline at ${baseUrl}. Check the URL.`,
-        logMessage: `Outline auth.info fetch failed: ${err?.message ?? err}`,
+        logMessage: `Outline auth.info fetch failed: ${message}`,
       };
     }
 
