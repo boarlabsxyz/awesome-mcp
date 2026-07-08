@@ -11,7 +11,7 @@ import {
   parseCloseWindow,
 } from './apiHelpers.js';
 import { formatTask, formatTaskList } from './formatHelpers.js';
-import { CAPTURED_EVENTS } from './webhookHelpers.js';
+import { CAPTURED_EVENTS, subscribeToTaskEventsFlow } from './webhookHelpers.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
@@ -563,48 +563,40 @@ clickUpServer.addTool({
     }
     const client = getClickUpClient(session);
     const events = (args.events && args.events.length > 0) ? args.events : [...CAPTURED_EVENTS];
-    const { findSubscription, createSubscription } = await import('./taskEventStore.js');
-
-    // Idempotency: return the existing subscription if we already have one
-    // for (user, workspace). Do NOT hit ClickUp again — we already have a
-    // secret we can verify against, and re-creating would leak orphan webhooks.
-    const existing = await findSubscription(session.userId, args.workspaceId);
-    if (existing) {
-      return [
-        'Subscription already active (idempotent no-op).',
-        `  Subscription ID: ${existing.id}`,
-        `  ClickUp webhook ID: ${existing.clickupWebhookId}`,
-        `  Events: ${existing.events.join(', ')}`,
-        `  Status: ${existing.status} (fail_count: ${existing.failCount})`,
-        `  Created: ${existing.createdAt}`,
-      ].join('\n');
-    }
+    const store = await import('./taskEventStore.js');
 
     const baseUrl = (process.env.BASE_URL || '').replace(/\/+$/, '');
     if (!baseUrl) {
       throw new UserError('BASE_URL env var must be set to create webhooks (ClickUp needs a callback URL).');
     }
-
     const endpoint = `${baseUrl}/webhooks/clickup/inbound`;
-    let created: any;
+
+    let result;
     try {
-      created = await client.createWebhook(args.workspaceId, { endpoint, events });
+      result = await subscribeToTaskEventsFlow(
+        {
+          createWebhook: (ws, p) => client.createWebhook(ws, p),
+          deleteWebhook: (id) => client.deleteWebhook(id),
+          findSubscription: store.findSubscription,
+          createSubscription: store.createSubscription,
+        },
+        { userId: session.userId, workspaceId: args.workspaceId, events, endpoint },
+      );
     } catch (err: any) {
-      throw new UserError(`Failed to create ClickUp webhook: ${err.message || err}`);
-    }
-    const webhookId = created?.id || created?.webhook?.id;
-    const sharedSecret = created?.webhook?.secret || created?.secret;
-    if (!webhookId || !sharedSecret) {
-      throw new UserError(`ClickUp webhook creation returned no id/secret. Raw response: ${JSON.stringify(created).slice(0, 500)}`);
+      throw new UserError(err?.message || String(err));
     }
 
-    const sub = await createSubscription({
-      userId: session.userId,
-      workspaceId: args.workspaceId,
-      clickupWebhookId: String(webhookId),
-      sharedSecret: String(sharedSecret),
-      events,
-    });
+    const sub = result.subscription;
+    if (result.kind === 'existing') {
+      return [
+        'Subscription already active (idempotent no-op).',
+        `  Subscription ID: ${sub.id}`,
+        `  ClickUp webhook ID: ${sub.clickupWebhookId}`,
+        `  Events: ${sub.events.join(', ')}`,
+        `  Status: ${sub.status} (fail_count: ${sub.failCount})`,
+        `  Created: ${sub.createdAt}`,
+      ].join('\n');
+    }
     return [
       'Subscription created.',
       `  Subscription ID: ${sub.id}`,

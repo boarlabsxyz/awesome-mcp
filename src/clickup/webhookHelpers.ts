@@ -179,3 +179,126 @@ export async function handleClickUpWebhookIngest(
 
   return { status: 200, body: { ok: true }, insertedEventCount };
 }
+
+// -----------------------------------------------------------------------------
+// Subscribe flow helpers
+// -----------------------------------------------------------------------------
+
+const SECRET_KEYS = new Set(['secret', 'shared_secret', 'sharedSecret', 'token', 'access_token']);
+
+// Recursively replace known-sensitive fields with [REDACTED]. Used before
+// stringifying a ClickUp webhook-create response into an error message, so
+// a malformed response can't leak the shared_secret we're about to store.
+export function redactWebhookSecrets<T = any>(value: T): T {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) return (value as any[]).map(redactWebhookSecrets) as any;
+  if (typeof value !== 'object') return value;
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(value as Record<string, any>)) {
+    out[k] = SECRET_KEYS.has(k) ? '[REDACTED]' : redactWebhookSecrets(v);
+  }
+  return out as T;
+}
+
+// Extracts (webhookId, sharedSecret) from the varied response shapes ClickUp
+// returns from POST /team/{id}/webhook. Returns a tagged result so the caller
+// can either use the credentials or emit a REDACTED-shape error — never a raw
+// stringified response.
+export function extractWebhookCreds(
+  created: any,
+): { ok: true; webhookId: string; sharedSecret: string } | { ok: false; error: string } {
+  const webhookId = created?.id || created?.webhook?.id;
+  const sharedSecret = created?.webhook?.secret || created?.secret;
+  if (!webhookId || !sharedSecret) {
+    const safe = JSON.stringify(redactWebhookSecrets(created)).slice(0, 500);
+    return {
+      ok: false,
+      error: `ClickUp webhook creation returned no id/secret. Redacted response: ${safe}`,
+    };
+  }
+  return { ok: true, webhookId: String(webhookId), sharedSecret: String(sharedSecret) };
+}
+
+// Dependencies the subscribe orchestrator needs. Splits ClickUp client calls
+// from the persistence store so tests can wire fakes for each side and
+// exercise the orphan-cleanup path.
+export interface SubscribeDeps {
+  createWebhook(workspaceId: string, params: { endpoint: string; events: string[] }): Promise<any>;
+  deleteWebhook(webhookId: string): Promise<any>;
+  findSubscription(userId: number, workspaceId: string): Promise<ClickUpWebhookSubscription | null>;
+  createSubscription(input: {
+    userId: number;
+    workspaceId: string;
+    clickupWebhookId: string;
+    sharedSecret: string;
+    events: string[];
+  }): Promise<ClickUpWebhookSubscription>;
+}
+
+export interface SubscribeFlowResult {
+  kind: 'existing' | 'created';
+  subscription: ClickUpWebhookSubscription;
+}
+
+// Orchestrates: check idempotency → create webhook on ClickUp → validate
+// response → persist subscription → on persist failure, roll the ClickUp
+// webhook back so a retry doesn't accumulate orphans.
+//
+// Throws plain Error; the MCP tool re-wraps as UserError. That keeps the
+// helper free of fastmcp coupling for test purposes.
+export async function subscribeToTaskEventsFlow(
+  deps: SubscribeDeps,
+  input: { userId: number; workspaceId: string; events: string[]; endpoint: string },
+): Promise<SubscribeFlowResult> {
+  // 1. Idempotency: never hit ClickUp if we already own a subscription for
+  //    this (user, workspace). Return the existing record as-is.
+  const existing = await deps.findSubscription(input.userId, input.workspaceId);
+  if (existing) return { kind: 'existing', subscription: existing };
+
+  // 2. Create webhook on ClickUp.
+  let created: any;
+  try {
+    created = await deps.createWebhook(input.workspaceId, {
+      endpoint: input.endpoint,
+      events: input.events,
+    });
+  } catch (err: any) {
+    throw new Error(`Failed to create ClickUp webhook: ${err?.message || err}`);
+  }
+
+  // 3. Extract creds. Response shape varies; extractor also redacts secrets
+  //    from any error message it emits.
+  const creds = extractWebhookCreds(created);
+  if (!creds.ok) throw new Error(creds.error);
+
+  // 4. Persist. If this throws, we've created a webhook on ClickUp but have
+  //    no record of it — delete it before rethrowing so a retry doesn't
+  //    accumulate duplicate ghost webhooks and blow past ClickUp's per-team
+  //    webhook cap.
+  try {
+    const sub = await deps.createSubscription({
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+      clickupWebhookId: creds.webhookId,
+      sharedSecret: creds.sharedSecret,
+      events: input.events,
+    });
+    return { kind: 'created', subscription: sub };
+  } catch (persistErr: any) {
+    let cleanupNote = 'rolled back';
+    try {
+      await deps.deleteWebhook(creds.webhookId);
+    } catch (cleanupErr: any) {
+      // Log-and-continue: the original persist error is what matters most,
+      // but the operator needs to know the ClickUp webhook is still live so
+      // they can delete it manually.
+      console.error(
+        `[clickup-subscribe] cleanup failed for orphaned webhook ${creds.webhookId}:`,
+        cleanupErr?.message || cleanupErr,
+      );
+      cleanupNote = `cleanup FAILED — orphaned ClickUp webhook ${creds.webhookId} must be deleted manually`;
+    }
+    const msg = persistErr?.message || String(persistErr);
+    throw new Error(`Failed to persist ClickUp subscription (webhook ${cleanupNote}): ${msg}`);
+  }
+}
