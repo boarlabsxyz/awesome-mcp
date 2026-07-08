@@ -626,6 +626,45 @@ function registerSharedRoutes(app: express.Express): void {
     next();
   }
 
+  // === ClickUp task-event webhook ingestion (public, HMAC-verified) ===
+  // Registered BEFORE the global express.json() so this route can consume the
+  // body as a raw Buffer — HMAC-SHA256 is computed over the exact bytes ClickUp
+  // sent, and json-parsing them would change whitespace/ordering and break the
+  // signature check.
+  //
+  // Auth model: no session, no bearer. The URL is public because ClickUp POSTs
+  // to it. Trust is anchored in the X-Signature header, which we verify against
+  // the per-webhook shared_secret we stored at subscribe time. Fail-fast 401
+  // on bad HMAC.
+  //
+  // Response contract: ClickUp marks the webhook failing if we return an error
+  // or take over 7 seconds. We 200 the moment the insert completes; on parse or
+  // insert failure we still 200 (to avoid ClickUp incrementing fail_count for
+  // our bug) but bump our own fail_count and log — the query tool in PR2 will
+  // surface fail_count so operators can see a dying webhook.
+  app.post(
+    '/webhooks/clickup/inbound',
+    express.raw({ type: '*/*', limit: '1mb' }),
+    async (req, res) => {
+      try {
+        const store = await import('../clickup/taskEventStore.js');
+        const { handleClickUpWebhookIngest } = await import('../clickup/webhookHelpers.js');
+        const rawBody: Buffer = req.body instanceof Buffer ? req.body : Buffer.from(req.body as any);
+        const result = await handleClickUpWebhookIngest(
+          rawBody,
+          req.headers['x-signature'] as string | undefined,
+          store,
+        );
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        // Last-resort catch. 200 so ClickUp doesn't disable the webhook for
+        // an infra crash our end.
+        console.error('[clickup-ingest] handler crash:', err?.message || err);
+        res.status(200).json({ ok: true });
+      }
+    },
+  );
+
   // JSON body parser for API routes
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));

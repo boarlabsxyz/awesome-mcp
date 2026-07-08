@@ -405,6 +405,31 @@ export class ClickUpClient {
     return this.request('GET', `/team/${teamId}/time_entries${qs ? '?' + qs : ''}`);
   }
 
+  // === Webhooks ===
+
+  // POST /team/{team_id}/webhook — create a workspace-level webhook.
+  // ClickUp response includes `id` (webhook id) and `webhook.secret` (the
+  // shared secret used to HMAC-sign inbound event POSTs). The caller MUST
+  // store the secret; ClickUp doesn't re-issue it later.
+  async createWebhook(teamId: string, data: {
+    endpoint: string;
+    events: string[];
+    space_id?: string | null;
+    folder_id?: string | null;
+    list_id?: string | null;
+    task_id?: string | null;
+  }): Promise<any> {
+    return this.request('POST', `/team/${teamId}/webhook`, data);
+  }
+
+  async listWebhooks(teamId: string): Promise<any> {
+    return this.request('GET', `/team/${teamId}/webhook`);
+  }
+
+  async deleteWebhook(webhookId: string): Promise<any> {
+    return this.request('DELETE', `/webhook/${webhookId}`);
+  }
+
   // === Docs (v3 API) ===
 
   async listDocs(workspaceId: string): Promise<any> {
