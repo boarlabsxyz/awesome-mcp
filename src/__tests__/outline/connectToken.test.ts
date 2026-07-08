@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import {
   validateOutlineToken,
   buildOutlineInstanceName,
+  checkBaseUrl,
+  isPrivateHost,
   type ValidateInput,
 } from '../../outline/connectToken.js';
 
@@ -268,5 +270,265 @@ describe('validateOutlineToken — network', () => {
     assert.equal(result.status, 502);
     // logMessage still assembled with the upstream status even when the body read fails
     assert.match(result.logMessage, /502/);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// isPrivateHost — direct enumeration of every range we defend against
+// -----------------------------------------------------------------------------
+
+describe('isPrivateHost', () => {
+  test('rejects loopback hostnames', () => {
+    for (const h of ['localhost', 'LOCALHOST', 'LocalHost', 'ip6-localhost', 'ip6-loopback']) {
+      assert.equal(isPrivateHost(h), true, `expected ${h} to be private`);
+    }
+  });
+
+  test('rejects the entire 127.0.0.0/8 loopback range', () => {
+    for (const h of ['127.0.0.1', '127.1.2.3', '127.255.255.255']) {
+      assert.equal(isPrivateHost(h), true, `expected ${h} to be private`);
+    }
+  });
+
+  test('rejects 10.0.0.0/8 (RFC1918)', () => {
+    for (const h of ['10.0.0.0', '10.1.2.3', '10.255.255.255']) {
+      assert.equal(isPrivateHost(h), true, `expected ${h} to be private`);
+    }
+  });
+
+  test('rejects 172.16.0.0/12 (RFC1918) with boundary checks', () => {
+    for (const h of ['172.16.0.0', '172.20.5.5', '172.31.255.255']) {
+      assert.equal(isPrivateHost(h), true, `expected ${h} to be private`);
+    }
+    // Just outside the range: 172.15 and 172.32 must NOT be blocked
+    assert.equal(isPrivateHost('172.15.0.1'), false);
+    assert.equal(isPrivateHost('172.32.0.1'), false);
+  });
+
+  test('rejects 192.168.0.0/16 (RFC1918)', () => {
+    for (const h of ['192.168.0.1', '192.168.1.1', '192.168.255.255']) {
+      assert.equal(isPrivateHost(h), true, `expected ${h} to be private`);
+    }
+    assert.equal(isPrivateHost('192.169.0.1'), false);
+  });
+
+  test('rejects 169.254.0.0/16 link-local (AWS metadata endpoint)', () => {
+    assert.equal(isPrivateHost('169.254.169.254'), true, 'must block the AWS metadata IP');
+    assert.equal(isPrivateHost('169.254.0.0'), true);
+    assert.equal(isPrivateHost('169.254.255.255'), true);
+    assert.equal(isPrivateHost('169.253.0.1'), false);
+  });
+
+  test('rejects 0.0.0.0/8', () => {
+    assert.equal(isPrivateHost('0.0.0.0'), true);
+    assert.equal(isPrivateHost('0.1.2.3'), true);
+  });
+
+  test('rejects IPv6 canonical loopback / unspecified', () => {
+    assert.equal(isPrivateHost('::1'), true);
+    assert.equal(isPrivateHost('::'), true);
+    assert.equal(isPrivateHost('[::1]'), true, 'brackets should be tolerated');
+  });
+
+  test('rejects uncompressed IPv6 loopback (0:0:0:0:0:0:0:1)', () => {
+    assert.equal(isPrivateHost('0:0:0:0:0:0:0:1'), true);
+    assert.equal(isPrivateHost('0:0:0:0:0:0:0:0'), true);
+  });
+
+  test('rejects fe80::/10 link-local', () => {
+    for (const h of ['fe80::1', 'fe90::1', 'FEBF::1', 'febf::abcd']) {
+      assert.equal(isPrivateHost(h), true, `expected ${h} to be link-local`);
+    }
+    // Just outside the range
+    assert.equal(isPrivateHost('fec0::1'), false, 'fec0:: is not link-local');
+    assert.equal(isPrivateHost('fe7f::1'), false);
+  });
+
+  test('rejects fc00::/7 unique-local', () => {
+    for (const h of ['fc00::1', 'fd00::1', 'fdff::abcd']) {
+      assert.equal(isPrivateHost(h), true, `expected ${h} to be unique-local`);
+    }
+    assert.equal(isPrivateHost('fe00::1'), false);
+  });
+
+  test('rejects IPv4-mapped IPv6 pointing at a private IPv4 (dotted-quad form)', () => {
+    assert.equal(isPrivateHost('::ffff:127.0.0.1'), true);
+    assert.equal(isPrivateHost('::ffff:169.254.169.254'), true);
+    assert.equal(isPrivateHost('::ffff:10.0.0.1'), true);
+    // IPv4-mapped to a public IPv4 must NOT be blocked
+    assert.equal(isPrivateHost('::ffff:8.8.8.8'), false);
+  });
+
+  test('rejects IPv4-mapped IPv6 in WHATWG canonical form (two hex groups)', () => {
+    // WHATWG URL rewrites ::ffff:127.0.0.1 → ::ffff:7f00:1 in URL.hostname.
+    // If this test regresses, http://[::ffff:127.0.0.1]/ silently passes SSRF.
+    assert.equal(isPrivateHost('::ffff:7f00:1'), true, '127.0.0.1 canonical');
+    assert.equal(isPrivateHost('::ffff:a9fe:a9fe'), true, '169.254.169.254 canonical (AWS metadata)');
+    assert.equal(isPrivateHost('::ffff:a00:1'), true, '10.0.0.1 canonical');
+    assert.equal(isPrivateHost('::ffff:c0a8:1'), true, '192.168.0.1 canonical');
+    // Canonical form of 8.8.8.8 must NOT be blocked
+    assert.equal(isPrivateHost('::ffff:808:808'), false);
+  });
+
+  test('strips zone id from IPv6 addresses', () => {
+    assert.equal(isPrivateHost('fe80::1%eth0'), true);
+  });
+
+  test('accepts public IPv4 addresses', () => {
+    for (const h of ['8.8.8.8', '1.1.1.1', '208.67.222.222', '192.169.1.1']) {
+      assert.equal(isPrivateHost(h), false, `expected ${h} to be public`);
+    }
+  });
+
+  test('accepts public IPv6 addresses', () => {
+    for (const h of ['2001:db8::1', '2606:4700:4700::1111']) {
+      assert.equal(isPrivateHost(h), false, `expected ${h} to be public`);
+    }
+  });
+
+  test('accepts ordinary hostnames', () => {
+    for (const h of ['wiki.gluzdov.com', 'example.com', 'app.slack.com']) {
+      assert.equal(isPrivateHost(h), false, `expected ${h} to be public`);
+    }
+  });
+
+  test('empty / whitespace hostnames report as not-private (checkBaseUrl catches those first)', () => {
+    assert.equal(isPrivateHost(''), false);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// checkBaseUrl — SSRF-guard behavior via the URL layer
+// -----------------------------------------------------------------------------
+
+describe('checkBaseUrl — SSRF guard', () => {
+  test('accepts a public https URL', () => {
+    assert.equal(checkBaseUrl('https://wiki.gluzdov.com'), null);
+  });
+
+  test('rejects http://localhost', () => {
+    assert.match(checkBaseUrl('http://localhost:3000') ?? '', /public host/);
+  });
+
+  test('rejects the AWS metadata endpoint', () => {
+    assert.match(checkBaseUrl('http://169.254.169.254/latest/meta-data/') ?? '', /public host/);
+  });
+
+  test('rejects http://127.0.0.1 with a port + path', () => {
+    assert.match(checkBaseUrl('http://127.0.0.1:8080/anything') ?? '', /public host/);
+  });
+
+  test('rejects bracketed IPv6 loopback', () => {
+    assert.match(checkBaseUrl('http://[::1]:3000/') ?? '', /public host/);
+  });
+
+  test('rejects an RFC1918 IPv4', () => {
+    assert.match(checkBaseUrl('http://10.0.0.1/') ?? '', /public host/);
+  });
+
+  test('rejects an IPv4-mapped IPv6 pointing at loopback', () => {
+    assert.match(checkBaseUrl('http://[::ffff:127.0.0.1]/') ?? '', /public host/);
+  });
+
+  test('rejects link-local IPv6', () => {
+    assert.match(checkBaseUrl('http://[fe80::1]/') ?? '', /public host/);
+  });
+
+  test('user-facing error message is stable and matches connect-token error shape', () => {
+    // The paste-token endpoint surfaces the checkBaseUrl string verbatim.
+    // If this ever changes, downstream error copy needs to move too.
+    assert.equal(checkBaseUrl('http://localhost'), 'Outline URL must point to a public host.');
+  });
+});
+
+// -----------------------------------------------------------------------------
+// validateOutlineToken — end-to-end SSRF rejection + body-read timeout
+// -----------------------------------------------------------------------------
+
+describe('validateOutlineToken — SSRF guard forwards checkBaseUrl error', () => {
+  test('rejects a loopback URL before any fetch is attempted', async () => {
+    let fetchCalled = false;
+    const fetchImpl = (async () => { fetchCalled = true; return new Response(); }) as unknown as typeof fetch;
+    const result = await validateOutlineToken({
+      baseUrl: 'http://127.0.0.1:3000',
+      token: 'tok',
+      fetchImpl,
+    });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.status, 400);
+    assert.match(result.userMessage, /public host/);
+    assert.equal(fetchCalled, false, 'must not touch the network for a private host');
+  });
+
+  test('rejects the AWS metadata endpoint before any fetch is attempted', async () => {
+    let fetchCalled = false;
+    const fetchImpl = (async () => { fetchCalled = true; return new Response(); }) as unknown as typeof fetch;
+    const result = await validateOutlineToken({
+      baseUrl: 'http://169.254.169.254/latest/meta-data/',
+      token: 'tok',
+      fetchImpl,
+    });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(fetchCalled, false);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// validateOutlineToken — body-read AbortError → timeout
+// -----------------------------------------------------------------------------
+
+describe('validateOutlineToken — timeout covers response body', () => {
+  test('AbortError from response.json() on 2xx path → 502 timeout', async () => {
+    const fetchImpl = makeMockFetch(() => {
+      const res = new Response('', { status: 200, headers: { 'content-type': 'application/json' } });
+      (res as any).json = async () => {
+        const err: any = new Error('aborted');
+        err.name = 'AbortError';
+        throw err;
+      };
+      return res;
+    }).fetch;
+    const result = await validateOutlineToken({ ...goodInput(), fetchImpl });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.status, 502);
+    assert.match(result.userMessage, /did not respond in time/);
+    assert.match(result.logMessage, /timed out/);
+  });
+
+  test('AbortError from response.text() on non-2xx path → 502 timeout', async () => {
+    const fetchImpl = makeMockFetch(() => {
+      const res = new Response('', { status: 502 });
+      (res as any).text = async () => {
+        const err: any = new Error('aborted');
+        err.name = 'AbortError';
+        throw err;
+      };
+      return res;
+    }).fetch;
+    const result = await validateOutlineToken({ ...goodInput(), fetchImpl });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.status, 502);
+    assert.match(result.userMessage, /did not respond in time/);
+  });
+
+  test('non-abort JSON parse failure still yields ok=true with null email/team', async () => {
+    // Regression guard for the existing contract: malformed JSON on 2xx is not
+    // treated as an error, so the connect flow still succeeds. Only AbortError
+    // from the body reader is upgraded to a timeout.
+    const { fetch: fetchImpl } = makeMockFetch(() =>
+      new Response('not json', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const result = await validateOutlineToken({ ...goodInput(), fetchImpl });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.email, null);
+    assert.equal(result.teamName, null);
   });
 });
