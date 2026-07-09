@@ -9,6 +9,7 @@ import {
   formatCloseWindowCapMessage,
   markdownToCommentBlocks,
   parseCloseWindow,
+  parseTimestampInput,
 } from './apiHelpers.js';
 import { formatTask, formatTaskList } from './formatHelpers.js';
 import { CAPTURED_EVENTS, subscribeToTaskEventsFlow } from './webhookHelpers.js';
@@ -364,6 +365,69 @@ clickUpServer.addTool({
 });
 
 // === Tier 3: Search ===
+
+clickUpServer.addTool({
+  name: 'filterTeamTasks',
+  annotations: { readOnlyHint: true },
+  description: 'Query tasks across a ClickUp workspace using ClickUp\'s server-side "Get Filtered Team Tasks" endpoint (GET /api/v2/team/{team_id}/task). One paginated call replaces per-list enumeration for workspace-wide digests. Returns tasks the caller can access (naturally scoped by the OAuth identity), 100 per page — iterate `page` from 0 to fetch all. Supports assignees, statuses, tags, scope narrowing (spaceIds/projectIds/listIds), and date ranges on date_created / date_updated / due_date. IMPORTANT: ClickUp does NOT support date_closed / date_done filters or a close-date sort here — for "closed since T", query with `dateUpdatedGt=T` (closing bumps date_updated, so this is a superset) and partition on each task\'s `date_closed` client-side.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+    assignees: z.array(z.string()).optional().describe('Filter to tasks assigned to any of these user IDs.'),
+    statuses: z.array(z.string()).optional().describe('Filter to tasks in any of these status names.'),
+    tags: z.array(z.string()).optional().describe('Filter to tasks with any of these tag names.'),
+    spaceIds: z.array(z.string()).optional().describe('Narrow to tasks in these space IDs.'),
+    projectIds: z.array(z.string()).optional().describe('Narrow to tasks in these folder (project) IDs.'),
+    listIds: z.array(z.string()).optional().describe('Narrow to tasks in these list IDs.'),
+    dateCreatedGt: z.string().optional().describe('Only tasks created at/after this time. ISO string or Unix ms.'),
+    dateCreatedLt: z.string().optional().describe('Only tasks created at/before this time. ISO string or Unix ms.'),
+    dateUpdatedGt: z.string().optional().describe('Only tasks updated at/after this time. ISO string or Unix ms. Use as a superset for "closed since T" queries — closing a task bumps date_updated.'),
+    dateUpdatedLt: z.string().optional().describe('Only tasks updated at/before this time. ISO string or Unix ms.'),
+    dueDateGt: z.string().optional().describe('Only tasks with due_date at/after this time. ISO string or Unix ms.'),
+    dueDateLt: z.string().optional().describe('Only tasks with due_date at/before this time. ISO string or Unix ms.'),
+    orderBy: z.enum(['id', 'created', 'updated', 'due_date']).optional().describe('Sort field. No server-side close-date sort — sort client-side if needed.'),
+    reverse: z.boolean().optional().default(false).describe('Reverse the sort order.'),
+    subtasks: z.boolean().optional().default(false).describe('Include subtasks in results.'),
+    includeClosed: z.boolean().optional().default(false).describe('Include closed/completed tasks.'),
+    page: z.number().int().min(0).optional().describe('Page number (0-based). 100 tasks per page. Omit to start at page 0; iterate until a page returns fewer than 100.'),
+    custom_fields: z.array(z.object({
+      field_id: z.string().describe('The custom field ID.'),
+      operator: z.enum(['=', '<', '>', '>=', '<=', '!=', 'IS NULL', 'IS NOT NULL', 'RANGE', 'ANY', 'ALL', 'NOT ANY', 'NOT ALL']).describe('Comparison operator.'),
+      value: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional().describe('Value to compare against. Use an array for ANY/ALL. For dropdown fields, use the option UUID (id from getAccessibleCustomFields), not orderindex or label.'),
+    })).optional().describe('Filter by custom fields.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    const parseTs = (input: string | undefined, field: string): number | undefined => {
+      if (!input) return undefined;
+      const ts = parseTimestampInput(input);
+      if (Number.isNaN(ts)) throw new UserError(`Invalid ${field}: ${input}`);
+      return ts;
+    };
+    const result = await client.filterTeamTasks(args.workspaceId, {
+      page: args.page,
+      order_by: args.orderBy,
+      reverse: args.reverse,
+      subtasks: args.subtasks,
+      include_closed: args.includeClosed,
+      assignees: args.assignees,
+      statuses: args.statuses,
+      tags: args.tags,
+      space_ids: args.spaceIds,
+      project_ids: args.projectIds,
+      list_ids: args.listIds,
+      date_created_gt: parseTs(args.dateCreatedGt, 'dateCreatedGt'),
+      date_created_lt: parseTs(args.dateCreatedLt, 'dateCreatedLt'),
+      date_updated_gt: parseTs(args.dateUpdatedGt, 'dateUpdatedGt'),
+      date_updated_lt: parseTs(args.dateUpdatedLt, 'dateUpdatedLt'),
+      due_date_gt: parseTs(args.dueDateGt, 'dueDateGt'),
+      due_date_lt: parseTs(args.dueDateLt, 'dueDateLt'),
+      custom_fields: args.custom_fields,
+    });
+    const tasks = result.tasks || [];
+    if (tasks.length === 0) return 'No tasks found matching filters.';
+    return `Found ${tasks.length} task(s):\n\n` + tasks.map(formatTask).join('\n\n');
+  },
+});
 
 clickUpServer.addTool({
   name: 'searchTasks',

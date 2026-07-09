@@ -13,7 +13,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Drive](#google-drive) (15)
 - [Gmail](#gmail) (14)
 - [Google Slides](#google-slides) (6)
-- [ClickUp](#clickup) (38)
+- [ClickUp](#clickup) (39)
 - [Slack (bot)](#slack-bot-) (7)
 - [Slack (user)](#slack-user-) (7)
 - [Outline](#outline) (27)
@@ -154,7 +154,7 @@ Source: `src/google-slides/server.ts` — 6 tools.
 
 ## ClickUp
 
-Source: `src/clickup/server.ts` — 38 tools.
+Source: `src/clickup/server.ts` — 39 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -171,6 +171,7 @@ Source: `src/clickup/server.ts` — 38 tools.
 | `moveTask` | Move a task to a different list. | — |
 | `addTaskComment` | Add a comment to a ClickUp task. Supports markdown formatting: **bold**, *italic*, `inline code`. | — |
 | `getTaskComments` | Get comments on a ClickUp task. | `GET /api/v1/clickup/tasks/{taskId}/comments` |
+| `filterTeamTasks` | Query tasks across a ClickUp workspace using ClickUp's server-side "Get Filtered Team Tasks" endpoint (GET /api/v2/team/{team_id}/task). One paginated call replaces per-list enumeration for workspace-wide digests. Returns tasks the caller can access (naturally scoped by the OAuth identity), 100 per page — iterate `page` from 0 to fetch all. Supports assignees, statuses, tags, scope narrowing (spaceIds/projectIds/listIds), and date ranges on date_created / date_updated / due_date. IMPORTANT: ClickUp does NOT support date_closed / date_done filters or a close-date sort here — for "closed since T", query with `dateUpdatedGt=T` (closing bumps date_updated, so this is a superset) and partition on each task's `date_closed` client-side. | `GET /api/v1/clickup/workspaces/{workspaceId}/tasks/filter` |
 | `searchTasks` | Search for tasks across a ClickUp workspace. Supports filtering by name (client-side substring match) and/or custom fields. By default excludes closed/completed tasks — set includeClosed=true to include them. To query tasks closed within a window, set closedAfter and/or closedBefore — the tool then forces include_closed, auto-paginates up to 2000 tasks, and filters locally on date_closed (ClickUp's REST API has no server-side close-date filter). | `GET /api/v1/clickup/workspaces/{workspaceId}/tasks/search` |
 | `getAccessibleCustomFields` | List all custom fields available on a ClickUp list. Use this to discover field IDs for filtering or setting values. | `GET /api/v1/clickup/lists/{listId}/fields` |
 | `setCustomFieldValue` | Set a custom field value on a ClickUp task. Use getAccessibleCustomFields first to find the field ID and type. Value shape depends on field type: text/email/phone → string; number → number; drop_down → option orderindex (int); users → array of user IDs; labels → array of label UUIDs; date → unix ms. NOTE: drop_down uses orderindex here, but searchTasks custom_fields filter uses the option UUID — getAccessibleCustomFields returns both. | — |
@@ -261,4 +262,4 @@ Source: `src/outline/server.ts` — 27 tools.
 
 ---
 
-**Grand total: 164 tools across 11 sections.**
+**Grand total: 165 tools across 11 sections.**
