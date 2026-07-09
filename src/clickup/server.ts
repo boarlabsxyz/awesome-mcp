@@ -12,6 +12,7 @@ import {
   parseTimestampInput,
 } from './apiHelpers.js';
 import { formatTask, formatTaskList } from './formatHelpers.js';
+import { CAPTURED_EVENTS, subscribeToTaskEventsFlow } from './webhookHelpers.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
@@ -601,6 +602,73 @@ clickUpServer.addTool({
     return members.map((m: any) =>
       `${m.username || m.email} (ID: ${m.id})`
     ).join('\n');
+  },
+});
+
+// === Tier 3.5: Task event webhooks (PR1 — subscribe only; query tool in PR2) ===
+
+clickUpServer.addTool({
+  name: 'subscribeToTaskEvents',
+  annotations: { readOnlyHint: false },
+  description: 'Subscribe this user\'s digest routine to ClickUp task events for a workspace. Creates a webhook on ClickUp\'s side and stores its shared secret so the ingestion endpoint can verify inbound POSTs. IDEMPOTENT: re-calling with the same (user, workspace) returns the existing subscription without hitting ClickUp again. Default event bundle is `taskCreated`, `taskStatusUpdated`, `taskAssigneeUpdated`, `taskMoved`, `taskDeleted` — deliberately excludes `taskUpdated` (firehose, redundant with the pull-side `date_updated_gt` filter on filterTeamTasks). Requires the BASE_URL env var so ClickUp can call back. Once subscribed, the event store accrues from this moment forward — history queries against events before this timestamp fall back to the `date_updated + current status` approximation.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID to subscribe to.'),
+    events: z.array(z.enum([
+      'taskCreated',
+      'taskStatusUpdated',
+      'taskAssigneeUpdated',
+      'taskMoved',
+      'taskDeleted',
+    ])).optional().describe('Event types to subscribe to. Defaults to all five in the recommended bundle.'),
+  }),
+  execute: async (args, { session }) => {
+    if (!session?.userId) {
+      throw new UserError('subscribeToTaskEvents requires a logged-in user context.');
+    }
+    const client = getClickUpClient(session);
+    const events = (args.events && args.events.length > 0) ? args.events : [...CAPTURED_EVENTS];
+    const store = await import('./taskEventStore.js');
+
+    const baseUrl = (process.env.BASE_URL || '').replace(/\/+$/, '');
+    if (!baseUrl) {
+      throw new UserError('BASE_URL env var must be set to create webhooks (ClickUp needs a callback URL).');
+    }
+    const endpoint = `${baseUrl}/webhooks/clickup/inbound`;
+
+    let result;
+    try {
+      result = await subscribeToTaskEventsFlow(
+        {
+          createWebhook: (ws, p) => client.createWebhook(ws, p),
+          deleteWebhook: (id) => client.deleteWebhook(id),
+          findSubscription: store.findSubscription,
+          createSubscription: store.createSubscription,
+        },
+        { userId: session.userId, workspaceId: args.workspaceId, events, endpoint },
+      );
+    } catch (err: any) {
+      throw new UserError(err?.message || String(err));
+    }
+
+    const sub = result.subscription;
+    if (result.kind === 'existing') {
+      return [
+        'Subscription already active (idempotent no-op).',
+        `  Subscription ID: ${sub.id}`,
+        `  ClickUp webhook ID: ${sub.clickupWebhookId}`,
+        `  Events: ${sub.events.join(', ')}`,
+        `  Status: ${sub.status} (fail_count: ${sub.failCount})`,
+        `  Created: ${sub.createdAt}`,
+      ].join('\n');
+    }
+    return [
+      'Subscription created.',
+      `  Subscription ID: ${sub.id}`,
+      `  ClickUp webhook ID: ${sub.clickupWebhookId}`,
+      `  Events: ${sub.events.join(', ')}`,
+      `  Callback URL: ${endpoint}`,
+      `  History accrues from: ${sub.createdAt}`,
+    ].join('\n');
   },
 });
 

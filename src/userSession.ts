@@ -23,6 +23,8 @@ export interface UserSession {
   slackAccessRules?: import('./mcpConnectionStore.js').SlackAccessRules;
   slackInstanceId?: string;
   outlineAccessToken?: string;
+  /** Per-connection Outline base URL (e.g. https://wiki.example.com), used by OutlineClient. */
+  outlineBaseUrl?: string;
 }
 
 // Cache sessions to avoid recreating clients per request
@@ -241,16 +243,22 @@ export function createSlackUserSession(
 
 /**
  * Create a user session for Outline connections.
- * Outline uses a bearer token issued via Auth0 OAuth broker, no OAuth2Client needed.
+ *
+ * Outline uses either a personal API key (paste-token flow) or an OAuth
+ * bearer token; either way the connection's `providerTokens.access_token`
+ * holds it, and `providerTokens.baseUrl` (paste-token flow) or the
+ * OUTLINE_BASE_URL env var (OAuth flow) locates the instance.
  */
 export function createOutlineSession(
   user: UserRecord,
   connection: McpConnection,
 ): UserSession {
-  const accessToken = (connection.providerTokens as any)?.access_token;
+  const providerTokens = connection.providerTokens as { access_token?: string; baseUrl?: string } | undefined;
+  const accessToken = providerTokens?.access_token;
   if (!accessToken) {
     throw new Error(`Outline access token missing for connection ${connection.instanceId}. Please reconnect.`);
   }
+  const baseUrl = providerTokens?.baseUrl || process.env.OUTLINE_BASE_URL || undefined;
 
   const cacheKey = `${user.apiKey}:${connection.instanceId}`;
   const cached = mcpSessionCache.get(cacheKey);
@@ -262,6 +270,7 @@ export function createOutlineSession(
     email: user.email,
     mcpSlug: connection.mcpSlug,
     outlineAccessToken: accessToken,
+    outlineBaseUrl: baseUrl,
     // Null placeholders for Google clients (Outline MCP won't use them)
     googleDocs: null as any,
     googleDrive: null as any,

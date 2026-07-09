@@ -307,6 +307,8 @@ import { stripTrailingSlashes } from '../util/url.js';
 import { selectTabContent, extractDocBodyText, truncateJsonByLength } from './docContent.js';
 import { clearSessionCache, createUserSession, createUserSessionFromConnection, UserSession } from '../userSession.js';
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
+import { exchangeOutlineOauthCode, buildOutlineInstanceName } from '../outline/oauthCallback.js';
+import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceNameFromToken } from '../outline/connectToken.js';
 import {
   connectMcp,
   getMcpConnection,
@@ -381,8 +383,8 @@ export function computeTokenStatus(
   expiryDate: number | null;
   isExpired: boolean;
 } {
-  // ClickUp and Slack tokens are long-lived (no refresh needed, no expiry)
-  if (provider === 'clickup' || provider === 'slack-bot' || provider === 'slack') {
+  // ClickUp, Slack, and Outline tokens are long-lived (no refresh needed, no expiry)
+  if (provider === 'clickup' || provider === 'slack-bot' || provider === 'slack' || provider === 'outline') {
     return { hasRefreshToken: false, expiryDate: null, isExpired: false };
   }
   return {
@@ -623,6 +625,45 @@ function registerSharedRoutes(app: express.Express): void {
     req.session = session;
     next();
   }
+
+  // === ClickUp task-event webhook ingestion (public, HMAC-verified) ===
+  // Registered BEFORE the global express.json() so this route can consume the
+  // body as a raw Buffer — HMAC-SHA256 is computed over the exact bytes ClickUp
+  // sent, and json-parsing them would change whitespace/ordering and break the
+  // signature check.
+  //
+  // Auth model: no session, no bearer. The URL is public because ClickUp POSTs
+  // to it. Trust is anchored in the X-Signature header, which we verify against
+  // the per-webhook shared_secret we stored at subscribe time. Fail-fast 401
+  // on bad HMAC.
+  //
+  // Response contract: ClickUp marks the webhook failing if we return an error
+  // or take over 7 seconds. We 200 the moment the insert completes; on parse or
+  // insert failure we still 200 (to avoid ClickUp incrementing fail_count for
+  // our bug) but bump our own fail_count and log — the query tool in PR2 will
+  // surface fail_count so operators can see a dying webhook.
+  app.post(
+    '/webhooks/clickup/inbound',
+    express.raw({ type: '*/*', limit: '1mb' }),
+    async (req, res) => {
+      try {
+        const store = await import('../clickup/taskEventStore.js');
+        const { handleClickUpWebhookIngest } = await import('../clickup/webhookHelpers.js');
+        const rawBody: Buffer = req.body instanceof Buffer ? req.body : Buffer.from(req.body as any);
+        const result = await handleClickUpWebhookIngest(
+          rawBody,
+          req.headers['x-signature'] as string | undefined,
+          store,
+        );
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        // Last-resort catch. 200 so ClickUp doesn't disable the webhook for
+        // an infra crash our end.
+        console.error('[clickup-ingest] handler crash:', err?.message || err);
+        res.status(200).json({ ok: true });
+      }
+    },
+  );
 
   // JSON body parser for API routes
   app.use(express.json());
@@ -1004,6 +1045,50 @@ function registerSharedRoutes(app: express.Express): void {
           );
           console.error(`User ${user.id} connected ClickUp MCP: ${connection.instanceId}`);
         }
+      } else if (provider === 'outline') {
+        // Outline OAuth 2.0 authorization_code exchange, plus a best-effort
+        // /api/auth.info fetch for email + team name. See src/outline/oauthCallback.ts.
+        const outlineBaseUrl = process.env.OUTLINE_BASE_URL || 'https://wiki-dev.gluzdov.com';
+        const exchange = await exchangeOutlineOauthCode({
+          tokenUrl: mcp.oauthTokenUrl || `${outlineBaseUrl}/oauth/token`,
+          code,
+          clientId: client_id,
+          clientSecret: client_secret,
+          redirectUri,
+          baseUrl: outlineBaseUrl,
+        });
+        if (!exchange.ok) {
+          console.error(`[MCP Connect] ${exchange.logMessage}`);
+          res.status(exchange.status).send(exchange.userMessage);
+          return;
+        }
+        console.error(`[MCP Connect] Outline user email: ${exchange.email}, team: ${exchange.teamName}`);
+
+        // Persist baseUrl alongside the token so tool calls can locate the
+        // right Outline instance regardless of which env var is set on the MCP
+        // service later (matches the paste-token flow's shape).
+        const outlineProviderTokens = { access_token: exchange.accessToken, baseUrl: outlineBaseUrl };
+        const emptyGoogleTokensForOutline = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const outlineInstanceName = buildOutlineInstanceName({
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          providedInstanceName: stateData.instanceName,
+          teamName: exchange.teamName,
+          email: exchange.email,
+        });
+
+        const outlineConnections = await getUserConnectedMcps(user.id);
+        const existingOutline = outlineConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === outlineInstanceName);
+
+        if (existingOutline) {
+          console.error(`User ${user.id} already has ${mcpSlug} for ${exchange.email}: ${existingOutline.instanceId}`);
+          res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingOutline.instanceName));
+          return;
+        }
+        connection = await createMcpInstance(
+          user.id, mcpSlug, outlineInstanceName, emptyGoogleTokensForOutline, null,
+          'outline', outlineProviderTokens, exchange.email
+        );
+        console.error(`User ${user.id} connected Outline MCP: ${connection.instanceId}`);
       } else {
         // Google OAuth (default)
         const oauthClient = new OAuth2Client(client_id, client_secret, redirectUri);
@@ -1149,6 +1234,38 @@ function registerSharedRoutes(app: express.Express): void {
           console.error('[connect-token] Slack token validation failed:', err);
           res.status(502).json({ error: 'Failed to validate Slack token. Check the token and try again.' });
         }
+        return;
+      }
+
+      if (mcpSlug === 'outline') {
+        // Outline paste-token flow: the request body carries { token, baseUrl,
+        // instanceName? }. We validate the pair by calling <baseUrl>/api/auth.info,
+        // then store baseUrl alongside the access_token so tool calls hit the
+        // right instance.
+        const { baseUrl } = req.body as { baseUrl?: string };
+        const validate = await validateOutlineToken({ baseUrl: baseUrl ?? '', token });
+        if (!validate.ok) {
+          console.error(`[connect-token] ${validate.logMessage}`);
+          res.status(validate.status).json({ error: validate.userMessage });
+          return;
+        }
+
+        const providerEmail = validate.email;
+        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const providerTokens = { access_token: token, baseUrl: validate.baseUrl };
+        const outlineInstanceName = buildOutlineInstanceNameFromToken({
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          providedInstanceName: instanceName,
+          teamName: validate.teamName,
+          email: providerEmail,
+        });
+
+        const connection = await createMcpInstance(
+          user.id, mcpSlug, outlineInstanceName, emptyGoogleTokens, null,
+          'outline', providerTokens, providerEmail
+        );
+        console.error(`User ${user.id} connected Outline MCP: ${connection.instanceId} (${validate.baseUrl})`);
+        res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
         return;
       }
 
@@ -2155,6 +2272,10 @@ function registerRestApiRoutes(app: express.Express): void {
             // Slack User uses its own session with slackUserToken + allowedChannels
             const { createSlackUserSession } = await import('../userSession.js');
             req.userSession = createSlackUserSession(user, connection);
+          } else if (connection.provider === 'outline') {
+            // Outline uses its own session with outlineAccessToken
+            const { createOutlineSession } = await import('../userSession.js');
+            req.userSession = createOutlineSession(user, connection);
           } else {
             const mcp = await getMcpCatalog(connection.mcpSlug);
             const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret

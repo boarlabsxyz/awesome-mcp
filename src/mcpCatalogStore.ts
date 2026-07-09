@@ -439,6 +439,48 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
+  // Outline MCP
+  //
+  // Two auth flows are supported and the seed picks between them based on
+  // whether an OAuth App has been provisioned (i.e. OUTLINE_CLIENT_ID is set):
+  //
+  //   OAuth flow    — admin creates an OAuth App on the Outline instance
+  //                   (Settings → API → Applications). Sets OUTLINE_CLIENT_ID
+  //                   + OUTLINE_CLIENT_SECRET + OUTLINE_BASE_URL. Dashboard
+  //                   shows the "Connect" button, /connect/outline runs the
+  //                   authorization_code exchange (webServer.ts).
+  //   Paste-token   — no admin. Each user creates a Personal API Key in
+  //                   Outline (Settings → API Keys → New API Key) and pastes
+  //                   { baseUrl, token } into the dashboard's connect form.
+  //                   Router validates via POST <baseUrl>/api/auth.info.
+  //                   This is the reference implementation's model.
+  //
+  // If OAuth env vars aren't set the OAuth URLs stay blank, which routes the
+  // dashboard through the paste-token flow (empty oauthAuthorizationUrl → the
+  // direct-token connect-token endpoint).
+  const outlineClientId     = process.env.OUTLINE_CLIENT_ID || null;
+  const outlineClientSecret = process.env.OUTLINE_CLIENT_SECRET || null;
+  const outlineOauthEnabled = !!(outlineClientId && outlineClientSecret && process.env.OUTLINE_BASE_URL);
+  const outlineOauthBaseUrl = process.env.OUTLINE_BASE_URL || '';
+  const outlineMcpUrl       = normalizeUrl(process.env.OUTLINE_MCP_URL, '/outline');
+
+  await createMcpCatalog({
+    slug: 'outline',
+    name: 'Outline Wiki MCP',
+    description: 'Read, write, and manage Outline wiki documents and collections',
+    iconUrl: null,
+    mcpUrl: outlineMcpUrl,
+    provider: 'outline',
+    scopes: [],
+    googleClientId: outlineClientId,
+    googleClientSecret: outlineClientSecret,
+    oauthAuthorizationUrl: outlineOauthEnabled ? `${outlineOauthBaseUrl}/oauth/authorize` : '',
+    oauthTokenUrl:         outlineOauthEnabled ? `${outlineOauthBaseUrl}/oauth/token`     : '',
+    oauthScopes: outlineOauthEnabled ? ['read'] : [],
+    isLocal: !process.env.OUTLINE_MCP_URL,
+    isActive: true,
+  });
+
   // Slack Bot MCP (bot-token provider — no OAuth, user pastes xoxb- token)
   const slackBotMcpUrl = normalizeUrl(process.env.SLACK_BOT_MCP_URL, '/slack-bot');
 
@@ -476,27 +518,6 @@ export async function seedDefaultCatalogs(): Promise<void> {
     oauthTokenUrl: 'https://slack.com/api/oauth.v2.access',
     oauthScopes: ['channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'im:write', 'mpim:history', 'mpim:read', 'mpim:write', 'chat:write', 'users:read', 'team:read'],
     isLocal: !process.env.SLACK_USER_MCP_URL,
-    isActive: true,
-  });
-
-  // Outline MCP (Auth0-brokered bearer token — connect flow handles the OAuth
-  // roundtrip itself, so oauthAuthorizationUrl / oauthTokenUrl stay empty).
-  const outlineMcpUrl = normalizeUrl(process.env.OUTLINE_MCP_URL, '/outline');
-
-  await createMcpCatalog({
-    slug: 'outline',
-    name: 'Outline Wiki MCP',
-    description: 'Read, write, and manage Outline wiki documents and collections',
-    iconUrl: null,
-    mcpUrl: outlineMcpUrl,
-    provider: 'outline',
-    scopes: [],
-    googleClientId: null,
-    googleClientSecret: null,
-    oauthAuthorizationUrl: '',
-    oauthTokenUrl: '',
-    oauthScopes: [],
-    isLocal: !process.env.OUTLINE_MCP_URL,
     isActive: true,
   });
 
