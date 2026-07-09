@@ -3660,6 +3660,76 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // GET /api/v1/clickup/workspaces/:workspaceId/events - Task-event history from the store
+  // Mirrors the getTaskEventHistory MCP tool 1:1. Query params: since/until
+  // (ISO or Unix ms), eventTypes (repeatable), toStatus, taskId, limit.
+  // If no subscription exists for (user, workspace), returns 200 with
+  // { kind: 'no-subscription', warning, events: [] } — not 404 — so the
+  // caller can fall back to filterTeamTasks without inspecting a status code.
+  app.get('/api/v1/clickup/workspaces/:workspaceId/events', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const userId = req.userSession?.userId;
+      if (!userId) { res.status(401).json({ error: 'Missing user context' }); return; }
+
+      const { parseTimestampInput } = await import('../clickup/apiHelpers.js');
+      const { queryTaskEventsFlow } = await import('../clickup/webhookHelpers.js');
+      const store = await import('../clickup/taskEventStore.js');
+
+      const toArr = (v: any): string[] | undefined => {
+        if (v === undefined) return undefined;
+        return Array.isArray(v) ? (v as string[]) : [v as string];
+      };
+      const parseTs = (v: any, field: string): number | undefined => {
+        if (v === undefined) return undefined;
+        const ts = parseTimestampInput(v as string);
+        if (Number.isNaN(ts)) throw new Error(`Invalid ${field}: ${v}`);
+        return ts;
+      };
+
+      let since: number | undefined, until: number | undefined;
+      try {
+        since = parseTs(req.query.since, 'since');
+        until = parseTs(req.query.until, 'until');
+      } catch (e: any) {
+        res.status(400).json({ error: e.message });
+        return;
+      }
+
+      const result = await queryTaskEventsFlow(
+        { findSubscription: store.findSubscription, queryTaskEvents: store.queryTaskEvents },
+        {
+          userId,
+          workspaceId: req.params.workspaceId as string,
+          since, until,
+          eventTypes: toArr(req.query.eventTypes),
+          toStatus: req.query.toStatus as string | undefined,
+          taskId: req.query.taskId as string | undefined,
+          limit: req.query.limit !== undefined ? parseInt(req.query.limit as string) : undefined,
+        },
+      );
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to query task events' });
+    }
+  });
+
+  // GET /api/v1/clickup/subscriptions - List task-event subscriptions owned by
+  // the caller. Optional ?workspaceId to narrow.
+  app.get('/api/v1/clickup/subscriptions', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const userId = req.userSession?.userId;
+      if (!userId) { res.status(401).json({ error: 'Missing user context' }); return; }
+      const { listSubscriptionsForUser } = await import('../clickup/taskEventStore.js');
+      const subs = await listSubscriptionsForUser(userId, req.query.workspaceId as string | undefined);
+      // Redact shared_secret before returning — it's for HMAC verification
+      // server-side only and must never leave the process.
+      const safe = subs.map(({ sharedSecret: _s, ...rest }) => rest);
+      res.json({ subscriptions: safe });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to list subscriptions' });
+    }
+  });
+
   // GET /api/v1/clickup/tasks/:taskId/comments - Get comments
   app.get('/api/v1/clickup/tasks/:taskId/comments', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {

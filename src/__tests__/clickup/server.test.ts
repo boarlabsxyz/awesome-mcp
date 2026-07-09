@@ -81,11 +81,12 @@ describe('ClickUp server tools', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('should have registered all 41 tools', () => {
-    // 39 ClickUp-specific tools (incl. tag-management + filterTeamTasks
-    // + subscribeToTaskEvents) + 2 shared (mintRestBearerForCurl,
-    // listRestEndpoints) registered on every FastMCP server.
-    assert.equal(toolMap.size, 41);
+  it('should have registered all 43 tools', () => {
+    // 41 ClickUp-specific tools (incl. tag-management + filterTeamTasks
+    // + subscribeToTaskEvents + getTaskEventHistory + listTaskEventSubscriptions)
+    // + 2 shared (mintRestBearerForCurl, listRestEndpoints) registered on every
+    // FastMCP server.
+    assert.equal(toolMap.size, 43);
   });
 
   // === getClickUpClient / auth guard ===

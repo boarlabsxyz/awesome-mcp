@@ -1413,6 +1413,62 @@
         }
       }
     },
+    "/api/v1/clickup/workspaces/{workspaceId}/events": {
+      "get": {
+        "operationId": "getTaskEventHistory",
+        "summary": "Read task-event transitions from the webhook store",
+        "description": "Reads events populated by the ClickUp webhook receiver: status transitions, moves, assignee changes, task creations and deletions. Scoped to the caller's own subscription for the workspace. If no subscription exists, returns 200 with kind='no-subscription' + a warning — not 404 — so digests can gracefully fall back to filterTeamTasks with dateUpdatedGt.",
+        "parameters": [
+          { "name": "workspaceId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "The workspace (team) ID" },
+          { "name": "since", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Only return events at/after this time. ISO string or Unix ms." },
+          { "name": "until", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Only return events at/before this time. ISO string or Unix ms." },
+          { "name": "eventTypes", "in": "query", "required": false, "schema": { "type": "array", "items": { "type": "string", "enum": ["taskCreated", "taskStatusUpdated", "taskAssigneeUpdated", "taskMoved", "taskDeleted"] } }, "explode": true, "description": "Filter to specific event types. Repeat the param for multiple values." },
+          { "name": "toStatus", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Only return status-transition events whose destination status equals this label." },
+          { "name": "taskId", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Narrow to a single task." },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 500, "maximum": 2000 }, "description": "Row cap. Narrow via since if you hit it." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task events retrieved (kind='ok') or subscription missing (kind='no-subscription')",
+            "content": { "application/json": { "schema": {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "enum": ["ok", "no-subscription"] },
+                "events": { "type": "array", "items": { "type": "object" } },
+                "eventStoreStartedAt": { "type": "string" },
+                "warning": { "type": "string" }
+              }
+            } } }
+          },
+          "400": { "description": "Invalid date parameter", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "500": { "description": "Server error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/v1/clickup/subscriptions": {
+      "get": {
+        "operationId": "listTaskEventSubscriptions",
+        "summary": "List task-event webhook subscriptions owned by the caller",
+        "description": "Surfaces subscription health so operators can spot a dying webhook (ClickUp stops delivering after 5 consecutive failures). shared_secret is never returned.",
+        "parameters": [
+          { "name": "workspaceId", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Optional workspace ID to narrow to a single subscription." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Subscription list",
+            "content": { "application/json": { "schema": {
+              "type": "object",
+              "properties": {
+                "subscriptions": { "type": "array", "items": { "type": "object" } }
+              }
+            } } }
+          },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "500": { "description": "Server error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
     "/api/v1/clickup/tasks/{taskId}/comments": {
       "get": {
         "operationId": "getTaskComments",

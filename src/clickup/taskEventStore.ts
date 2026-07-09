@@ -11,6 +11,8 @@
 //   createSubscription(...)                — after ClickUp returns webhook_id + secret
 //   incrementFailCount(subscriptionId)     — bookkeeping when we can't process an event
 //   insertTaskEvents(events[])             — batch insert during ingestion
+//   listSubscriptionsForUser(userId, ...)  — read side of "which webhooks do I own"
+//   queryTaskEvents(...)                   — read side of the digest (PR2 query tool)
 //   pruneOldTaskEvents(retentionDays)      — nightly cleanup
 
 import { isDatabaseAvailable, getPool } from '../db.js';
@@ -151,6 +153,112 @@ export async function insertTaskEvents(events: ClickUpTaskEvent[]): Promise<numb
     values,
   );
   return rowCount || 0;
+}
+
+// A row returned from the events table, joined onto its owning subscription
+// so callers can render "who owns this history" without a second lookup.
+export interface StoredTaskEvent {
+  id: number;
+  subscriptionId: number;
+  workspaceId: string;
+  taskId: string;
+  eventType: string;
+  field: string | null;
+  fromVal: string | null;
+  toVal: string | null;
+  actorId: string | null;
+  actorUsername: string | null;
+  occurredAt: number;
+  receivedAt: string;
+  rawPayload: any;
+}
+
+function mapEventRow(row: any): StoredTaskEvent {
+  return {
+    id: row.id,
+    subscriptionId: row.subscription_id,
+    workspaceId: row.workspace_id,
+    taskId: row.task_id,
+    eventType: row.event_type,
+    field: row.field,
+    fromVal: row.from_val,
+    toVal: row.to_val,
+    actorId: row.actor_id,
+    actorUsername: row.actor_username,
+    occurredAt: typeof row.occurred_at === 'string' ? parseInt(row.occurred_at, 10) : Number(row.occurred_at),
+    receivedAt: row.received_at instanceof Date ? row.received_at.toISOString() : String(row.received_at),
+    rawPayload: row.raw_payload,
+  };
+}
+
+// List every subscription owned by a user. Optional workspaceId narrows to
+// a single record. Used by listTaskEventSubscriptions to surface fail_count
+// so operators can spot a dying webhook.
+export async function listSubscriptionsForUser(
+  userId: number,
+  workspaceId?: string,
+): Promise<ClickUpWebhookSubscription[]> {
+  requireDb();
+  const params: any[] = [userId];
+  let where = 'user_id = $1';
+  if (workspaceId) { params.push(workspaceId); where += ` AND workspace_id = $${params.length}`; }
+  const { rows } = await getPool().query(
+    `SELECT id, user_id, workspace_id, clickup_webhook_id, shared_secret, events, status, fail_count, created_at, updated_at
+     FROM clickup_webhook_subscriptions
+     WHERE ${where}
+     ORDER BY created_at DESC`,
+    params,
+  );
+  return rows.map(mapSubscriptionRow);
+}
+
+// Query task events with all the filters the digest routine actually uses.
+// Scoping is always by workspace (a subscription is workspace-wide from
+// ClickUp's side — see per-(user, workspace) design note in PR1). Scoping by
+// subscription is applied on top so caller B never sees events from a
+// subscription owned by caller A even though they both share the workspace.
+export async function queryTaskEvents(input: {
+  subscriptionId: number;
+  since?: number;
+  until?: number;
+  eventTypes?: string[];
+  toStatus?: string;
+  taskId?: string;
+  limit?: number;
+}): Promise<StoredTaskEvent[]> {
+  requireDb();
+  const params: any[] = [input.subscriptionId];
+  const clauses: string[] = ['subscription_id = $1'];
+
+  if (input.since !== undefined) { params.push(input.since); clauses.push(`occurred_at >= $${params.length}`); }
+  if (input.until !== undefined) { params.push(input.until); clauses.push(`occurred_at <= $${params.length}`); }
+  if (input.taskId) { params.push(input.taskId); clauses.push(`task_id = $${params.length}`); }
+  if (input.eventTypes && input.eventTypes.length > 0) {
+    params.push(input.eventTypes);
+    clauses.push(`event_type = ANY($${params.length}::text[])`);
+  }
+  if (input.toStatus) {
+    // to_val for status transitions is the status label (see
+    // stringifyChange in webhookHelpers.ts). Exact match.
+    params.push(input.toStatus);
+    clauses.push(`to_val = $${params.length}`);
+  }
+
+  // Hard cap on rows returned. Postgres can happily paginate but the MCP
+  // caller (Claude/ChatGPT) is going to render this into a chat; a 100k-row
+  // dump helps nobody. Callers narrow by `since` if they hit the cap.
+  const limit = Math.min(Math.max(input.limit ?? 500, 1), 2000);
+  params.push(limit);
+
+  const { rows } = await getPool().query(
+    `SELECT id, subscription_id, workspace_id, task_id, event_type, field, from_val, to_val, actor_id, actor_username, occurred_at, received_at, raw_payload
+     FROM clickup_task_events
+     WHERE ${clauses.join(' AND ')}
+     ORDER BY occurred_at DESC
+     LIMIT $${params.length}`,
+    params,
+  );
+  return rows.map(mapEventRow);
 }
 
 // Delete rows older than `retentionDays`. Cheap because of the

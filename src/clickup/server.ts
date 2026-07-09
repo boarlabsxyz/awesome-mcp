@@ -12,7 +12,7 @@ import {
   parseTimestampInput,
 } from './apiHelpers.js';
 import { formatTask, formatTaskList } from './formatHelpers.js';
-import { CAPTURED_EVENTS, subscribeToTaskEventsFlow } from './webhookHelpers.js';
+import { CAPTURED_EVENTS, queryTaskEventsFlow, subscribeToTaskEventsFlow } from './webhookHelpers.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
@@ -669,6 +669,107 @@ clickUpServer.addTool({
       `  Callback URL: ${endpoint}`,
       `  History accrues from: ${sub.createdAt}`,
     ].join('\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'getTaskEventHistory',
+  annotations: { readOnlyHint: true },
+  description: 'Read from-status→to-status transitions (and other captured events) for a ClickUp workspace, sourced from the event store populated by subscribeToTaskEvents. Use this to answer "what moved to In Review since last report" exactly, instead of approximating from date_updated + current status. IMPORTANT: history accrues from the moment subscribeToTaskEvents was first called — events before that boundary are NOT in the store; the response includes `eventStoreStartedAt` so the caller can fall back to filterTeamTasks with dateUpdatedGt for any earlier window. If no subscription exists for the (user, workspace), the response is `kind: "no-subscription"` with a warning — not an error — so the digest can gracefully fall back to pull.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+    since: z.string().optional().describe('Only return events at/after this time. ISO string or Unix ms.'),
+    until: z.string().optional().describe('Only return events at/before this time. ISO string or Unix ms.'),
+    eventTypes: z.array(z.enum([
+      'taskCreated',
+      'taskStatusUpdated',
+      'taskAssigneeUpdated',
+      'taskMoved',
+      'taskDeleted',
+    ])).optional().describe('Filter to specific event types. Omit for all captured events.'),
+    toStatus: z.string().optional().describe('Only return status-transition events whose destination status equals this label. Combine with eventTypes=["taskStatusUpdated"] for "moved to X since T".'),
+    taskId: z.string().optional().describe('Narrow to a single task.'),
+    limit: z.number().int().min(1).max(2000).optional().describe('Row cap (default 500, max 2000). Narrow via `since` if you hit the cap.'),
+  }),
+  execute: async (args, { session }) => {
+    if (!session?.userId) {
+      throw new UserError('getTaskEventHistory requires a logged-in user context.');
+    }
+    const parseTs = (input: string | undefined, field: string): number | undefined => {
+      if (!input) return undefined;
+      const ts = parseTimestampInput(input);
+      if (Number.isNaN(ts)) throw new UserError(`Invalid ${field}: ${input}`);
+      return ts;
+    };
+    const since = parseTs(args.since, 'since');
+    const until = parseTs(args.until, 'until');
+    const store = await import('./taskEventStore.js');
+
+    const result = await queryTaskEventsFlow(
+      {
+        findSubscription: store.findSubscription,
+        queryTaskEvents: store.queryTaskEvents,
+      },
+      {
+        userId: session.userId,
+        workspaceId: args.workspaceId,
+        since, until,
+        eventTypes: args.eventTypes,
+        toStatus: args.toStatus,
+        taskId: args.taskId,
+        limit: args.limit,
+      },
+    );
+
+    if (result.kind === 'no-subscription') {
+      return [
+        'No task-event subscription for this workspace.',
+        `  Warning: ${result.warning}`,
+      ].join('\n');
+    }
+
+    const header = [
+      `Found ${result.events.length} event(s) in workspace ${args.workspaceId}.`,
+      `  Event store started: ${result.eventStoreStartedAt}`,
+      `  Subscription: ${result.subscription!.id} (fail_count: ${result.subscription!.failCount})`,
+    ];
+    if (result.warning) header.push(`  Warning: ${result.warning}`);
+    if (result.events.length === 0) return header.join('\n');
+
+    const rows = result.events.map(e => {
+      const when = new Date(e.occurredAt).toISOString();
+      const actor = e.actorUsername || e.actorId || 'unknown';
+      const transition = e.field
+        ? `${e.field}: ${e.fromVal ?? '?'} → ${e.toVal ?? '?'}`
+        : '(no field diff)';
+      return `- ${when}  task=${e.taskId}  ${e.eventType}  ${transition}  by ${actor}`;
+    });
+    return [...header, '', ...rows].join('\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'listTaskEventSubscriptions',
+  annotations: { readOnlyHint: true },
+  description: 'List task-event webhook subscriptions owned by the current user. Surfaces fail_count so operators can spot a dying webhook (ClickUp stops delivering after 5 consecutive failures). Optionally narrow to a single workspace.',
+  parameters: z.object({
+    workspaceId: z.string().optional().describe('Optional workspace ID to narrow to a single subscription.'),
+  }),
+  execute: async (_args, { session }) => {
+    if (!session?.userId) {
+      throw new UserError('listTaskEventSubscriptions requires a logged-in user context.');
+    }
+    const store = await import('./taskEventStore.js');
+    const subs = await store.listSubscriptionsForUser(session.userId, _args.workspaceId);
+    if (subs.length === 0) return 'No task-event subscriptions.';
+    return subs.map(s => [
+      `Subscription ${s.id}`,
+      `  Workspace: ${s.workspaceId}`,
+      `  ClickUp webhook: ${s.clickupWebhookId}`,
+      `  Events: ${s.events.join(', ')}`,
+      `  Status: ${s.status} (fail_count: ${s.failCount})`,
+      `  Created: ${s.createdAt}`,
+    ].join('\n')).join('\n\n');
   },
 });
 

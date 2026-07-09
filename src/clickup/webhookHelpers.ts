@@ -11,7 +11,7 @@
 // exactly the same logic.
 
 import crypto from 'crypto';
-import type { ClickUpTaskEvent, ClickUpWebhookSubscription } from './taskEventStore.js';
+import type { ClickUpTaskEvent, ClickUpWebhookSubscription, StoredTaskEvent } from './taskEventStore.js';
 
 // The events we deliberately capture (see PR discussion — deliberately
 // excludes taskUpdated, which is a firehose fully redundant with pull's
@@ -302,3 +302,96 @@ export async function subscribeToTaskEventsFlow(
     throw new Error(`Failed to persist ClickUp subscription (webhook ${cleanupNote}): ${msg}`);
   }
 }
+
+// -----------------------------------------------------------------------------
+// Query flow — read side of the event store
+// -----------------------------------------------------------------------------
+
+// A read result the query tool renders to Claude/ChatGPT. Always carries the
+// eventStoreStartedAt boundary so callers know the pre-subscribe cutoff: if
+// their `since` predates the subscription, the empty result is not "nothing
+// changed" but "we weren't listening yet — fall back to filterTeamTasks'
+// date_updated_gt for that window."
+export interface QueryTaskEventsResult {
+  kind: 'ok' | 'no-subscription';
+  subscription?: ClickUpWebhookSubscription;
+  events: StoredTaskEvent[];
+  eventStoreStartedAt?: string;
+  warning?: string;
+}
+
+export interface QueryDeps {
+  findSubscription(userId: number, workspaceId: string): Promise<ClickUpWebhookSubscription | null>;
+  queryTaskEvents(input: {
+    subscriptionId: number;
+    since?: number;
+    until?: number;
+    eventTypes?: string[];
+    toStatus?: string;
+    taskId?: string;
+    limit?: number;
+  }): Promise<StoredTaskEvent[]>;
+}
+
+// Runs a workspace-scoped event query with lazy self-heal:
+//   - No subscription for (user, workspace) → kind='no-subscription' with a
+//     warning telling the caller to /subscribe first. Not an error: the
+//     digest can still fall back to pull.
+//   - Subscription exists but `since` predates its createdAt → still runs
+//     the query, but attaches a warning explaining the missing window.
+//   - Otherwise → kind='ok' with events sorted newest-first.
+export async function queryTaskEventsFlow(
+  deps: QueryDeps,
+  input: {
+    userId: number;
+    workspaceId: string;
+    since?: number;
+    until?: number;
+    eventTypes?: string[];
+    toStatus?: string;
+    taskId?: string;
+    limit?: number;
+  },
+): Promise<QueryTaskEventsResult> {
+  const sub = await deps.findSubscription(input.userId, input.workspaceId);
+  if (!sub) {
+    return {
+      kind: 'no-subscription',
+      events: [],
+      warning:
+        `No task-event subscription exists for workspace ${input.workspaceId}. ` +
+        `Call subscribeToTaskEvents first — history accrues from that moment forward. ` +
+        `For events before that boundary, fall back to filterTeamTasks with dateUpdatedGt.`,
+    };
+  }
+
+  const events = await deps.queryTaskEvents({
+    subscriptionId: sub.id,
+    since: input.since,
+    until: input.until,
+    eventTypes: input.eventTypes,
+    toStatus: input.toStatus,
+    taskId: input.taskId,
+    limit: input.limit,
+  });
+
+  let warning: string | undefined;
+  if (input.since !== undefined) {
+    const subStartMs = Date.parse(sub.createdAt);
+    if (Number.isFinite(subStartMs) && input.since < subStartMs) {
+      warning =
+        `Query 'since' predates subscription creation (${sub.createdAt}). ` +
+        `Events before that timestamp are not in the store — for that earlier window, ` +
+        `fall back to filterTeamTasks with dateUpdatedGt.`;
+    }
+  }
+
+  return {
+    kind: 'ok',
+    subscription: sub,
+    events,
+    eventStoreStartedAt: sub.createdAt,
+    warning,
+  };
+}
+
