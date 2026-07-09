@@ -3730,6 +3730,38 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // GET /api/v1/clickup/workspaces/:workspaceId/subscription/debug -
+  // Structured diagnostic report cross-referencing local subscription vs
+  // ClickUp's own view vs the event store. Mirrors debugTaskEventSubscription
+  // MCP tool 1:1. Returns 200 with the report even when things are broken —
+  // this is a diagnostic tool, not a health check.
+  app.get('/api/v1/clickup/workspaces/:workspaceId/subscription/debug', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const userId = req.userSession?.userId;
+      if (!userId) { res.status(401).json({ error: 'Missing user context' }); return; }
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const { debugTaskEventSubscriptionFlow } = await import('../clickup/webhookHelpers.js');
+      const store = await import('../clickup/taskEventStore.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+
+      const baseUrl = (process.env.BASE_URL || '').replace(/\/+$/, '');
+      const expectedEndpoint = baseUrl ? `${baseUrl}/webhooks/clickup/inbound` : '';
+
+      const report = await debugTaskEventSubscriptionFlow(
+        {
+          findSubscription: store.findSubscription,
+          listWebhooks: (workspaceId) => client.listWebhooks(workspaceId),
+          countTaskEventsForSubscription: store.countTaskEventsForSubscription,
+          queryTaskEvents: store.queryTaskEvents,
+        },
+        { userId, workspaceId: req.params.workspaceId as string, expectedEndpoint },
+      );
+      res.json(report);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to build debug report' });
+    }
+  });
+
   // GET /api/v1/clickup/tasks/:taskId/comments - Get comments
   app.get('/api/v1/clickup/tasks/:taskId/comments', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {

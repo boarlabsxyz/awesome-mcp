@@ -12,7 +12,12 @@ import {
   parseTimestampInput,
 } from './apiHelpers.js';
 import { formatTask, formatTaskList } from './formatHelpers.js';
-import { CAPTURED_EVENTS, queryTaskEventsFlow, subscribeToTaskEventsFlow } from './webhookHelpers.js';
+import {
+  CAPTURED_EVENTS,
+  debugTaskEventSubscriptionFlow,
+  queryTaskEventsFlow,
+  subscribeToTaskEventsFlow,
+} from './webhookHelpers.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
@@ -770,6 +775,79 @@ clickUpServer.addTool({
       `  Status: ${s.status} (fail_count: ${s.failCount})`,
       `  Created: ${s.createdAt}`,
     ].join('\n')).join('\n\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'debugTaskEventSubscription',
+  annotations: { readOnlyHint: true },
+  description: 'Cross-reference the local task-event subscription against ClickUp\'s own view of the webhook and the event store, and surface anomalies. Use when subscribeToTaskEvents reports success but events aren\'t landing, or when local fail_count doesn\'t match reality. Detects: endpoint-URL drift (BASE_URL changed since subscribe), orphaned ClickUp webhook (local record points at a webhook ClickUp deleted), event-bundle mismatch, ClickUp fail_count > local fail_count (ingestion route silently returning 200 on thrown errors), disabled webhook status, and the "zero events with zero failures" pattern that means deliveries either aren\'t reaching us or are being silently swallowed.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+  }),
+  execute: async (args, { session }) => {
+    if (!session?.userId) {
+      throw new UserError('debugTaskEventSubscription requires a logged-in user context.');
+    }
+    const client = getClickUpClient(session);
+    const store = await import('./taskEventStore.js');
+    const baseUrl = (process.env.BASE_URL || '').replace(/\/+$/, '');
+    const expectedEndpoint = baseUrl ? `${baseUrl}/webhooks/clickup/inbound` : '';
+
+    const report = await debugTaskEventSubscriptionFlow(
+      {
+        findSubscription: store.findSubscription,
+        listWebhooks: (workspaceId) => client.listWebhooks(workspaceId),
+        countTaskEventsForSubscription: store.countTaskEventsForSubscription,
+        queryTaskEvents: store.queryTaskEvents,
+      },
+      { userId: session.userId, workspaceId: args.workspaceId, expectedEndpoint },
+    );
+
+    const lines: string[] = [
+      `Task-Event Subscription Diagnostic — workspace ${report.workspaceId}`,
+      `  Expected endpoint (from current BASE_URL): ${report.expectedEndpoint || '(BASE_URL not set)'}`,
+      `  Overall: ${report.kind}`,
+      '',
+    ];
+    if (report.local) {
+      lines.push(
+        'Local subscription record:',
+        `  Subscription ID: ${report.local.id}`,
+        `  ClickUp webhook ID: ${report.local.clickupWebhookId}`,
+        `  Events: [${report.local.events.join(', ')}]`,
+        `  Status: ${report.local.status}, fail_count: ${report.local.failCount}`,
+        `  Created: ${report.local.createdAt}`,
+        '',
+      );
+    } else {
+      lines.push('Local subscription record: (none)', '');
+    }
+    if (report.clickup) {
+      lines.push(
+        'ClickUp\'s view:',
+        `  Webhook ID: ${report.clickup.id}`,
+        `  Endpoint: ${report.clickup.endpoint}`,
+        `  Events: [${report.clickup.events.join(', ')}]`,
+        `  health.status: ${report.clickup.healthStatus ?? '(unknown)'}`,
+        `  health.fail_count: ${report.clickup.healthFailCount ?? '(unknown)'}`,
+        '',
+      );
+    } else {
+      lines.push('ClickUp\'s view: (no matching webhook found in this workspace)', '');
+    }
+    if (report.eventStore) {
+      lines.push(
+        'Event store:',
+        `  Total events for this subscription: ${report.eventStore.count}`,
+        `  Most recent occurredAt: ${report.eventStore.mostRecentOccurredAt !== null ? new Date(report.eventStore.mostRecentOccurredAt).toISOString() : '(none)'}`,
+        `  Most recent receivedAt: ${report.eventStore.mostRecentReceivedAt ?? '(none)'}`,
+        '',
+      );
+    }
+    lines.push('Findings:');
+    for (const f of report.findings) lines.push(`  - ${f}`);
+    return lines.join('\n');
   },
 });
 

@@ -108,6 +108,7 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `filterTeamTasks` | `GET /api/v1/clickup/workspaces/{workspaceId}/tasks/filter` | live | Filter tasks across a workspace with server-side filters (assignees, statuses, date ranges, etc.) |
 | `getTaskEventHistory` | `GET /api/v1/clickup/workspaces/{workspaceId}/events` | live | Read task-event transitions (status/assignee/moves) from the webhook store |
 | `listTaskEventSubscriptions` | `GET /api/v1/clickup/subscriptions` | live | List task-event webhook subscriptions owned by the caller |
+| `debugTaskEventSubscription` | `GET /api/v1/clickup/workspaces/{workspaceId}/subscription/debug` | live | Diagnostic report cross-referencing local subscription vs the ClickUp-side webhook vs the event store |
 | `listDocs` | `GET /api/v1/clickup/workspaces/{workspaceId}/docs` | live | List docs in a workspace |
 | `searchDocs` | `GET /api/v1/clickup/workspaces/{workspaceId}/docs/search` | live | Search docs in a workspace |
 | `getDoc` | `GET /api/v1/clickup/docs/{docId}?workspaceId={workspaceId}` | live | Get a ClickUp doc with its pages — _Required query param: workspaceId._ |
@@ -147,4 +148,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 67 endpoints.
+Catalog size: 68 endpoints.

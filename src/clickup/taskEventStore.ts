@@ -13,6 +13,7 @@
 //   insertTaskEvents(events[])             — batch insert during ingestion
 //   listSubscriptionsForUser(userId, ...)  — read side of "which webhooks do I own"
 //   queryTaskEvents(...)                   — read side of the digest (PR2 query tool)
+//   countTaskEventsForSubscription(id)     — for the debug tool (PR3)
 //   pruneOldTaskEvents(retentionDays)      — nightly cleanup
 
 import { isDatabaseAvailable, getPool } from '../db.js';
@@ -259,6 +260,18 @@ export async function queryTaskEvents(input: {
     params,
   );
   return rows.map(mapEventRow);
+}
+
+// Debug helper: how many events have we recorded for this subscription?
+// Used by debugTaskEventSubscription to disambiguate "delivery never
+// happened" from "delivery happened but nothing persisted."
+export async function countTaskEventsForSubscription(subscriptionId: number): Promise<number> {
+  requireDb();
+  const { rows } = await getPool().query(
+    `SELECT COUNT(*)::int AS c FROM clickup_task_events WHERE subscription_id = $1`,
+    [subscriptionId],
+  );
+  return rows[0]?.c ?? 0;
 }
 
 // Delete rows older than `retentionDays`. Cheap because of the

@@ -1469,6 +1469,35 @@
         }
       }
     },
+    "/api/v1/clickup/workspaces/{workspaceId}/subscription/debug": {
+      "get": {
+        "operationId": "debugTaskEventSubscription",
+        "summary": "Task-event subscription diagnostic report",
+        "description": "Cross-references the local subscription record against ClickUp's own view of the webhook and the event store. Detects endpoint-URL drift (BASE_URL changed between subscribe and now), orphaned ClickUp webhook (local record points at a webhook ClickUp deleted), event-bundle mismatch, ClickUp fail_count exceeding our stored fail_count (ingestion route silently 200-ing on thrown errors), disabled-webhook status, and the 'zero events with zero delivery failures' pattern that means deliveries either are not reaching the ingestion route or are being silently swallowed. Returns 200 even for broken states.",
+        "parameters": [
+          { "name": "workspaceId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "The workspace (team) ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Diagnostic report",
+            "content": { "application/json": { "schema": {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "enum": ["ok", "no-local-subscription", "no-clickup-webhook"] },
+                "workspaceId": { "type": "string" },
+                "expectedEndpoint": { "type": "string" },
+                "local": { "type": "object", "nullable": true },
+                "clickup": { "type": "object", "nullable": true },
+                "eventStore": { "type": "object", "nullable": true },
+                "findings": { "type": "array", "items": { "type": "string" } }
+              }
+            } } }
+          },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "500": { "description": "Server error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
     "/api/v1/clickup/tasks/{taskId}/comments": {
       "get": {
         "operationId": "getTaskComments",
