@@ -395,3 +395,190 @@ export async function queryTaskEventsFlow(
   };
 }
 
+// -----------------------------------------------------------------------------
+// Debug flow — cross-reference local DB vs ClickUp's own view vs event store
+// -----------------------------------------------------------------------------
+
+// Report a debug caller sees. Optional fields let the same shape represent
+// every failure mode (no local record, no ClickUp record, both present but
+// disagreeing on endpoint/events/health).
+export interface DebugReport {
+  kind: 'ok' | 'no-local-subscription' | 'no-clickup-webhook';
+  workspaceId: string;
+  expectedEndpoint: string;
+  local?: {
+    id: number;
+    clickupWebhookId: string;
+    events: string[];
+    status: string;
+    failCount: number;
+    createdAt: string;
+  };
+  clickup?: {
+    id: string;
+    endpoint: string;
+    events: string[];
+    healthStatus: string | null;
+    healthFailCount: number | null;
+    rawHealth?: any;
+  };
+  eventStore?: {
+    count: number;
+    mostRecentOccurredAt: number | null;
+    mostRecentReceivedAt: string | null;
+  };
+  // Human-readable anomalies + suggested next actions. Order matters — the
+  // caller renders these in a single "Findings" block.
+  findings: string[];
+}
+
+export interface DebugDeps {
+  findSubscription(userId: number, workspaceId: string): Promise<ClickUpWebhookSubscription | null>;
+  listWebhooks(workspaceId: string): Promise<any>;
+  countTaskEventsForSubscription(subscriptionId: number): Promise<number>;
+  queryTaskEvents(input: { subscriptionId: number; limit?: number }): Promise<StoredTaskEvent[]>;
+}
+
+function sameStringSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const A = new Set(a);
+  for (const x of b) if (!A.has(x)) return false;
+  return true;
+}
+
+export async function debugTaskEventSubscriptionFlow(
+  deps: DebugDeps,
+  input: { userId: number; workspaceId: string; expectedEndpoint: string },
+): Promise<DebugReport> {
+  const findings: string[] = [];
+  const report: DebugReport = {
+    kind: 'ok',
+    workspaceId: input.workspaceId,
+    expectedEndpoint: input.expectedEndpoint,
+    findings,
+  };
+
+  const localSub = await deps.findSubscription(input.userId, input.workspaceId);
+  if (localSub) {
+    report.local = {
+      id: localSub.id,
+      clickupWebhookId: localSub.clickupWebhookId,
+      events: localSub.events,
+      status: localSub.status,
+      failCount: localSub.failCount,
+      createdAt: localSub.createdAt,
+    };
+  } else {
+    report.kind = 'no-local-subscription';
+    findings.push(
+      'No local subscription record for this (user, workspace). Call subscribeToTaskEvents first, or check that the caller has been logged in as the same user who subscribed.',
+    );
+  }
+
+  // Pull ClickUp's view even when local is missing — a stale webhook on
+  // ClickUp's side (created by a previous account, or one whose local record
+  // got cleaned up) is exactly the kind of orphan a debug tool should catch.
+  let clickupWebhooks: any[] = [];
+  try {
+    const raw = await deps.listWebhooks(input.workspaceId);
+    clickupWebhooks = Array.isArray(raw?.webhooks) ? raw.webhooks : [];
+  } catch (err: any) {
+    findings.push(`Failed to fetch ClickUp's webhook list: ${err?.message || err}. Skipping ClickUp-side checks.`);
+  }
+
+  // Match by webhook id if we have a local record, else by endpoint URL.
+  let match: any = undefined;
+  if (localSub) {
+    match = clickupWebhooks.find(w => String(w?.id) === localSub.clickupWebhookId);
+  }
+  if (!match && input.expectedEndpoint) {
+    match = clickupWebhooks.find(w => String(w?.endpoint) === input.expectedEndpoint);
+  }
+
+  if (match) {
+    report.clickup = {
+      id: String(match.id),
+      endpoint: String(match.endpoint || ''),
+      events: Array.isArray(match.events) ? match.events.map(String) : [],
+      healthStatus: match.health?.status ? String(match.health.status) : null,
+      healthFailCount: typeof match.health?.fail_count === 'number' ? match.health.fail_count : null,
+      rawHealth: match.health,
+    };
+  } else if (localSub) {
+    report.kind = 'no-clickup-webhook';
+    findings.push(
+      `Local record points at ClickUp webhook ${localSub.clickupWebhookId} but ClickUp has no such webhook in this workspace. It was likely deleted on ClickUp's side. Recreate: delete the local record and call subscribeToTaskEvents again.`,
+    );
+  }
+
+  // Endpoint mismatch (URL rot) — highest-priority root cause per the design
+  // note. Very common when BASE_URL changes between subscribe and deploy.
+  if (report.clickup && report.clickup.endpoint !== input.expectedEndpoint) {
+    findings.push(
+      `Endpoint mismatch: ClickUp is delivering to "${report.clickup.endpoint}" but the current BASE_URL would produce "${input.expectedEndpoint}". This is the most common cause of "fail_count stays 0 and nothing lands." Fix: delete the ClickUp webhook (via unsubscribe or ClickUp UI) and re-run subscribeToTaskEvents so a fresh webhook is created against the current URL.`,
+    );
+  }
+
+  // Events mismatch — someone edited the webhook on ClickUp's side, or PR1
+  // shipped a different default bundle than what's currently stored.
+  if (report.clickup && localSub && !sameStringSet(report.clickup.events, localSub.events)) {
+    findings.push(
+      `Event bundle differs: ClickUp is subscribed to [${report.clickup.events.join(', ')}] but the local record says [${localSub.events.join(', ')}]. One side has been edited out of band.`,
+    );
+  }
+
+  // fail_count divergence — ClickUp says delivery is failing but our counter
+  // hasn't moved. Classic sign the outer try/catch in ingestion is swallowing.
+  if (report.clickup && localSub) {
+    const cf = report.clickup.healthFailCount;
+    if (cf !== null && cf > localSub.failCount) {
+      findings.push(
+        `ClickUp fail_count (${cf}) exceeds local fail_count (${localSub.failCount}). Deliveries are failing on ClickUp's side but our subscription record isn't being updated. Most likely: the ingestion route's outer catch is returning 200 on a thrown error before it reaches store.incrementFailCount, so ClickUp keeps retrying and we don't notice.`,
+      );
+    }
+    if (report.clickup.healthStatus && report.clickup.healthStatus !== 'active') {
+      findings.push(
+        `ClickUp reports webhook health.status="${report.clickup.healthStatus}". Webhook has been disabled by ClickUp (typically after 5 consecutive delivery failures). Delete + re-subscribe to restore.`,
+      );
+    }
+  }
+
+  // Event-store counts + last-event timestamps. Only meaningful when there's
+  // a local subscription — the count is scoped to that subscription's rows.
+  if (localSub) {
+    let count = 0;
+    try { count = await deps.countTaskEventsForSubscription(localSub.id); }
+    catch (err: any) { findings.push(`Failed to count events: ${err?.message || err}`); }
+
+    let mostRecent: StoredTaskEvent | undefined;
+    try {
+      const recent = await deps.queryTaskEvents({ subscriptionId: localSub.id, limit: 1 });
+      mostRecent = recent[0];
+    } catch (err: any) {
+      findings.push(`Failed to fetch most recent event: ${err?.message || err}`);
+    }
+
+    report.eventStore = {
+      count,
+      mostRecentOccurredAt: mostRecent?.occurredAt ?? null,
+      mostRecentReceivedAt: mostRecent?.receivedAt ?? null,
+    };
+
+    // Zero-events call-out. Only fires when nothing has landed AND ClickUp
+    // reports no delivery failures — that's the specific pattern (silent 200s
+    // from ingestion) the debug tool exists to surface.
+    if (count === 0 && report.clickup && (report.clickup.healthFailCount === 0 || report.clickup.healthFailCount === null)) {
+      const created = Date.parse(localSub.createdAt);
+      const ageMinutes = Number.isFinite(created) ? Math.round((Date.now() - created) / 60000) : NaN;
+      findings.push(
+        `Zero events stored, and ClickUp reports zero delivery failures. If the subscription is more than a few minutes old (age: ${Number.isFinite(ageMinutes) ? ageMinutes + 'm' : 'unknown'}) and you know ClickUp has fired events (task moves, new tasks) in that window, deliveries are either not reaching the ingestion route at all OR the route is returning 200 without persisting. Check dev logs for "[clickup-ingest]" entries.`,
+      );
+    }
+  }
+
+  if (findings.length === 0) {
+    findings.push('No anomalies detected. Local record, ClickUp record, and event store are consistent.');
+  }
+  return report;
+}
+

@@ -13,7 +13,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Drive](#google-drive) (15)
 - [Gmail](#gmail) (14)
 - [Google Slides](#google-slides) (6)
-- [ClickUp](#clickup) (41)
+- [ClickUp](#clickup) (42)
 - [Slack (bot)](#slack-bot-) (7)
 - [Slack (user)](#slack-user-) (7)
 - [Outline](#outline) (27)
@@ -154,7 +154,7 @@ Source: `src/google-slides/server.ts` — 6 tools.
 
 ## ClickUp
 
-Source: `src/clickup/server.ts` — 41 tools.
+Source: `src/clickup/server.ts` — 42 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -183,6 +183,7 @@ Source: `src/clickup/server.ts` — 41 tools.
 | `subscribeToTaskEvents` | Subscribe this user's digest routine to ClickUp task events for a workspace. Creates a webhook on ClickUp's side and stores its shared secret so the ingestion endpoint can verify inbound POSTs. IDEMPOTENT: re-calling with the same (user, workspace) returns the existing subscription without hitting ClickUp again. Default event bundle is `taskCreated`, `taskStatusUpdated`, `taskAssigneeUpdated`, `taskMoved`, `taskDeleted` — deliberately excludes `taskUpdated` (firehose, redundant with the pull-side `date_updated_gt` filter on filterTeamTasks). Requires the BASE_URL env var so ClickUp can call back. Once subscribed, the event store accrues from this moment forward — history queries against events before this timestamp fall back to the `date_updated + current status` approximation. | — |
 | `getTaskEventHistory` | Read from-status→to-status transitions (and other captured events) for a ClickUp workspace, sourced from the event store populated by subscribeToTaskEvents. Use this to answer "what moved to In Review since last report" exactly, instead of approximating from date_updated + current status. IMPORTANT: history accrues from the moment subscribeToTaskEvents was first called — events before that boundary are NOT in the store; the response includes `eventStoreStartedAt` so the caller can fall back to filterTeamTasks with dateUpdatedGt for any earlier window. If no subscription exists for the (user, workspace), the response is `kind: "no-subscription"` with a warning — not an error — so the digest can gracefully fall back to pull. | `GET /api/v1/clickup/workspaces/{workspaceId}/events` |
 | `listTaskEventSubscriptions` | List task-event webhook subscriptions owned by the current user. Surfaces fail_count so operators can spot a dying webhook (ClickUp stops delivering after 5 consecutive failures). Optionally narrow to a single workspace. | `GET /api/v1/clickup/subscriptions` |
+| `debugTaskEventSubscription` | Cross-reference the local task-event subscription against ClickUp's own view of the webhook and the event store, and surface anomalies. Use when subscribeToTaskEvents reports success but events aren't landing, or when local fail_count doesn't match reality. Detects: endpoint-URL drift (BASE_URL changed since subscribe), orphaned ClickUp webhook (local record points at a webhook ClickUp deleted), event-bundle mismatch, ClickUp fail_count > local fail_count (ingestion route silently returning 200 on thrown errors), disabled webhook status, and the "zero events with zero failures" pattern that means deliveries either aren't reaching us or are being silently swallowed. | `GET /api/v1/clickup/workspaces/{workspaceId}/subscription/debug` |
 | `createList` | Create a new list in a ClickUp folder, or a folderless list in a space. | — |
 | `createFolder` | Create a new folder in a ClickUp space. | — |
 | `createSpace` | Create a new space in a ClickUp workspace. | — |
@@ -264,4 +265,4 @@ Source: `src/outline/server.ts` — 27 tools.
 
 ---
 
-**Grand total: 167 tools across 11 sections.**
+**Grand total: 168 tools across 11 sections.**
