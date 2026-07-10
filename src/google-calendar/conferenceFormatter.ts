@@ -1,9 +1,25 @@
 // src/google-calendar/conferenceFormatter.ts
 // Pure formatters for an Event's conferencing fields (hangoutLink / conferenceData).
 // Extracted so the listEvents / getEvent tools can be unit-tested without FastMCP.
+import { randomUUID } from 'node:crypto';
 import type { calendar_v3 } from 'googleapis';
 
 type Event = calendar_v3.Schema$Event;
+
+/**
+ * Build the conferenceData.createRequest payload that tells Google Calendar to
+ * mint a fresh Google Meet conference for the event. The caller must also pass
+ * conferenceDataVersion=1 on the events.insert / events.update request — without
+ * that flag the API silently ignores conferenceData.
+ */
+export function buildMeetConferenceData(): calendar_v3.Schema$ConferenceData {
+  return {
+    createRequest: {
+      requestId: randomUUID(),
+      conferenceSolutionKey: { type: 'hangoutsMeet' },
+    },
+  };
+}
 
 /**
  * One-line conferencing summary for list-style output.

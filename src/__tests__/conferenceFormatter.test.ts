@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { formatConferenceCompact, formatConferenceDetail } from '../google-calendar/conferenceFormatter.js';
+import { buildMeetConferenceData, formatConferenceCompact, formatConferenceDetail } from '../google-calendar/conferenceFormatter.js';
 
 describe('formatConferenceCompact', () => {
   it('returns empty string when event has no conferencing', () => {
@@ -118,5 +118,26 @@ describe('formatConferenceDetail', () => {
     assert.match(out, /\*\*Hangout Link:\*\* https:\/\/meet\.google\.com\/abc/);
     assert.match(out, /\*\*Conference:\*\* Google Meet/);
     assert.match(out, /- video https:\/\/meet\.google\.com\/abc/);
+  });
+});
+
+describe('buildMeetConferenceData', () => {
+  it('emits a createRequest with a hangoutsMeet solution key', () => {
+    const data = buildMeetConferenceData();
+    assert.equal(data.createRequest?.conferenceSolutionKey?.type, 'hangoutsMeet');
+  });
+
+  it('emits a non-empty requestId string', () => {
+    const data = buildMeetConferenceData();
+    assert.equal(typeof data.createRequest?.requestId, 'string');
+    assert.ok((data.createRequest?.requestId?.length ?? 0) > 0);
+  });
+
+  it('generates a fresh requestId on every call', () => {
+    // Google Calendar deduplicates conference creation by requestId — a stable id
+    // across calls would silently return the same conference instead of a new one.
+    const a = buildMeetConferenceData();
+    const b = buildMeetConferenceData();
+    assert.notEqual(a.createRequest?.requestId, b.createRequest?.requestId);
   });
 });

@@ -257,6 +257,11 @@
                     },
                     "description": "List of attendee email addresses"
                   },
+                  "addGoogleMeet": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true, generate a Google Meet video conference for this event. The Meet link is returned as hangoutLink and attached to the calendar invite."
+                  },
                   "sendUpdates": {
                     "type": "string",
                     "enum": ["all", "externalOnly", "none"],
@@ -456,6 +461,11 @@
                   "timeZone": {
                     "type": "string",
                     "description": "Time zone for the start/end times"
+                  },
+                  "addGoogleMeet": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true, generate a Google Meet video conference for this event. Ignored if the event already has a conference attached."
                   },
                   "sendUpdates": {
                     "type": "string",
@@ -688,6 +698,16 @@
             "type": "string",
             "nullable": true,
             "description": "URL link to the event in Google Calendar"
+          },
+          "hangoutLink": {
+            "type": "string",
+            "nullable": true,
+            "description": "URL of the attached Google Meet conference, if any. Present on events created or updated with addGoogleMeet=true, or on events with a pre-existing Meet."
+          },
+          "conferenceData": {
+            "type": "object",
+            "nullable": true,
+            "description": "Full conference metadata. When a Meet was just requested, createRequest.status.statusCode may be 'pending' until Google finishes provisioning; re-fetch the event with GET to poll for the final entryPoints."
           },
           "creator": {
             "type": "string",
