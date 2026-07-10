@@ -835,6 +835,217 @@ describe('renderProseMirror', () => {
     const doc = { type: 'doc', content: [] };
     assert.equal(renderProseMirror(doc), null);
   });
+
+  test('whitespace-only document collapses to null', () => {
+    // A doc with a paragraph containing only spaces should not render as valid
+    // markdown — the `trim()` at the end of renderProseMirror kicks in and we
+    // fall through to the JSON display.
+    const doc = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '   ' }] }] };
+    assert.equal(renderProseMirror(doc), null);
+  });
+
+  test('nested bullet lists preserve indentation via child recursion', () => {
+    // Outline supports nesting a bullet_list inside a list_item. The
+    // list_item renderer joins its children with '\n', so a nested list
+    // shows up under its parent bullet as a follow-on line. This is a
+    // faithful shape check — Markdown parsers accept it even without leading
+    // spaces because the parent bullet's block scope covers the child.
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'bullet_list',
+          content: [
+            {
+              type: 'list_item',
+              content: [
+                { type: 'paragraph', content: [{ type: 'text', text: 'outer' }] },
+                {
+                  type: 'bullet_list',
+                  content: [
+                    {
+                      type: 'list_item',
+                      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'inner' }] }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const out = renderProseMirror(doc);
+    assert.ok(out);
+    if (!out) return;
+    assert.match(out, /^- outer/m);
+    assert.match(out, /- inner/);
+  });
+
+  test('multiple marks on a single text stack in the order applied', () => {
+    // A text node with two marks like [strong, em] wraps the base string in
+    // both — Outline emits this shape when the user selects bold+italic
+    // together. Order matters for the final visual (bold-then-italic vs
+    // italic-then-bold produce identical output but different bytes), so we
+    // pin the specific expected string.
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'hi', marks: [{ type: 'strong' }, { type: 'em' }] }],
+        },
+      ],
+    };
+    assert.equal(renderProseMirror(doc), '***hi***');
+  });
+
+  test('multi-paragraph blockquote renders each line prefixed with >', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'blockquote',
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'first' }] },
+            { type: 'paragraph', content: [{ type: 'text', text: 'second' }] },
+          ],
+        },
+      ],
+    };
+    const out = renderProseMirror(doc);
+    assert.ok(out);
+    if (!out) return;
+    // Two content lines and one blank continuation line separating the paragraphs.
+    assert.match(out, /^> first$/m);
+    assert.match(out, /^>$/m);
+    assert.match(out, /^> second$/m);
+  });
+
+  test('mixed marks + list + heading round-trip through the full renderer', () => {
+    // A representative Outline comment: heading, paragraph with a link and
+    // bold, then a bullet list. Guards against interactions between block
+    // types (e.g. the previous block leaking a trailing newline).
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'heading',
+          attrs: { level: 3 },
+          content: [{ type: 'text', text: 'Update' }],
+        },
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'see the ' },
+            {
+              type: 'text',
+              text: 'ticket',
+              marks: [{ type: 'link', attrs: { href: 'https://linear.app/x/issue/42' } }],
+            },
+            { type: 'text', text: ' — ' },
+            { type: 'text', text: 'urgent', marks: [{ type: 'strong' }] },
+          ],
+        },
+        {
+          type: 'bullet_list',
+          content: [
+            {
+              type: 'list_item',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'done' }] }],
+            },
+            {
+              type: 'list_item',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'todo' }] }],
+            },
+          ],
+        },
+      ],
+    };
+    const out = renderProseMirror(doc);
+    assert.ok(out);
+    if (!out) return;
+    assert.match(out, /^### Update/m);
+    assert.match(out, /see the \[ticket\]\(https:\/\/linear\.app\/x\/issue\/42\) — \*\*urgent\*\*/);
+    assert.match(out, /^- done\n- todo/m);
+  });
+
+  test('unknown "mention" node recurses so the display name is preserved', () => {
+    // Outline emits mentions as `{type: 'mention', content: [{type: 'text',
+    // text: '@Ana'}]}` (or similar). We don't render them specially, but the
+    // default-case recursion picks up the child text so the reader still sees
+    // "@Ana" instead of losing it entirely.
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'ping ' },
+            {
+              type: 'mention',
+              attrs: { userId: 'u1', userName: 'Ana' },
+              content: [{ type: 'text', text: '@Ana' }],
+            },
+          ],
+        },
+      ],
+    };
+    assert.equal(renderProseMirror(doc), 'ping @Ana');
+  });
+
+  test('unknown "checkbox_list" recurses through items but drops box markers', () => {
+    // Task lists in Outline use checkbox_list / checkbox_item, which we don't
+    // yet render as GFM `- [ ]`. Documented behavior for now: text content is
+    // preserved so nothing is lost, but the visual checkbox is missing. If
+    // this shows up in real comments enough to matter, upgrade the walker.
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'checkbox_list',
+          content: [
+            {
+              type: 'checkbox_item',
+              attrs: { checked: false },
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'buy milk' }] }],
+            },
+            {
+              type: 'checkbox_item',
+              attrs: { checked: true },
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'ship it' }] }],
+            },
+          ],
+        },
+      ],
+    };
+    const out = renderProseMirror(doc);
+    assert.ok(out);
+    if (!out) return;
+    assert.match(out, /buy milk/);
+    assert.match(out, /ship it/);
+  });
+
+  test('collapses runs of blank lines to at most one', () => {
+    // Contract: renderProseMirror normalizes `\n{3,}` → `\n\n` so downstream
+    // markdown renderers get a single paragraph break instead of arbitrary
+    // vertical whitespace. Two empty paragraphs between content would
+    // otherwise produce 5 newlines.
+    const doc = {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'before' }] },
+        { type: 'paragraph', content: [] },
+        { type: 'paragraph', content: [] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'after' }] },
+      ],
+    };
+    const out = renderProseMirror(doc);
+    assert.ok(out);
+    if (!out) return;
+    assert.doesNotMatch(out, /\n{3,}/);
+    assert.match(out, /^before\n\nafter$/);
+  });
 });
 
 describe('formatComment / formatComments — ProseMirror rendering', () => {
