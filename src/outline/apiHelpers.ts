@@ -416,13 +416,143 @@ export function formatCollectionStructure(nodes: OutlineCollectionNode[]): strin
   return lines.join('\n');
 }
 
+/**
+ * Render an Outline comment body from ProseMirror JSON back to plain markdown.
+ *
+ * Outline stores comment bodies as ProseMirror documents (a nested tree of
+ * `{ type, content, marks, text, attrs }` nodes). The reference implementation
+ * this MCP was ported from dumped that JSON verbatim, which is unpleasant to
+ * read. This walker handles the shapes Outline actually emits (paragraphs,
+ * text with common marks, links, code, blockquote, headings, hard breaks,
+ * lists) and produces the same markdown the user typed when they added the
+ * comment.
+ *
+ * If the input isn't a recognizable ProseMirror doc — malformed, empty, or a
+ * shape we don't understand yet — returns `null` so the caller can fall back
+ * to the raw-JSON display and not silently drop information.
+ */
+export function renderProseMirror(node: unknown): string | null {
+  if (!isPMNode(node)) return null;
+  const rendered = renderNode(node);
+  const collapsed = rendered.replace(/\n{3,}/g, '\n\n').trim();
+  return collapsed.length > 0 ? collapsed : null;
+}
+
+type PMMark = { type: string; attrs?: Record<string, unknown> };
+type PMNode = {
+  type: string;
+  text?: string;
+  content?: PMNode[];
+  marks?: PMMark[];
+  attrs?: Record<string, unknown>;
+};
+
+function isPMNode(v: unknown): v is PMNode {
+  return typeof v === 'object' && v !== null && typeof (v as { type?: unknown }).type === 'string';
+}
+
+function renderChildren(node: PMNode, sep = ''): string {
+  if (!Array.isArray(node.content)) return '';
+  return node.content.map(renderNode).join(sep);
+}
+
+function renderNode(node: PMNode): string {
+  switch (node.type) {
+    case 'doc':
+      return renderChildren(node, '\n\n');
+    case 'paragraph':
+      return renderChildren(node);
+    case 'text':
+      return applyMarks(node.text ?? '', node.marks);
+    case 'hard_break':
+    case 'hardBreak':
+      return '\n';
+    case 'heading': {
+      const level = clampHeadingLevel(node.attrs?.level);
+      return `${'#'.repeat(level)} ${renderChildren(node)}`;
+    }
+    case 'blockquote':
+      return renderChildren(node, '\n\n')
+        .split('\n')
+        .map(line => (line.length ? `> ${line}` : '>'))
+        .join('\n');
+    case 'code_block':
+    case 'codeBlock': {
+      const lang = typeof node.attrs?.language === 'string' ? node.attrs.language : '';
+      const body = (node.content ?? []).map(c => c.text ?? '').join('');
+      return '```' + lang + '\n' + body + '\n```';
+    }
+    case 'bullet_list':
+    case 'bulletList':
+      return (node.content ?? []).map(item => `- ${renderNode(item).trimEnd()}`).join('\n');
+    case 'ordered_list':
+    case 'orderedList':
+      return (node.content ?? [])
+        .map((item, i) => `${i + 1}. ${renderNode(item).trimEnd()}`)
+        .join('\n');
+    case 'list_item':
+    case 'listItem':
+      return renderChildren(node, '\n');
+    case 'horizontal_rule':
+    case 'horizontalRule':
+      return '---';
+    default:
+      // Unknown node type — recurse so we don't lose text buried inside, but
+      // leave rendering shape-neutral to avoid inventing markup.
+      return renderChildren(node, '\n');
+  }
+}
+
+function clampHeadingLevel(v: unknown): number {
+  const n = typeof v === 'number' ? v : 1;
+  return Math.min(6, Math.max(1, Math.floor(n)));
+}
+
+function applyMarks(text: string, marks?: PMMark[]): string {
+  if (!marks || marks.length === 0) return text;
+  let out = text;
+  for (const m of marks) {
+    switch (m.type) {
+      case 'strong':
+      case 'bold':
+        out = `**${out}**`;
+        break;
+      case 'em':
+      case 'italic':
+        out = `*${out}*`;
+        break;
+      case 'code':
+        out = `\`${out}\``;
+        break;
+      case 'strike':
+      case 'strikethrough':
+        out = `~~${out}~~`;
+        break;
+      case 'link': {
+        const href = typeof m.attrs?.href === 'string' ? m.attrs.href : '';
+        out = href ? `[${out}](${href})` : out;
+        break;
+      }
+      // Unknown marks: leave the text as-is rather than lose it.
+    }
+  }
+  return out;
+}
+
+/** Render a comment body, falling back to fenced JSON when we can't parse it. */
+function renderCommentBody(data: unknown): string {
+  const md = renderProseMirror(data);
+  if (md) return md;
+  return '```json\n' + JSON.stringify(data, null, 2) + '\n```';
+}
+
 export function formatComment(comment: OutlineComment): string {
   const user = comment.createdBy?.name ?? 'Unknown User';
   const parts = [`# Comment by ${user}`];
   if (comment.createdAt) parts.push(`Date: ${comment.createdAt}`);
   if (comment.anchorText) parts.push('', `Referencing text: "${comment.anchorText}"`);
   if (comment.data !== undefined && comment.data !== null) {
-    parts.push('', 'Comment content:', '```json', JSON.stringify(comment.data, null, 2), '```');
+    parts.push('', 'Comment content:', renderCommentBody(comment.data));
   } else {
     parts.push('', '(No comment content found)');
   }
@@ -454,7 +584,7 @@ export function formatComments(
     if (c.createdAt) parts.push(`Date: ${c.createdAt}`);
     if (c.anchorText) parts.push('', `Referencing text: "${c.anchorText}"`);
     if (c.data !== undefined && c.data !== null) {
-      parts.push('', 'Comment content:', '```json', JSON.stringify(c.data, null, 2), '```', '');
+      parts.push('', 'Comment content:', renderCommentBody(c.data), '');
     } else {
       parts.push('', '(No comment content found)', '');
     }
