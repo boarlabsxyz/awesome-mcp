@@ -17,6 +17,7 @@ import {
   getOutlineClient,
   mapOutlineError,
   withOutlineClient,
+  renderProseMirror,
 } from '../outline/apiHelpers.js';
 
 // -----------------------------------------------------------------------------
@@ -479,7 +480,9 @@ describe('OutlineClient method dispatch', () => {
       '/api/documents.update',
       '/api/documents.move',
       '/api/documents.archive',
-      '/api/documents.unarchive',
+      // /api/documents.unarchive is intentionally absent — Outline exposes a
+      // single /api/documents.restore endpoint for both archive- and trash-
+      // restoration, so unarchiveDocument() maps to documents.restore too.
       '/api/documents.restore',
       '/api/documents.delete',
       '/api/documents.archived',
@@ -649,5 +652,232 @@ describe('withOutlineClient', () => {
       }),
       /not found/,
     );
+  });
+});
+
+// -----------------------------------------------------------------------------
+// unarchiveDocument endpoint mapping (regression guard against the "not found"
+// bug where /api/documents.unarchive returned 404).
+// -----------------------------------------------------------------------------
+
+describe('unarchiveDocument endpoint mapping', () => {
+  beforeEach(() => installMockFetch());
+  afterEach(() => {
+    mockImpl = null;
+    globalThis.fetch = originalFetch;
+  });
+
+  test('hits /api/documents.restore, NOT /api/documents.unarchive', async () => {
+    mockImpl = () => jsonResponse({ data: { id: 'd1', title: 'Doc' } });
+    const c = new OutlineClient('tok');
+    await c.unarchiveDocument('d1');
+    assert.equal(calls.length, 1);
+    assert.equal(new URL(calls[0].url).pathname, '/api/documents.restore');
+  });
+
+  test('both unarchive and restore share the same endpoint (single Outline route)', async () => {
+    mockImpl = () => jsonResponse({ data: { id: 'd1' } });
+    const c = new OutlineClient('tok');
+    await c.unarchiveDocument('d1');
+    await c.restoreDocument('d1');
+    const paths = calls.map(c => new URL(c.url).pathname);
+    assert.deepEqual(paths, ['/api/documents.restore', '/api/documents.restore']);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// renderProseMirror + formatComment PM rendering
+// -----------------------------------------------------------------------------
+
+describe('renderProseMirror', () => {
+  test('returns null for non-ProseMirror inputs so callers can fall back cleanly', () => {
+    assert.equal(renderProseMirror(null), null);
+    assert.equal(renderProseMirror(undefined), null);
+    assert.equal(renderProseMirror('not a node'), null);
+    assert.equal(renderProseMirror(42), null);
+    assert.equal(renderProseMirror({}), null);
+    assert.equal(renderProseMirror({ text: 'no type field' }), null);
+  });
+
+  test('renders a plain paragraph', () => {
+    const doc = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'hello world' }] }] };
+    assert.equal(renderProseMirror(doc), 'hello world');
+  });
+
+  test('applies strong/em/code/strike/link marks in the expected markdown', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'plain ' },
+            { type: 'text', text: 'bold', marks: [{ type: 'strong' }] },
+            { type: 'text', text: ' ' },
+            { type: 'text', text: 'italic', marks: [{ type: 'em' }] },
+            { type: 'text', text: ' ' },
+            { type: 'text', text: 'code', marks: [{ type: 'code' }] },
+            { type: 'text', text: ' ' },
+            { type: 'text', text: 'gone', marks: [{ type: 'strike' }] },
+            { type: 'text', text: ' ' },
+            { type: 'text', text: 'here', marks: [{ type: 'link', attrs: { href: 'https://x.example.com' } }] },
+          ],
+        },
+      ],
+    };
+    assert.equal(
+      renderProseMirror(doc),
+      'plain **bold** *italic* `code` ~~gone~~ [here](https://x.example.com)',
+    );
+  });
+
+  test('accepts both PascalCase and snake_case node/mark names Outline uses', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'a', marks: [{ type: 'bold' }] }],
+        },
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'b', marks: [{ type: 'italic' }] }],
+        },
+      ],
+    };
+    assert.equal(renderProseMirror(doc), '**a**\n\n*b*');
+  });
+
+  test('renders headings, blockquotes, code blocks, and both list styles', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Section' }] },
+        { type: 'blockquote', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'quoted' }] }] },
+        {
+          type: 'code_block',
+          attrs: { language: 'js' },
+          content: [{ type: 'text', text: 'console.log(1)' }],
+        },
+        {
+          type: 'bullet_list',
+          content: [
+            { type: 'list_item', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'one' }] }] },
+            { type: 'list_item', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'two' }] }] },
+          ],
+        },
+        {
+          type: 'ordered_list',
+          content: [
+            { type: 'list_item', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'first' }] }] },
+            { type: 'list_item', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'second' }] }] },
+          ],
+        },
+        { type: 'horizontal_rule' },
+      ],
+    };
+    const out = renderProseMirror(doc);
+    assert.ok(out);
+    if (!out) return;
+    assert.match(out, /^## Section/);
+    assert.match(out, /^> quoted/m);
+    assert.match(out, /```js\nconsole\.log\(1\)\n```/);
+    assert.match(out, /^- one\n- two/m);
+    assert.match(out, /^1\. first\n2\. second/m);
+    assert.match(out, /^---$/m);
+  });
+
+  test('clamps heading levels to 1..6 and defaults invalid values to 1', () => {
+    const above = { type: 'doc', content: [{ type: 'heading', attrs: { level: 12 }, content: [{ type: 'text', text: 'X' }] }] };
+    const below = { type: 'doc', content: [{ type: 'heading', attrs: { level: 0 }, content: [{ type: 'text', text: 'X' }] }] };
+    const bogus = { type: 'doc', content: [{ type: 'heading', attrs: { level: 'wat' }, content: [{ type: 'text', text: 'X' }] }] };
+    assert.equal(renderProseMirror(above), '###### X');
+    assert.equal(renderProseMirror(below), '# X');
+    assert.equal(renderProseMirror(bogus), '# X');
+  });
+
+  test('link mark without href leaves the wrapped text alone', () => {
+    const doc = {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x', marks: [{ type: 'link', attrs: {} }] }] }],
+    };
+    assert.equal(renderProseMirror(doc), 'x');
+  });
+
+  test('unknown node types recurse instead of dropping text', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        { type: 'custom_thing', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'kept' }] }] },
+      ],
+    };
+    assert.equal(renderProseMirror(doc), 'kept');
+  });
+
+  test('hard_break emits a newline inside a paragraph', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'line one' },
+            { type: 'hard_break' },
+            { type: 'text', text: 'line two' },
+          ],
+        },
+      ],
+    };
+    assert.equal(renderProseMirror(doc), 'line one\nline two');
+  });
+
+  test('empty document collapses to null so the caller falls back to JSON', () => {
+    const doc = { type: 'doc', content: [] };
+    assert.equal(renderProseMirror(doc), null);
+  });
+});
+
+describe('formatComment / formatComments — ProseMirror rendering', () => {
+  const pmBody = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [
+          { type: 'text', text: 'hey ' },
+          { type: 'text', text: 'team', marks: [{ type: 'strong' }] },
+        ],
+      },
+    ],
+  };
+
+  test('formatComment renders ProseMirror as markdown, not JSON', () => {
+    const out = formatComment({
+      id: 'x',
+      createdBy: { name: 'Ana' },
+      createdAt: '2026-01-02T00:00:00.000Z',
+      data: pmBody,
+    });
+    assert.match(out, /hey \*\*team\*\*/);
+    assert.doesNotMatch(out, /```json/);
+  });
+
+  test('formatComment still falls back to fenced JSON for non-PM bodies', () => {
+    // Regression guard for the pre-existing contract: unknown shapes are
+    // preserved verbatim so a user or downstream tool can still inspect them.
+    const out = formatComment({ id: 'x', data: { legacy: 'shape' } });
+    assert.match(out, /```json/);
+    assert.match(out, /"legacy": "shape"/);
+  });
+
+  test('formatComments renders each item as markdown when it is ProseMirror', () => {
+    const out = formatComments([
+      { id: 'c1', createdBy: { name: 'A' }, data: pmBody },
+      { id: 'c2', createdBy: { name: 'B' }, data: pmBody },
+    ]);
+    // Count the markdown-y line; two comments should produce two occurrences.
+    const matches = out.match(/hey \*\*team\*\*/g) || [];
+    assert.equal(matches.length, 2);
+    assert.doesNotMatch(out, /```json/);
   });
 });
