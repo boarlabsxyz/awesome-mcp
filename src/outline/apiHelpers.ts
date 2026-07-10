@@ -170,7 +170,13 @@ export class OutlineClient {
   }
 
   unarchiveDocument(id: string): Promise<OutlineDocument | undefined> {
-    return this.post('/api/documents.unarchive', { id }).then(r => r?.data);
+    // Outline exposes a single `/api/documents.restore` endpoint for both
+    // archive-restoration and trash-restoration. There is no
+    // `/api/documents.unarchive`; hitting that returns 404 which the tool
+    // surfaces as "not found." Confirmed against wiki.gluzdov.com and
+    // matches the reference implementation (Vortiago/mcp-outline maps
+    // both `unarchive_document` and `restore_document` to documents.restore).
+    return this.post('/api/documents.restore', { id }).then(r => r?.data);
   }
 
   restoreDocument(id: string): Promise<OutlineDocument | undefined> {
