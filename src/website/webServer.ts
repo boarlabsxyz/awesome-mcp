@@ -2855,7 +2855,10 @@ function registerRestApiRoutes(app: express.Express): void {
       });
       const existingEvent = existingResponse.data;
 
-      const wantsNewMeet = addGoogleMeet && !existingEvent.hangoutLink && !existingEvent.conferenceData?.conferenceId;
+      const wantsNewMeet = addGoogleMeet
+        && !existingEvent.hangoutLink
+        && !existingEvent.conferenceData?.conferenceId
+        && !existingEvent.conferenceData?.createRequest;
       const eventResource: any = {
         summary: summary ?? existingEvent.summary,
         description: description ?? existingEvent.description,

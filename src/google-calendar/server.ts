@@ -332,7 +332,10 @@ calendarServer.addTool({
         conferenceData: existingEvent.conferenceData,
       };
 
-      const wantsNewMeet = args.addGoogleMeet && !existingEvent.hangoutLink && !existingEvent.conferenceData?.conferenceId;
+      const wantsNewMeet = args.addGoogleMeet
+        && !existingEvent.hangoutLink
+        && !existingEvent.conferenceData?.conferenceId
+        && !existingEvent.conferenceData?.createRequest;
       if (wantsNewMeet) {
         eventResource.conferenceData = buildMeetConferenceData();
       }
