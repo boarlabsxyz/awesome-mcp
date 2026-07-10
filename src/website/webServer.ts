@@ -411,6 +411,57 @@ export function mergeReconnectTokens(
 }
 
 /**
+ * Mount the ClickUp task-event webhook ingestion endpoint on any Express app.
+ *
+ * Called from every app factory (createWebApp, createWebOnlyApp,
+ * createMcpOnlyApp) so subscribeToTaskEvents can safely construct
+ * `${BASE_URL}/webhooks/clickup/inbound` regardless of which pod BASE_URL
+ * points at. Before this helper existed, MCP-only pods (createMcpOnlyApp)
+ * had no /webhooks route and returned Express's default 404 for every
+ * delivery — the exact production symptom that motivated PR5.
+ *
+ * Design notes:
+ * - Registered with express.raw() so we consume the exact bytes ClickUp
+ *   signed. Must be registered BEFORE any global express.json() on the
+ *   same app; each caller is responsible for that ordering.
+ * - Auth is signature-only. The URL is public because ClickUp POSTs to it.
+ *   Trust is anchored in the X-Signature header vs the shared_secret we
+ *   stored at subscribe time.
+ * - Emits one structured JSON log line per delivery, greppable via
+ *   [clickup-ingest]. Never logs the shared_secret itself (see
+ *   IngestionLogContext).
+ * - Outer catch returns 500 on infra crashes (import failure, DB down)
+ *   so ClickUp counts them — the previous 200-swallow hid a 30-delivery
+ *   failure behind a green counter.
+ */
+export function registerClickUpWebhookIngest(app: express.Express): void {
+  app.post(
+    '/webhooks/clickup/inbound',
+    express.raw({ type: '*/*', limit: '1mb' }),
+    async (req, res) => {
+      try {
+        const store = await import('../clickup/taskEventStore.js');
+        const { handleClickUpWebhookIngest } = await import('../clickup/webhookHelpers.js');
+        const rawBody: Buffer = req.body instanceof Buffer ? req.body : Buffer.from(req.body as any);
+        const result = await handleClickUpWebhookIngest(
+          rawBody,
+          req.headers['x-signature'] as string | undefined,
+          store,
+        );
+        console.error(`[clickup-ingest] ${JSON.stringify({
+          status: result.status,
+          ...result.logContext,
+        })}`);
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        console.error(`[clickup-ingest] handler crash: ${err?.message || err}`);
+        res.status(500).json({ error: 'Internal error' });
+      }
+    },
+  );
+}
+
+/**
  * Registers all shared routes used by both single-service and multi-service modes.
  * Includes: auth, dashboard, connect/reconnect OAuth, API endpoints, admin, catalogs.
  */
@@ -627,54 +678,9 @@ function registerSharedRoutes(app: express.Express): void {
   }
 
   // === ClickUp task-event webhook ingestion (public, HMAC-verified) ===
-  // Registered BEFORE the global express.json() so this route can consume the
-  // body as a raw Buffer — HMAC-SHA256 is computed over the exact bytes ClickUp
-  // sent, and json-parsing them would change whitespace/ordering and break the
-  // signature check.
-  //
-  // Auth model: no session, no bearer. The URL is public because ClickUp POSTs
-  // to it. Trust is anchored in the X-Signature header, which we verify against
-  // the per-webhook shared_secret we stored at subscribe time. Fail-fast 401
-  // on bad HMAC.
-  //
-  // Response contract: ClickUp marks the webhook failing if we return an error
-  // or take over 7 seconds. We 200 the moment the insert completes; on parse or
-  // insert failure we still 200 (to avoid ClickUp incrementing fail_count for
-  // our bug) but bump our own fail_count and log — the query tool in PR2 will
-  // surface fail_count so operators can see a dying webhook.
-  app.post(
-    '/webhooks/clickup/inbound',
-    express.raw({ type: '*/*', limit: '1mb' }),
-    async (req, res) => {
-      try {
-        const store = await import('../clickup/taskEventStore.js');
-        const { handleClickUpWebhookIngest } = await import('../clickup/webhookHelpers.js');
-        const rawBody: Buffer = req.body instanceof Buffer ? req.body : Buffer.from(req.body as any);
-        const result = await handleClickUpWebhookIngest(
-          rawBody,
-          req.headers['x-signature'] as string | undefined,
-          store,
-        );
-        // One structured log line per delivery. Emit as a single JSON object
-        // so Railway/CloudWatch can parse the fields directly; grep for
-        // "clickup-ingest" to find the whole feed. NEVER logs shared_secret
-        // (only its length via storedSecretLen).
-        console.error(`[clickup-ingest] ${JSON.stringify({
-          status: result.status,
-          ...result.logContext,
-        })}`);
-        res.status(result.status).json(result.body);
-      } catch (err: any) {
-        // Infra-level crash (dynamic import failure, DB down, etc.). Return
-        // 500 so ClickUp's fail_count starts climbing — under the previous
-        // "return 200 to keep webhook alive" policy this exact class of bug
-        // hid behind a green counter for 30 deliveries. Better ClickUp
-        // eventually disables us and forces a human look than silent green.
-        console.error(`[clickup-ingest] handler crash: ${err?.message || err}`);
-        res.status(500).json({ error: 'Internal error' });
-      }
-    },
-  );
+  // Mounted here (before the global express.json()) so we can consume the raw
+  // body. See registerClickUpWebhookIngest for the full design note.
+  registerClickUpWebhookIngest(app);
 
   // JSON body parser for API routes
   app.use(express.json());
@@ -4529,6 +4535,14 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
   app.get('/health', (_req, res) => {
     res.status(200).json({ status: 'ok' });
   });
+
+  // ClickUp task-event webhook ingestion. Mounted here so an MCP-only pod
+  // whose BASE_URL was used at subscribeToTaskEvents time (very common in
+  // multi-service Railway deploys where each MCP has its own domain) can
+  // still receive deliveries — previously this returned Express's default
+  // 404 and ClickUp fail_count climbed to 30 while nothing landed. Must be
+  // registered BEFORE any express.json() on this app.
+  registerClickUpWebhookIngest(app);
 
   // RFC 9728: OAuth Protected Resource Metadata (scoped to this MCP service)
   const mcpSlug = process.env.MCP_SLUG || 'google-docs';
