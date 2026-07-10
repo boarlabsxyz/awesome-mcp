@@ -1201,9 +1201,9 @@ describe('OutlineClient → formatter chains', () => {
     const out = formatCollectionStructure(tree);
     assert.match(out, /# Collection Structure/);
     assert.match(out, /^- Runbooks \(ID: r1\)/m);
-    assert.match(out, /^  - Deploy \(ID: c1\)/m);
-    assert.match(out, /^  - Incident Response \(ID: c2\)/m);
-    assert.match(out, /^    - Sev1 Playbook \(ID: g1\)/m);
+    assert.match(out, /^ {2}- Deploy \(ID: c1\)/m);
+    assert.match(out, /^ {2}- Incident Response \(ID: c2\)/m);
+    assert.match(out, /^ {4}- Sev1 Playbook \(ID: g1\)/m);
     assert.match(out, /^- Meeting Notes \(ID: r2\)/m);
   });
 
