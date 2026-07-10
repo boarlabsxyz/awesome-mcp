@@ -7,7 +7,13 @@ import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
-import { formatConferenceCompact, formatConferenceDetail } from './conferenceFormatter.js';
+import {
+  buildMeetConferenceData,
+  formatConferenceCompact,
+  formatConferenceDetail,
+  formatMeetPendingHint,
+  hasExistingConference,
+} from './conferenceFormatter.js';
 
 const calendarServer = new FastMCP<UserSession>({
   name: 'Google Calendar MCP Server',
@@ -224,12 +230,14 @@ calendarServer.addTool({
     endDateTime: z.string().describe('End time in ISO 8601 format (e.g., "2024-01-15T11:00:00-05:00").'),
     timeZone: z.string().optional().describe('Time zone (e.g., "America/New_York"). Defaults to calendar\'s time zone.'),
     attendees: z.array(z.string()).optional().describe('List of attendee email addresses.'),
+    addGoogleMeet: z.boolean().optional().default(false)
+      .describe('If true, generate a Google Meet video conference for this event. The Meet link is returned in the response and attached to the calendar invite.'),
     sendUpdates: z.enum(['all', 'externalOnly', 'none']).optional().default('none')
       .describe('Whether to send email notifications to attendees. Default "none" — attendees are NOT notified unless you pass "all" or "externalOnly".'),
   }),
   execute: async (args, { log, session }) => {
     const calendar = getCalendarClient(session);
-    log.info(`Creating event "${args.summary}" in calendar: ${args.calendarId}`);
+    log.info(`Creating event "${args.summary}" in calendar: ${args.calendarId}${args.addGoogleMeet ? ' (with Google Meet)' : ''}`);
 
     try {
       const eventResource: calendar_v3.Schema$Event = {
@@ -250,19 +258,27 @@ calendarServer.addTool({
         eventResource.attendees = args.attendees.map(email => ({ email }));
       }
 
+      if (args.addGoogleMeet) {
+        eventResource.conferenceData = buildMeetConferenceData();
+      }
+
       const response = await calendar.events.insert({
         calendarId: args.calendarId,
         requestBody: eventResource,
         sendUpdates: args.sendUpdates,
+        conferenceDataVersion: args.addGoogleMeet ? 1 : undefined,
       });
 
       const event = response.data;
-      return `Event created successfully!\n\n` +
+      let result = `Event created successfully!\n\n` +
         `**Title:** ${event.summary}\n` +
         `**ID:** ${event.id}\n` +
         `**Start:** ${event.start?.dateTime || event.start?.date}\n` +
         `**End:** ${event.end?.dateTime || event.end?.date}\n` +
         `**Link:** ${event.htmlLink}`;
+      result += formatConferenceDetail(event);
+      result += formatMeetPendingHint(args.addGoogleMeet, event);
+      return result;
     } catch (error: any) {
       log.error(`Error creating event: ${error.message || error}`);
       if (error.code === 403) throw new UserError("Permission denied. Make sure you have write access to this calendar.");
@@ -285,12 +301,14 @@ calendarServer.addTool({
     startDateTime: z.string().optional().describe('New start time in ISO 8601 format.'),
     endDateTime: z.string().optional().describe('New end time in ISO 8601 format.'),
     timeZone: z.string().optional().describe('Time zone for the start/end times.'),
+    addGoogleMeet: z.boolean().optional().default(false)
+      .describe('If true, generate a Google Meet video conference for this event. Ignored if the event already has a conference. The Meet link is returned in the response.'),
     sendUpdates: z.enum(['all', 'externalOnly', 'none']).optional().default('none')
       .describe('Whether to send email notifications to attendees. Default "none" — attendees are NOT notified unless you pass "all" or "externalOnly".'),
   }),
   execute: async (args, { log, session }) => {
     const calendar = getCalendarClient(session);
-    log.info(`Updating event: ${args.eventId} in calendar: ${args.calendarId}`);
+    log.info(`Updating event: ${args.eventId} in calendar: ${args.calendarId}${args.addGoogleMeet ? ' (adding Google Meet)' : ''}`);
 
     try {
       // First, get the existing event
@@ -315,22 +333,32 @@ calendarServer.addTool({
           timeZone: args.timeZone,
         } : existingEvent.end,
         attendees: existingEvent.attendees,
+        conferenceData: existingEvent.conferenceData,
       };
+
+      const wantsNewMeet = args.addGoogleMeet && !hasExistingConference(existingEvent);
+      if (wantsNewMeet) {
+        eventResource.conferenceData = buildMeetConferenceData();
+      }
 
       const response = await calendar.events.update({
         calendarId: args.calendarId,
         eventId: args.eventId,
         requestBody: eventResource,
         sendUpdates: args.sendUpdates,
+        conferenceDataVersion: wantsNewMeet ? 1 : undefined,
       });
 
       const event = response.data;
-      return `Event updated successfully!\n\n` +
+      let result = `Event updated successfully!\n\n` +
         `**Title:** ${event.summary}\n` +
         `**ID:** ${event.id}\n` +
         `**Start:** ${event.start?.dateTime || event.start?.date}\n` +
         `**End:** ${event.end?.dateTime || event.end?.date}\n` +
         `**Link:** ${event.htmlLink}`;
+      result += formatConferenceDetail(event);
+      result += formatMeetPendingHint(wantsNewMeet, event);
+      return result;
     } catch (error: any) {
       log.error(`Error updating event: ${error.message || error}`);
       if (error.code === 404) throw new UserError(`Event not found (ID: ${args.eventId}).`);

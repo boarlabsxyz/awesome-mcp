@@ -1,9 +1,50 @@
 // src/google-calendar/conferenceFormatter.ts
 // Pure formatters for an Event's conferencing fields (hangoutLink / conferenceData).
 // Extracted so the listEvents / getEvent tools can be unit-tested without FastMCP.
+import { randomUUID } from 'node:crypto';
 import type { calendar_v3 } from 'googleapis';
 
 type Event = calendar_v3.Schema$Event;
+
+/**
+ * Build the conferenceData.createRequest payload that tells Google Calendar to
+ * mint a fresh Google Meet conference for the event. The caller must also pass
+ * conferenceDataVersion=1 on the events.insert / events.update request — without
+ * that flag the API silently ignores conferenceData.
+ */
+export function buildMeetConferenceData(): calendar_v3.Schema$ConferenceData {
+  return {
+    createRequest: {
+      requestId: randomUUID(),
+      conferenceSolutionKey: { type: 'hangoutsMeet' },
+    },
+  };
+}
+
+/**
+ * True when the event already has (or is provisioning) a video conference.
+ * Guards updateEvent from firing a duplicate createRequest while a prior one
+ * is still pending, or from overwriting an already-provisioned Meet.
+ */
+export function hasExistingConference(event: Event): boolean {
+  if (event.hangoutLink) return true;
+  const conf = event.conferenceData;
+  if (!conf) return false;
+  return Boolean(conf.conferenceId) || Boolean(conf.createRequest);
+}
+
+/**
+ * Trailing hint for tool responses when a fresh Meet createRequest was fired
+ * but the immediate response has no hangoutLink yet — i.e. Google is still
+ * provisioning. Returns '' when the Meet resolved synchronously or was never
+ * requested, so callers can unconditionally concatenate.
+ */
+export function formatMeetPendingHint(wantsNewMeet: boolean, event: Event): string {
+  if (!wantsNewMeet) return '';
+  if (event.hangoutLink) return '';
+  if (event.conferenceData?.createRequest?.status?.statusCode !== 'pending') return '';
+  return '\n**Meet Status:** Conference is being provisioned (pending). Re-fetch the event with getEvent to retrieve the Meet link.';
+}
 
 /**
  * One-line conferencing summary for list-style output.

@@ -10,6 +10,7 @@ import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
 import { validateJwt, validateOpaqueToken, hasScope } from '../auth/jwtValidator.js';
 import { mapJwtToUser } from '../auth/userMapping.js';
 import { looksLikeJwt } from '../auth/resourceServerMiddleware.js';
+import { buildMeetConferenceData, hasExistingConference } from '../google-calendar/conferenceFormatter.js';
 
 /** Normalize Auth0 domain to https:// URL. */
 function auth0Issuer(): string {
@@ -2771,7 +2772,7 @@ function registerRestApiRoutes(app: express.Express): void {
   app.post('/api/v1/calendars/:calendarId/events', requireCalendarApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const calendarId = req.params.calendarId as string;
-      const { summary, description, location, startDateTime, endDateTime, timeZone, attendees, sendUpdates = 'none' } = req.body;
+      const { summary, description, location, startDateTime, endDateTime, timeZone, attendees, addGoogleMeet = false, sendUpdates = 'none' } = req.body;
 
       if (!summary) {
         res.status(400).json({ error: 'summary is required' });
@@ -2800,10 +2801,15 @@ function registerRestApiRoutes(app: express.Express): void {
         eventResource.attendees = attendees.map((email: string) => ({ email }));
       }
 
+      if (addGoogleMeet) {
+        eventResource.conferenceData = buildMeetConferenceData();
+      }
+
       const response = await calendar.events.insert({
         calendarId,
         requestBody: eventResource,
         sendUpdates,
+        conferenceDataVersion: addGoogleMeet ? 1 : undefined,
       });
 
       const event = response.data;
@@ -2816,6 +2822,8 @@ function registerRestApiRoutes(app: express.Express): void {
         end: event.end?.dateTime || event.end?.date || null,
         status: event.status,
         htmlLink: event.htmlLink || null,
+        hangoutLink: event.hangoutLink || null,
+        conferenceData: event.conferenceData || null,
         creator: event.creator?.email || null,
         organizer: event.organizer?.email || null,
         attendees: (event.attendees || []).map((a: any) => ({
@@ -2837,7 +2845,7 @@ function registerRestApiRoutes(app: express.Express): void {
   app.patch('/api/v1/calendars/:calendarId/events/:eventId', requireCalendarApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { calendarId, eventId } = req.params;
-      const { summary, description, location, startDateTime, endDateTime, timeZone, sendUpdates = 'none' } = req.body;
+      const { summary, description, location, startDateTime, endDateTime, timeZone, addGoogleMeet = false, sendUpdates = 'none' } = req.body;
       const calendar = req.userSession!.googleCalendar;
 
       // Fetch existing event to merge fields
@@ -2847,6 +2855,7 @@ function registerRestApiRoutes(app: express.Express): void {
       });
       const existingEvent = existingResponse.data;
 
+      const wantsNewMeet = addGoogleMeet && !hasExistingConference(existingEvent);
       const eventResource: any = {
         summary: summary ?? existingEvent.summary,
         description: description ?? existingEvent.description,
@@ -2854,6 +2863,7 @@ function registerRestApiRoutes(app: express.Express): void {
         start: startDateTime ? { dateTime: startDateTime, timeZone } : existingEvent.start,
         end: endDateTime ? { dateTime: endDateTime, timeZone } : existingEvent.end,
         attendees: existingEvent.attendees,
+        conferenceData: wantsNewMeet ? buildMeetConferenceData() : existingEvent.conferenceData,
       };
 
       const response: any = await calendar.events.update({
@@ -2861,6 +2871,7 @@ function registerRestApiRoutes(app: express.Express): void {
         eventId: eventId as string,
         requestBody: eventResource,
         sendUpdates: sendUpdates as 'all' | 'externalOnly' | 'none',
+        conferenceDataVersion: wantsNewMeet ? 1 : undefined,
       });
 
       const event = response.data;
@@ -2873,6 +2884,8 @@ function registerRestApiRoutes(app: express.Express): void {
         end: event.end?.dateTime || event.end?.date || null,
         status: event.status,
         htmlLink: event.htmlLink || null,
+        hangoutLink: event.hangoutLink || null,
+        conferenceData: event.conferenceData || null,
         creator: event.creator?.email || null,
         organizer: event.organizer?.email || null,
         attendees: (event.attendees || []).map((a: any) => ({

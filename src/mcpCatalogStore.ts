@@ -468,7 +468,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
     slug: 'outline',
     name: 'Outline Wiki MCP',
     description: 'Read, write, and manage Outline wiki documents and collections',
-    iconUrl: null,
+    iconUrl: 'https://www.getoutline.com/images/icon-desktop.png',
     mcpUrl: outlineMcpUrl,
     provider: 'outline',
     scopes: [],

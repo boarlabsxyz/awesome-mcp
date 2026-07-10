@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { formatConferenceCompact, formatConferenceDetail } from '../google-calendar/conferenceFormatter.js';
+import {
+  buildMeetConferenceData,
+  formatConferenceCompact,
+  formatConferenceDetail,
+  formatMeetPendingHint,
+  hasExistingConference,
+} from '../google-calendar/conferenceFormatter.js';
 
 describe('formatConferenceCompact', () => {
   it('returns empty string when event has no conferencing', () => {
@@ -118,5 +124,88 @@ describe('formatConferenceDetail', () => {
     assert.match(out, /\*\*Hangout Link:\*\* https:\/\/meet\.google\.com\/abc/);
     assert.match(out, /\*\*Conference:\*\* Google Meet/);
     assert.match(out, /- video https:\/\/meet\.google\.com\/abc/);
+  });
+});
+
+describe('buildMeetConferenceData', () => {
+  it('emits a createRequest with a hangoutsMeet solution key', () => {
+    const data = buildMeetConferenceData();
+    assert.equal(data.createRequest?.conferenceSolutionKey?.type, 'hangoutsMeet');
+  });
+
+  it('emits a non-empty requestId string', () => {
+    const data = buildMeetConferenceData();
+    assert.equal(typeof data.createRequest?.requestId, 'string');
+    assert.ok((data.createRequest?.requestId?.length ?? 0) > 0);
+  });
+
+  it('generates a fresh requestId on every call', () => {
+    // Google Calendar deduplicates conference creation by requestId — a stable id
+    // across calls would silently return the same conference instead of a new one.
+    const a = buildMeetConferenceData();
+    const b = buildMeetConferenceData();
+    assert.notEqual(a.createRequest?.requestId, b.createRequest?.requestId);
+  });
+});
+
+describe('hasExistingConference', () => {
+  it('returns false for a plain event with no conferencing', () => {
+    assert.equal(hasExistingConference({ summary: 'plain' } as any), false);
+  });
+
+  it('returns true when hangoutLink is set', () => {
+    assert.equal(hasExistingConference({ hangoutLink: 'https://meet.google.com/x' } as any), true);
+  });
+
+  it('returns true when conferenceData.conferenceId is set (provisioned)', () => {
+    assert.equal(hasExistingConference({ conferenceData: { conferenceId: 'abc-defg-hij' } } as any), true);
+  });
+
+  it('returns true when a createRequest is in flight (no conferenceId yet)', () => {
+    // Guards against firing a duplicate Meet request while Google is still
+    // provisioning the previous one.
+    assert.equal(hasExistingConference({
+      conferenceData: {
+        createRequest: {
+          requestId: 'r-1',
+          conferenceSolutionKey: { type: 'hangoutsMeet' },
+          status: { statusCode: 'pending' },
+        },
+      },
+    } as any), true);
+  });
+
+  it('returns false when conferenceData is present but empty', () => {
+    assert.equal(hasExistingConference({ conferenceData: {} } as any), false);
+  });
+});
+
+describe('formatMeetPendingHint', () => {
+  it('returns empty when no Meet was requested', () => {
+    assert.equal(formatMeetPendingHint(false, { conferenceData: { createRequest: { status: { statusCode: 'pending' } } } } as any), '');
+  });
+
+  it('returns empty when the Meet resolved synchronously (hangoutLink present)', () => {
+    assert.equal(formatMeetPendingHint(true, { hangoutLink: 'https://meet.google.com/x' } as any), '');
+  });
+
+  it('returns empty when there is no createRequest status', () => {
+    assert.equal(formatMeetPendingHint(true, { conferenceData: {} } as any), '');
+  });
+
+  it('returns empty when createRequest.status is success', () => {
+    assert.equal(
+      formatMeetPendingHint(true, { conferenceData: { createRequest: { status: { statusCode: 'success' } } } } as any),
+      '',
+    );
+  });
+
+  it('returns the "provisioning" hint when a fresh Meet request is still pending', () => {
+    const out = formatMeetPendingHint(true, {
+      conferenceData: { createRequest: { status: { statusCode: 'pending' } } },
+    } as any);
+    assert.match(out, /Meet Status/);
+    assert.match(out, /provisioned \(pending\)/);
+    assert.match(out, /getEvent/);
   });
 });
