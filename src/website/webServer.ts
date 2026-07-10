@@ -655,12 +655,23 @@ function registerSharedRoutes(app: express.Express): void {
           req.headers['x-signature'] as string | undefined,
           store,
         );
+        // One structured log line per delivery. Emit as a single JSON object
+        // so Railway/CloudWatch can parse the fields directly; grep for
+        // "clickup-ingest" to find the whole feed. NEVER logs shared_secret
+        // (only its length via storedSecretLen).
+        console.error(`[clickup-ingest] ${JSON.stringify({
+          status: result.status,
+          ...result.logContext,
+        })}`);
         res.status(result.status).json(result.body);
       } catch (err: any) {
-        // Last-resort catch. 200 so ClickUp doesn't disable the webhook for
-        // an infra crash our end.
-        console.error('[clickup-ingest] handler crash:', err?.message || err);
-        res.status(200).json({ ok: true });
+        // Infra-level crash (dynamic import failure, DB down, etc.). Return
+        // 500 so ClickUp's fail_count starts climbing — under the previous
+        // "return 200 to keep webhook alive" policy this exact class of bug
+        // hid behind a green counter for 30 deliveries. Better ClickUp
+        // eventually disables us and forces a human look than silent green.
+        console.error(`[clickup-ingest] handler crash: ${err?.message || err}`);
+        res.status(500).json({ error: 'Internal error' });
       }
     },
   );

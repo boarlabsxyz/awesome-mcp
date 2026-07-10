@@ -14,6 +14,7 @@
 //   listSubscriptionsForUser(userId, ...)  — read side of "which webhooks do I own"
 //   queryTaskEvents(...)                   — read side of the digest (PR2 query tool)
 //   countTaskEventsForSubscription(id)     — for the debug tool (PR3)
+//   deleteSubscription(userId, workspaceId) — for unsubscribeFromTaskEvents (PR4)
 //   pruneOldTaskEvents(retentionDays)      — nightly cleanup
 
 import { isDatabaseAvailable, getPool } from '../db.js';
@@ -260,6 +261,18 @@ export async function queryTaskEvents(input: {
     params,
   );
   return rows.map(mapEventRow);
+}
+
+// Idempotent delete keyed by (user, workspace). Returns true when a row was
+// removed. Used by the unsubscribe flow after client.deleteWebhook so a
+// stuck subscription can be blown away and re-created cleanly.
+export async function deleteSubscription(userId: number, workspaceId: string): Promise<boolean> {
+  requireDb();
+  const { rowCount } = await getPool().query(
+    `DELETE FROM clickup_webhook_subscriptions WHERE user_id = $1 AND workspace_id = $2`,
+    [userId, workspaceId],
+  );
+  return (rowCount || 0) > 0;
 }
 
 // Debug helper: how many events have we recorded for this subscription?

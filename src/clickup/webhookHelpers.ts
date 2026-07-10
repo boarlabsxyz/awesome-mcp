@@ -125,59 +125,142 @@ export interface IngestionStore {
   incrementFailCount(subscriptionId: number): Promise<void>;
 }
 
+// Everything needed to explain WHY a delivery went the way it did. Attached
+// to every IngestionResult so the transport layer can emit one structured
+// log line per delivery, and PR3's debug tool can reason about the pattern.
+//
+// NEVER carries the shared_secret — only its length, so we can spot "stored
+// undefined/empty" without leaking the secret. Same for the payload: prefix
+// only, never the whole body (which is safe on its own but shouldn't hit
+// disk unbounded).
+export interface IngestionLogContext {
+  branch: 'ok' | 'bad-json' | 'missing-webhook-id' | 'unknown-webhook' | 'bad-signature' | 'insert-failed';
+  webhookId: string | null;
+  subscriptionId: number | null;
+  storedSecretLen: number | null;
+  sigPresent: boolean;
+  sigLen: number;
+  bodyLen: number;
+  bodyPrefix: string;
+  insertedEventCount?: number;
+  failCountBumped: boolean;
+}
+
 export interface IngestionResult {
   status: 200 | 400 | 401 | 404;
   body: { ok: true } | { error: string };
   insertedEventCount?: number;
+  logContext: IngestionLogContext;
 }
 
 // Pure ingestion logic given the raw body bytes, the X-Signature header, and
 // a store. Returns an IngestionResult the transport layer maps to an HTTP
-// response. Contract: 200 iff signature verified AND at least one event row
-// was inserted (or would have been — parse errors during insert still 200
-// so ClickUp doesn't disable the webhook for our bug; store bumps fail_count).
+// response.
+//
+// Contract:
+//   200 → signature verified, insert succeeded (insertedEventCount reflects rows)
+//   200 + fail_count bumped → signature verified, insert threw (rare — DB blip)
+//   401 + fail_count bumped → signature failed. Bumping is the fix for PR3's
+//         "silent 200" divergence: previously only insert failures bumped, so
+//         a wrong-stored-secret produced ClickUp fail_count=30 vs local 0.
+//   404 → webhook_id in body doesn't match any subscription. No fail_count
+//         bump because we don't know which sub to charge; log has full context.
+//   400 → bad JSON or missing webhook_id. Same rationale as 404.
 export async function handleClickUpWebhookIngest(
   rawBody: Buffer | string,
   signatureHeader: string | undefined,
   store: IngestionStore,
 ): Promise<IngestionResult> {
   const buf: Buffer = typeof rawBody === 'string' ? Buffer.from(rawBody, 'utf8') : rawBody;
+  const sig = signatureHeader || '';
+  const bodyPrefix = buf.slice(0, 200).toString('utf8');
+
+  const baseCtx: IngestionLogContext = {
+    branch: 'ok',
+    webhookId: null,
+    subscriptionId: null,
+    storedSecretLen: null,
+    sigPresent: !!signatureHeader,
+    sigLen: sig.length,
+    bodyLen: buf.length,
+    bodyPrefix,
+    failCountBumped: false,
+  };
+
   let parsed: any;
   try {
     parsed = JSON.parse(buf.toString('utf8'));
   } catch {
-    return { status: 400, body: { error: 'Invalid JSON body' } };
+    return {
+      status: 400,
+      body: { error: 'Invalid JSON body' },
+      logContext: { ...baseCtx, branch: 'bad-json' },
+    };
   }
 
   const webhookId = parsed?.webhook_id ? String(parsed.webhook_id) : '';
   if (!webhookId) {
-    return { status: 400, body: { error: 'Missing webhook_id in body' } };
+    return {
+      status: 400,
+      body: { error: 'Missing webhook_id in body' },
+      logContext: { ...baseCtx, branch: 'missing-webhook-id' },
+    };
   }
+  baseCtx.webhookId = webhookId;
 
   const sub = await store.getSubscriptionByWebhookId(webhookId);
   if (!sub) {
-    // Unknown webhook — could be a stale one ClickUp is retrying after we
-    // deleted it, or a spoof. 404 so ClickUp stops sending. Don't leak
-    // signature-check timing.
-    return { status: 404, body: { error: 'Unknown webhook' } };
+    return {
+      status: 404,
+      body: { error: 'Unknown webhook' },
+      logContext: { ...baseCtx, branch: 'unknown-webhook' },
+    };
   }
+  baseCtx.subscriptionId = sub.id;
+  baseCtx.storedSecretLen = sub.sharedSecret ? sub.sharedSecret.length : 0;
 
-  const sig = signatureHeader || '';
   if (!verifyClickUpSignature(sub.sharedSecret, buf, sig)) {
-    return { status: 401, body: { error: 'Invalid signature' } };
+    // Bump local fail_count so it tracks ClickUp's. This is the specific fix
+    // for the divergence PR3's debug tool caught: ClickUp fail_count=30, ours=0.
+    let failCountBumped = false;
+    try {
+      await store.incrementFailCount(sub.id);
+      failCountBumped = true;
+    } catch (err: any) {
+      console.error(`[clickup-ingest] incrementFailCount failed for subscription ${sub.id}:`, err?.message || err);
+    }
+    return {
+      status: 401,
+      body: { error: 'Invalid signature' },
+      logContext: { ...baseCtx, branch: 'bad-signature', failCountBumped },
+    };
   }
 
-  let insertedEventCount = 0;
+  let insertedEventCount: number;
   try {
     const events = parseClickUpWebhookPayload(parsed, { id: sub.id, workspaceId: sub.workspaceId });
     insertedEventCount = await store.insertTaskEvents(events);
   } catch (err: any) {
     console.error(`[clickup-ingest] insert failure for subscription ${sub.id}:`, err?.message || err);
-    try { await store.incrementFailCount(sub.id); } catch { /* best-effort */ }
-    // Still 200 so ClickUp doesn't disable the webhook for our bug.
+    let failCountBumped = false;
+    try { await store.incrementFailCount(sub.id); failCountBumped = true; } catch { /* best-effort */ }
+    // Still 200 so ClickUp doesn't disable the webhook for our own DB blip —
+    // insert failures are treated as transient. Signature failures (above)
+    // are treated as permanent + reported as 401 so ClickUp counts them too.
+    return {
+      status: 200,
+      body: { ok: true },
+      insertedEventCount: 0,
+      logContext: { ...baseCtx, branch: 'insert-failed', insertedEventCount: 0, failCountBumped },
+    };
   }
 
-  return { status: 200, body: { ok: true }, insertedEventCount };
+  return {
+    status: 200,
+    body: { ok: true },
+    insertedEventCount,
+    logContext: { ...baseCtx, branch: 'ok', insertedEventCount },
+  };
 }
 
 // -----------------------------------------------------------------------------
