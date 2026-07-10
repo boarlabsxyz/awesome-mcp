@@ -851,6 +851,46 @@ clickUpServer.addTool({
   },
 });
 
+clickUpServer.addTool({
+  name: 'unsubscribeFromTaskEvents',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Delete the ClickUp task-event subscription for a workspace. Best-effort deletes both the ClickUp-side webhook and the local record; if ClickUp already deleted or disabled the webhook, still clears the local row so a fresh subscribeToTaskEvents can create a new one. Use this to recover from the "webhook disabled by ClickUp after 5 fails" state or after debugTaskEventSubscription flags an endpoint mismatch.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID to unsubscribe from.'),
+  }),
+  execute: async (args, { session }) => {
+    if (!session?.userId) {
+      throw new UserError('unsubscribeFromTaskEvents requires a logged-in user context.');
+    }
+    const client = getClickUpClient(session);
+    const store = await import('./taskEventStore.js');
+
+    const sub = await store.findSubscription(session.userId, args.workspaceId);
+    if (!sub) {
+      return `No task-event subscription found for workspace ${args.workspaceId}. Nothing to unsubscribe.`;
+    }
+
+    // Try ClickUp first. If ClickUp already deleted/disabled the webhook,
+    // this may 404 or 5xx — we still want to clear the local row so a
+    // subsequent subscribe isn't blocked by the idempotency short-circuit.
+    let clickupNote = 'deleted';
+    try {
+      await client.deleteWebhook(sub.clickupWebhookId);
+    } catch (err: any) {
+      clickupNote = `delete failed (${err?.message || err}) — may be orphaned on ClickUp's side`;
+    }
+
+    const deleted = await store.deleteSubscription(session.userId, args.workspaceId);
+    return [
+      'Unsubscribed.',
+      `  Local record: ${deleted ? 'deleted' : 'not found (unexpected — findSubscription had returned a row)'}`,
+      `  ClickUp webhook (${sub.clickupWebhookId}): ${clickupNote}`,
+      '',
+      `Call subscribeToTaskEvents again to start a fresh subscription with a new shared_secret.`,
+    ].join('\n');
+  },
+});
+
 // === Tier 4: Space/List Management ===
 
 clickUpServer.addTool({
