@@ -10,7 +10,7 @@ import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
 import { validateJwt, validateOpaqueToken, hasScope } from '../auth/jwtValidator.js';
 import { mapJwtToUser } from '../auth/userMapping.js';
 import { looksLikeJwt } from '../auth/resourceServerMiddleware.js';
-import { buildMeetConferenceData } from '../google-calendar/conferenceFormatter.js';
+import { buildMeetConferenceData, hasExistingConference } from '../google-calendar/conferenceFormatter.js';
 
 /** Normalize Auth0 domain to https:// URL. */
 function auth0Issuer(): string {
@@ -2855,10 +2855,7 @@ function registerRestApiRoutes(app: express.Express): void {
       });
       const existingEvent = existingResponse.data;
 
-      const wantsNewMeet = addGoogleMeet
-        && !existingEvent.hangoutLink
-        && !existingEvent.conferenceData?.conferenceId
-        && !existingEvent.conferenceData?.createRequest;
+      const wantsNewMeet = addGoogleMeet && !hasExistingConference(existingEvent);
       const eventResource: any = {
         summary: summary ?? existingEvent.summary,
         description: description ?? existingEvent.description,

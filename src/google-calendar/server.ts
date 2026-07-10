@@ -7,7 +7,13 @@ import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
-import { buildMeetConferenceData, formatConferenceCompact, formatConferenceDetail } from './conferenceFormatter.js';
+import {
+  buildMeetConferenceData,
+  formatConferenceCompact,
+  formatConferenceDetail,
+  formatMeetPendingHint,
+  hasExistingConference,
+} from './conferenceFormatter.js';
 
 const calendarServer = new FastMCP<UserSession>({
   name: 'Google Calendar MCP Server',
@@ -271,9 +277,7 @@ calendarServer.addTool({
         `**End:** ${event.end?.dateTime || event.end?.date}\n` +
         `**Link:** ${event.htmlLink}`;
       result += formatConferenceDetail(event);
-      if (args.addGoogleMeet && !event.hangoutLink && event.conferenceData?.createRequest?.status?.statusCode === 'pending') {
-        result += `\n**Meet Status:** Conference is being provisioned (pending). Re-fetch the event with getEvent to retrieve the Meet link.`;
-      }
+      result += formatMeetPendingHint(args.addGoogleMeet, event);
       return result;
     } catch (error: any) {
       log.error(`Error creating event: ${error.message || error}`);
@@ -332,10 +336,7 @@ calendarServer.addTool({
         conferenceData: existingEvent.conferenceData,
       };
 
-      const wantsNewMeet = args.addGoogleMeet
-        && !existingEvent.hangoutLink
-        && !existingEvent.conferenceData?.conferenceId
-        && !existingEvent.conferenceData?.createRequest;
+      const wantsNewMeet = args.addGoogleMeet && !hasExistingConference(existingEvent);
       if (wantsNewMeet) {
         eventResource.conferenceData = buildMeetConferenceData();
       }
@@ -356,9 +357,7 @@ calendarServer.addTool({
         `**End:** ${event.end?.dateTime || event.end?.date}\n` +
         `**Link:** ${event.htmlLink}`;
       result += formatConferenceDetail(event);
-      if (wantsNewMeet && !event.hangoutLink && event.conferenceData?.createRequest?.status?.statusCode === 'pending') {
-        result += `\n**Meet Status:** Conference is being provisioned (pending). Re-fetch the event with getEvent to retrieve the Meet link.`;
-      }
+      result += formatMeetPendingHint(wantsNewMeet, event);
       return result;
     } catch (error: any) {
       log.error(`Error updating event: ${error.message || error}`);

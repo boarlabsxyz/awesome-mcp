@@ -22,6 +22,31 @@ export function buildMeetConferenceData(): calendar_v3.Schema$ConferenceData {
 }
 
 /**
+ * True when the event already has (or is provisioning) a video conference.
+ * Guards updateEvent from firing a duplicate createRequest while a prior one
+ * is still pending, or from overwriting an already-provisioned Meet.
+ */
+export function hasExistingConference(event: Event): boolean {
+  if (event.hangoutLink) return true;
+  const conf = event.conferenceData;
+  if (!conf) return false;
+  return Boolean(conf.conferenceId) || Boolean(conf.createRequest);
+}
+
+/**
+ * Trailing hint for tool responses when a fresh Meet createRequest was fired
+ * but the immediate response has no hangoutLink yet — i.e. Google is still
+ * provisioning. Returns '' when the Meet resolved synchronously or was never
+ * requested, so callers can unconditionally concatenate.
+ */
+export function formatMeetPendingHint(wantsNewMeet: boolean, event: Event): string {
+  if (!wantsNewMeet) return '';
+  if (event.hangoutLink) return '';
+  if (event.conferenceData?.createRequest?.status?.statusCode !== 'pending') return '';
+  return '\n**Meet Status:** Conference is being provisioned (pending). Re-fetch the event with getEvent to retrieve the Meet link.';
+}
+
+/**
  * One-line conferencing summary for list-style output.
  * Returns '' when the event has no video conference attached.
  */
