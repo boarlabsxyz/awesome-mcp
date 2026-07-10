@@ -903,7 +903,7 @@
 
       <!-- Step 2: Name Instance -->
       <div id="step2" class="modal-step">
-        <div class="name-input-section">
+        <div class="name-input-section" id="nameInputSection">
           <label for="instanceNameInput">Name this instance</label>
           <input type="text" id="instanceNameInput" placeholder="e.g., Work Account, Personal…" autocomplete="off" />
           <p class="name-suggestion" id="nameSuggestion">Tip: Use a name that helps you identify which <span translate="no">Google</span> account this is for.</p>
@@ -1263,25 +1263,22 @@
       document.getElementById('step2').classList.add('active');
       document.getElementById('addToolModalTitle').textContent = `Add ${selectedMcpType.name}`;
 
-      // Suggest a default name
-      const existingCount = instances.filter(i => i.mcpSlug === slug).length;
-      if (existingCount === 0) {
-        document.getElementById('instanceNameInput').value = selectedMcpType.name;
-      } else {
-        document.getElementById('instanceNameInput').value = `${selectedMcpType.name} ${existingCount + 1}`;
-      }
-
       document.getElementById('connectGoogleBtn').style.display = 'none';
       document.getElementById('connectTokenBtn').style.display = '';
       document.getElementById('tokenInputSection').style.display = '';
       document.getElementById('tokenInput').value = '';
 
-      // Per-provider label / placeholder / hint / URL visibility.
+      // Per-provider label / placeholder / hint / URL visibility, plus whether
+      // the user enters an instance name (Slack) or the backend auto-generates
+      // one from the upstream team/email (Outline, matching OAuth providers).
       const tokenLabel = document.getElementById('tokenLabel');
       const tokenInput = document.getElementById('tokenInput');
       const tokenHint = document.getElementById('tokenHint');
       const urlSection = document.getElementById('urlInputSection');
       const urlInput = document.getElementById('urlInput');
+      const nameSection = document.getElementById('nameInputSection');
+      const nameInput = document.getElementById('instanceNameInput');
+
       if (provider === 'outline') {
         tokenLabel.textContent = 'API Key';
         tokenInput.placeholder = 'ol_pat_…';
@@ -1290,6 +1287,10 @@
           'Paste the generated token here. The key is scoped to your own user and can be revoked at any time.';
         urlSection.style.display = '';
         urlInput.value = '';
+        // Auto-name from team/email upstream (same UX as OAuth providers).
+        nameSection.style.display = 'none';
+        nameInput.value = '';
+        urlInput.focus();
       } else {
         tokenLabel.textContent = 'Bot Token';
         tokenInput.placeholder = 'xoxb-…';
@@ -1300,11 +1301,14 @@
           '<code translate="no">users:read</code>), install to workspace, then paste the Bot User OAuth Token here. ' +
           "The bot only sees channels where it's been /invited.";
         urlSection.style.display = 'none';
+        nameSection.style.display = '';
+        const existingCount = instances.filter(i => i.mcpSlug === slug).length;
+        nameInput.value = existingCount === 0
+          ? selectedMcpType.name
+          : `${selectedMcpType.name} ${existingCount + 1}`;
+        document.getElementById('nameSuggestion').textContent = 'Tip: Use a name like "Engineering" or "My Startup" to identify the workspace.';
+        nameInput.focus();
       }
-
-      document.getElementById('nameSuggestion').textContent = 'Tip: Use a name like "Engineering" or "My Startup" to identify the workspace.';
-
-      document.getElementById('instanceNameInput').focus();
     }
 
     function startOAuth() {
@@ -1323,18 +1327,21 @@
     }
 
     async function connectWithToken() {
-      const name = document.getElementById('instanceNameInput').value.trim();
-      if (!name) { alert('Please enter a name for this instance'); return; }
       if (!selectedMcpType) { alert('Please select an MCP type'); return; }
+      const isOutline = selectedMcpType.provider === 'outline';
+      // Outline auto-names from the upstream team/email; other token providers
+      // still require a user-entered name.
+      const name = isOutline ? '' : document.getElementById('instanceNameInput').value.trim();
+      if (!isOutline && !name) { alert('Please enter a name for this instance'); return; }
       const token = document.getElementById('tokenInput').value.trim();
       if (!token) {
-        alert(selectedMcpType.provider === 'outline' ? 'Please enter your Outline API key' : 'Please enter a bot token');
+        alert(isOutline ? 'Please enter your Outline API key' : 'Please enter a bot token');
         return;
       }
 
       // Providers that need a per-connection base URL (currently: outline).
       let baseUrl;
-      if (selectedMcpType.provider === 'outline') {
+      if (isOutline) {
         baseUrl = document.getElementById('urlInput').value.trim();
         if (!baseUrl) { alert('Please enter the Outline instance URL'); return; }
       }
@@ -1344,7 +1351,10 @@
       btn.textContent = 'Connecting…';
 
       try {
-        const body = { mcpSlug: selectedMcpType.slug, token, instanceName: name };
+        const body = { mcpSlug: selectedMcpType.slug, token };
+        // Only send instanceName when the user entered one — the backend
+        // auto-generates a name from upstream metadata when it's omitted.
+        if (name) body.instanceName = name;
         if (baseUrl) body.baseUrl = baseUrl;
         const response = await fetch('/api/connect-token', {
           method: 'POST',
