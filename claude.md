@@ -43,6 +43,8 @@ FastMCP server with 43 tools for Google Docs, Sheets, and Drive.
 | `src/google-calendar/server.ts` | Google Calendar tool definitions |
 | `src/outline/server.ts` | Outline wiki tool definitions (self-hosted at wiki.gluzdov.com; base URL via `OUTLINE_BASE_URL`, defaults to dev wiki) |
 | `src/outline/apiHelpers.ts` | `OutlineClient` — Bearer-token HTTP client for Outline REST API |
+| `src/peopleforce/server.ts` | PeopleForce HRIS tool definitions (base URL via `PEOPLEFORCE_BASE_URL`, defaults to app.peopleforce.io/api/public/v2) |
+| `src/peopleforce/apiHelpers.ts` | `PeopleForceClient` — API-key/Bearer HTTP client for PeopleForce REST API |
 | `src/website/webServer.ts` | Express app, proxy routes, registration/OAuth pages |
 | `src/website/oauthServer.ts` | MCP OAuth 2.1 authorization server |
 | `src/website/sessionStore.ts` | Session management (cookie/Redis) |

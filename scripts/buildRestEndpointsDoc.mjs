@@ -54,9 +54,10 @@ const SERVICE_TITLE = {
   clickup: 'ClickUp',
   slack: 'Slack',
   outline: 'Outline',
+  peopleforce: 'PeopleForce',
 };
 
-const SERVICE_ORDER = ['docs', 'sheets', 'calendar', 'drive', 'gmail', 'slides', 'clickup', 'slack', 'outline'];
+const SERVICE_ORDER = ['docs', 'sheets', 'calendar', 'drive', 'gmail', 'slides', 'clickup', 'slack', 'outline', 'peopleforce'];
 
 const lines = [];
 lines.push('# REST Data Plane — Endpoint Catalog');

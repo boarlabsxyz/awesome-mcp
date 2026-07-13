@@ -521,5 +521,25 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
+  // PeopleForce MCP (paste-token provider — user pastes a personal API key)
+  const peopleForceMcpUrl = normalizeUrl(process.env.PEOPLEFORCE_MCP_URL, '/peopleforce');
+
+  await createMcpCatalog({
+    slug: 'peopleforce',
+    name: 'PeopleForce MCP Server',
+    description: 'Read and manage HR data (employees, departments, absences) via PeopleForce API',
+    iconUrl: null,
+    mcpUrl: peopleForceMcpUrl,
+    provider: 'peopleforce',
+    scopes: [],
+    googleClientId: null,
+    googleClientSecret: null,
+    oauthAuthorizationUrl: '',
+    oauthTokenUrl: '',
+    oauthScopes: [],
+    isLocal: !process.env.PEOPLEFORCE_MCP_URL,
+    isActive: true,
+  });
+
   console.error('Default MCP catalog entries seeded.');
 }

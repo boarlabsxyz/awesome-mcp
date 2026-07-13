@@ -17,6 +17,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Slack (bot)](#slack-bot-) (7)
 - [Slack (user)](#slack-user-) (7)
 - [Outline](#outline) (27)
+- [PeopleForce](#peopleforce) (5)
 
 ## Shared (every server)
 
@@ -264,6 +265,18 @@ Source: `src/outline/server.ts` — 27 tools.
 | `listDocumentAttachments` | Lists attachment IDs referenced in an Outline document by parsing its markdown for /api/attachments.redirect links. | — |
 | `getAttachmentUrl` | Resolves an Outline attachment ID to a signed download URL by following the /api/attachments.redirect redirect. | — |
 
+## PeopleForce
+
+Source: `src/peopleforce/server.ts` — 5 tools.
+
+| Tool | Description | REST |
+|---|---|---|
+| `listEmployees` | Lists PeopleForce employees. Paginated; supports optional status and department filters. | — |
+| `getEmployee` | Retrieves a single PeopleForce employee by ID. | — |
+| `listDepartments` | Lists all PeopleForce departments in the workspace (paginated). | — |
+| `listAbsences` | Lists PeopleForce absences (time off, sick leave, etc.). Supports employee, status, and date-range filters. | — |
+| `createAbsence` | Creates a new PeopleForce absence (time-off request) for an employee against a specific policy. | — |
+
 ---
 
-**Grand total: 169 tools across 11 sections.**
+**Grand total: 174 tools across 12 sections.**
