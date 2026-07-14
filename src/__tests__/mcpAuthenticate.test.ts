@@ -23,6 +23,7 @@ function makeDeps(overrides: Partial<AuthDeps> = {}): AuthDeps {
     createSlackBotSession: mock.fn(() => fakeSession),
     createSlackUserSession: mock.fn(() => fakeSession),
     createOutlineSession: mock.fn(() => fakeSession),
+    createPeopleForceSession: mock.fn(() => fakeSession),
     ...overrides,
   };
 }

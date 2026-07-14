@@ -15,7 +15,8 @@ export type RestService =
   | 'slides'
   | 'clickup'
   | 'slack'
-  | 'outline';
+  | 'outline'
+  | 'peopleforce';
 
 export interface RestEndpoint {
   service: RestService;
@@ -117,6 +118,14 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'outline', method: 'GET', path: '/api/v1/outline/comments/{commentId}', summary: 'Get a single Outline comment', mcpToolName: 'getComment', openapiOperationId: 'getOutlineComment', status: 'planned' },
   { service: 'outline', method: 'GET', path: '/api/v1/outline/documents/{documentId}/attachments', summary: 'List attachments referenced in an Outline document', mcpToolName: 'listDocumentAttachments', openapiOperationId: 'listOutlineDocumentAttachments', status: 'planned' },
   { service: 'outline', method: 'GET', path: '/api/v1/outline/attachments/{attachmentId}/url', summary: 'Resolve an Outline attachment ID to a signed download URL', mcpToolName: 'getAttachmentUrl', openapiOperationId: 'getOutlineAttachmentUrl', status: 'planned' },
+
+  // -------- PeopleForce --------
+  // Catalog-only for now: MCP tools ship in src/peopleforce/server.ts, but the
+  // /api/v1/peopleforce/* REST siblings are not yet wired in webServer.ts.
+  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/employees', summary: 'List PeopleForce employees', mcpToolName: 'listEmployees', openapiOperationId: 'listPeopleForceEmployees', status: 'planned' },
+  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/employees/{employeeId}', summary: 'Get a single PeopleForce employee', mcpToolName: 'getEmployee', openapiOperationId: 'getPeopleForceEmployee', status: 'planned' },
+  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/departments', summary: 'List PeopleForce departments', mcpToolName: 'listDepartments', openapiOperationId: 'listPeopleForceDepartments', status: 'planned' },
+  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/leave-requests', summary: 'List PeopleForce leave requests', mcpToolName: 'listLeaveRequests', openapiOperationId: 'listPeopleForceLeaveRequests', status: 'planned' },
 ];
 
 export function endpointsForTool(mcpToolName: string): RestEndpoint[] {

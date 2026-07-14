@@ -143,9 +143,18 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `listDocumentAttachments` | `GET /api/v1/outline/documents/{documentId}/attachments` | planned | List attachments referenced in an Outline document |
 | `getAttachmentUrl` | `GET /api/v1/outline/attachments/{attachmentId}/url` | planned | Resolve an Outline attachment ID to a signed download URL |
 
+### PeopleForce (`peopleforce`)
+
+| MCP tool | REST endpoint | Status | Summary |
+|---|---|---|---|
+| `listEmployees` | `GET /api/v1/peopleforce/employees` | planned | List PeopleForce employees |
+| `getEmployee` | `GET /api/v1/peopleforce/employees/{employeeId}` | planned | Get a single PeopleForce employee |
+| `listDepartments` | `GET /api/v1/peopleforce/departments` | planned | List PeopleForce departments |
+| `listLeaveRequests` | `GET /api/v1/peopleforce/leave-requests` | planned | List PeopleForce leave requests |
+
 ## Status legend
 
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 68 endpoints.
+Catalog size: 72 endpoints.

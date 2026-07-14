@@ -25,6 +25,9 @@ export interface UserSession {
   outlineAccessToken?: string;
   /** Per-connection Outline base URL (e.g. https://wiki.example.com), used by OutlineClient. */
   outlineBaseUrl?: string;
+  peopleForceAccessToken?: string;
+  /** Optional per-connection PeopleForce base URL; falls back to PEOPLEFORCE_BASE_URL or the public default. */
+  peopleForceBaseUrl?: string;
 }
 
 // Cache sessions to avoid recreating clients per request
@@ -272,6 +275,49 @@ export function createOutlineSession(
     outlineAccessToken: accessToken,
     outlineBaseUrl: baseUrl,
     // Null placeholders for Google clients (Outline MCP won't use them)
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
+  };
+
+  mcpSessionCache.set(cacheKey, session);
+  return session;
+}
+
+/**
+ * Create a user session for PeopleForce connections.
+ *
+ * PeopleForce uses a personal API key that the user pastes into the dashboard.
+ * The connection's `providerTokens.access_token` holds it; `providerTokens.baseUrl`
+ * lets self-hosted / regional deployments override the default endpoint.
+ */
+export function createPeopleForceSession(
+  user: UserRecord,
+  connection: McpConnection,
+): UserSession {
+  const providerTokens = connection.providerTokens as { access_token?: string; baseUrl?: string } | undefined;
+  const accessToken = providerTokens?.access_token;
+  if (!accessToken) {
+    throw new Error(`PeopleForce access token missing for connection ${connection.instanceId}. Please reconnect.`);
+  }
+  const baseUrl = providerTokens?.baseUrl || process.env.PEOPLEFORCE_BASE_URL || undefined;
+
+  const cacheKey = `${user.apiKey}:${connection.instanceId}`;
+  const cached = mcpSessionCache.get(cacheKey);
+  if (cached) return cached;
+
+  const session: UserSession = {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: connection.mcpSlug,
+    peopleForceAccessToken: accessToken,
+    peopleForceBaseUrl: baseUrl,
+    // Null placeholders for Google clients (PeopleForce MCP won't use them)
     googleDocs: null as any,
     googleDrive: null as any,
     googleSheets: null as any,

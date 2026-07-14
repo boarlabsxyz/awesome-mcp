@@ -37,6 +37,7 @@ const SERVICES = [
   ['src/slack/server.ts',                 'Slack (bot)',           'slack'],
   ['src/slack-user/server.ts',            'Slack (user)',          null],
   ['src/outline/server.ts',               'Outline',               'outline'],
+  ['src/peopleforce/server.ts',           'PeopleForce',           'peopleforce'],
 ];
 
 // ---------------------------------------------------------------------------
