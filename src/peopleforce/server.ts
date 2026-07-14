@@ -8,10 +8,10 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import {
-  formatAbsenceList,
   formatDepartmentList,
   formatEmployee,
   formatEmployeeList,
+  formatLeaveRequestList,
   withPeopleForceClient,
 } from './apiHelpers.js';
 
@@ -80,56 +80,56 @@ peopleForceServer.addTool({
     }),
 });
 
-// === Absences ===
+// === Leave requests ===
 
 peopleForceServer.addTool({
-  name: 'listAbsences',
+  name: 'listLeaveRequests',
   annotations: { readOnlyHint: true },
-  description: 'Lists PeopleForce absences (time off, sick leave, etc.). Supports employee, status, and date-range filters.',
+  description: 'Lists PeopleForce leave requests (time off, sick leave, etc.). Supports employee, state, and date-range filters.',
   parameters: z.object({
     page: z.number().int().min(1).optional().default(1).describe('Page number (1-based).'),
     perPage: z.number().int().min(1).max(100).optional().default(25).describe('Results per page (max 100).'),
     employeeId: z.union([z.string(), z.number()]).optional().describe('Restrict to a single employee ID.'),
-    status: z.string().optional().describe('Filter by status (e.g. "approved", "pending").'),
-    startFrom: z.string().optional().describe('Include absences starting on/after this ISO date (YYYY-MM-DD).'),
-    startTo: z.string().optional().describe('Include absences starting on/before this ISO date (YYYY-MM-DD).'),
+    state: z.string().optional().describe('Filter by leave-request state (e.g. "approved", "pending", "declined").'),
+    startsFrom: z.string().optional().describe('Include leave requests starting on/after this ISO date (YYYY-MM-DD).'),
+    startsTo: z.string().optional().describe('Include leave requests starting on/before this ISO date (YYYY-MM-DD).'),
   }),
   execute: (args, { log, session }) =>
-    withPeopleForceClient('Failed to list absences', session, log, async (client) => {
-      log.info(`Listing PeopleForce absences (page=${args.page})`);
-      const res = await client.listAbsences({
+    withPeopleForceClient('Failed to list leave requests', session, log, async (client) => {
+      log.info(`Listing PeopleForce leave requests (page=${args.page})`);
+      const res = await client.listLeaveRequests({
         page: args.page,
         per_page: args.perPage,
         employeeId: args.employeeId,
-        status: args.status,
-        startFrom: args.startFrom,
-        startTo: args.startTo,
+        state: args.state,
+        startsFrom: args.startsFrom,
+        startsTo: args.startsTo,
       });
-      return formatAbsenceList(res.data ?? [], res.meta);
+      return formatLeaveRequestList(res.data ?? [], res.meta);
     }),
 });
 
 peopleForceServer.addTool({
-  name: 'createAbsence',
-  description: 'Creates a new PeopleForce absence (time-off request) for an employee against a specific policy.',
+  name: 'createLeaveRequest',
+  description: 'Creates a new PeopleForce leave request (time off) for an employee against a specific leave type.',
   parameters: z.object({
-    employeeId: z.union([z.string(), z.number()]).describe('The employee ID the absence is for.'),
-    policyId: z.union([z.string(), z.number()]).describe('The absence policy ID (from PeopleForce settings).'),
-    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use ISO date format YYYY-MM-DD.').describe('Absence start date (YYYY-MM-DD).'),
-    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use ISO date format YYYY-MM-DD.').describe('Absence end date (YYYY-MM-DD).'),
-    reason: z.string().optional().describe('Optional reason/comment.'),
+    employeeId: z.union([z.string(), z.number()]).describe('The employee ID the leave request is for.'),
+    leaveType: z.union([z.string(), z.number()]).describe('The leave-type ID (from PeopleForce settings).'),
+    startsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use ISO date format YYYY-MM-DD.').describe('First day of leave (YYYY-MM-DD).'),
+    endsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use ISO date format YYYY-MM-DD.').describe('Last day of leave (YYYY-MM-DD).'),
+    description: z.string().optional().describe('Optional description/comment.'),
   }),
   execute: (args, { log, session }) =>
-    withPeopleForceClient('Failed to create absence', session, log, async (client) => {
-      log.info(`Creating PeopleForce absence for employee ${args.employeeId}`);
-      const res = await client.createAbsence({
+    withPeopleForceClient('Failed to create leave request', session, log, async (client) => {
+      log.info(`Creating PeopleForce leave request for employee ${args.employeeId}`);
+      const res = await client.createLeaveRequest({
         employeeId: args.employeeId,
-        policyId: args.policyId,
-        startDate: args.startDate,
-        endDate: args.endDate,
-        reason: args.reason,
+        leaveType: args.leaveType,
+        startsOn: args.startsOn,
+        endsOn: args.endsOn,
+        description: args.description,
       });
-      if (!res?.data) throw new UserError('Failed to create absence.');
-      return `Absence created successfully (ID: ${res.data.id ?? 'unknown'})`;
+      if (!res?.data) throw new UserError('Failed to create leave request.');
+      return `Leave request created successfully (ID: ${res.data.id ?? 'unknown'})`;
     }),
 });

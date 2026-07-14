@@ -27,14 +27,14 @@ export type PeopleForceDepartment = {
   employees_count?: number;
 };
 
-export type PeopleForceAbsence = {
+export type PeopleForceLeaveRequest = {
   id?: number | string;
   employee?: { id?: number | string; first_name?: string; last_name?: string } | null;
-  policy?: { id?: number | string; name?: string } | null;
-  start_date?: string;
-  end_date?: string;
-  status?: string;
-  reason?: string;
+  leave_type?: { id?: number | string; name?: string } | string | null;
+  starts_on?: string;
+  ends_on?: string;
+  state?: string;
+  description?: string;
   duration?: number;
 };
 
@@ -136,39 +136,39 @@ export class PeopleForceClient {
     });
   }
 
-  // === Absences ===
+  // === Leave requests ===
 
-  listAbsences(input: {
+  listLeaveRequests(input: {
     page?: number;
     per_page?: number;
     employeeId?: string | number;
-    status?: string;
-    startFrom?: string;
-    startTo?: string;
-  } = {}): Promise<{ data: PeopleForceAbsence[]; meta?: PeopleForcePagination }> {
-    return this.request('GET', '/absences', undefined, {
+    state?: string;
+    startsFrom?: string;
+    startsTo?: string;
+  } = {}): Promise<{ data: PeopleForceLeaveRequest[]; meta?: PeopleForcePagination }> {
+    return this.request('GET', '/leave_requests', undefined, {
       page: input.page,
       per_page: input.per_page,
       employee_id: input.employeeId,
-      status: input.status,
-      start_date_from: input.startFrom,
-      start_date_to: input.startTo,
+      state: input.state,
+      starts_on_from: input.startsFrom,
+      starts_on_to: input.startsTo,
     });
   }
 
-  createAbsence(input: {
+  createLeaveRequest(input: {
     employeeId: string | number;
-    policyId: string | number;
-    startDate: string;
-    endDate: string;
-    reason?: string;
-  }): Promise<{ data: PeopleForceAbsence }> {
-    return this.request('POST', '/absences', {
+    leaveType: string | number;
+    startsOn: string;
+    endsOn: string;
+    description?: string;
+  }): Promise<{ data: PeopleForceLeaveRequest }> {
+    return this.request('POST', '/leave_requests', {
       employee_id: input.employeeId,
-      policy_id: input.policyId,
-      start_date: input.startDate,
-      end_date: input.endDate,
-      reason: input.reason,
+      leave_type: input.leaveType,
+      starts_on: input.startsOn,
+      ends_on: input.endsOn,
+      description: input.description,
     });
   }
 }
@@ -233,27 +233,29 @@ export function formatDepartmentList(departments: PeopleForceDepartment[]): stri
   return parts.join('\n').trimEnd();
 }
 
-export function formatAbsenceList(
-  absences: PeopleForceAbsence[],
+export function formatLeaveRequestList(
+  requests: PeopleForceLeaveRequest[],
   meta?: PeopleForcePagination,
 ): string {
-  if (absences.length === 0) return 'No absences found.';
-  const parts = ['# Absences', ''];
+  if (requests.length === 0) return 'No leave requests found.';
+  const parts = ['# Leave Requests', ''];
   if (meta) {
     const page = meta.page ?? 1;
     const totalPages = meta.total_pages ?? 1;
-    const totalCount = meta.total_count ?? absences.length;
+    const totalCount = meta.total_count ?? requests.length;
     parts.push(`Page ${page} of ${totalPages} (${totalCount} total)`);
     parts.push('');
   }
-  absences.forEach((a, i) => {
-    parts.push(`## ${i + 1}. ${fullName(a.employee ?? undefined)} — ${a.policy?.name ?? 'Absence'}`);
-    parts.push(`ID: ${a.id ?? ''}`);
-    if (a.start_date) parts.push(`Start: ${a.start_date}`);
-    if (a.end_date) parts.push(`End: ${a.end_date}`);
-    if (a.status) parts.push(`Status: ${a.status}`);
-    if (typeof a.duration === 'number') parts.push(`Duration: ${a.duration}`);
-    if (a.reason) parts.push(`Reason: ${a.reason}`);
+  requests.forEach((r, i) => {
+    const leaveType =
+      typeof r.leave_type === 'string' ? r.leave_type : r.leave_type?.name ?? 'Leave';
+    parts.push(`## ${i + 1}. ${fullName(r.employee ?? undefined)} — ${leaveType}`);
+    parts.push(`ID: ${r.id ?? ''}`);
+    if (r.starts_on) parts.push(`Starts: ${r.starts_on}`);
+    if (r.ends_on) parts.push(`Ends: ${r.ends_on}`);
+    if (r.state) parts.push(`State: ${r.state}`);
+    if (typeof r.duration === 'number') parts.push(`Duration: ${r.duration}`);
+    if (r.description) parts.push(`Description: ${r.description}`);
     parts.push('');
   });
   return parts.join('\n').trimEnd();

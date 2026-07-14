@@ -125,7 +125,7 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/employees', summary: 'List PeopleForce employees', mcpToolName: 'listEmployees', openapiOperationId: 'listPeopleForceEmployees', status: 'planned' },
   { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/employees/{employeeId}', summary: 'Get a single PeopleForce employee', mcpToolName: 'getEmployee', openapiOperationId: 'getPeopleForceEmployee', status: 'planned' },
   { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/departments', summary: 'List PeopleForce departments', mcpToolName: 'listDepartments', openapiOperationId: 'listPeopleForceDepartments', status: 'planned' },
-  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/absences', summary: 'List PeopleForce absences', mcpToolName: 'listAbsences', openapiOperationId: 'listPeopleForceAbsences', status: 'planned' },
+  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/leave-requests', summary: 'List PeopleForce leave requests', mcpToolName: 'listLeaveRequests', openapiOperationId: 'listPeopleForceLeaveRequests', status: 'planned' },
 ];
 
 export function endpointsForTool(mcpToolName: string): RestEndpoint[] {

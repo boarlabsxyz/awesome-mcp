@@ -150,7 +150,7 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `listEmployees` | `GET /api/v1/peopleforce/employees` | planned | List PeopleForce employees |
 | `getEmployee` | `GET /api/v1/peopleforce/employees/{employeeId}` | planned | Get a single PeopleForce employee |
 | `listDepartments` | `GET /api/v1/peopleforce/departments` | planned | List PeopleForce departments |
-| `listAbsences` | `GET /api/v1/peopleforce/absences` | planned | List PeopleForce absences |
+| `listLeaveRequests` | `GET /api/v1/peopleforce/leave-requests` | planned | List PeopleForce leave requests |
 
 ## Status legend
 

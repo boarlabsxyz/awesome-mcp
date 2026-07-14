@@ -274,8 +274,8 @@ Source: `src/peopleforce/server.ts` — 5 tools.
 | `listEmployees` | Lists PeopleForce employees. Paginated; supports optional status and department filters. | — |
 | `getEmployee` | Retrieves a single PeopleForce employee by ID. | — |
 | `listDepartments` | Lists all PeopleForce departments in the workspace (paginated). | — |
-| `listAbsences` | Lists PeopleForce absences (time off, sick leave, etc.). Supports employee, status, and date-range filters. | — |
-| `createAbsence` | Creates a new PeopleForce absence (time-off request) for an employee against a specific policy. | — |
+| `listLeaveRequests` | Lists PeopleForce leave requests (time off, sick leave, etc.). Supports employee, state, and date-range filters. | — |
+| `createLeaveRequest` | Creates a new PeopleForce leave request (time off) for an employee against a specific leave type. | — |
 
 ---
 
