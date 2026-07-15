@@ -310,6 +310,7 @@ import { clearSessionCache, createUserSession, createUserSessionFromConnection, 
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
 import { exchangeOutlineOauthCode, buildOutlineInstanceName } from '../outline/oauthCallback.js';
 import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceNameFromToken } from '../outline/connectToken.js';
+import { validatePeopleForceToken, buildPeopleForceInstanceName } from '../peopleforce/connectToken.js';
 import {
   connectMcp,
   getMcpConnection,
@@ -1283,6 +1284,36 @@ function registerSharedRoutes(app: express.Express): void {
           'outline', providerTokens, providerEmail
         );
         console.error(`User ${user.id} connected Outline MCP: ${connection.instanceId} (${validate.baseUrl})`);
+        res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
+        return;
+      }
+
+      if (mcpSlug === 'peopleforce') {
+        // PeopleForce paste-token flow: the request body carries { token,
+        // instanceName? }. We validate the key by hitting the public API's
+        // /employees endpoint, then store just the access_token — PeopleForce
+        // uses a fixed base URL for the vast majority of tenants, and the
+        // per-service PEOPLEFORCE_BASE_URL env var covers the rest.
+        const validate = await validatePeopleForceToken({ token });
+        if (!validate.ok) {
+          console.error(`[connect-token] ${validate.logMessage}`);
+          res.status(validate.status).json({ error: validate.userMessage });
+          return;
+        }
+
+        const providerEmail = null;
+        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const providerTokens = { access_token: token };
+        const pfInstanceName = buildPeopleForceInstanceName({
+          serviceName: mcp.name.replace(' MCP Server', '').replace(' MCP', '').trim(),
+          providedInstanceName: instanceName,
+        });
+
+        const connection = await createMcpInstance(
+          user.id, mcpSlug, pfInstanceName, emptyGoogleTokens, null,
+          'peopleforce', providerTokens, providerEmail
+        );
+        console.error(`User ${user.id} connected PeopleForce MCP: ${connection.instanceId}`);
         res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
         return;
       }
