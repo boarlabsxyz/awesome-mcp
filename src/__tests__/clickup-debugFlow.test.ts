@@ -144,17 +144,22 @@ describe('debugTaskEventSubscriptionFlow', () => {
     assert.ok(report.findings.some(f => f.includes('Event bundle differs')));
   });
 
-  it('flags fail_count divergence — the "outer catch swallowing" signature', async () => {
+  it('flags fail_count divergence WITHOUT calling it a silent-200 (ClickUp counter moved, so it was not a 200)', async () => {
     const { deps } = fakeDeps({
       listWebhooks: async () => ({ webhooks: [healthyClickUpWebhook({ health: { status: 'active', fail_count: 3 } })] }),
     });
     const report = await debugTaskEventSubscriptionFlow(deps, {
       userId: 100, workspaceId: 'W1', expectedEndpoint: EXPECTED_ENDPOINT,
     });
-    assert.ok(
-      report.findings.some(f => f.includes('ClickUp fail_count (3)') && f.includes('outer catch')),
-      'expected fail_count divergence finding referencing the outer catch',
-    );
+    const finding = report.findings.find(f => f.includes('ClickUp fail_count (3)'));
+    assert.ok(finding, 'expected fail_count divergence finding');
+    // Regression guard: the previous message asserted "outer catch is
+    // returning 200 on a thrown error" — but if ClickUp incremented
+    // fail_count, ingestion did NOT return 200. The finding must not
+    // contradict itself by pointing at the silent-200 pattern here.
+    assert.doesNotMatch(finding!, /returning 200/);
+    assert.match(finding!, /non-2xx|timeout/);
+    assert.match(finding!, /NOT the "silent 200"/);
   });
 
   it('flags a disabled webhook when ClickUp reports non-active health.status', async () => {

@@ -610,13 +610,18 @@ export async function debugTaskEventSubscriptionFlow(
     );
   }
 
-  // fail_count divergence — ClickUp says delivery is failing but our counter
-  // hasn't moved. Classic sign the outer try/catch in ingestion is swallowing.
+  // fail_count divergence — ClickUp saw a non-2xx (or a timeout) but our
+  // counter didn't move. Explicitly NOT the "silent 200" pattern: if
+  // ingestion had returned 200, ClickUp would not have incremented its own
+  // counter. The gap here means the request reached a failing state on
+  // ClickUp's view but our incrementFailCount either wasn't called, was
+  // called on a different subscription row, or the store write itself is
+  // failing.
   if (report.clickup && localSub) {
     const cf = report.clickup.healthFailCount;
     if (cf !== null && cf > localSub.failCount) {
       findings.push(
-        `ClickUp fail_count (${cf}) exceeds local fail_count (${localSub.failCount}). Deliveries are failing on ClickUp's side but our subscription record isn't being updated. Most likely: the ingestion route's outer catch is returning 200 on a thrown error before it reaches store.incrementFailCount, so ClickUp keeps retrying and we don't notice.`,
+        `ClickUp fail_count (${cf}) exceeds local fail_count (${localSub.failCount}). ClickUp is seeing non-2xx responses (or timeouts) for this webhook, but our counter is not moving. Rule out: (a) endpoint drift — ClickUp is delivering to a URL we no longer own (check the endpoint-mismatch finding above); (b) requests reaching the process but throwing before incrementFailCount runs (check dev logs for "[clickup-ingest] handler crash" entries); (c) incrementFailCount running but writing to a different subscription id, or the store write itself failing silently. This is NOT the "silent 200" pattern — that one is a separate finding below when count=0 and ClickUp fail_count=0.`,
       );
     }
     if (report.clickup.healthStatus && report.clickup.healthStatus !== 'active') {

@@ -781,7 +781,7 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'debugTaskEventSubscription',
   annotations: { readOnlyHint: true },
-  description: 'Cross-reference the local task-event subscription against ClickUp\'s own view of the webhook and the event store, and surface anomalies. Use when subscribeToTaskEvents reports success but events aren\'t landing, or when local fail_count doesn\'t match reality. Detects: endpoint-URL drift (BASE_URL changed since subscribe), orphaned ClickUp webhook (local record points at a webhook ClickUp deleted), event-bundle mismatch, ClickUp fail_count > local fail_count (ingestion route silently returning 200 on thrown errors), disabled webhook status, and the "zero events with zero failures" pattern that means deliveries either aren\'t reaching us or are being silently swallowed.',
+  description: 'Cross-reference the local task-event subscription against ClickUp\'s own view of the webhook and the event store, and surface anomalies. Use when subscribeToTaskEvents reports success but events aren\'t landing, or when local fail_count doesn\'t match reality. Detects: endpoint-URL drift (BASE_URL changed since subscribe), orphaned ClickUp webhook (local record points at a webhook ClickUp deleted), event-bundle mismatch, ClickUp fail_count > local fail_count (ClickUp seeing non-2xx/timeouts while our counter stays flat — NOT the silent-200 pattern), disabled webhook status, and the "zero events with zero failures" pattern (silent 200s: ingestion returning success without persisting).',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
   }),
