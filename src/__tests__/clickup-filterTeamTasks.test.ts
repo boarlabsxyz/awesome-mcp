@@ -33,7 +33,9 @@ describe('ClickUpClient.filterTeamTasks', () => {
     }
   });
 
-  it('serializes assignees[] and statuses[] as repeated bracketed keys', async () => {
+  it('serializes assignees and statuses as repeated bare keys (no brackets)', async () => {
+    // ClickUp v2 GET /team/{id}/task drops the filter silently if the PHP-style
+    // `foo[]=` form is used. Repeated bare `foo=` is what actually filters.
     const { calls, restore } = withMockedFetch();
     try {
       const client = new ClickUpClient('tok');
@@ -42,16 +44,17 @@ describe('ClickUpClient.filterTeamTasks', () => {
         statuses: ['open', 'in progress'],
       });
       const url = calls[0].url;
-      assert.match(url, /assignees%5B%5D=u1/);
-      assert.match(url, /assignees%5B%5D=u2/);
-      assert.match(url, /statuses%5B%5D=open/);
-      assert.match(url, /statuses%5B%5D=in\+progress/);
+      assert.match(url, /(?:\?|&)assignees=u1(?:&|$)/);
+      assert.match(url, /(?:\?|&)assignees=u2(?:&|$)/);
+      assert.match(url, /(?:\?|&)statuses=open(?:&|$)/);
+      assert.match(url, /(?:\?|&)statuses=in\+progress(?:&|$)/);
+      assert.doesNotMatch(url, /%5B%5D/);
     } finally {
       restore();
     }
   });
 
-  it('serializes tags[], space_ids[], project_ids[], list_ids[] similarly', async () => {
+  it('serializes tags, space_ids, project_ids, list_ids as bare repeated keys', async () => {
     const { calls, restore } = withMockedFetch();
     try {
       const client = new ClickUpClient('tok');
@@ -62,11 +65,12 @@ describe('ClickUpClient.filterTeamTasks', () => {
         list_ids: ['l1', 'l2'],
       });
       const url = calls[0].url;
-      assert.match(url, /tags%5B%5D=frontend/);
-      assert.match(url, /space_ids%5B%5D=s1/);
-      assert.match(url, /project_ids%5B%5D=p1/);
-      assert.match(url, /list_ids%5B%5D=l1/);
-      assert.match(url, /list_ids%5B%5D=l2/);
+      assert.match(url, /(?:\?|&)tags=frontend(?:&|$)/);
+      assert.match(url, /(?:\?|&)space_ids=s1(?:&|$)/);
+      assert.match(url, /(?:\?|&)project_ids=p1(?:&|$)/);
+      assert.match(url, /(?:\?|&)list_ids=l1(?:&|$)/);
+      assert.match(url, /(?:\?|&)list_ids=l2(?:&|$)/);
+      assert.doesNotMatch(url, /%5B%5D/);
     } finally {
       restore();
     }
