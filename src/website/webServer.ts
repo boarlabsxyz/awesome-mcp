@@ -1305,7 +1305,7 @@ function registerSharedRoutes(app: express.Express): void {
         const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
         const providerTokens = { access_token: token };
         const pfInstanceName = buildPeopleForceInstanceName({
-          serviceName: mcp.name.replace(' MCP Server', '').replace(' MCP', '').trim(),
+          serviceName: mcp.name.replace(' MCP', '').trim(),
           providedInstanceName: instanceName,
         });
 

@@ -526,9 +526,9 @@ export async function seedDefaultCatalogs(): Promise<void> {
 
   await createMcpCatalog({
     slug: 'peopleforce',
-    name: 'PeopleForce MCP Server',
-    description: 'Read and manage HR data (employees, departments, absences) via PeopleForce API',
-    iconUrl: null,
+    name: 'PeopleForce MCP',
+    description: 'Read and manage HR data (employees, departments, leave requests) via PeopleForce API',
+    iconUrl: 'https://intercom.help/peopleforce/assets/favicon',
     mcpUrl: peopleForceMcpUrl,
     provider: 'peopleforce',
     scopes: [],

@@ -16,7 +16,7 @@ import {
 } from './apiHelpers.js';
 
 export const peopleForceServer = new FastMCP<UserSession>({
-  name: 'PeopleForce MCP Server',
+  name: 'PeopleForce MCP',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'peopleforce'),
 });
