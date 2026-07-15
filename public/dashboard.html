@@ -1299,12 +1299,10 @@
           'In PeopleForce: <strong>Settings → Integrations → API</strong>. ' +
           'Create a new API key and paste it here. The key inherits the permissions of the user who created it.';
         urlSection.style.display = 'none';
-        nameSection.style.display = '';
-        const existingCount = instances.filter(i => i.mcpSlug === slug).length;
-        nameInput.value = existingCount === 0
-          ? selectedMcpType.name
-          : `${selectedMcpType.name} ${existingCount + 1}`;
-        document.getElementById('nameSuggestion').textContent = 'Tip: Use a name like "Acme HR" to identify the workspace.';
+        // Match Outline's UX: no user-entered name — backend falls back to the
+        // service name via buildPeopleForceInstanceName.
+        nameSection.style.display = 'none';
+        nameInput.value = '';
         tokenInput.focus();
       } else {
         tokenLabel.textContent = 'Bot Token';
@@ -1343,11 +1341,15 @@
 
     async function connectWithToken() {
       if (!selectedMcpType) { alert('Please select an MCP type'); return; }
-      const isOutline = selectedMcpType.provider === 'outline';
-      // Outline auto-names from the upstream team/email; other token providers
-      // still require a user-entered name.
-      const name = isOutline ? '' : document.getElementById('instanceNameInput').value.trim();
-      if (!isOutline && !name) { alert('Please enter a name for this instance'); return; }
+      const provider = selectedMcpType.provider;
+      // Providers that auto-name (no user-entered name): outline (from upstream
+      // team/email) and peopleforce (falls back to service name). Slack Bot
+      // still asks the user because bot tokens don't carry workspace metadata
+      // we can display.
+      const isOutline = provider === 'outline';
+      const autoName = isOutline || provider === 'peopleforce';
+      const name = autoName ? '' : document.getElementById('instanceNameInput').value.trim();
+      if (!autoName && !name) { alert('Please enter a name for this instance'); return; }
       const token = document.getElementById('tokenInput').value.trim();
       if (!token) {
         const provider = selectedMcpType.provider;
