@@ -521,11 +521,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
-  // PeopleForce MCP — hidden from dashboard. Server code stays wired up so
-  // existing users' subscriptions keep working, but createMcpCatalog upserts
-  // isActive=false so listMcpCatalogs (which filters is_active=true) excludes
-  // it from the dashboard's connector list. Flip isActive back to true to
-  // re-enable.
+  // PeopleForce MCP (paste-token provider — user pastes a personal API key)
   const peopleForceMcpUrl = normalizeUrl(process.env.PEOPLEFORCE_MCP_URL, '/peopleforce');
 
   await createMcpCatalog({
@@ -542,7 +538,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
     oauthTokenUrl: '',
     oauthScopes: [],
     isLocal: !process.env.PEOPLEFORCE_MCP_URL,
-    isActive: false,
+    isActive: true,
   });
 
   console.error('Default MCP catalog entries seeded.');
