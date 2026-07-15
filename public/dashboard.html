@@ -1248,8 +1248,9 @@
 
       const provider = selectedMcpType.provider;
       // Any provider without an OAuth authorize URL goes through /api/connect-token.
-      // Currently: slack-bot (single-field token paste) and outline (URL + API key paste).
-      const isTokenProvider = provider === 'slack-bot' || provider === 'outline';
+      // Currently: slack-bot (single-field token paste), outline (URL + API key paste),
+      // and peopleforce (single-field API key paste).
+      const isTokenProvider = provider === 'slack-bot' || provider === 'outline' || provider === 'peopleforce';
 
       // For OAuth providers, skip naming step — name is auto-generated on the backend
       if (!isTokenProvider) {
@@ -1291,6 +1292,20 @@
         nameSection.style.display = 'none';
         nameInput.value = '';
         urlInput.focus();
+      } else if (provider === 'peopleforce') {
+        tokenLabel.textContent = 'API Key';
+        tokenInput.placeholder = 'Your PeopleForce API key';
+        tokenHint.innerHTML =
+          'In PeopleForce: <strong>Settings → Integrations → API</strong>. ' +
+          'Create a new API key and paste it here. The key inherits the permissions of the user who created it.';
+        urlSection.style.display = 'none';
+        nameSection.style.display = '';
+        const existingCount = instances.filter(i => i.mcpSlug === slug).length;
+        nameInput.value = existingCount === 0
+          ? selectedMcpType.name
+          : `${selectedMcpType.name} ${existingCount + 1}`;
+        document.getElementById('nameSuggestion').textContent = 'Tip: Use a name like "Acme HR" to identify the workspace.';
+        tokenInput.focus();
       } else {
         tokenLabel.textContent = 'Bot Token';
         tokenInput.placeholder = 'xoxb-…';
@@ -1335,7 +1350,11 @@
       if (!isOutline && !name) { alert('Please enter a name for this instance'); return; }
       const token = document.getElementById('tokenInput').value.trim();
       if (!token) {
-        alert(isOutline ? 'Please enter your Outline API key' : 'Please enter a bot token');
+        const provider = selectedMcpType.provider;
+        const msg = provider === 'outline' ? 'Please enter your Outline API key'
+                  : provider === 'peopleforce' ? 'Please enter your PeopleForce API key'
+                  : 'Please enter a bot token';
+        alert(msg);
         return;
       }
 
