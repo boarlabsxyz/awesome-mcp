@@ -377,12 +377,16 @@ export class ClickUpClient {
     if (params?.reverse) sp.set('reverse', 'true');
     if (params?.subtasks) sp.set('subtasks', 'true');
     if (params?.include_closed) sp.set('include_closed', 'true');
-    params?.assignees?.forEach(a => sp.append('assignees[]', a));
-    params?.statuses?.forEach(s => sp.append('statuses[]', s));
-    params?.tags?.forEach(t => sp.append('tags[]', t));
-    params?.space_ids?.forEach(id => sp.append('space_ids[]', id));
-    params?.project_ids?.forEach(id => sp.append('project_ids[]', id));
-    params?.list_ids?.forEach(id => sp.append('list_ids[]', id));
+    // ClickUp v2 GET /team/{id}/task expects repeated bare params, NOT the
+    // PHP-style `foo[]=…` bracket form. Verified live: `?assignees=<id>`
+    // filters correctly; `?assignees[]=<id>` silently returns unassigned
+    // tasks (filter dropped). Applies to every array param on this endpoint.
+    params?.assignees?.forEach(a => sp.append('assignees', a));
+    params?.statuses?.forEach(s => sp.append('statuses', s));
+    params?.tags?.forEach(t => sp.append('tags', t));
+    params?.space_ids?.forEach(id => sp.append('space_ids', id));
+    params?.project_ids?.forEach(id => sp.append('project_ids', id));
+    params?.list_ids?.forEach(id => sp.append('list_ids', id));
     if (params?.date_created_gt !== undefined) sp.set('date_created_gt', String(params.date_created_gt));
     if (params?.date_created_lt !== undefined) sp.set('date_created_lt', String(params.date_created_lt));
     if (params?.date_updated_gt !== undefined) sp.set('date_updated_gt', String(params.date_updated_gt));
