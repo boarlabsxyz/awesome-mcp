@@ -33,9 +33,9 @@ describe('ClickUpClient.filterTeamTasks', () => {
     }
   });
 
-  it('serializes assignees and statuses as repeated bare keys (no brackets)', async () => {
-    // ClickUp v2 GET /team/{id}/task drops the filter silently if the PHP-style
-    // `foo[]=` form is used. Repeated bare `foo=` is what actually filters.
+  it('serializes multi-element arrays as repeated bare keys (no brackets)', async () => {
+    // ClickUp v2 GET /team/{id}/task drops the filter silently on the PHP-style
+    // `foo[]=` form. Repeated bare `foo=` with ≥2 occurrences is what filters.
     const { calls, restore } = withMockedFetch();
     try {
       const client = new ClickUpClient('tok');
@@ -54,7 +54,23 @@ describe('ClickUpClient.filterTeamTasks', () => {
     }
   });
 
-  it('serializes tags, space_ids, project_ids, list_ids as bare repeated keys', async () => {
+  it('duplicates single-element arrays so ClickUp parses them as arrays', async () => {
+    // ?assignees=X alone 400s with PUBAPITASK_017 (parser treats a single
+    // occurrence as scalar). Duplicating to ?assignees=X&assignees=X is the
+    // only bare-key form that works for a 1-element filter.
+    const { calls, restore } = withMockedFetch();
+    try {
+      const client = new ClickUpClient('tok');
+      await client.filterTeamTasks('T1', { assignees: ['u1'] });
+      const url = new URL(calls[0].url);
+      assert.deepEqual(url.searchParams.getAll('assignees'), ['u1', 'u1']);
+      assert.doesNotMatch(calls[0].url, /%5B%5D/);
+    } finally {
+      restore();
+    }
+  });
+
+  it('applies single-element duplication to every array filter uniformly', async () => {
     const { calls, restore } = withMockedFetch();
     try {
       const client = new ClickUpClient('tok');
@@ -62,15 +78,16 @@ describe('ClickUpClient.filterTeamTasks', () => {
         tags: ['frontend'],
         space_ids: ['s1'],
         project_ids: ['p1'],
-        list_ids: ['l1', 'l2'],
+        list_ids: ['l1'],
+        statuses: ['open'],
       });
-      const url = calls[0].url;
-      assert.match(url, /(?:\?|&)tags=frontend(?:&|$)/);
-      assert.match(url, /(?:\?|&)space_ids=s1(?:&|$)/);
-      assert.match(url, /(?:\?|&)project_ids=p1(?:&|$)/);
-      assert.match(url, /(?:\?|&)list_ids=l1(?:&|$)/);
-      assert.match(url, /(?:\?|&)list_ids=l2(?:&|$)/);
-      assert.doesNotMatch(url, /%5B%5D/);
+      const url = new URL(calls[0].url);
+      assert.deepEqual(url.searchParams.getAll('tags'), ['frontend', 'frontend']);
+      assert.deepEqual(url.searchParams.getAll('space_ids'), ['s1', 's1']);
+      assert.deepEqual(url.searchParams.getAll('project_ids'), ['p1', 'p1']);
+      assert.deepEqual(url.searchParams.getAll('list_ids'), ['l1', 'l1']);
+      assert.deepEqual(url.searchParams.getAll('statuses'), ['open', 'open']);
+      assert.doesNotMatch(calls[0].url, /%5B%5D/);
     } finally {
       restore();
     }

@@ -116,6 +116,38 @@ describe('ClickUpClient', () => {
     });
   });
 
+  describe('getTasks — array filter serialization', () => {
+    // Same ClickUp v2 parser quirk as filterTeamTasks: bare `foo=X` alone
+    // 400s (scalar), `foo[]=X` silently drops the filter. Only ≥2 repeated
+    // bare occurrences work — verify the workaround propagates here too.
+    it('duplicates single-element assignees so the filter is parsed as an array', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { tasks: [] } }]);
+      const client = new ClickUpClient('token');
+      await client.getTasks('list1', { assignees: ['u1'] });
+      const url = new URL(calls[0].url);
+      assert.deepEqual(url.searchParams.getAll('assignees'), ['u1', 'u1']);
+      assert.doesNotMatch(calls[0].url, /%5B%5D/);
+    });
+
+    it('duplicates single-element statuses the same way', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { tasks: [] } }]);
+      const client = new ClickUpClient('token');
+      await client.getTasks('list1', { statuses: ['open'] });
+      const url = new URL(calls[0].url);
+      assert.deepEqual(url.searchParams.getAll('statuses'), ['open', 'open']);
+    });
+
+    it('leaves multi-element arrays as repeated bare keys', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { tasks: [] } }]);
+      const client = new ClickUpClient('token');
+      await client.getTasks('list1', { assignees: ['u1', 'u2'], statuses: ['open', 'in progress'] });
+      const url = new URL(calls[0].url);
+      assert.deepEqual(url.searchParams.getAll('assignees'), ['u1', 'u2']);
+      assert.deepEqual(url.searchParams.getAll('statuses'), ['open', 'in progress']);
+      assert.doesNotMatch(calls[0].url, /%5B%5D/);
+    });
+  });
+
   describe('error handling', () => {
     it('should throw UserError on rate limit (429)', async () => {
       mockFetch([{ status: 429, text: 'rate limited' }]);

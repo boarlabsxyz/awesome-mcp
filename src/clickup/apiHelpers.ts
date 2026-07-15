@@ -4,6 +4,28 @@ import { UserError } from 'fastmcp';
 const CLICKUP_API_BASE = 'https://api.clickup.com/api/v2';
 const CLICKUP_API_V3_BASE = 'https://api.clickup.com/api/v3';
 
+/**
+ * Append an array filter to a URLSearchParams so ClickUp's v2 REST parser
+ * reads it as an array. Two collisions to avoid on this API:
+ *
+ *   1. `?foo[]=X` — silently drops the filter (returns unfiltered results).
+ *   2. `?foo=X`   — with exactly one value, 400s (PUBAPITASK_017 etc.)
+ *                   because the parser treats a single occurrence as a scalar.
+ *
+ * The only form that behaves consistently is a repeated bare key with ≥2
+ * occurrences. For a single-element input we duplicate the value so ClickUp
+ * sees an array; `[X, X]` and `[X]` are equivalent as a set-filter.
+ */
+function appendArrayFilter(sp: URLSearchParams, key: string, values: readonly string[] | undefined): void {
+  if (!values || values.length === 0) return;
+  if (values.length === 1) {
+    sp.append(key, values[0]);
+    sp.append(key, values[0]);
+    return;
+  }
+  values.forEach(v => sp.append(key, v));
+}
+
 export interface CommentBlock {
   text: string;
   attributes?: Record<string, any>;
@@ -262,8 +284,8 @@ export class ClickUpClient {
     if (params?.reverse) searchParams.set('reverse', 'true');
     if (params?.subtasks) searchParams.set('subtasks', 'true');
     if (params?.include_closed) searchParams.set('include_closed', 'true');
-    if (params?.statuses) params.statuses.forEach(s => searchParams.append('statuses[]', s));
-    if (params?.assignees) params.assignees.forEach(a => searchParams.append('assignees[]', a));
+    appendArrayFilter(searchParams, 'statuses', params?.statuses);
+    appendArrayFilter(searchParams, 'assignees', params?.assignees);
     if (params?.due_date_gt) searchParams.set('due_date_gt', String(params.due_date_gt));
     if (params?.due_date_lt) searchParams.set('due_date_lt', String(params.due_date_lt));
     const qs = searchParams.toString();
@@ -377,16 +399,16 @@ export class ClickUpClient {
     if (params?.reverse) sp.set('reverse', 'true');
     if (params?.subtasks) sp.set('subtasks', 'true');
     if (params?.include_closed) sp.set('include_closed', 'true');
-    // ClickUp v2 GET /team/{id}/task expects repeated bare params, NOT the
-    // PHP-style `foo[]=…` bracket form. Verified live: `?assignees=<id>`
-    // filters correctly; `?assignees[]=<id>` silently returns unassigned
-    // tasks (filter dropped). Applies to every array param on this endpoint.
-    params?.assignees?.forEach(a => sp.append('assignees', a));
-    params?.statuses?.forEach(s => sp.append('statuses', s));
-    params?.tags?.forEach(t => sp.append('tags', t));
-    params?.space_ids?.forEach(id => sp.append('space_ids', id));
-    params?.project_ids?.forEach(id => sp.append('project_ids', id));
-    params?.list_ids?.forEach(id => sp.append('list_ids', id));
+    // ClickUp v2 GET /team/{id}/task is picky about array-param shape:
+    // `foo[]=X` silently drops the filter, and `foo=X` alone is parsed as
+    // scalar and 400s. Only a repeated bare key with ≥2 occurrences works
+    // — see appendArrayFilter for the single-element duplication workaround.
+    appendArrayFilter(sp, 'assignees', params?.assignees);
+    appendArrayFilter(sp, 'statuses', params?.statuses);
+    appendArrayFilter(sp, 'tags', params?.tags);
+    appendArrayFilter(sp, 'space_ids', params?.space_ids);
+    appendArrayFilter(sp, 'project_ids', params?.project_ids);
+    appendArrayFilter(sp, 'list_ids', params?.list_ids);
     if (params?.date_created_gt !== undefined) sp.set('date_created_gt', String(params.date_created_gt));
     if (params?.date_created_lt !== undefined) sp.set('date_created_lt', String(params.date_created_lt));
     if (params?.date_updated_gt !== undefined) sp.set('date_updated_gt', String(params.date_updated_gt));
