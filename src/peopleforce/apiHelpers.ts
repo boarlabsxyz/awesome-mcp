@@ -519,7 +519,9 @@ export function formatLeaveBalances(balances: PeopleForceLeaveBalance[]): string
     const name = b.leave_type?.name ?? b.leave_type_policy?.name ?? 'Balance';
     const unit = b.leave_type?.unit ? ` ${b.leave_type.unit}` : '';
     parts.push(`## ${i + 1}. ${name}`);
-    parts.push(`Balance: ${b.balance ?? 0}${unit}`);
+    // Don't collapse an omitted balance to 0 — "unknown" and "zero days left"
+    // are very different signals for an HR consumer.
+    parts.push(`Balance: ${b.balance !== undefined ? `${b.balance}${unit}` : 'unknown'}`);
     if (b.effective_on) parts.push(`Effective on: ${b.effective_on}`);
     if (b.leave_type?.id !== undefined) parts.push(`Leave type ID: ${b.leave_type.id}`);
     parts.push('');
@@ -555,7 +557,10 @@ export function formatTaskList(
     if (t.type) parts.push(`Type: ${t.type}`);
     if (t.starts_on) parts.push(`Starts: ${t.starts_on}`);
     if (t.ends_on) parts.push(`Ends: ${t.ends_on}`);
-    parts.push(`Completed: ${t.completed ? 'yes' : 'no'}${t.completed_at ? ` (${t.completed_at})` : ''}`);
+    // Only report yes/no when we actually have a boolean; otherwise say so
+    // explicitly rather than false-reporting missing state as "no".
+    const completedText = typeof t.completed === 'boolean' ? (t.completed ? 'yes' : 'no') : 'unknown';
+    parts.push(`Completed: ${completedText}${t.completed_at ? ` (${t.completed_at})` : ''}`);
     if (t.associated_to?.full_name) parts.push(`Associated with: ${t.associated_to.full_name} (${t.associated_to.type ?? 'entity'})`);
     if (t.description_plain) parts.push(`Description: ${t.description_plain}`);
     parts.push('');

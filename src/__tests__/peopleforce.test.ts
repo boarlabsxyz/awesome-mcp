@@ -358,6 +358,22 @@ describe('formatNamedList + lookup formatters', () => {
     assert.match(out, /Sabbatical/);
   });
 
+  test('formatLeaveBalances renders explicit zero as "0", not "unknown"', () => {
+    const out = formatLeaveBalances([
+      { id: 1, balance: 0, leave_type: { id: 22159, name: 'Vacation', unit: 'days' } },
+    ]);
+    assert.match(out, /Balance: 0 days/);
+    assert.doesNotMatch(out, /unknown/);
+  });
+
+  test('formatLeaveBalances renders omitted balance as "unknown" (not 0)', () => {
+    const out = formatLeaveBalances([
+      { id: 1, leave_type: { id: 22159, name: 'Vacation', unit: 'days' } },
+    ]);
+    assert.match(out, /Balance: unknown/);
+    assert.doesNotMatch(out, /Balance: 0/);
+  });
+
   test('formatEmployeeSkills handles empty', () => {
     assert.equal(formatEmployeeSkills([]), 'No skills recorded for this employee.');
   });
@@ -389,6 +405,19 @@ describe('formatNamedList + lookup formatters', () => {
     assert.match(out, /Starts: 2026-07-15/);
     assert.match(out, /Completed: no/);
     assert.match(out, /Associated with: Oleh Kobzar \(Candidate\)/);
+  });
+
+  test('formatTaskList renders completed=true as "yes"', () => {
+    const out = formatTaskList([
+      { id: 1, title: 'X', completed: true, completed_at: '2026-01-05' },
+    ]);
+    assert.match(out, /Completed: yes \(2026-01-05\)/);
+  });
+
+  test('formatTaskList renders omitted completed as "unknown" (not "no")', () => {
+    const out = formatTaskList([{ id: 1, title: 'X' }]);
+    assert.match(out, /Completed: unknown/);
+    assert.doesNotMatch(out, /Completed: no/);
   });
 
   test('formatUnknownItemList dumps records as JSON', () => {
