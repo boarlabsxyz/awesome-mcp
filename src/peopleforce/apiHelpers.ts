@@ -26,6 +26,58 @@ export type PeopleForceRef = {
   name?: string;
 } | null;
 
+export type PeopleForceNamed = {
+  id?: number | string;
+  name?: string;
+};
+
+export type PeopleForceLeaveType = {
+  id?: number | string;
+  name?: string;
+  /** "hours" or "days". */
+  unit?: string;
+  hex_color?: string;
+};
+
+export type PeopleForceLocation = {
+  id?: number | string;
+  name?: string;
+  country_code?: string;
+  address?: string;
+  time_zone?: string;
+  holiday_policy_id?: number | string | null;
+};
+
+export type PeopleForceLeaveBalance = {
+  id?: number | string;
+  effective_on?: string;
+  /** Numeric balance in the leave_type.unit (hours or days). */
+  balance?: number;
+  leave_type?: PeopleForceLeaveType | null;
+  leave_type_policy?: { id?: number | string; name?: string } | null;
+};
+
+export type PeopleForceEmployeeSkill = {
+  id?: number | string;
+  /** "beginner" | "intermediate" | "proficient" | "expert" | etc. */
+  level?: string;
+  skill?: PeopleForceNamed | null;
+};
+
+export type PeopleForceTask = {
+  id?: number | string;
+  title?: string;
+  type?: string;
+  starts_on?: string | null;
+  ends_on?: string | null;
+  completed_at?: string | null;
+  completed?: boolean;
+  description_plain?: string | null;
+  associated_to?: { id?: number | string; type?: string; full_name?: string; email?: string } | null;
+  assigned_to?: { id?: number | string; full_name?: string; email?: string } | null;
+  created_by?: { id?: number | string; full_name?: string; email?: string } | null;
+};
+
 export type PeopleForceEmployee = {
   id?: number | string;
   active?: boolean;
@@ -207,6 +259,77 @@ export class PeopleForceClient {
       comment: input.comment,
     });
   }
+
+  getLeaveRequest(id: string | number): Promise<{ data: PeopleForceLeaveRequest }> {
+    return this.request('GET', `/leave_requests/${encodeURIComponent(String(id))}`);
+  }
+
+  // === Reference / lookup data ===
+
+  listLeaveTypes(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceLeaveType>> {
+    return this.request('GET', '/leave_types', undefined, { page: input.page });
+  }
+
+  listPositions(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceNamed>> {
+    return this.request('GET', '/positions', undefined, { page: input.page });
+  }
+
+  listDivisions(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceNamed>> {
+    return this.request('GET', '/divisions', undefined, { page: input.page });
+  }
+
+  listLocations(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceLocation>> {
+    return this.request('GET', '/locations', undefined, { page: input.page });
+  }
+
+  listEmploymentTypes(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceNamed>> {
+    return this.request('GET', '/employment_types', undefined, { page: input.page });
+  }
+
+  listJobLevels(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceNamed>> {
+    return this.request('GET', '/job_levels', undefined, { page: input.page });
+  }
+
+  listSkills(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceNamed>> {
+    return this.request('GET', '/skills', undefined, { page: input.page });
+  }
+
+  listCompetencies(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceNamed>> {
+    return this.request('GET', '/competencies', undefined, { page: input.page });
+  }
+
+  listTasks(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceTask>> {
+    return this.request('GET', '/tasks', undefined, { page: input.page });
+  }
+
+  // === Employee-nested ===
+
+  listEmployeeLeaveBalances(employeeId: string | number): Promise<PeopleForceListResponse<PeopleForceLeaveBalance>> {
+    return this.request('GET', `/employees/${encodeURIComponent(String(employeeId))}/leave_balances`);
+  }
+
+  listEmployeeSkills(employeeId: string | number): Promise<PeopleForceListResponse<PeopleForceEmployeeSkill>> {
+    return this.request('GET', `/employees/${encodeURIComponent(String(employeeId))}/skills`);
+  }
+
+  /**
+   * Employee-scoped list endpoints whose payload shape isn't documented and
+   * that returned zero rows on the reference workspace we probed. We forward
+   * the response as `unknown[]` so the tool layer can dump the JSON verbatim
+   * without inventing a schema — safer than guessing keys the API might not
+   * emit.
+   */
+  listEmployeeDocuments(employeeId: string | number): Promise<PeopleForceListResponse<Record<string, unknown>>> {
+    return this.request('GET', `/employees/${encodeURIComponent(String(employeeId))}/documents`);
+  }
+
+  listEmployeeNotes(employeeId: string | number): Promise<PeopleForceListResponse<Record<string, unknown>>> {
+    return this.request('GET', `/employees/${encodeURIComponent(String(employeeId))}/notes`);
+  }
+
+  listEmployeeEmergencyContacts(employeeId: string | number): Promise<PeopleForceListResponse<Record<string, unknown>>> {
+    return this.request('GET', `/employees/${encodeURIComponent(String(employeeId))}/emergency_contacts`);
+  }
 }
 
 // ==== Formatting helpers ====
@@ -323,6 +446,124 @@ export function formatLeaveRequestList(
     if (r.state) parts.push(`State: ${r.state}`);
     if (r.amount) parts.push(`Amount: ${r.amount}${r.tracking_time_in ? ` (${r.tracking_time_in})` : ''}`);
     if (r.comment && r.comment !== '-') parts.push(`Comment: ${r.comment}`);
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+/**
+ * Generic formatter for `{ id, name }` reference lookups (leave_types,
+ * positions, divisions, employment_types, job_levels, skills, competencies).
+ * Optional `extras` picks additional per-item lines out of arbitrary keys
+ * without forcing each caller to write a dedicated formatter.
+ */
+export function formatNamedList(
+  title: string,
+  items: PeopleForceNamed[],
+  pagination?: PeopleForcePagination,
+  extras?: (item: PeopleForceNamed) => string[],
+): string {
+  if (items.length === 0) return `No ${title.toLowerCase()} found.`;
+  const parts = [`# ${title}`, ''];
+  const pag = renderPaginationLine(pagination);
+  if (pag) { parts.push(pag); parts.push(''); }
+  items.forEach((item, i) => {
+    parts.push(`## ${i + 1}. ${item.name ?? 'Untitled'}`);
+    parts.push(`ID: ${item.id ?? ''}`);
+    if (extras) for (const line of extras(item)) parts.push(line);
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+export function formatLeaveTypeList(
+  types: PeopleForceLeaveType[],
+  pagination?: PeopleForcePagination,
+): string {
+  return formatNamedList('Leave Types', types, pagination, (t) => {
+    const lt = t as PeopleForceLeaveType;
+    return lt.unit ? [`Unit: ${lt.unit}`] : [];
+  });
+}
+
+export function formatLocationList(
+  locations: PeopleForceLocation[],
+  pagination?: PeopleForcePagination,
+): string {
+  return formatNamedList('Locations', locations, pagination, (item) => {
+    const loc = item as PeopleForceLocation;
+    const lines: string[] = [];
+    if (loc.country_code) lines.push(`Country: ${loc.country_code}`);
+    if (loc.time_zone) lines.push(`Time zone: ${loc.time_zone}`);
+    if (loc.address) lines.push(`Address: ${loc.address}`);
+    return lines;
+  });
+}
+
+export function formatLeaveBalances(balances: PeopleForceLeaveBalance[]): string {
+  if (balances.length === 0) return 'No leave balances found.';
+  const parts = ['# Leave Balances', ''];
+  balances.forEach((b, i) => {
+    const name = b.leave_type?.name ?? b.leave_type_policy?.name ?? 'Balance';
+    const unit = b.leave_type?.unit ? ` ${b.leave_type.unit}` : '';
+    parts.push(`## ${i + 1}. ${name}`);
+    parts.push(`Balance: ${b.balance ?? 0}${unit}`);
+    if (b.effective_on) parts.push(`Effective on: ${b.effective_on}`);
+    if (b.leave_type?.id !== undefined) parts.push(`Leave type ID: ${b.leave_type.id}`);
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+export function formatEmployeeSkills(skills: PeopleForceEmployeeSkill[]): string {
+  if (skills.length === 0) return 'No skills recorded for this employee.';
+  const parts = ['# Employee Skills', ''];
+  skills.forEach((s, i) => {
+    const name = s.skill?.name ?? 'Unknown skill';
+    parts.push(`## ${i + 1}. ${name}`);
+    if (s.level) parts.push(`Level: ${s.level}`);
+    if (s.skill?.id !== undefined) parts.push(`Skill ID: ${s.skill.id}`);
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+export function formatTaskList(
+  tasks: PeopleForceTask[],
+  pagination?: PeopleForcePagination,
+): string {
+  if (tasks.length === 0) return 'No tasks found.';
+  const parts = ['# Tasks', ''];
+  const pag = renderPaginationLine(pagination);
+  if (pag) { parts.push(pag); parts.push(''); }
+  tasks.forEach((t, i) => {
+    const assignee = t.assigned_to?.full_name ?? 'Unassigned';
+    parts.push(`## ${i + 1}. ${t.title ?? 'Untitled'} — ${assignee}`);
+    parts.push(`ID: ${t.id ?? ''}`);
+    if (t.type) parts.push(`Type: ${t.type}`);
+    if (t.starts_on) parts.push(`Starts: ${t.starts_on}`);
+    if (t.ends_on) parts.push(`Ends: ${t.ends_on}`);
+    parts.push(`Completed: ${t.completed ? 'yes' : 'no'}${t.completed_at ? ` (${t.completed_at})` : ''}`);
+    if (t.associated_to?.full_name) parts.push(`Associated with: ${t.associated_to.full_name} (${t.associated_to.type ?? 'entity'})`);
+    if (t.description_plain) parts.push(`Description: ${t.description_plain}`);
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+/**
+ * Fallback formatter for endpoints whose payload shape is undocumented and
+ * that we couldn't verify against the reference workspace (returned 0 items).
+ * Dumps each record as fenced JSON so no field is silently dropped.
+ */
+export function formatUnknownItemList(title: string, items: Record<string, unknown>[]): string {
+  if (items.length === 0) return `No ${title.toLowerCase()} recorded.`;
+  const parts = [`# ${title}`, ''];
+  items.forEach((it, i) => {
+    parts.push(`## ${i + 1}. ${it.id !== undefined ? `ID: ${it.id}` : 'Item'}`);
+    parts.push('```json');
+    parts.push(JSON.stringify(it, null, 2));
+    parts.push('```');
     parts.push('');
   });
   return parts.join('\n').trimEnd();

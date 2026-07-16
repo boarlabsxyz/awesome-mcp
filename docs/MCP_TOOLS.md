@@ -17,7 +17,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Slack (bot)](#slack-bot-) (7)
 - [Slack (user)](#slack-user-) (7)
 - [Outline](#outline) (27)
-- [PeopleForce](#peopleforce) (5)
+- [PeopleForce](#peopleforce) (20)
 
 ## Shared (every server)
 
@@ -267,7 +267,7 @@ Source: `src/outline/server.ts` — 27 tools.
 
 ## PeopleForce
 
-Source: `src/peopleforce/server.ts` — 5 tools.
+Source: `src/peopleforce/server.ts` — 20 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -275,8 +275,23 @@ Source: `src/peopleforce/server.ts` — 5 tools.
 | `getEmployee` | Retrieves a single PeopleForce employee by ID. Returns full profile: contact, position, department, division, employment type, location, reporting line, and hiring dates. | — |
 | `listDepartments` | Lists all PeopleForce departments, 50 per page (server-fixed). Use `page` to paginate. | — |
 | `listLeaveRequests` | Lists PeopleForce leave requests, 100 per page (server-fixed). Use `page` to paginate; `state` filters by lifecycle state (e.g. "pending", "approved", "declined"). PeopleForce's public API does NOT support server-side filtering by employee or date range — fetch pages and filter client-side if needed. | — |
-| `createLeaveRequest` | Creates a new PeopleForce leave request (time off) for an employee against a specific leave-type ID. | — |
+| `createLeaveRequest` | Creates a new PeopleForce leave request (time off) for an employee against a specific leave-type ID. Call `listLeaveTypes` first if you need the ID. | — |
+| `getLeaveRequest` | Retrieves a single PeopleForce leave request by ID (state, dates, amount, employee, comment). | — |
+| `listLeaveTypes` | Lists PeopleForce leave types (Vacation, Sick, Sabbatical, etc.) with their IDs and time-tracking unit (days/hours). Call this to find the `leaveTypeId` needed for `createLeaveRequest`. | — |
+| `listPositions` | Lists all PeopleForce job positions with their IDs. Server-fixed 50 per page. | — |
+| `listDivisions` | Lists PeopleForce divisions (org-chart layer above departments) with their IDs. | — |
+| `listLocations` | Lists PeopleForce office/remote locations with country code and time zone. Server-fixed 50 per page. | — |
+| `listEmploymentTypes` | Lists PeopleForce employment types (Employee, Contractor, Intern, etc.) with their IDs. | — |
+| `listJobLevels` | Lists PeopleForce job levels (Junior, Mid, Senior, Head of, etc.) with their IDs. | — |
+| `listSkills` | Lists the PeopleForce skills catalog (workspace-wide) with IDs. Server-fixed 50 per page. | — |
+| `listCompetencies` | Lists PeopleForce competencies (behavioral/performance dimensions used in reviews) with their IDs. | — |
+| `listTasks` | Lists PeopleForce tasks (onboarding, applicant follow-ups, etc.) with assignee, dates, and completion state. Server-fixed 50 per page. | — |
+| `listEmployeeLeaveBalances` | Lists a specific employee's current leave balances per leave type (e.g. "how many vacation days does this person have?"). | — |
+| `listEmployeeSkills` | Lists the skills recorded on a specific employee's profile with proficiency level. | — |
+| `listEmployeeDocuments` | Lists documents attached to a specific employee's profile. Payload shape is dumped as JSON since the public API doesn't document a fixed schema for this endpoint. | — |
+| `listEmployeeNotes` | Lists HR notes on a specific employee's profile. Payload dumped as JSON (undocumented shape). | — |
+| `listEmployeeEmergencyContacts` | Lists emergency contacts on a specific employee's profile. Payload dumped as JSON (undocumented shape). | — |
 
 ---
 
-**Grand total: 174 tools across 12 sections.**
+**Grand total: 189 tools across 12 sections.**

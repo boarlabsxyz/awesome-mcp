@@ -9,6 +9,13 @@ import {
   formatEmployee,
   formatDepartmentList,
   formatLeaveRequestList,
+  formatLeaveTypeList,
+  formatLocationList,
+  formatNamedList,
+  formatLeaveBalances,
+  formatEmployeeSkills,
+  formatTaskList,
+  formatUnknownItemList,
   getPeopleForceClient,
   mapPeopleForceError,
   withPeopleForceClient,
@@ -193,6 +200,104 @@ describe('formatLeaveRequestList', () => {
   });
 });
 
+describe('formatNamedList + lookup formatters', () => {
+  test('formatNamedList handles empty', () => {
+    assert.equal(formatNamedList('Positions', []), 'No positions found.');
+  });
+
+  test('formatNamedList emits id + name and optional extras', () => {
+    const out = formatNamedList(
+      'Locations',
+      [{ id: 1, name: 'London' } as any],
+      undefined,
+      (item: any) => (item.country ? [`Country: ${item.country}`] : []),
+    );
+    assert.match(out, /London/);
+    assert.match(out, /ID: 1/);
+  });
+
+  test('formatLeaveTypeList includes unit', () => {
+    const out = formatLeaveTypeList([{ id: 22159, name: 'Vacation', unit: 'hours' }]);
+    assert.match(out, /Vacation/);
+    assert.match(out, /Unit: hours/);
+  });
+
+  test('formatLocationList includes country + time zone', () => {
+    const out = formatLocationList([
+      { id: 29304, name: 'Alanya', country_code: 'TR', time_zone: 'Istanbul', address: 'Main St' },
+    ]);
+    assert.match(out, /Alanya/);
+    assert.match(out, /Country: TR/);
+    assert.match(out, /Time zone: Istanbul/);
+    assert.match(out, /Address: Main St/);
+  });
+
+  test('formatLeaveBalances handles empty', () => {
+    assert.equal(formatLeaveBalances([]), 'No leave balances found.');
+  });
+
+  test('formatLeaveBalances shows balance + unit + effective_on', () => {
+    const out = formatLeaveBalances([
+      { id: 1, balance: 12, effective_on: '2026-01-01', leave_type: { id: 22159, name: 'Vacation', unit: 'days' } },
+    ]);
+    assert.match(out, /Vacation/);
+    assert.match(out, /Balance: 12 days/);
+    assert.match(out, /Effective on: 2026-01-01/);
+    assert.match(out, /Leave type ID: 22159/);
+  });
+
+  test('formatLeaveBalances falls back to policy name when leave_type missing', () => {
+    const out = formatLeaveBalances([
+      { id: 1, balance: 0, leave_type_policy: { id: 1, name: 'Sabbatical' } },
+    ]);
+    assert.match(out, /Sabbatical/);
+  });
+
+  test('formatEmployeeSkills handles empty', () => {
+    assert.equal(formatEmployeeSkills([]), 'No skills recorded for this employee.');
+  });
+
+  test('formatEmployeeSkills shows level', () => {
+    const out = formatEmployeeSkills([
+      { id: 1, level: 'proficient', skill: { id: 130638, name: 'C#' } },
+    ]);
+    assert.match(out, /C#/);
+    assert.match(out, /Level: proficient/);
+    assert.match(out, /Skill ID: 130638/);
+  });
+
+  test('formatTaskList shows title, assignee, associated entity, completion', () => {
+    const out = formatTaskList([
+      {
+        id: 7240433,
+        title: 'ping if no reply',
+        type: 'Tasks::Applicant',
+        starts_on: '2026-07-15',
+        ends_on: '2026-07-20',
+        completed: false,
+        assigned_to: { id: 1, full_name: 'Yana Nakonechna' },
+        associated_to: { id: 2, type: 'Candidate', full_name: 'Oleh Kobzar' },
+      },
+    ]);
+    assert.match(out, /ping if no reply — Yana Nakonechna/);
+    assert.match(out, /Type: Tasks::Applicant/);
+    assert.match(out, /Starts: 2026-07-15/);
+    assert.match(out, /Completed: no/);
+    assert.match(out, /Associated with: Oleh Kobzar \(Candidate\)/);
+  });
+
+  test('formatUnknownItemList dumps records as JSON', () => {
+    const out = formatUnknownItemList('Notes', [{ id: 5, body: 'foo' } as any]);
+    assert.match(out, /# Notes/);
+    assert.match(out, /```json/);
+    assert.match(out, /"body": "foo"/);
+  });
+
+  test('formatUnknownItemList handles empty', () => {
+    assert.equal(formatUnknownItemList('Notes', []), 'No notes recorded.');
+  });
+});
+
 // -----------------------------------------------------------------------------
 // PeopleForceClient — fetch-mocked
 // -----------------------------------------------------------------------------
@@ -344,6 +449,59 @@ describe('PeopleForceClient', () => {
     const c = new PeopleForceClient('t', 'https://x.example.com');
     const res = await c.getEmployee(1);
     assert.equal(res as unknown, undefined);
+  });
+
+  // === Reference / lookup endpoints ===
+
+  test('listLeaveTypes hits /leave_types with page only', async () => {
+    stub = stubFetch(() => ({ body: { data: [{ id: 22159, name: 'Vacation', unit: 'hours' }] } }));
+    const c = new PeopleForceClient('t', 'https://x.example.com');
+    await c.listLeaveTypes({ page: 2 });
+    const url = new URL(stub.calls[0].url);
+    assert.equal(url.pathname, '/leave_types');
+    assert.equal(url.searchParams.get('page'), '2');
+  });
+
+  test('listPositions / listDivisions / listLocations hit the right paths', async () => {
+    stub = stubFetch(() => ({ body: { data: [] } }));
+    const c = new PeopleForceClient('t', 'https://x.example.com');
+    await c.listPositions();
+    await c.listDivisions();
+    await c.listLocations();
+    await c.listEmploymentTypes();
+    await c.listJobLevels();
+    await c.listSkills();
+    await c.listCompetencies();
+    await c.listTasks();
+    assert.deepEqual(
+      stub.calls.map((r) => new URL(r.url).pathname),
+      ['/positions', '/divisions', '/locations', '/employment_types', '/job_levels', '/skills', '/competencies', '/tasks'],
+    );
+  });
+
+  test('getLeaveRequest URL-encodes the id', async () => {
+    stub = stubFetch(() => ({ body: { data: { id: 1 } } }));
+    const c = new PeopleForceClient('t', 'https://x.example.com');
+    await c.getLeaveRequest('a/b');
+    assert.match(stub.calls[0].url, /\/leave_requests\/a%2Fb$/);
+  });
+
+  test('employee-nested endpoints URL-encode the employee id', async () => {
+    stub = stubFetch(() => ({ body: { data: [] } }));
+    const c = new PeopleForceClient('t', 'https://x.example.com');
+    await c.listEmployeeLeaveBalances('132045');
+    await c.listEmployeeSkills('132045');
+    await c.listEmployeeDocuments('132045');
+    await c.listEmployeeNotes('132045');
+    await c.listEmployeeEmergencyContacts('132045');
+    const paths = stub.calls.map((r) => new URL(r.url).pathname);
+    assert.deepEqual(paths, [
+      '/employees/132045/leave_balances',
+      '/employees/132045/skills',
+      '/employees/132045/documents',
+      '/employees/132045/notes',
+      '/employees/132045/emergency_contacts',
+    ]);
   });
 });
 
