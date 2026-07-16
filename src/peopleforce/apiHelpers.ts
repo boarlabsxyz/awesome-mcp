@@ -359,11 +359,22 @@ function renderPaginationLine(pagination?: PeopleForcePagination): string | null
   return `Page ${page} of ${pages}${suffix}`;
 }
 
+/**
+ * Compose an empty-list message that still surfaces pagination context when
+ * present. Useful signal to the LLM that it paged past the last page rather
+ * than the workspace actually being empty.
+ */
+function renderEmptyList(title: string, noun: string, pagination?: PeopleForcePagination): string {
+  const pag = renderPaginationLine(pagination);
+  if (!pag) return `No ${noun} found.`;
+  return [`# ${title}`, '', pag, '', `No ${noun} on this page.`].join('\n');
+}
+
 export function formatEmployeeList(
   employees: PeopleForceEmployee[],
   pagination?: PeopleForcePagination,
 ): string {
-  if (employees.length === 0) return 'No employees found.';
+  if (employees.length === 0) return renderEmptyList('Employees', 'employees', pagination);
   const parts = ['# Employees', ''];
   const pag = renderPaginationLine(pagination);
   if (pag) { parts.push(pag); parts.push(''); }
@@ -414,7 +425,7 @@ export function formatDepartmentList(
   departments: PeopleForceDepartment[],
   pagination?: PeopleForcePagination,
 ): string {
-  if (departments.length === 0) return 'No departments found.';
+  if (departments.length === 0) return renderEmptyList('Departments', 'departments', pagination);
   const parts = ['# Departments', ''];
   const pag = renderPaginationLine(pagination);
   if (pag) { parts.push(pag); parts.push(''); }
@@ -432,7 +443,7 @@ export function formatLeaveRequestList(
   requests: PeopleForceLeaveRequest[],
   pagination?: PeopleForcePagination,
 ): string {
-  if (requests.length === 0) return 'No leave requests found.';
+  if (requests.length === 0) return renderEmptyList('Leave Requests', 'leave requests', pagination);
   const parts = ['# Leave Requests', ''];
   const pag = renderPaginationLine(pagination);
   if (pag) { parts.push(pag); parts.push(''); }
@@ -463,7 +474,8 @@ export function formatNamedList(
   pagination?: PeopleForcePagination,
   extras?: (item: PeopleForceNamed) => string[],
 ): string {
-  if (items.length === 0) return `No ${title.toLowerCase()} found.`;
+  const noun = title.toLowerCase();
+  if (items.length === 0) return renderEmptyList(title, noun, pagination);
   const parts = [`# ${title}`, ''];
   const pag = renderPaginationLine(pagination);
   if (pag) { parts.push(pag); parts.push(''); }
@@ -532,7 +544,7 @@ export function formatTaskList(
   tasks: PeopleForceTask[],
   pagination?: PeopleForcePagination,
 ): string {
-  if (tasks.length === 0) return 'No tasks found.';
+  if (tasks.length === 0) return renderEmptyList('Tasks', 'tasks', pagination);
   const parts = ['# Tasks', ''];
   const pag = renderPaginationLine(pagination);
   if (pag) { parts.push(pag); parts.push(''); }

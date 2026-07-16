@@ -2,7 +2,7 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { UserError } from 'fastmcp';
-import { peopleForceServer } from '../peopleforce/server.js';
+import { peopleForceServer, isoDate, createLeaveRequestSchema } from '../peopleforce/server.js';
 import {
   PeopleForceClient,
   formatEmployeeList,
@@ -27,6 +27,89 @@ import {
 
 test('peopleforce server is registered', () => {
   assert.ok(peopleForceServer, 'server should be defined');
+});
+
+// -----------------------------------------------------------------------------
+// createLeaveRequest Zod validation (regression: previously accepted impossible
+// dates and never checked startsOn <= endsOn)
+// -----------------------------------------------------------------------------
+
+describe('isoDate — calendar-aware validator', () => {
+  test('rejects impossible day (Feb 31)', () => {
+    const r = isoDate.safeParse('2026-02-31');
+    assert.equal(r.success, false);
+    if (!r.success) assert.match(r.error.issues[0].message, /valid calendar date/i);
+  });
+
+  test('rejects month 13', () => {
+    assert.equal(isoDate.safeParse('2026-13-01').success, false);
+  });
+
+  test('rejects non-leap-year Feb 29 (2026 is not a leap year)', () => {
+    assert.equal(isoDate.safeParse('2026-02-29').success, false);
+  });
+
+  test('accepts leap-year Feb 29 (2028)', () => {
+    assert.equal(isoDate.safeParse('2028-02-29').success, true);
+  });
+
+  test('accepts normal dates', () => {
+    assert.equal(isoDate.safeParse('2026-07-15').success, true);
+    assert.equal(isoDate.safeParse('2026-12-31').success, true);
+  });
+
+  test('rejects wrong format (no dashes)', () => {
+    assert.equal(isoDate.safeParse('20260715').success, false);
+  });
+});
+
+describe('createLeaveRequestSchema — cross-field ordering', () => {
+  test('rejects endsOn before startsOn', () => {
+    const r = createLeaveRequestSchema.safeParse({
+      employeeId: 1,
+      leaveTypeId: 1,
+      startsOn: '2026-08-05',
+      endsOn: '2026-08-01',
+    });
+    assert.equal(r.success, false);
+    if (!r.success) {
+      assert.ok(
+        r.error.issues.some((i) => /endsOn.*on or after startsOn/i.test(i.message)),
+        `expected ordering error, got: ${JSON.stringify(r.error.issues)}`,
+      );
+    }
+  });
+
+  test('accepts a single-day request (startsOn == endsOn)', () => {
+    const r = createLeaveRequestSchema.safeParse({
+      employeeId: 1,
+      leaveTypeId: 1,
+      startsOn: '2026-08-05',
+      endsOn: '2026-08-05',
+    });
+    assert.equal(r.success, true);
+  });
+
+  test('accepts a valid multi-day request', () => {
+    const r = createLeaveRequestSchema.safeParse({
+      employeeId: 1,
+      leaveTypeId: 1,
+      startsOn: '2026-08-01',
+      endsOn: '2026-08-05',
+      comment: 'Beach',
+    });
+    assert.equal(r.success, true);
+  });
+
+  test('impossible date on startsOn still bubbles up (regression: 2026-02-31)', () => {
+    const r = createLeaveRequestSchema.safeParse({
+      employeeId: 1,
+      leaveTypeId: 1,
+      startsOn: '2026-02-31',
+      endsOn: '2026-03-05',
+    });
+    assert.equal(r.success, false);
+  });
 });
 
 // -----------------------------------------------------------------------------
@@ -74,6 +157,16 @@ describe('formatEmployeeList', () => {
       { page: 2, pages: 3, count: 121, items: 50 },
     );
     assert.match(out, /Page 2 of 3 \(121 total, 50 per page\)/);
+  });
+
+  test('empty list surfaces pagination context when supplied', () => {
+    const out = formatEmployeeList([], { page: 5, pages: 3, count: 121, items: 50 });
+    assert.match(out, /Page 5 of 3 \(121 total, 50 per page\)/);
+    assert.match(out, /No employees on this page\./);
+  });
+
+  test('empty list without pagination keeps the terse message', () => {
+    assert.equal(formatEmployeeList([]), 'No employees found.');
   });
 });
 
@@ -148,6 +241,12 @@ describe('formatDepartmentList', () => {
     );
     assert.match(out, /Page 1 of 1 \(10 total, 50 per page\)/);
   });
+
+  test('empty list surfaces pagination context when supplied', () => {
+    const out = formatDepartmentList([], { page: 4, pages: 3, count: 121, items: 50 });
+    assert.match(out, /Page 4 of 3 \(121 total, 50 per page\)/);
+    assert.match(out, /No departments on this page\./);
+  });
 });
 
 describe('formatLeaveRequestList', () => {
@@ -197,6 +296,12 @@ describe('formatLeaveRequestList', () => {
       { page: 1, pages: 13, count: 1245, items: 100 },
     );
     assert.match(out, /Page 1 of 13 \(1245 total, 100 per page\)/);
+  });
+
+  test('empty list surfaces pagination context when supplied', () => {
+    const out = formatLeaveRequestList([], { page: 14, pages: 13, count: 1245, items: 100 });
+    assert.match(out, /Page 14 of 13 \(1245 total, 100 per page\)/);
+    assert.match(out, /No leave requests on this page\./);
   });
 });
 
@@ -295,6 +400,18 @@ describe('formatNamedList + lookup formatters', () => {
 
   test('formatUnknownItemList handles empty', () => {
     assert.equal(formatUnknownItemList('Notes', []), 'No notes recorded.');
+  });
+
+  test('formatNamedList surfaces pagination on empty page', () => {
+    const out = formatNamedList('Positions', [], { page: 3, pages: 2, count: 95, items: 50 });
+    assert.match(out, /Page 3 of 2 \(95 total, 50 per page\)/);
+    assert.match(out, /No positions on this page\./);
+  });
+
+  test('formatTaskList surfaces pagination on empty page', () => {
+    const out = formatTaskList([], { page: 9, pages: 9, count: 402, items: 50 });
+    assert.match(out, /Page 9 of 9 \(402 total, 50 per page\)/);
+    assert.match(out, /No tasks on this page\./);
   });
 });
 
