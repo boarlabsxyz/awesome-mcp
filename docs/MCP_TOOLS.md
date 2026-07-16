@@ -17,7 +17,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Slack (bot)](#slack-bot-) (7)
 - [Slack (user)](#slack-user-) (7)
 - [Outline](#outline) (27)
-- [PeopleForce](#peopleforce) (5)
+- [PeopleForce](#peopleforce) (20)
 
 ## Shared (every server)
 
@@ -184,7 +184,7 @@ Source: `src/clickup/server.ts` — 43 tools.
 | `subscribeToTaskEvents` | Subscribe this user's digest routine to ClickUp task events for a workspace. Creates a webhook on ClickUp's side and stores its shared secret so the ingestion endpoint can verify inbound POSTs. IDEMPOTENT: re-calling with the same (user, workspace) returns the existing subscription without hitting ClickUp again. Default event bundle is `taskCreated`, `taskStatusUpdated`, `taskAssigneeUpdated`, `taskMoved`, `taskDeleted` — deliberately excludes `taskUpdated` (firehose, redundant with the pull-side `date_updated_gt` filter on filterTeamTasks). Requires the BASE_URL env var so ClickUp can call back. Once subscribed, the event store accrues from this moment forward — history queries against events before this timestamp fall back to the `date_updated + current status` approximation. | — |
 | `getTaskEventHistory` | Read from-status→to-status transitions (and other captured events) for a ClickUp workspace, sourced from the event store populated by subscribeToTaskEvents. Use this to answer "what moved to In Review since last report" exactly, instead of approximating from date_updated + current status. IMPORTANT: history accrues from the moment subscribeToTaskEvents was first called — events before that boundary are NOT in the store; the response includes `eventStoreStartedAt` so the caller can fall back to filterTeamTasks with dateUpdatedGt for any earlier window. If no subscription exists for the (user, workspace), the response is `kind: "no-subscription"` with a warning — not an error — so the digest can gracefully fall back to pull. | `GET /api/v1/clickup/workspaces/{workspaceId}/events` |
 | `listTaskEventSubscriptions` | List task-event webhook subscriptions owned by the current user. Surfaces fail_count so operators can spot a dying webhook (ClickUp stops delivering after 5 consecutive failures). Optionally narrow to a single workspace. | `GET /api/v1/clickup/subscriptions` |
-| `debugTaskEventSubscription` | Cross-reference the local task-event subscription against ClickUp's own view of the webhook and the event store, and surface anomalies. Use when subscribeToTaskEvents reports success but events aren't landing, or when local fail_count doesn't match reality. Detects: endpoint-URL drift (BASE_URL changed since subscribe), orphaned ClickUp webhook (local record points at a webhook ClickUp deleted), event-bundle mismatch, ClickUp fail_count > local fail_count (ingestion route silently returning 200 on thrown errors), disabled webhook status, and the "zero events with zero failures" pattern that means deliveries either aren't reaching us or are being silently swallowed. | `GET /api/v1/clickup/workspaces/{workspaceId}/subscription/debug` |
+| `debugTaskEventSubscription` | Cross-reference the local task-event subscription against ClickUp's own view of the webhook and the event store, and surface anomalies. Use when subscribeToTaskEvents reports success but events aren't landing, or when local fail_count doesn't match reality. Detects: endpoint-URL drift (BASE_URL changed since subscribe), orphaned ClickUp webhook (local record points at a webhook ClickUp deleted), event-bundle mismatch, ClickUp fail_count > local fail_count (ClickUp seeing non-2xx/timeouts while our counter stays flat — NOT the silent-200 pattern), disabled webhook status, and the "zero events with zero failures" pattern (silent 200s: ingestion returning success without persisting). | `GET /api/v1/clickup/workspaces/{workspaceId}/subscription/debug` |
 | `unsubscribeFromTaskEvents` | Delete the ClickUp task-event subscription for a workspace. Best-effort deletes both the ClickUp-side webhook and the local record; if ClickUp already deleted or disabled the webhook, still clears the local row so a fresh subscribeToTaskEvents can create a new one. Use this to recover from the "webhook disabled by ClickUp after 5 fails" state or after debugTaskEventSubscription flags an endpoint mismatch. | — |
 | `createList` | Create a new list in a ClickUp folder, or a folderless list in a space. | — |
 | `createFolder` | Create a new folder in a ClickUp space. | — |
@@ -267,16 +267,31 @@ Source: `src/outline/server.ts` — 27 tools.
 
 ## PeopleForce
 
-Source: `src/peopleforce/server.ts` — 5 tools.
+Source: `src/peopleforce/server.ts` — 20 tools.
 
 | Tool | Description | REST |
 |---|---|---|
-| `listEmployees` | Lists PeopleForce employees. Paginated; supports optional status and department filters. | — |
-| `getEmployee` | Retrieves a single PeopleForce employee by ID. | — |
-| `listDepartments` | Lists all PeopleForce departments in the workspace (paginated). | — |
-| `listLeaveRequests` | Lists PeopleForce leave requests (time off, sick leave, etc.). Supports employee, state, and date-range filters. | — |
-| `createLeaveRequest` | Creates a new PeopleForce leave request (time off) for an employee against a specific leave type. | — |
+| `listEmployees` | Lists PeopleForce employees, 50 per page (server-fixed). Use `page` to paginate; `status` narrows the cohort (e.g. "active", "terminated"). | — |
+| `getEmployee` | Retrieves a single PeopleForce employee by ID. Returns full profile: contact, position, department, division, employment type, location, reporting line, and hiring dates. | — |
+| `listDepartments` | Lists all PeopleForce departments, 50 per page (server-fixed). Use `page` to paginate. | — |
+| `listLeaveRequests` | Lists PeopleForce leave requests, 100 per page (server-fixed). Use `page` to paginate; `state` filters by lifecycle state (e.g. "pending", "approved", "declined"). PeopleForce's public API does NOT support server-side filtering by employee or date range — fetch pages and filter client-side if needed. | — |
+| `createLeaveRequest` | Creates a new PeopleForce leave request (time off) for an employee against a specific leave-type ID. Call `listLeaveTypes` first if you need the ID. | — |
+| `getLeaveRequest` | Retrieves a single PeopleForce leave request by ID (state, dates, amount, employee, comment). | — |
+| `listLeaveTypes` | Lists PeopleForce leave types (Vacation, Sick, Sabbatical, etc.) with their IDs and time-tracking unit (days/hours). Call this to find the `leaveTypeId` needed for `createLeaveRequest`. | — |
+| `listPositions` | Lists all PeopleForce job positions with their IDs. Server-fixed 50 per page. | — |
+| `listDivisions` | Lists PeopleForce divisions (org-chart layer above departments) with their IDs. | — |
+| `listLocations` | Lists PeopleForce office/remote locations with country code and time zone. Server-fixed 50 per page. | — |
+| `listEmploymentTypes` | Lists PeopleForce employment types (Employee, Contractor, Intern, etc.) with their IDs. | — |
+| `listJobLevels` | Lists PeopleForce job levels (Junior, Mid, Senior, Head of, etc.) with their IDs. | — |
+| `listSkills` | Lists the PeopleForce skills catalog (workspace-wide) with IDs. Server-fixed 50 per page. | — |
+| `listCompetencies` | Lists PeopleForce competencies (behavioral/performance dimensions used in reviews) with their IDs. | — |
+| `listTasks` | Lists PeopleForce tasks (onboarding, applicant follow-ups, etc.) with assignee, dates, and completion state. Server-fixed 50 per page. | — |
+| `listEmployeeLeaveBalances` | Lists a specific employee's current leave balances per leave type (e.g. "how many vacation days does this person have?"). | — |
+| `listEmployeeSkills` | Lists the skills recorded on a specific employee's profile with proficiency level. | — |
+| `listEmployeeDocuments` | Lists documents attached to a specific employee's profile. Payload shape is dumped as JSON since the public API doesn't document a fixed schema for this endpoint. | — |
+| `listEmployeeNotes` | Lists HR notes on a specific employee's profile. Payload dumped as JSON (undocumented shape). | — |
+| `listEmployeeEmergencyContacts` | Lists emergency contacts on a specific employee's profile. Payload dumped as JSON (undocumented shape). | — |
 
 ---
 
-**Grand total: 174 tools across 12 sections.**
+**Grand total: 189 tools across 12 sections.**
