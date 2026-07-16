@@ -31,49 +31,85 @@ describe('formatEmployeeList', () => {
     assert.equal(formatEmployeeList([]), 'No employees found.');
   });
 
-  test('renders employees with names, ids, and departments', () => {
+  test('prefers full_name when present', () => {
     const out = formatEmployeeList([
-      { id: 42, first_name: 'Ada', last_name: 'Lovelace', email: 'ada@example.com', department: { id: 1, name: 'R&D' } },
+      { id: 42, full_name: 'Ada Lovelace', first_name: 'X', last_name: 'Y', department: { id: 1, name: 'R&D' } },
     ]);
-    assert.match(out, /# Employees/);
     assert.match(out, /Ada Lovelace/);
-    assert.match(out, /ID: 42/);
-    assert.match(out, /Department: R&D/);
+    // full_name wins over first+last composition
+    assert.doesNotMatch(out, /X Y/);
   });
 
-  test('renders position as a string', () => {
-    const out = formatEmployeeList([{ id: 1, first_name: 'A', last_name: 'B', position: 'Engineer' }]);
-    assert.match(out, /Position: Engineer/);
+  test('renders name from first + last when no full_name', () => {
+    const out = formatEmployeeList([
+      { id: 42, first_name: 'Grace', last_name: 'Hopper' },
+    ]);
+    assert.match(out, /Grace Hopper/);
   });
 
-  test('renders pagination when meta is present', () => {
+  test('renders position as an object OR a string', () => {
+    const asObject = formatEmployeeList([{ id: 1, first_name: 'A', last_name: 'B', position: { id: 9, name: 'Engineer' } }]);
+    assert.match(asObject, /Position: Engineer/);
+    const asString = formatEmployeeList([{ id: 2, first_name: 'C', last_name: 'D', position: 'Manager' }]);
+    assert.match(asString, /Position: Manager/);
+  });
+
+  test('renders status from `active` boolean', () => {
+    const active = formatEmployeeList([{ id: 1, first_name: 'A', last_name: 'B', active: true }]);
+    assert.match(active, /Status: active/);
+    const inactive = formatEmployeeList([{ id: 2, first_name: 'C', last_name: 'D', active: false }]);
+    assert.match(inactive, /Status: inactive/);
+  });
+
+  test('renders pagination with the API-native shape', () => {
     const out = formatEmployeeList(
       [{ id: 1, first_name: 'A', last_name: 'B' }],
-      { page: 2, total_pages: 5, total_count: 100 },
+      { page: 2, pages: 3, count: 121, items: 50 },
     );
-    assert.match(out, /Page 2 of 5 \(100 total\)/);
+    assert.match(out, /Page 2 of 3 \(121 total, 50 per page\)/);
   });
 });
 
 describe('formatEmployee', () => {
-  test('renders single employee with position object and status', () => {
+  test('renders rich employee profile', () => {
     const out = formatEmployee({
       id: 7,
+      employee_number: '10241',
+      active: true,
+      full_name: 'Grace Hopper',
       first_name: 'Grace',
       last_name: 'Hopper',
-      position: { name: 'Rear Admiral' },
-      status: 'active',
-      hired_at: '1949-05-01',
+      email: 'grace@example.com',
+      personal_email: 'grace@home.com',
+      mobile_number: '+15550001111',
+      hired_on: '1949-05-01',
+      probation_ends_on: '1949-08-01',
+      position: { id: 1, name: 'Rear Admiral' },
+      department: { id: 2, name: 'Cryptology' },
+      division: { id: 3, name: 'Navy' },
+      employment_type: { id: 4, name: 'Contractor' },
+      location: { id: 5, name: 'Washington, DC' },
+      reporting_to: { id: 6, name: 'Adm. Smith' },
     });
     assert.match(out, /# Grace Hopper/);
-    assert.match(out, /Position: Rear Admiral/);
+    assert.match(out, /Employee #: 10241/);
     assert.match(out, /Status: active/);
+    assert.match(out, /Email: grace@example.com/);
+    assert.match(out, /Personal email: grace@home.com/);
+    assert.match(out, /Mobile: \+15550001111/);
+    assert.match(out, /Position: Rear Admiral/);
+    assert.match(out, /Department: Cryptology/);
+    assert.match(out, /Division: Navy/);
+    assert.match(out, /Employment type: Contractor/);
+    assert.match(out, /Location: Washington, DC/);
+    assert.match(out, /Reports to: Adm\. Smith/);
     assert.match(out, /Hired: 1949-05-01/);
+    assert.match(out, /Probation ends: 1949-08-01/);
   });
 
-  test('includes terminated_at when present', () => {
-    const out = formatEmployee({ id: 1, first_name: 'A', last_name: 'B', terminated_at: '2026-01-01' });
-    assert.match(out, /Terminated: 2026-01-01/);
+  test('renders status: inactive for active=false', () => {
+    const out = formatEmployee({ id: 1, first_name: 'A', last_name: 'B', active: false });
+    assert.match(out, /Status: inactive/);
   });
 
   test('falls back to Unknown when no name is provided', () => {
@@ -97,6 +133,14 @@ describe('formatDepartmentList', () => {
     assert.match(out, /Employees: 24/);
     assert.match(out, /People Ops/);
   });
+
+  test('renders pagination line when metadata is present', () => {
+    const out = formatDepartmentList(
+      [{ id: 1, name: 'X' }],
+      { page: 1, pages: 1, count: 10, items: 50 },
+    );
+    assert.match(out, /Page 1 of 1 \(10 total, 50 per page\)/);
+  });
 });
 
 describe('formatLeaveRequestList', () => {
@@ -104,32 +148,35 @@ describe('formatLeaveRequestList', () => {
     assert.equal(formatLeaveRequestList([]), 'No leave requests found.');
   });
 
-  test('renders leave request with employee and leave_type object', () => {
+  test('renders leave request with the native API shape', () => {
     const out = formatLeaveRequestList([
       {
         id: 9,
-        employee: { first_name: 'Ada', last_name: 'Lovelace' },
-        leave_type: { id: 1, name: 'Vacation' },
+        employee_id: 111,
+        employee: { id: 111, first_name: 'Ada', last_name: 'Lovelace' },
+        leave_type: 'Vacation',
         starts_on: '2026-08-01',
         ends_on: '2026-08-05',
         state: 'approved',
-        duration: 5,
-        description: 'Beach',
+        amount: '32.0',
+        tracking_time_in: 'hours',
+        comment: 'Beach',
       },
     ]);
     assert.match(out, /Ada Lovelace — Vacation/);
+    assert.match(out, /Employee ID: 111/);
     assert.match(out, /Starts: 2026-08-01/);
     assert.match(out, /Ends: 2026-08-05/);
     assert.match(out, /State: approved/);
-    assert.match(out, /Duration: 5/);
-    assert.match(out, /Description: Beach/);
+    assert.match(out, /Amount: 32\.0 \(hours\)/);
+    assert.match(out, /Comment: Beach/);
   });
 
-  test('renders leave_type as a string', () => {
+  test('omits placeholder "-" comments', () => {
     const out = formatLeaveRequestList([
-      { id: 1, employee: { first_name: 'A', last_name: 'B' }, leave_type: 'Sick', starts_on: '2026-01-01' },
+      { id: 1, employee: { first_name: 'A', last_name: 'B' }, leave_type: 'Sick', comment: '-' },
     ]);
-    assert.match(out, /A B — Sick/);
+    assert.doesNotMatch(out, /Comment:/);
   });
 
   test('falls back to "Leave" when leave_type missing', () => {
@@ -137,12 +184,12 @@ describe('formatLeaveRequestList', () => {
     assert.match(out, /A B — Leave/);
   });
 
-  test('renders pagination when meta present', () => {
+  test('renders pagination with the API-native shape', () => {
     const out = formatLeaveRequestList(
       [{ id: 1, employee: { first_name: 'A', last_name: 'B' } }],
-      { page: 1, total_pages: 3, total_count: 30 },
+      { page: 1, pages: 13, count: 1245, items: 100 },
     );
-    assert.match(out, /Page 1 of 3 \(30 total\)/);
+    assert.match(out, /Page 1 of 13 \(1245 total, 100 per page\)/);
   });
 });
 
@@ -208,17 +255,21 @@ describe('PeopleForceClient', () => {
     assert.equal(stub.calls[0].headers.Authorization, 'Bearer mykey');
   });
 
-  test('listEmployees serializes query params (snake_case)', async () => {
-    stub = stubFetch(() => ({ body: { data: [{ id: 1 }], meta: { page: 1 } } }));
+  test('listEmployees only serializes page + status (no perPage / departmentId)', async () => {
+    stub = stubFetch(() => ({
+      body: { data: [{ id: 1 }], metadata: { pagination: { page: 2, pages: 3, count: 121, items: 50 } } },
+    }));
     const c = new PeopleForceClient('t', 'https://x.example.com');
-    const res = await c.listEmployees({ page: 2, per_page: 50, status: 'active', departmentId: 7 });
+    const res = await c.listEmployees({ page: 2, status: 'active' });
     const url = new URL(stub.calls[0].url);
     assert.equal(url.pathname, '/employees');
     assert.equal(url.searchParams.get('page'), '2');
-    assert.equal(url.searchParams.get('per_page'), '50');
     assert.equal(url.searchParams.get('status'), 'active');
-    assert.equal(url.searchParams.get('department_id'), '7');
+    // Guard against regressions: no fake filters should ever be sent.
+    assert.equal(url.searchParams.get('per_page'), null);
+    assert.equal(url.searchParams.get('department_id'), null);
     assert.deepEqual(res.data, [{ id: 1 }]);
+    assert.equal(res.metadata?.pagination?.count, 121);
   });
 
   test('getEmployee URL-encodes the id and hits the singular path', async () => {
@@ -228,51 +279,48 @@ describe('PeopleForceClient', () => {
     assert.match(stub.calls[0].url, /\/employees\/x%2Fy$/);
   });
 
-  test('listDepartments passes pagination', async () => {
+  test('listDepartments only serializes page', async () => {
     stub = stubFetch(() => ({ body: { data: [] } }));
     const c = new PeopleForceClient('t', 'https://x.example.com');
-    await c.listDepartments({ page: 3, per_page: 10 });
+    await c.listDepartments({ page: 3 });
     const url = new URL(stub.calls[0].url);
     assert.equal(url.searchParams.get('page'), '3');
-    assert.equal(url.searchParams.get('per_page'), '10');
+    assert.equal(url.searchParams.get('per_page'), null);
   });
 
-  test('listLeaveRequests uses /leave_requests and starts_on_from/to + state', async () => {
+  test('listLeaveRequests hits /leave_requests and only serializes page + state', async () => {
     stub = stubFetch(() => ({ body: { data: [] } }));
     const c = new PeopleForceClient('t', 'https://x.example.com');
-    await c.listLeaveRequests({
-      employeeId: 42,
-      state: 'approved',
-      startsFrom: '2026-01-01',
-      startsTo: '2026-12-31',
-    });
+    await c.listLeaveRequests({ page: 2, state: 'approved' });
     const url = new URL(stub.calls[0].url);
     assert.equal(url.pathname, '/leave_requests');
-    assert.equal(url.searchParams.get('employee_id'), '42');
+    assert.equal(url.searchParams.get('page'), '2');
     assert.equal(url.searchParams.get('state'), 'approved');
-    assert.equal(url.searchParams.get('starts_on_from'), '2026-01-01');
-    assert.equal(url.searchParams.get('starts_on_to'), '2026-12-31');
+    // Guard against regressions: no fake filters should ever be sent.
+    assert.equal(url.searchParams.get('employee_id'), null);
+    assert.equal(url.searchParams.get('starts_on_from'), null);
+    assert.equal(url.searchParams.get('starts_on_to'), null);
   });
 
-  test('createLeaveRequest POSTs the leave_requests contract', async () => {
+  test('createLeaveRequest POSTs the leave_requests contract with leave_type_id + comment', async () => {
     stub = stubFetch(() => ({ status: 201, body: { data: { id: 99 } } }));
     const c = new PeopleForceClient('t', 'https://x.example.com');
     const res = await c.createLeaveRequest({
       employeeId: 42,
-      leaveType: 3,
+      leaveTypeId: 3,
       startsOn: '2026-08-01',
       endsOn: '2026-08-05',
-      description: 'Beach',
+      comment: 'Beach',
     });
     assert.equal(stub.calls[0].method, 'POST');
     assert.match(stub.calls[0].url, /\/leave_requests$/);
     const body = JSON.parse(stub.calls[0].body as string);
     assert.deepEqual(body, {
       employee_id: 42,
-      leave_type: 3,
+      leave_type_id: 3,
       starts_on: '2026-08-01',
       ends_on: '2026-08-05',
-      description: 'Beach',
+      comment: 'Beach',
     });
     assert.equal(res.data.id, 99);
   });
@@ -294,7 +342,6 @@ describe('PeopleForceClient', () => {
   test('returns undefined body when 204 no-content', async () => {
     stub = stubFetch(() => ({ status: 204, contentType: null }));
     const c = new PeopleForceClient('t', 'https://x.example.com');
-    // getEmployee happens to hit the same request path; type says { data } but 204 → undefined
     const res = await c.getEmployee(1);
     assert.equal(res as unknown, undefined);
   });

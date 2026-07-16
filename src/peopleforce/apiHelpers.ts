@@ -1,22 +1,55 @@
 // src/peopleforce/apiHelpers.ts
 // Bearer-token / API-Key HTTP client for the PeopleForce public REST API.
 // Docs: https://apidoc.peopleforce.io/
+//
+// The API surface here mirrors what the public v2 API actually accepts,
+// verified against a live workspace on 2026-07-16:
+//   - Pagination is server-fixed (50/page for /employees + /departments,
+//     100/page for /leave_requests). No `per_page`/`limit`/etc. override
+//     works; only `page` navigates.
+//   - Filter params that work: `status` (employees), `state` (leave requests).
+//   - Filter params that DO NOT work despite looking obvious: `department_id`
+//     on /employees, `employee_id` on /leave_requests, and any date-range
+//     filter on /leave_requests. Nested endpoints like
+//     /employees/{id}/leave_requests are 404. The response body wraps the
+//     collection in { data, metadata: { pagination: { page, pages, count,
+//     items } } }.
 
 import { UserError } from 'fastmcp';
 import { UserSession } from '../userSession.js';
 
 const DEFAULT_BASE_URL = process.env.PEOPLEFORCE_BASE_URL || 'https://app.peopleforce.io/api/public/v2';
 
+// Rich objects the API embeds inside employee records.
+export type PeopleForceRef = {
+  id?: number | string;
+  name?: string;
+} | null;
+
 export type PeopleForceEmployee = {
   id?: number | string;
+  active?: boolean;
+  employee_number?: string;
+  full_name?: string;
   first_name?: string;
+  middle_name?: string;
   last_name?: string;
   email?: string;
-  position?: { name?: string } | string | null;
-  department?: { id?: number | string; name?: string } | null;
-  status?: string;
-  hired_at?: string;
-  terminated_at?: string | null;
+  personal_email?: string;
+  mobile_number?: string | null;
+  work_phone_number?: string | null;
+  date_of_birth?: string | null;
+  probation_ends_on?: string | null;
+  hired_on?: string | null;
+  position?: PeopleForceRef | string;
+  job_level?: PeopleForceRef;
+  location?: (PeopleForceRef & { address?: string; time_zone?: string }) | null;
+  employment_type?: PeopleForceRef;
+  division?: PeopleForceRef;
+  department?: PeopleForceRef;
+  reporting_to?: PeopleForceRef;
+  job_profile?: PeopleForceRef;
+  avatar_url?: string | null;
 };
 
 export type PeopleForceDepartment = {
@@ -29,20 +62,39 @@ export type PeopleForceDepartment = {
 
 export type PeopleForceLeaveRequest = {
   id?: number | string;
-  employee?: { id?: number | string; first_name?: string; last_name?: string } | null;
-  leave_type?: { id?: number | string; name?: string } | string | null;
+  employee_id?: number | string;
+  leave_type_id?: number | string;
+  /** PeopleForce returns leave_type as a plain string on list responses (e.g. "Vacation"). */
+  leave_type?: string;
+  state?: string;
+  amount?: string;
+  hours?: string;
+  tracking_time_in?: string;
+  on_demand?: boolean;
   starts_on?: string;
   ends_on?: string;
-  state?: string;
-  description?: string;
-  duration?: number;
+  comment?: string | null;
+  attachment_url?: string | null;
+  employee?: {
+    id?: number | string;
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+  } | null;
 };
 
+/** Pagination shape the API actually returns. Server-forced page size. */
 export type PeopleForcePagination = {
   page?: number;
-  per_page?: number;
-  total_pages?: number;
-  total_count?: number;
+  pages?: number;
+  count?: number;
+  items?: number;
+};
+
+/** Envelope shape for list endpoints. */
+export type PeopleForceListResponse<T> = {
+  data: T[];
+  metadata?: { pagination?: PeopleForcePagination };
 };
 
 export class PeopleForceClient {
@@ -108,15 +160,11 @@ export class PeopleForceClient {
 
   listEmployees(input: {
     page?: number;
-    per_page?: number;
     status?: string;
-    departmentId?: string | number;
-  } = {}): Promise<{ data: PeopleForceEmployee[]; meta?: PeopleForcePagination }> {
+  } = {}): Promise<PeopleForceListResponse<PeopleForceEmployee>> {
     return this.request('GET', '/employees', undefined, {
       page: input.page,
-      per_page: input.per_page,
       status: input.status,
-      department_id: input.departmentId,
     });
   }
 
@@ -126,13 +174,9 @@ export class PeopleForceClient {
 
   // === Departments ===
 
-  listDepartments(input: { page?: number; per_page?: number } = {}): Promise<{
-    data: PeopleForceDepartment[];
-    meta?: PeopleForcePagination;
-  }> {
+  listDepartments(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceDepartment>> {
     return this.request('GET', '/departments', undefined, {
       page: input.page,
-      per_page: input.per_page,
     });
   }
 
@@ -140,68 +184,75 @@ export class PeopleForceClient {
 
   listLeaveRequests(input: {
     page?: number;
-    per_page?: number;
-    employeeId?: string | number;
     state?: string;
-    startsFrom?: string;
-    startsTo?: string;
-  } = {}): Promise<{ data: PeopleForceLeaveRequest[]; meta?: PeopleForcePagination }> {
+  } = {}): Promise<PeopleForceListResponse<PeopleForceLeaveRequest>> {
     return this.request('GET', '/leave_requests', undefined, {
       page: input.page,
-      per_page: input.per_page,
-      employee_id: input.employeeId,
       state: input.state,
-      starts_on_from: input.startsFrom,
-      starts_on_to: input.startsTo,
     });
   }
 
   createLeaveRequest(input: {
     employeeId: string | number;
-    leaveType: string | number;
+    leaveTypeId: string | number;
     startsOn: string;
     endsOn: string;
-    description?: string;
+    comment?: string;
   }): Promise<{ data: PeopleForceLeaveRequest }> {
     return this.request('POST', '/leave_requests', {
       employee_id: input.employeeId,
-      leave_type: input.leaveType,
+      leave_type_id: input.leaveTypeId,
       starts_on: input.startsOn,
       ends_on: input.endsOn,
-      description: input.description,
+      comment: input.comment,
     });
   }
 }
 
 // ==== Formatting helpers ====
 
-function fullName(person: { first_name?: string; last_name?: string } | undefined | null): string {
+function fullName(
+  person: { full_name?: string; first_name?: string; last_name?: string } | undefined | null,
+): string {
   if (!person) return 'Unknown';
+  if (person.full_name) return person.full_name;
   const parts = [person.first_name, person.last_name].filter(Boolean);
   return parts.length > 0 ? parts.join(' ') : 'Unknown';
 }
 
+function refName(ref: PeopleForceRef | string | undefined): string | undefined {
+  if (!ref) return undefined;
+  if (typeof ref === 'string') return ref;
+  return ref.name;
+}
+
+function renderPaginationLine(pagination?: PeopleForcePagination): string | null {
+  if (!pagination) return null;
+  const page = pagination.page ?? 1;
+  const pages = pagination.pages ?? 1;
+  const count = pagination.count;
+  const items = pagination.items;
+  const suffix = count !== undefined ? ` (${count} total, ${items ?? '?'} per page)` : '';
+  return `Page ${page} of ${pages}${suffix}`;
+}
+
 export function formatEmployeeList(
   employees: PeopleForceEmployee[],
-  meta?: PeopleForcePagination,
+  pagination?: PeopleForcePagination,
 ): string {
   if (employees.length === 0) return 'No employees found.';
   const parts = ['# Employees', ''];
-  if (meta) {
-    const page = meta.page ?? 1;
-    const totalPages = meta.total_pages ?? 1;
-    const totalCount = meta.total_count ?? employees.length;
-    parts.push(`Page ${page} of ${totalPages} (${totalCount} total)`);
-    parts.push('');
-  }
+  const pag = renderPaginationLine(pagination);
+  if (pag) { parts.push(pag); parts.push(''); }
   employees.forEach((e, i) => {
     parts.push(`## ${i + 1}. ${fullName(e)}`);
     parts.push(`ID: ${e.id ?? ''}`);
     if (e.email) parts.push(`Email: ${e.email}`);
-    const position = typeof e.position === 'string' ? e.position : e.position?.name;
+    const position = refName(e.position);
     if (position) parts.push(`Position: ${position}`);
-    if (e.department?.name) parts.push(`Department: ${e.department.name}`);
-    if (e.status) parts.push(`Status: ${e.status}`);
+    const dept = refName(e.department);
+    if (dept) parts.push(`Department: ${dept}`);
+    if (typeof e.active === 'boolean') parts.push(`Status: ${e.active ? 'active' : 'inactive'}`);
     parts.push('');
   });
   return parts.join('\n').trimEnd();
@@ -210,19 +261,40 @@ export function formatEmployeeList(
 export function formatEmployee(employee: PeopleForceEmployee): string {
   const parts = [`# ${fullName(employee)}`];
   if (employee.id !== undefined) parts.push(`ID: ${employee.id}`);
+  if (employee.employee_number) parts.push(`Employee #: ${employee.employee_number}`);
+  if (typeof employee.active === 'boolean') parts.push(`Status: ${employee.active ? 'active' : 'inactive'}`);
   if (employee.email) parts.push(`Email: ${employee.email}`);
-  const position = typeof employee.position === 'string' ? employee.position : employee.position?.name;
+  if (employee.personal_email) parts.push(`Personal email: ${employee.personal_email}`);
+  if (employee.mobile_number) parts.push(`Mobile: ${employee.mobile_number}`);
+  if (employee.work_phone_number) parts.push(`Work phone: ${employee.work_phone_number}`);
+  const position = refName(employee.position);
   if (position) parts.push(`Position: ${position}`);
-  if (employee.department?.name) parts.push(`Department: ${employee.department.name}`);
-  if (employee.status) parts.push(`Status: ${employee.status}`);
-  if (employee.hired_at) parts.push(`Hired: ${employee.hired_at}`);
-  if (employee.terminated_at) parts.push(`Terminated: ${employee.terminated_at}`);
+  const jobLevel = refName(employee.job_level);
+  if (jobLevel) parts.push(`Job level: ${jobLevel}`);
+  const dept = refName(employee.department);
+  if (dept) parts.push(`Department: ${dept}`);
+  const division = refName(employee.division);
+  if (division) parts.push(`Division: ${division}`);
+  const employment = refName(employee.employment_type);
+  if (employment) parts.push(`Employment type: ${employment}`);
+  const location = refName(employee.location);
+  if (location) parts.push(`Location: ${location}`);
+  const reportingTo = refName(employee.reporting_to);
+  if (reportingTo) parts.push(`Reports to: ${reportingTo}`);
+  if (employee.hired_on) parts.push(`Hired: ${employee.hired_on}`);
+  if (employee.probation_ends_on) parts.push(`Probation ends: ${employee.probation_ends_on}`);
+  if (employee.date_of_birth) parts.push(`Date of birth: ${employee.date_of_birth}`);
   return parts.join('\n');
 }
 
-export function formatDepartmentList(departments: PeopleForceDepartment[]): string {
+export function formatDepartmentList(
+  departments: PeopleForceDepartment[],
+  pagination?: PeopleForcePagination,
+): string {
   if (departments.length === 0) return 'No departments found.';
   const parts = ['# Departments', ''];
+  const pag = renderPaginationLine(pagination);
+  if (pag) { parts.push(pag); parts.push(''); }
   departments.forEach((d, i) => {
     parts.push(`## ${i + 1}. ${d.name ?? 'Untitled'}`);
     parts.push(`ID: ${d.id ?? ''}`);
@@ -235,27 +307,22 @@ export function formatDepartmentList(departments: PeopleForceDepartment[]): stri
 
 export function formatLeaveRequestList(
   requests: PeopleForceLeaveRequest[],
-  meta?: PeopleForcePagination,
+  pagination?: PeopleForcePagination,
 ): string {
   if (requests.length === 0) return 'No leave requests found.';
   const parts = ['# Leave Requests', ''];
-  if (meta) {
-    const page = meta.page ?? 1;
-    const totalPages = meta.total_pages ?? 1;
-    const totalCount = meta.total_count ?? requests.length;
-    parts.push(`Page ${page} of ${totalPages} (${totalCount} total)`);
-    parts.push('');
-  }
+  const pag = renderPaginationLine(pagination);
+  if (pag) { parts.push(pag); parts.push(''); }
   requests.forEach((r, i) => {
-    const leaveType =
-      typeof r.leave_type === 'string' ? r.leave_type : r.leave_type?.name ?? 'Leave';
+    const leaveType = r.leave_type ?? 'Leave';
     parts.push(`## ${i + 1}. ${fullName(r.employee ?? undefined)} — ${leaveType}`);
     parts.push(`ID: ${r.id ?? ''}`);
+    if (r.employee_id) parts.push(`Employee ID: ${r.employee_id}`);
     if (r.starts_on) parts.push(`Starts: ${r.starts_on}`);
     if (r.ends_on) parts.push(`Ends: ${r.ends_on}`);
     if (r.state) parts.push(`State: ${r.state}`);
-    if (typeof r.duration === 'number') parts.push(`Duration: ${r.duration}`);
-    if (r.description) parts.push(`Description: ${r.description}`);
+    if (r.amount) parts.push(`Amount: ${r.amount}${r.tracking_time_in ? ` (${r.tracking_time_in})` : ''}`);
+    if (r.comment && r.comment !== '-') parts.push(`Comment: ${r.comment}`);
     parts.push('');
   });
   return parts.join('\n').trimEnd();
