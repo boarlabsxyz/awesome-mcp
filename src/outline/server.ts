@@ -191,6 +191,7 @@ outlineServer.addTool({
 
 outlineServer.addTool({
   name: 'createDocument',
+  annotations: { readOnlyHint: false },
   description: 'Creates a new Outline document in a collection. Optionally publishes immediately, sets an icon, or nests under a parent.',
   parameters: z.object({
     title: z.string().describe('Document title.'),
@@ -220,6 +221,7 @@ outlineServer.addTool({
 
 outlineServer.addTool({
   name: 'updateDocument',
+  annotations: { readOnlyHint: false },
   description: 'Updates an Outline document. Replaces title/content unless append=true.',
   parameters: z.object({
     documentId: z.string().describe('The document ID to update.'),
@@ -247,6 +249,7 @@ outlineServer.addTool({
 
 outlineServer.addTool({
   name: 'moveDocument',
+  annotations: { readOnlyHint: false },
   description: 'Moves an Outline document to a different collection and/or under a different parent. Must specify at least one destination.',
   parameters: z.object({
     documentId: z.string().describe('The document ID to move.'),
@@ -272,7 +275,8 @@ outlineServer.addTool({
 
 outlineServer.addTool({
   name: 'archiveDocument',
-  description: 'Archives an Outline document (removes from collections but keeps searchable).',
+  annotations: { readOnlyHint: false },
+  description: 'Archives an Outline document (removes from collections but keeps searchable). Reversible via unarchiveDocument.',
   parameters: z.object({
     documentId: z.string().describe('The document ID to archive.'),
   }),
@@ -287,6 +291,7 @@ outlineServer.addTool({
 
 outlineServer.addTool({
   name: 'unarchiveDocument',
+  annotations: { readOnlyHint: false },
   description: 'Unarchives a previously archived Outline document.',
   parameters: z.object({
     documentId: z.string().describe('The document ID to unarchive.'),
@@ -302,6 +307,7 @@ outlineServer.addTool({
 
 outlineServer.addTool({
   name: 'restoreDocument',
+  annotations: { readOnlyHint: false },
   description: 'Restores an Outline document from the trash back to active status.',
   parameters: z.object({
     documentId: z.string().describe('The document ID to restore from trash.'),
@@ -317,6 +323,7 @@ outlineServer.addTool({
 
 outlineServer.addTool({
   name: 'deleteDocument',
+  annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Moves an Outline document to trash. Set permanent=true to skip trash and delete immediately (irreversible).',
   parameters: z.object({
     documentId: z.string().describe('The document ID to delete.'),
@@ -373,6 +380,7 @@ outlineServer.addTool({
 
 outlineServer.addTool({
   name: 'createCollection',
+  annotations: { readOnlyHint: false },
   description: 'Creates a new Outline collection.',
   parameters: z.object({
     name: z.string().describe('Collection name.'),
@@ -398,6 +406,7 @@ outlineServer.addTool({
 
 outlineServer.addTool({
   name: 'updateCollection',
+  annotations: { readOnlyHint: false },
   description: 'Updates an Outline collection\'s name, description, or color. Provide at least one field.',
   parameters: z.object({
     collectionId: z.string().describe('The collection ID.'),
@@ -429,6 +438,7 @@ outlineServer.addTool({
 
 outlineServer.addTool({
   name: 'deleteCollection',
+  annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Permanently deletes an Outline collection AND all documents in it. This cannot be undone.',
   parameters: z.object({
     collectionId: z.string().describe('The collection ID to delete.'),
@@ -519,6 +529,7 @@ outlineServer.addTool({
 
 outlineServer.addTool({
   name: 'addComment',
+  annotations: { readOnlyHint: false },
   description: 'Adds a comment on an Outline document, or replies to an existing comment.',
   parameters: z.object({
     documentId: z.string().describe('The document to comment on.'),

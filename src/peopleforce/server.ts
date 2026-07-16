@@ -208,6 +208,7 @@ peopleForceServer.addTool({
 
 peopleForceServer.addTool({
   name: 'createLeaveRequest',
+  annotations: { readOnlyHint: false },
   description: 'Creates a new PeopleForce leave request (time off) for an employee against a specific leave-type ID. Call `listLeaveTypes` first if you need the ID.',
   parameters: createLeaveRequestSchema,
   execute: (args, { log, session }) =>
