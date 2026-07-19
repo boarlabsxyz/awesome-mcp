@@ -120,6 +120,11 @@ jobs:
           done
 
       - name: Generate release notes
+        env:
+          # When set, generate-release-notes.mjs asks Claude to rewrite the commit list into
+          # a user-facing summary (drops chores/refactors/CI/internal fixes). If missing or
+          # the API call fails, the script falls back to conventional-commit categorization.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           node .github/scripts/generate-release-notes.mjs \
             --tag "${{ steps.tags.outputs.current }}" \
