@@ -163,10 +163,17 @@ async function generateFromAI() {
 
   console.log(`Calling ${OPENROUTER_MODEL} via OpenRouter to summarize ${commits.length} commit(s)...`);
 
+  // Bound the call so a stuck upstream can't run out the workflow's 6h job timeout.
+  // Fallback categorization is cheap; failing fast is preferable to hanging the release.
+  const OPENROUTER_TIMEOUT_MS = 60_000;
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
+
   let response;
   try {
     response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
+      signal: controller.signal,
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
@@ -188,8 +195,13 @@ async function generateFromAI() {
       }),
     });
   } catch (err) {
-    console.warn(`OpenRouter request failed (network): ${err.message}. Falling back to deterministic categorization.`);
+    const reason = err.name === 'AbortError'
+      ? `timed out after ${OPENROUTER_TIMEOUT_MS}ms`
+      : `network: ${err.message}`;
+    console.warn(`OpenRouter request failed (${reason}). Falling back to deterministic categorization.`);
     return null;
+  } finally {
+    clearTimeout(timeoutHandle);
   }
 
   if (!response.ok) {
