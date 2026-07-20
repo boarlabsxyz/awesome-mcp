@@ -262,10 +262,11 @@ jobs:
       - name: Generate release notes
         env:
           TAG: ${{ inputs.tag }}
-          # When set, generate-release-notes.mjs asks Claude to rewrite the commit list into
-          # a user-facing summary (drops chores/refactors/CI/internal fixes). If missing or
-          # the API call fails, the script falls back to conventional-commit categorization.
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # When set, generate-release-notes.mjs asks Claude (via OpenRouter) to rewrite
+          # the commit list into a user-facing summary (drops chores/refactors/CI/internal
+          # fixes). If missing or the API call fails, the script falls back to
+          # conventional-commit categorization.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           # Stamp today as the release date and persist it so release-notes.yml
           # reuses the same value when it regenerates outputs for notifications.

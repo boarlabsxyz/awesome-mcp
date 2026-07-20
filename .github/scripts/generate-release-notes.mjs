@@ -3,11 +3,16 @@
 // No external dependencies — uses only Node.js builtins.
 //
 // Content strategy:
-//   1. If ANTHROPIC_API_KEY is set, send raw commits + ClickUp task titles to Claude and ask
-//      it to produce a user-facing summary (drops chores/refactors/CI/deps/internal fixes,
-//      rewrites commit-speak into plain English). Claude decides sections + primaryTag.
+//   1. If OPENROUTER_API_KEY is set, send raw commits + ClickUp task titles to Claude (via
+//      OpenRouter) and ask it to produce a user-facing summary (drops chores/refactors/CI/
+//      deps/internal fixes, rewrites commit-speak into plain English). Claude decides
+//      sections + primaryTag.
 //   2. Otherwise (or on API failure) fall back to conventional-commit categorization so the
 //      workflow never breaks on network hiccups or a missing key.
+//
+// We use OpenRouter rather than the Anthropic API directly so the same key can be
+// re-routed to a different provider/model in the future by editing OPENROUTER_MODEL below
+// without touching secrets.
 
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
@@ -87,9 +92,11 @@ function cleanSubject(subject) {
 // --- Normalized shape both paths produce ---
 // { primaryTag: 'feature'|'fix'|'improvement', sections: [{heading, items: [{text, taskIds}]}] }
 
-// --- AI-driven summary (Claude) ---
+// --- AI-driven summary (Claude via OpenRouter) ---
+const OPENROUTER_MODEL = 'anthropic/claude-sonnet-4.5';
+
 async function generateFromAI() {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return null;
   if (commits.length === 0) return null;
 
@@ -154,36 +161,40 @@ async function generateFromAI() {
     '- Keep bullets short — one line each, no trailing period required.',
   ].join('\n');
 
-  console.log(`Calling Claude to summarize ${commits.length} commit(s)...`);
+  console.log(`Calling ${OPENROUTER_MODEL} via OpenRouter to summarize ${commits.length} commit(s)...`);
 
   let response;
   try {
-    response = await fetch('https://api.anthropic.com/v1/messages', {
+    response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        // OpenRouter uses these for their attribution/rankings page; harmless if omitted.
+        'HTTP-Referer': 'https://github.com/boarlabsxyz/awesome-mcp',
+        'X-Title': 'awesome-mcp release notes',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: OPENROUTER_MODEL,
         max_tokens: 2048,
         temperature: 0,
-        system: systemPrompt,
+        // Hint to providers that support it (OpenAI, some others). Anthropic ignores
+        // it, which is why the prompt also spells out "no markdown fences, no prose".
+        response_format: { type: 'json_object' },
         messages: [
+          { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
-          { role: 'assistant', content: '{' },
         ],
       }),
     });
   } catch (err) {
-    console.warn(`Claude API request failed (network): ${err.message}. Falling back to deterministic categorization.`);
+    console.warn(`OpenRouter request failed (network): ${err.message}. Falling back to deterministic categorization.`);
     return null;
   }
 
   if (!response.ok) {
     const errBody = await response.text().catch(() => '');
-    console.warn(`Claude API returned HTTP ${response.status}. Body: ${errBody.slice(0, 500)}`);
+    console.warn(`OpenRouter returned HTTP ${response.status}. Body: ${errBody.slice(0, 500)}`);
     console.warn('Falling back to deterministic categorization.');
     return null;
   }
@@ -192,24 +203,30 @@ async function generateFromAI() {
   try {
     payload = await response.json();
   } catch (err) {
-    console.warn(`Could not parse Claude response as JSON: ${err.message}. Falling back.`);
+    console.warn(`Could not parse OpenRouter response as JSON envelope: ${err.message}. Falling back.`);
     return null;
   }
 
-  const rawText = payload?.content?.[0]?.text;
+  const rawText = payload?.choices?.[0]?.message?.content;
   if (typeof rawText !== 'string') {
-    console.warn('Claude response missing content[0].text. Falling back.');
+    console.warn('OpenRouter response missing choices[0].message.content. Falling back.');
     return null;
   }
 
-  // Reattach the assistant prefill "{" so the string is valid JSON.
-  const jsonText = '{' + rawText;
+  // Defensive: strip ```json fences if the model wrapped its output, then find the outer
+  // JSON object. Anthropic-via-OpenRouter usually returns bare JSON but this is cheap.
+  const jsonText = (() => {
+    const stripped = rawText.replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+    const firstBrace = stripped.indexOf('{');
+    const lastBrace = stripped.lastIndexOf('}');
+    return firstBrace !== -1 && lastBrace > firstBrace ? stripped.slice(firstBrace, lastBrace + 1) : stripped;
+  })();
 
   let parsed;
   try {
     parsed = JSON.parse(jsonText);
   } catch (err) {
-    console.warn(`Claude returned malformed JSON: ${err.message}. Raw text: ${rawText.slice(0, 300)}`);
+    console.warn(`Model returned malformed JSON: ${err.message}. Raw text: ${rawText.slice(0, 300)}`);
     return null;
   }
 
@@ -219,7 +236,7 @@ async function generateFromAI() {
   }
 
   if (parsed.hasUserFacingChanges === false) {
-    console.log('Claude determined no user-facing changes in this release.');
+    console.log('Model determined no user-facing changes in this release.');
     return {
       primaryTag: 'improvement',
       sections: [{
@@ -245,11 +262,11 @@ async function generateFromAI() {
     .filter(s => s.items.length > 0) : [];
 
   if (sections.length === 0) {
-    console.warn('Claude returned no usable sections. Falling back.');
+    console.warn('Model returned no usable sections. Falling back.');
     return null;
   }
 
-  console.log(`Claude produced ${sections.length} section(s), ${sections.reduce((n, s) => n + s.items.length, 0)} bullet(s).`);
+  console.log(`Model produced ${sections.length} section(s), ${sections.reduce((n, s) => n + s.items.length, 0)} bullet(s).`);
   return { primaryTag, sections };
 }
 
