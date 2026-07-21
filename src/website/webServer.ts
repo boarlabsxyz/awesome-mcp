@@ -2158,6 +2158,11 @@ function registerSharedRoutes(app: express.Express): void {
             mcpUrl: c.mcpUrl,
             provider,
             scopes: computeEffectiveScopes(provider, c.oauthScopes, c.scopes),
+            // Non-empty only when this connector has an OAuth authorize endpoint
+            // configured (e.g. Outline once OUTLINE_CLIENT_ID/SECRET/BASE_URL are
+            // set). The dashboard uses it to offer the OAuth "Connect" flow
+            // instead of the paste-token form for otherwise token-based providers.
+            oauthAuthorizationUrl: c.oauthAuthorizationUrl || null,
             samplePrompts: SAMPLE_PROMPTS[c.slug] || [],
           };
         }),

@@ -1248,9 +1248,13 @@
 
       const provider = selectedMcpType.provider;
       // Any provider without an OAuth authorize URL goes through /api/connect-token.
-      // Currently: slack-bot (single-field token paste), outline (URL + API key paste),
-      // and peopleforce (single-field API key paste).
-      const isTokenProvider = provider === 'slack-bot' || provider === 'outline' || provider === 'peopleforce';
+      // slack-bot and peopleforce are always paste-token. Outline is dual-mode:
+      // it uses the OAuth "Connect" flow when the deployment has configured an
+      // authorize URL (OUTLINE_CLIENT_ID/SECRET/BASE_URL), otherwise it falls
+      // back to the URL + API key paste form.
+      const isTokenProvider =
+        (provider === 'slack-bot' || provider === 'outline' || provider === 'peopleforce')
+        && !selectedMcpType.oauthAuthorizationUrl;
 
       // For OAuth providers, skip naming step — name is auto-generated on the backend
       if (!isTokenProvider) {
