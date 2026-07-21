@@ -25,6 +25,15 @@ export interface UserSession {
   outlineAccessToken?: string;
   /** Per-connection Outline base URL (e.g. https://wiki.example.com), used by OutlineClient. */
   outlineBaseUrl?: string;
+  /** OAuth refresh token (authorization_code flow only; absent for pasted API keys). */
+  outlineRefreshToken?: string;
+  /** Access-token expiry as ms-epoch; absent = non-expiring (paste-token flow). */
+  outlineTokenExpiry?: number;
+  /** OAuth client credentials (from env) used to drive the refresh_token grant. */
+  outlineOauthClientId?: string;
+  outlineOauthClientSecret?: string;
+  /** Connection instance id, so a refresh can persist rotated tokens back to the store. */
+  outlineInstanceId?: string;
   peopleForceAccessToken?: string;
   /** Optional per-connection PeopleForce base URL; falls back to PEOPLEFORCE_BASE_URL or the public default. */
   peopleForceBaseUrl?: string;
@@ -256,7 +265,12 @@ export function createOutlineSession(
   user: UserRecord,
   connection: McpConnection,
 ): UserSession {
-  const providerTokens = connection.providerTokens as { access_token?: string; baseUrl?: string } | undefined;
+  const providerTokens = connection.providerTokens as {
+    access_token?: string;
+    refresh_token?: string;
+    expiry_date?: number;
+    baseUrl?: string;
+  } | undefined;
   const accessToken = providerTokens?.access_token;
   if (!accessToken) {
     throw new Error(`Outline access token missing for connection ${connection.instanceId}. Please reconnect.`);
@@ -267,6 +281,12 @@ export function createOutlineSession(
   const cached = mcpSessionCache.get(cacheKey);
   if (cached) return cached;
 
+  // OAuth client credentials live in env (same vars the catalog seed reads to
+  // enable the OAuth flow). Present only for OAuth deployments; when absent
+  // (paste-token deployments) the refresh path in withOutlineClient no-ops.
+  const oauthClientId = process.env.OUTLINE_CLIENT_ID || undefined;
+  const oauthClientSecret = process.env.OUTLINE_CLIENT_SECRET || undefined;
+
   const session: UserSession = {
     userId: user.id,
     apiKey: user.apiKey,
@@ -274,6 +294,13 @@ export function createOutlineSession(
     mcpSlug: connection.mcpSlug,
     outlineAccessToken: accessToken,
     outlineBaseUrl: baseUrl,
+    // Refresh plumbing — only populated for OAuth connections (paste tokens
+    // carry no refresh_token/expiry_date, so refresh stays a no-op).
+    outlineRefreshToken: providerTokens?.refresh_token,
+    outlineTokenExpiry: providerTokens?.expiry_date,
+    outlineOauthClientId: oauthClientId,
+    outlineOauthClientSecret: oauthClientSecret,
+    outlineInstanceId: connection.instanceId,
     // Null placeholders for Google clients (Outline MCP won't use them)
     googleDocs: null as any,
     googleDrive: null as any,
