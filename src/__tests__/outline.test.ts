@@ -17,6 +17,7 @@ import {
   getOutlineClient,
   mapOutlineError,
   withOutlineClient,
+  maybeRefreshOutlineToken,
   renderProseMirror,
 } from '../outline/apiHelpers.js';
 
@@ -652,6 +653,103 @@ describe('withOutlineClient', () => {
       }),
       /not found/,
     );
+  });
+});
+
+// -----------------------------------------------------------------------------
+// maybeRefreshOutlineToken — OAuth access-token refresh at the tool-call
+// chokepoint. Persistence (updateMcpInstanceProviderTokens) is skipped when the
+// session carries no outlineInstanceId, keeping these tests off the real store.
+// -----------------------------------------------------------------------------
+
+describe('maybeRefreshOutlineToken', () => {
+  const noopLog = { info: () => {}, error: () => {} };
+  const oauthSession = () => ({
+    outlineAccessToken: 'old-at',
+    outlineBaseUrl: 'https://wiki.example.com',
+    outlineRefreshToken: 'old-rt',
+    outlineOauthClientId: 'cid',
+    outlineOauthClientSecret: 'sec',
+    // no outlineInstanceId → persistence is skipped in these unit tests
+  });
+
+  beforeEach(() => installMockFetch());
+  afterEach(() => {
+    mockImpl = null;
+    globalThis.fetch = originalFetch;
+  });
+
+  test('no-ops for an undefined session', async () => {
+    await maybeRefreshOutlineToken(undefined, noopLog);
+    assert.equal(calls.length, 0);
+  });
+
+  test('no-ops for a paste-token session (no refresh token / expiry)', async () => {
+    const session = { outlineAccessToken: 'paste-key', outlineBaseUrl: 'https://wiki.example.com' } as any;
+    await maybeRefreshOutlineToken(session, noopLog);
+    assert.equal(calls.length, 0);
+    assert.equal(session.outlineAccessToken, 'paste-key');
+  });
+
+  test('does not refresh while the access token is comfortably valid', async () => {
+    const session = { ...oauthSession(), outlineTokenExpiry: Date.now() + 3_600_000 } as any;
+    await maybeRefreshOutlineToken(session, noopLog);
+    assert.equal(calls.length, 0);
+    assert.equal(session.outlineAccessToken, 'old-at');
+  });
+
+  test('refreshes when at/near expiry and rotates the token in place', async () => {
+    mockImpl = () => jsonResponse({ access_token: 'new-at', refresh_token: 'new-rt', expires_in: 3600 });
+    const before = Date.now();
+    const session = { ...oauthSession(), outlineTokenExpiry: Date.now() + 10_000 } as any; // inside 60s skew
+    await maybeRefreshOutlineToken(session, noopLog);
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'https://wiki.example.com/oauth/token');
+    const body = new URLSearchParams(calls[0].init.body as string);
+    assert.equal(body.get('grant_type'), 'refresh_token');
+    assert.equal(body.get('refresh_token'), 'old-rt');
+    assert.equal(body.get('client_id'), 'cid');
+    assert.equal(body.get('client_secret'), 'sec');
+
+    assert.equal(session.outlineAccessToken, 'new-at');
+    assert.equal(session.outlineRefreshToken, 'new-rt');
+    assert.ok((session.outlineTokenExpiry as number) >= before + 3600 * 1000);
+  });
+
+  test('keeps the existing refresh token when Outline omits a rotated one', async () => {
+    mockImpl = () => jsonResponse({ access_token: 'new-at', expires_in: 3600 });
+    const session = { ...oauthSession(), outlineTokenExpiry: Date.now() - 1 } as any; // already expired
+    await maybeRefreshOutlineToken(session, noopLog);
+    assert.equal(session.outlineAccessToken, 'new-at');
+    assert.equal(session.outlineRefreshToken, 'old-rt');
+  });
+
+  test('leaves the session untouched and does not throw when refresh fails', async () => {
+    mockImpl = () => textResponse('invalid_grant', { status: 400 });
+    let logged = '';
+    const log = { info: () => {}, error: (m: string) => { logged = m; } };
+    const session = { ...oauthSession(), outlineTokenExpiry: Date.now() - 1 } as any;
+    await maybeRefreshOutlineToken(session, log);
+    assert.equal(session.outlineAccessToken, 'old-at');
+    assert.equal(session.outlineRefreshToken, 'old-rt');
+    assert.match(logged, /refresh failed/i);
+  });
+
+  test('withOutlineClient uses the freshly refreshed token for the tool call', async () => {
+    mockImpl = ({ url }) => {
+      if (url.endsWith('/oauth/token')) {
+        return jsonResponse({ access_token: 'new-at', refresh_token: 'new-rt', expires_in: 3600 });
+      }
+      return jsonResponse({ data: { id: 'd1', title: 'Doc' } });
+    };
+    const session = { ...oauthSession(), outlineTokenExpiry: Date.now() - 1 } as any;
+    await withOutlineClient('Failed to read', session, noopLog, async (client) => client.getDocument('d1'));
+
+    // First call is the refresh; the second is the API call carrying the new token.
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].url, 'https://wiki.example.com/oauth/token');
+    assert.equal((calls[1].init.headers as any).Authorization, 'Bearer new-at');
   });
 });
 

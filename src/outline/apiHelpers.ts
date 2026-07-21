@@ -4,6 +4,7 @@
 
 import { UserError } from 'fastmcp';
 import { UserSession } from '../userSession.js';
+import { refreshOutlineToken } from './oauthCallback.js';
 
 /**
  * Default base URL used only when no per-connection URL is stored and no
@@ -643,6 +644,75 @@ export function getOutlineClient(session?: UserSession): OutlineClient {
   return new OutlineClient(session.outlineAccessToken, session.outlineBaseUrl);
 }
 
+/** Refresh proactively this many ms before the access token's stated expiry. */
+const OUTLINE_REFRESH_SKEW_MS = 60_000;
+
+/**
+ * If this is an OAuth Outline session whose access token is at/near expiry,
+ * exchange the refresh token for a fresh access token, mutate the (cached,
+ * by-reference) session in place, and persist the rotated tokens.
+ *
+ * Best-effort and never throws: on any failure the existing access token is
+ * left in place so the tool call still proceeds (and surfaces a normal 401 via
+ * mapOutlineError if the token really is dead). No-ops for paste-token sessions
+ * (which carry no refresh_token/expiry) and when OAuth client credentials are
+ * absent — so the paste-token flow is completely unaffected.
+ */
+export async function maybeRefreshOutlineToken(
+  session: UserSession | undefined,
+  log: OutlineToolLog,
+): Promise<void> {
+  if (!session) return;
+  const expiry = session.outlineTokenExpiry;
+  const refreshToken = session.outlineRefreshToken;
+  const clientId = session.outlineOauthClientId;
+  const clientSecret = session.outlineOauthClientSecret;
+  // Only OAuth connections carry all four fields; anything else skips refresh.
+  if (!expiry || !refreshToken || !clientId || !clientSecret) return;
+  if (Date.now() < expiry - OUTLINE_REFRESH_SKEW_MS) return;
+
+  const baseUrl = (session.outlineBaseUrl || process.env.OUTLINE_BASE_URL || '').replace(/\/+$/, '');
+  if (!baseUrl) return;
+
+  const result = await refreshOutlineToken({
+    tokenUrl: `${baseUrl}/oauth/token`,
+    refreshToken,
+    clientId,
+    clientSecret,
+  });
+  if (!result.ok) {
+    log.error(`Outline token refresh failed (${result.status}); using existing token. ${result.logMessage}`);
+    return;
+  }
+
+  // Rotate in place so the cached session and subsequent tool calls see the new
+  // token. Outline rotates the refresh token on each use, so prefer whichever it
+  // returned (falling back to the current one only if it omitted a new one).
+  const newRefresh = result.refreshToken ?? refreshToken;
+  const newExpiry = result.expiresIn ? Date.now() + result.expiresIn * 1000 : undefined;
+  session.outlineAccessToken = result.accessToken;
+  session.outlineRefreshToken = newRefresh;
+  session.outlineTokenExpiry = newExpiry;
+
+  // Persist so a cold cache (or another process) reads the rotated tokens. The
+  // dynamic import keeps the connection store (and its db deps) out of the
+  // module-load path for unit tests that never trigger a refresh.
+  const instanceId = session.outlineInstanceId;
+  if (instanceId) {
+    try {
+      const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+      await updateMcpInstanceProviderTokens(instanceId, {
+        access_token: result.accessToken,
+        refresh_token: newRefresh,
+        expiry_date: newExpiry,
+        baseUrl: session.outlineBaseUrl,
+      });
+    } catch (err: any) {
+      log.error(`Failed to persist refreshed Outline tokens for ${instanceId}: ${err?.message ?? err}`);
+    }
+  }
+}
+
 /** Translate an API/network error into a `UserError` with the given prefix. */
 export function mapOutlineError(prefix: string, error: any, log: OutlineToolLog): never {
   log.error(`${prefix}: ${error?.message ?? error}`);
@@ -666,6 +736,10 @@ export async function withOutlineClient<T>(
   log: OutlineToolLog,
   fn: (client: OutlineClient) => Promise<T>,
 ): Promise<T> {
+  // Proactively refresh an expiring OAuth access token before building the
+  // client (no-op for paste-token sessions). Runs before getOutlineClient so a
+  // missing-token error is still surfaced verbatim by getOutlineClient.
+  await maybeRefreshOutlineToken(session, log);
   const client = getOutlineClient(session);
   try {
     return await fn(client);

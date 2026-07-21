@@ -385,8 +385,12 @@ export function computeTokenStatus(
   expiryDate: number | null;
   isExpired: boolean;
 } {
-  // ClickUp, Slack, and Outline tokens are long-lived (no refresh needed, no expiry)
-  if (provider === 'clickup' || provider === 'slack-bot' || provider === 'slack' || provider === 'outline') {
+  // ClickUp and Slack tokens are long-lived (no refresh needed, no expiry).
+  // Outline is intentionally NOT here: OAuth-connected Outline tokens expire
+  // (~1h) and carry a refresh token, so they are computed from the passed
+  // tokens below (paste-token Outline connections have neither field and so
+  // still resolve to non-expiring).
+  if (provider === 'clickup' || provider === 'slack-bot' || provider === 'slack') {
     return { hasRefreshToken: false, expiryDate: null, isExpired: false };
   }
   return {
@@ -772,7 +776,17 @@ function registerSharedRoutes(app: express.Express): void {
           const authorizeUrl = `${mcp.oauthAuthorizationUrl}?client_id=${encodeURIComponent(client_id)}&user_scope=${encodeURIComponent(userScopes)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
           res.redirect(authorizeUrl);
         } else {
-          const authorizeUrl = `${mcp.oauthAuthorizationUrl}?client_id=${encodeURIComponent(client_id)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
+          // Generic OAuth 2.0 authorization_code providers (e.g. Outline, ClickUp).
+          // response_type=code is REQUIRED by spec-compliant servers — Outline's
+          // OAuth server (@node-oauth/oauth2-server) rejects the request without
+          // it; ClickUp defaults to code and tolerates the explicit value. scope
+          // is only appended when the catalog declares scopes (ClickUp uses
+          // app-level scopes → none, so it is omitted for ClickUp).
+          let authorizeUrl = `${mcp.oauthAuthorizationUrl}?client_id=${encodeURIComponent(client_id)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&state=${encodeURIComponent(state)}`;
+          const scopeList = (mcp.oauthScopes || []).join(' ');
+          if (scopeList) {
+            authorizeUrl += `&scope=${encodeURIComponent(scopeList)}`;
+          }
           res.redirect(authorizeUrl);
         }
       } else {
@@ -1085,8 +1099,16 @@ function registerSharedRoutes(app: express.Express): void {
 
         // Persist baseUrl alongside the token so tool calls can locate the
         // right Outline instance regardless of which env var is set on the MCP
-        // service later (matches the paste-token flow's shape).
-        const outlineProviderTokens = { access_token: exchange.accessToken, baseUrl: outlineBaseUrl };
+        // service later (matches the paste-token flow's shape). Outline OAuth
+        // access tokens expire (~1h default) and rotate their refresh token on
+        // each use, so we store refresh_token + expiry_date to drive the
+        // tool-call-time refresh in createOutlineSession/withOutlineClient.
+        const outlineProviderTokens = {
+          access_token: exchange.accessToken,
+          refresh_token: exchange.refreshToken ?? undefined,
+          expiry_date: exchange.expiresIn ? Date.now() + exchange.expiresIn * 1000 : undefined,
+          baseUrl: outlineBaseUrl,
+        };
         const emptyGoogleTokensForOutline = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
         const outlineInstanceName = buildOutlineInstanceName({
           serviceName: mcp.name.replace(' MCP', '').trim(),
@@ -1715,7 +1737,15 @@ function registerSharedRoutes(app: express.Express): void {
           googleEmail: c.googleEmail || c.providerEmail,
           connectedAt: c.connectedAt,
           provider: c.provider || 'google',
-          tokenStatus: computeTokenStatus(c.googleTokens, c.provider),
+          // Outline stores its real (possibly expiring) OAuth token in
+          // providerTokens, not googleTokens — feed the right object so the
+          // dashboard reflects OAuth expiry/refresh state.
+          tokenStatus: computeTokenStatus(
+            c.provider === 'outline'
+              ? (c.providerTokens as { refresh_token?: string; expiry_date?: number } | undefined)
+              : c.googleTokens,
+            c.provider,
+          ),
         })),
       });
     } catch (err: any) {

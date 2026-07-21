@@ -476,7 +476,10 @@ export async function seedDefaultCatalogs(): Promise<void> {
     googleClientSecret: outlineClientSecret,
     oauthAuthorizationUrl: outlineOauthEnabled ? `${outlineOauthBaseUrl}/oauth/authorize` : '',
     oauthTokenUrl:         outlineOauthEnabled ? `${outlineOauthBaseUrl}/oauth/token`     : '',
-    oauthScopes: outlineOauthEnabled ? ['read'] : [],
+    // Outline's MCP surface includes write tools (create/update/delete docs,
+    // collections, comments), so request read+write. Scopes are only sent when
+    // OAuth is enabled; the paste-token flow ignores them.
+    oauthScopes: outlineOauthEnabled ? ['read', 'write'] : [],
     isLocal: !process.env.OUTLINE_MCP_URL,
     isActive: true,
   });

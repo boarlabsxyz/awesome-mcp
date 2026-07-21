@@ -11,6 +11,10 @@ export type FetchImpl = typeof fetch;
 export type ExchangeOk = {
   ok: true;
   accessToken: string;
+  /** Refresh token for the authorization_code grant; null if Outline omitted it. */
+  refreshToken: string | null;
+  /** Access-token lifetime in seconds; null if Outline omitted it. */
+  expiresIn: number | null;
   email: string | null;
   teamName: string | null;
 };
@@ -48,13 +52,20 @@ export async function exchangeOutlineOauthCode(input: ExchangeInput): Promise<Ex
   if (!tokenResult.ok) return tokenResult;
 
   const { email, teamName } = await fetchOutlineUserInfo(input.baseUrl, tokenResult.accessToken, fetchImpl);
-  return { ok: true, accessToken: tokenResult.accessToken, email, teamName };
+  return {
+    ok: true,
+    accessToken: tokenResult.accessToken,
+    refreshToken: tokenResult.refreshToken,
+    expiresIn: tokenResult.expiresIn,
+    email,
+    teamName,
+  };
 }
 
 async function postTokenExchange(
   input: ExchangeInput,
   fetchImpl: FetchImpl,
-): Promise<{ ok: true; accessToken: string } | ExchangeErr> {
+): Promise<{ ok: true; accessToken: string; refreshToken: string | null; expiresIn: number | null } | ExchangeErr> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TOKEN_EXCHANGE_TIMEOUT_MS);
   let response: Response;
@@ -101,7 +112,11 @@ async function postTokenExchange(
     };
   }
 
-  const parsed = await response.json().catch(() => null) as { access_token?: string } | null;
+  const parsed = await response.json().catch(() => null) as {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+  } | null;
   if (!parsed?.access_token) {
     return {
       ok: false,
@@ -110,7 +125,87 @@ async function postTokenExchange(
       logMessage: `Outline token response missing access_token: ${JSON.stringify(parsed)}`,
     };
   }
-  return { ok: true, accessToken: parsed.access_token };
+  return {
+    ok: true,
+    accessToken: parsed.access_token,
+    refreshToken: parsed.refresh_token ?? null,
+    expiresIn: typeof parsed.expires_in === 'number' ? parsed.expires_in : null,
+  };
+}
+
+// ==== Refresh-token grant (used at tool-call time when the access token nears expiry) ====
+
+export interface RefreshInput {
+  /** Outline token endpoint, e.g. https://wiki.example.com/oauth/token */
+  tokenUrl: string;
+  refreshToken: string;
+  clientId: string;
+  clientSecret: string;
+  fetchImpl?: FetchImpl;
+}
+
+export type RefreshResult =
+  | { ok: true; accessToken: string; refreshToken: string | null; expiresIn: number | null }
+  | { ok: false; status: number; logMessage: string };
+
+/**
+ * Exchange an Outline refresh token for a fresh access token via the
+ * `refresh_token` grant (client_secret_post). Outline ROTATES the refresh
+ * token on every use, so callers must persist the returned `refreshToken`.
+ *
+ * Never throws: returns a discriminated result so the caller can decide
+ * whether to fall back to the (soon-to-be-rejected) existing access token.
+ */
+export async function refreshOutlineToken(input: RefreshInput): Promise<RefreshResult> {
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TOKEN_EXCHANGE_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetchImpl(input.tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: input.refreshToken,
+        client_id: input.clientId,
+        client_secret: input.clientSecret,
+      }).toString(),
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    clearTimeout(timeout);
+    const timedOut = err?.name === 'AbortError';
+    return {
+      ok: false,
+      status: 502,
+      logMessage: timedOut
+        ? `Outline token refresh timed out: POST ${input.tokenUrl}`
+        : `Outline token refresh fetch failed: ${err?.message ?? err}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    return { ok: false, status: response.status, logMessage: `Outline token refresh failed: ${response.status} ${body}` };
+  }
+
+  const parsed = await response.json().catch(() => null) as {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+  } | null;
+  if (!parsed?.access_token) {
+    return { ok: false, status: 500, logMessage: `Outline refresh response missing access_token: ${JSON.stringify(parsed)}` };
+  }
+  return {
+    ok: true,
+    accessToken: parsed.access_token,
+    refreshToken: parsed.refresh_token ?? null,
+    expiresIn: typeof parsed.expires_in === 'number' ? parsed.expires_in : null,
+  };
 }
 
 /**

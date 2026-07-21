@@ -3,6 +3,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   exchangeOutlineOauthCode,
+  refreshOutlineToken,
   fetchOutlineUserInfo,
   buildOutlineInstanceName,
   type ExchangeInput,
@@ -280,5 +281,105 @@ describe('exchangeOutlineOauthCode', () => {
     assert.equal(result.status, 500);
     // logMessage still assembled with status code even if body read failed
     assert.match(result.logMessage, /502/);
+  });
+
+  test('captures refresh_token and expires_in from the token response', async () => {
+    const { fetch: mockFetch } = makeMockFetch((call) => {
+      if (call.url.endsWith('/oauth/token')) {
+        return new Response(
+          JSON.stringify({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ data: {} }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    const result = await exchangeOutlineOauthCode({ ...baseInput, fetchImpl: mockFetch });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.refreshToken, 'rt');
+    assert.equal(result.expiresIn, 3600);
+  });
+
+  test('refresh_token and expires_in default to null when Outline omits them', async () => {
+    const { fetch: mockFetch } = makeMockFetch((call) => {
+      if (call.url.endsWith('/oauth/token')) {
+        return new Response(JSON.stringify({ access_token: 'at' }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ data: {} }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    const result = await exchangeOutlineOauthCode({ ...baseInput, fetchImpl: mockFetch });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.refreshToken, null);
+    assert.equal(result.expiresIn, null);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// refreshOutlineToken — the refresh_token grant used at tool-call time
+// -----------------------------------------------------------------------------
+
+describe('refreshOutlineToken', () => {
+  const refreshInput = {
+    tokenUrl: 'https://wiki.example.com/oauth/token',
+    refreshToken: 'old-rt',
+    clientId: 'client-id',
+    clientSecret: 'client-secret',
+  };
+
+  test('happy path: returns rotated access + refresh token and expires_in', async () => {
+    const { fetch: mockFetch, calls } = makeMockFetch(() =>
+      new Response(JSON.stringify({ access_token: 'new-at', refresh_token: 'new-rt', expires_in: 3600 }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const result = await refreshOutlineToken({ ...refreshInput, fetchImpl: mockFetch });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.accessToken, 'new-at');
+    assert.equal(result.refreshToken, 'new-rt');
+    assert.equal(result.expiresIn, 3600);
+    const body = new URLSearchParams(calls[0].init.body as string);
+    assert.equal(body.get('grant_type'), 'refresh_token');
+    assert.equal(body.get('refresh_token'), 'old-rt');
+    assert.equal(body.get('client_id'), 'client-id');
+    assert.equal(body.get('client_secret'), 'client-secret');
+  });
+
+  test('surfaces upstream status on non-2xx', async () => {
+    const { fetch: mockFetch } = makeMockFetch(() => new Response('invalid_grant', { status: 400 }));
+    const result = await refreshOutlineToken({ ...refreshInput, fetchImpl: mockFetch });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.status, 400);
+    assert.match(result.logMessage, /400 invalid_grant/);
+  });
+
+  test('returns 500 when the response is 2xx but has no access_token', async () => {
+    const { fetch: mockFetch } = makeMockFetch(() =>
+      new Response(JSON.stringify({ error: 'invalid_grant' }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const result = await refreshOutlineToken({ ...refreshInput, fetchImpl: mockFetch });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.status, 500);
+    assert.match(result.logMessage, /missing access_token/);
+  });
+
+  test('returns 502 with timeout message when the fetch aborts', async () => {
+    const { fetch: mockFetch } = makeMockFetch(() => {
+      const err: any = new Error('aborted');
+      err.name = 'AbortError';
+      throw err;
+    });
+    const result = await refreshOutlineToken({ ...refreshInput, fetchImpl: mockFetch });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.status, 502);
+    assert.match(result.logMessage, /timed out/);
   });
 });
