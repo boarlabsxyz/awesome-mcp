@@ -647,10 +647,20 @@ export function getOutlineClient(session?: UserSession): OutlineClient {
 /** Refresh proactively this many ms before the access token's stated expiry. */
 const OUTLINE_REFRESH_SKEW_MS = 60_000;
 
+// Single-flight guard: collapse concurrent refreshes for the same connection so
+// only one rotating refresh_token grant is in flight at a time. Outline rotates
+// the refresh token on every use, so two parallel exchanges would invalidate
+// each other. Keyed by outlineInstanceId when present; the WeakMap covers the
+// (rare) session without a stable instance id by keying on the shared,
+// by-reference session object itself.
+const inflightOutlineRefreshById = new Map<string, Promise<void>>();
+const inflightOutlineRefreshBySession = new WeakMap<UserSession, Promise<void>>();
+
 /**
  * If this is an OAuth Outline session whose access token is at/near expiry,
  * exchange the refresh token for a fresh access token, mutate the (cached,
- * by-reference) session in place, and persist the rotated tokens.
+ * by-reference) session in place, and persist the rotated tokens. Concurrent
+ * calls for the same connection share a single in-flight refresh.
  *
  * Best-effort and never throws: on any failure the existing access token is
  * left in place so the tool call still proceeds (and surfaces a normal 401 via
@@ -664,13 +674,43 @@ export async function maybeRefreshOutlineToken(
 ): Promise<void> {
   if (!session) return;
   const expiry = session.outlineTokenExpiry;
+  // Only OAuth connections carry all of these; anything else skips refresh.
+  if (!expiry || !session.outlineRefreshToken || !session.outlineOauthClientId || !session.outlineOauthClientSecret) {
+    return;
+  }
+  if (Date.now() < expiry - OUTLINE_REFRESH_SKEW_MS) return;
+
+  // Reuse an in-flight refresh for this connection if one is already running so
+  // concurrent tool calls await the same request instead of each POSTing (and
+  // invalidating) the rotating refresh token.
+  const instanceId = session.outlineInstanceId;
+  const existing = instanceId
+    ? inflightOutlineRefreshById.get(instanceId)
+    : inflightOutlineRefreshBySession.get(session);
+  if (existing) {
+    await existing;
+    return;
+  }
+
+  const refresh = performOutlineRefresh(session, log).finally(() => {
+    if (instanceId) inflightOutlineRefreshById.delete(instanceId);
+    else inflightOutlineRefreshBySession.delete(session);
+  });
+  if (instanceId) inflightOutlineRefreshById.set(instanceId, refresh);
+  else inflightOutlineRefreshBySession.set(session, refresh);
+  await refresh;
+}
+
+/**
+ * Perform the refresh_token exchange, rotate the session tokens in place, and
+ * persist the rotated pair. Never throws (best-effort) so single-flight
+ * awaiters always resolve cleanly.
+ */
+async function performOutlineRefresh(session: UserSession, log: OutlineToolLog): Promise<void> {
   const refreshToken = session.outlineRefreshToken;
   const clientId = session.outlineOauthClientId;
   const clientSecret = session.outlineOauthClientSecret;
-  // Only OAuth connections carry all four fields; anything else skips refresh.
-  if (!expiry || !refreshToken || !clientId || !clientSecret) return;
-  if (Date.now() < expiry - OUTLINE_REFRESH_SKEW_MS) return;
-
+  if (!refreshToken || !clientId || !clientSecret) return;
   const baseUrl = (session.outlineBaseUrl || process.env.OUTLINE_BASE_URL || '').replace(/\/+$/, '');
   if (!baseUrl) return;
 

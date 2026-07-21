@@ -736,6 +736,58 @@ describe('maybeRefreshOutlineToken', () => {
     assert.match(logged, /refresh failed/i);
   });
 
+  test('single-flight: concurrent refreshes for one session make only one request', async () => {
+    let tokenPosts = 0;
+    mockImpl = ({ url }) => {
+      if (url.endsWith('/oauth/token')) {
+        tokenPosts += 1;
+        return jsonResponse({ access_token: 'new-at', refresh_token: 'new-rt', expires_in: 3600 });
+      }
+      return jsonResponse({ data: {} });
+    };
+    // No outlineInstanceId → dedup falls back to the shared session object and
+    // persistence is skipped, so this exercises the guard without the store.
+    const session = { ...oauthSession(), outlineTokenExpiry: Date.now() - 1 } as any;
+    await Promise.all([
+      maybeRefreshOutlineToken(session, noopLog),
+      maybeRefreshOutlineToken(session, noopLog),
+      maybeRefreshOutlineToken(session, noopLog),
+    ]);
+    assert.equal(tokenPosts, 1);
+    assert.equal(calls.length, 1);
+    assert.equal(session.outlineAccessToken, 'new-at');
+    assert.equal(session.outlineRefreshToken, 'new-rt');
+  });
+
+  test('allows a fresh refresh after the previous one settles (guard is cleared)', async () => {
+    mockImpl = () => jsonResponse({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 });
+    const session = { ...oauthSession(), outlineTokenExpiry: Date.now() - 1 } as any;
+    await maybeRefreshOutlineToken(session, noopLog);
+    // Force it near-expiry again; a second sequential call must be able to run.
+    session.outlineTokenExpiry = Date.now() - 1;
+    await maybeRefreshOutlineToken(session, noopLog);
+    assert.equal(calls.length, 2);
+  });
+
+  test('persists rotated tokens when the session carries an instanceId', async () => {
+    mockImpl = ({ url }) => {
+      if (url.endsWith('/oauth/token')) {
+        return jsonResponse({ access_token: 'persist-at', refresh_token: 'persist-rt', expires_in: 3600 });
+      }
+      return jsonResponse({ data: {} });
+    };
+    // instanceId set → exercises the id-keyed dedup + the persistence branch
+    // (updateMcpInstanceProviderTokens is a no-op for this unknown id).
+    const session = {
+      ...oauthSession(),
+      outlineTokenExpiry: Date.now() - 1,
+      outlineInstanceId: 'unknown-instance-for-coverage',
+    } as any;
+    await maybeRefreshOutlineToken(session, noopLog);
+    assert.equal(session.outlineAccessToken, 'persist-at');
+    assert.equal(session.outlineRefreshToken, 'persist-rt');
+  });
+
   test('withOutlineClient uses the freshly refreshed token for the tool call', async () => {
     mockImpl = ({ url }) => {
       if (url.endsWith('/oauth/token')) {
