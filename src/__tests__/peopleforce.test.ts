@@ -977,14 +977,14 @@ describe('PeopleForceClient — recruitment routing', () => {
     });
   });
 
-  test('disqualifyVacancyApplication POSTs the disqualify contract', async () => {
+  test('disqualifyVacancyApplication POSTs to the nested vacancy/application path', async () => {
     stub = stubFetch(() => ({ body: { data: { id: 1 } } }));
     const c = new PeopleForceClient('t', V2);
-    await c.disqualifyVacancyApplication({ vacancyApplicationId: 8, disqualifyReasonId: 2, comment: 'nope' });
+    await c.disqualifyVacancyApplication({ vacancyId: 3, applicationId: 8, disqualifyReasonId: 2, comment: 'nope' });
     assert.equal(stub.calls[0].method, 'POST');
-    assert.match(stub.calls[0].url, /\/recruitment\/disqualify_vacancy_application$/);
+    assert.match(stub.calls[0].url, /\/recruitment\/vacancies\/3\/applications\/8\/disqualify$/);
+    // vacancy + application live in the path now, not the body.
     assert.deepEqual(JSON.parse(stub.calls[0].body as string), {
-      vacancy_application_id: 8,
       disqualify_reason_id: 2,
       comment: 'nope',
     });

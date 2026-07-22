@@ -675,21 +675,23 @@ peopleForceServer.addTool({
   name: 'disqualifyVacancyApplication',
   annotations: { readOnlyHint: false },
   description:
-    'Disqualifies a vacancy application with a reason. Needs the application ID and a `disqualifyReasonId` (from listDisqualifyReasons); an optional comment is recorded.',
+    'Disqualifies a vacancy application with a reason. Needs the vacancy ID, application ID (from listVacancyApplications), and a `disqualifyReasonId` (from listDisqualifyReasons); an optional comment is recorded.',
   parameters: z.object({
-    vacancyApplicationId: z.union([z.string(), z.number()]).describe('The vacancy application ID to disqualify.'),
+    vacancyId: z.union([z.string(), z.number()]).describe('The vacancy ID.'),
+    applicationId: z.union([z.string(), z.number()]).describe('The application ID (from listVacancyApplications).'),
     disqualifyReasonId: z.union([z.string(), z.number()]).describe('The disqualify reason ID (from listDisqualifyReasons).'),
     comment: z.string().optional().describe('Optional comment explaining the disqualification.'),
   }),
   execute: (args, { log, session }) =>
     withPeopleForceClient('Failed to disqualify vacancy application', session, log, async (client) => {
-      log.info(`Disqualifying application ${args.vacancyApplicationId} (reason ${args.disqualifyReasonId})`);
+      log.info(`Disqualifying application ${args.applicationId} on vacancy ${args.vacancyId} (reason ${args.disqualifyReasonId})`);
       await client.disqualifyVacancyApplication({
-        vacancyApplicationId: args.vacancyApplicationId,
+        vacancyId: args.vacancyId,
+        applicationId: args.applicationId,
         disqualifyReasonId: args.disqualifyReasonId,
         comment: args.comment,
       });
-      return `Disqualified application ${args.vacancyApplicationId}.`;
+      return `Disqualified application ${args.applicationId}.`;
     }),
 });
 

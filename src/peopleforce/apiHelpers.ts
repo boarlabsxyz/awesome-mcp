@@ -654,15 +654,20 @@ export class PeopleForceClient {
   }
 
   disqualifyVacancyApplication(input: {
-    vacancyApplicationId: string | number;
+    vacancyId: string | number;
+    applicationId: string | number;
     disqualifyReasonId: string | number;
     comment?: string;
   }): Promise<{ data?: PeopleForceApplication }> {
-    return this.requestAt(this.recruitmentBaseUrl, 'POST', '/recruitment/disqualify_vacancy_application', {
-      vacancy_application_id: input.vacancyApplicationId,
-      disqualify_reason_id: input.disqualifyReasonId,
-      comment: input.comment,
-    });
+    return this.requestAt(
+      this.recruitmentBaseUrl,
+      'POST',
+      `/recruitment/vacancies/${encodeURIComponent(String(input.vacancyId))}/applications/${encodeURIComponent(String(input.applicationId))}/disqualify`,
+      {
+        disqualify_reason_id: input.disqualifyReasonId,
+        comment: input.comment,
+      },
+    );
   }
 
   // === Recruitment (v3) — support / lookups ===

@@ -307,7 +307,7 @@ Source: `src/peopleforce/server.ts` — 38 tools.
 | `getCandidateDossier` | Assembles a single candidate dossier for assessment: profile + recruiter notes + work experience + education, plus the current application/stage when `vacancyId` is given. One call to gather everything the AI needs to evaluate a candidate against a role. Best-effort: parts that fail to load are noted, not fatal. | — |
 | `getPublishedJobDescription` | Fetches the canonical public job description for a vacancy from the PeopleForce Careers API. Use this to get the exact JD text posted on your careers site for matching. Note: some tenants gate the Careers API behind a separate career-site token — if this returns not-authorized, use getVacancy's description instead. | — |
 | `moveVacancyApplication` | Moves a candidate's vacancy application to a different pipeline stage. Needs the vacancy ID, application ID, and target `pipelineStageId` (from listRecruitmentPipelines or getVacancy). | — |
-| `disqualifyVacancyApplication` | Disqualifies a vacancy application with a reason. Needs the application ID and a `disqualifyReasonId` (from listDisqualifyReasons); an optional comment is recorded. | — |
+| `disqualifyVacancyApplication` | Disqualifies a vacancy application with a reason. Needs the vacancy ID, application ID (from listVacancyApplications), and a `disqualifyReasonId` (from listDisqualifyReasons); an optional comment is recorded. | — |
 | `addCandidateNote` | Adds a note to a candidate — e.g. to record the AI's assessment or interview feedback back into PeopleForce. The note appears on the candidate card. | — |
 
 ---
