@@ -19,6 +19,22 @@ import {
   getPeopleForceClient,
   mapPeopleForceError,
   withPeopleForceClient,
+  // Recruitment (v3) — under test below
+  deriveRecruitmentBaseUrl,
+  deriveCareersBaseUrl,
+  appendQueryParams,
+  formatVacancyList,
+  formatVacancy,
+  formatPipelineList,
+  formatCandidateList,
+  formatCandidate,
+  formatApplicationList,
+  formatCandidateNotes,
+  formatCandidateExperiences,
+  formatCandidateEducations,
+  formatMovementList,
+  formatPublishedVacancy,
+  formatCandidateDossier,
 } from '../peopleforce/apiHelpers.js';
 
 // -----------------------------------------------------------------------------
@@ -741,5 +757,585 @@ describe('withPeopleForceClient', () => {
       () => withPeopleForceClient('X', undefined, log, async () => 1),
       UserError,
     );
+  });
+});
+
+// =============================================================================
+// Recruitment (v3) — uncommitted tools
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// Base-URL derivation
+// -----------------------------------------------------------------------------
+
+describe('deriveRecruitmentBaseUrl', () => {
+  const KEY = 'PEOPLEFORCE_RECRUITMENT_BASE_URL';
+  let saved: string | undefined;
+  beforeEach(() => { saved = process.env[KEY]; delete process.env[KEY]; });
+  afterEach(() => { if (saved === undefined) delete process.env[KEY]; else process.env[KEY] = saved; });
+
+  test('swaps the /api/public/v2 segment for /v3', () => {
+    assert.equal(
+      deriveRecruitmentBaseUrl('https://app.peopleforce.io/api/public/v2'),
+      'https://app.peopleforce.io/api/public/v3',
+    );
+  });
+
+  test('falls back to the public v3 base when no /v2 marker is present', () => {
+    assert.equal(
+      deriveRecruitmentBaseUrl('https://x.example.com'),
+      'https://app.peopleforce.io/api/public/v3',
+    );
+  });
+
+  test('honors the env override and strips trailing slashes', () => {
+    process.env[KEY] = 'https://custom.example.com/rec///';
+    assert.equal(deriveRecruitmentBaseUrl('https://whatever/api/public/v2'), 'https://custom.example.com/rec');
+  });
+});
+
+describe('deriveCareersBaseUrl', () => {
+  const KEY = 'PEOPLEFORCE_CAREERS_BASE_URL';
+  let saved: string | undefined;
+  beforeEach(() => { saved = process.env[KEY]; delete process.env[KEY]; });
+  afterEach(() => { if (saved === undefined) delete process.env[KEY]; else process.env[KEY] = saved; });
+
+  test('derives /api/careers/v1 from the origin', () => {
+    assert.equal(
+      deriveCareersBaseUrl('https://app.peopleforce.io/api/public/v2'),
+      'https://app.peopleforce.io/api/careers/v1',
+    );
+  });
+
+  test('falls back to the public careers base when the URL is unparseable', () => {
+    assert.equal(deriveCareersBaseUrl('not-a-url'), 'https://app.peopleforce.io/api/careers/v1');
+  });
+
+  test('honors the env override and strips trailing slashes', () => {
+    process.env[KEY] = 'https://custom.example.com/careers/';
+    assert.equal(deriveCareersBaseUrl('https://whatever'), 'https://custom.example.com/careers');
+  });
+});
+
+// -----------------------------------------------------------------------------
+// appendQueryParams
+// -----------------------------------------------------------------------------
+
+describe('appendQueryParams', () => {
+  function paramsFor(query: any): string {
+    const url = new URL('https://x.example.com/');
+    appendQueryParams(url, query);
+    return url.search;
+  }
+
+  test('no-op when query is undefined', () => {
+    assert.equal(paramsFor(undefined), '');
+  });
+
+  test('sets scalar values and coerces numbers to strings', () => {
+    const url = new URL('https://x.example.com/');
+    appendQueryParams(url, { page: 2, email: 'a@b.com' });
+    assert.equal(url.searchParams.get('page'), '2');
+    assert.equal(url.searchParams.get('email'), 'a@b.com');
+  });
+
+  test('skips undefined and null values', () => {
+    const url = new URL('https://x.example.com/');
+    appendQueryParams(url, { a: undefined, b: null, c: 'keep' });
+    assert.equal(url.searchParams.has('a'), false);
+    assert.equal(url.searchParams.has('b'), false);
+    assert.equal(url.searchParams.get('c'), 'keep');
+  });
+
+  test('expands arrays into repeated key[] entries', () => {
+    const url = new URL('https://x.example.com/');
+    appendQueryParams(url, { status: ['opened', 'closed'] });
+    assert.deepEqual(url.searchParams.getAll('status[]'), ['opened', 'closed']);
+    assert.equal(url.searchParams.has('status'), false);
+  });
+
+  test('does not double-append the bracket suffix for keys already ending in []', () => {
+    const url = new URL('https://x.example.com/');
+    appendQueryParams(url, { 'skills[]': ['ts', 'go'] });
+    assert.deepEqual(url.searchParams.getAll('skills[]'), ['ts', 'go']);
+    assert.equal(url.searchParams.has('skills[][]'), false);
+  });
+
+  test('drops empty arrays entirely', () => {
+    assert.equal(paramsFor({ status: [] }), '');
+  });
+
+  test('skips null/undefined items inside an array', () => {
+    const url = new URL('https://x.example.com/');
+    appendQueryParams(url, { ids: [1, null, 2, undefined] as any });
+    assert.deepEqual(url.searchParams.getAll('ids[]'), ['1', '2']);
+  });
+
+  test('passes literal bracket filter keys through untouched', () => {
+    const url = new URL('https://x.example.com/');
+    appendQueryParams(url, { 'created_at[gte]': '2026-01-01' });
+    assert.equal(url.searchParams.get('created_at[gte]'), '2026-01-01');
+  });
+});
+
+// -----------------------------------------------------------------------------
+// PeopleForceClient — recruitment (v3) + careers routing (fetch-mocked)
+// -----------------------------------------------------------------------------
+
+describe('PeopleForceClient — recruitment routing', () => {
+  let stub: ReturnType<typeof stubFetch> | null = null;
+  // A /api/public/v2 base makes v3 derivation deterministic on the same host.
+  const V2 = 'https://x.example.com/api/public/v2';
+
+  afterEach(() => {
+    if (stub) { stub.restore(); stub = null; }
+  });
+
+  test('constructor derives v3 recruitment + careers bases from a v2 base', () => {
+    const c = new PeopleForceClient('t', V2);
+    assert.equal(c.recruitmentBaseUrl, 'https://x.example.com/api/public/v3');
+    assert.equal(c.careersBaseUrl, 'https://x.example.com/api/careers/v1');
+  });
+
+  test('listVacancies hits the v3 host and serializes status[]/tag_ids[]', async () => {
+    stub = stubFetch(() => ({ body: { data: [] } }));
+    const c = new PeopleForceClient('t', V2);
+    await c.listVacancies({ page: 2, status: ['opened', 'closed'], tagIds: [7, 9] });
+    const url = new URL(stub.calls[0].url);
+    assert.equal(url.origin, 'https://x.example.com');
+    assert.equal(url.pathname, '/api/public/v3/recruitment/vacancies');
+    assert.equal(url.searchParams.get('page'), '2');
+    assert.deepEqual(url.searchParams.getAll('status[]'), ['opened', 'closed']);
+    assert.deepEqual(url.searchParams.getAll('tag_ids[]'), ['7', '9']);
+  });
+
+  test('getVacancy hits the singular v3 path and URL-encodes the id', async () => {
+    stub = stubFetch(() => ({ body: { data: { id: 'a/b' } } }));
+    const c = new PeopleForceClient('t', V2);
+    await c.getVacancy('a/b');
+    assert.match(stub.calls[0].url, /\/api\/public\/v3\/recruitment\/vacancy\/a%2Fb$/);
+  });
+
+  test('listCandidates serializes array filters and literal bracket date filters', async () => {
+    stub = stubFetch(() => ({ body: { data: [] } }));
+    const c = new PeopleForceClient('t', V2);
+    await c.listCandidates({
+      page: 1,
+      pipelineStageId: 55,
+      skills: ['ts', 'go'],
+      vacancyIds: [3],
+      email: 'a@b.com',
+      createdAtGte: '2026-01-01',
+      updatedAtLte: '2026-07-01',
+    });
+    const url = new URL(stub.calls[0].url);
+    assert.equal(url.pathname, '/api/public/v3/recruitment/candidates');
+    assert.equal(url.searchParams.get('pipeline_stage_id'), '55');
+    assert.deepEqual(url.searchParams.getAll('skills[]'), ['ts', 'go']);
+    assert.deepEqual(url.searchParams.getAll('vacancy_ids[]'), ['3']);
+    assert.equal(url.searchParams.get('email'), 'a@b.com');
+    assert.equal(url.searchParams.get('created_at[gte]'), '2026-01-01');
+    assert.equal(url.searchParams.get('updated_at[lte]'), '2026-07-01');
+    // Unset optional filters are never serialized.
+    assert.equal(url.searchParams.has('created_at[lte]'), false);
+  });
+
+  test('candidate-nested list endpoints hit the right v3 paths', async () => {
+    stub = stubFetch(() => ({ body: { data: [] } }));
+    const c = new PeopleForceClient('t', V2);
+    await c.listCandidateNotes(42);
+    await c.listCandidateExperiences(42);
+    await c.listCandidateEducations(42);
+    assert.deepEqual(
+      stub.calls.map((r) => new URL(r.url).pathname),
+      [
+        '/api/public/v3/recruitment/candidates/42/notes',
+        '/api/public/v3/recruitment/candidates/42/experiences',
+        '/api/public/v3/recruitment/candidates/42/educations',
+      ],
+    );
+  });
+
+  test('listVacancyApplications nests under the vacancy', async () => {
+    stub = stubFetch(() => ({ body: { data: [] } }));
+    const c = new PeopleForceClient('t', V2);
+    await c.listVacancyApplications({ vacancyId: 3, page: 2 });
+    const url = new URL(stub.calls[0].url);
+    assert.equal(url.pathname, '/api/public/v3/recruitment/vacancies/3/applications');
+    assert.equal(url.searchParams.get('page'), '2');
+  });
+
+  test('moveVacancyApplication PUTs the pipeline_stage_id contract', async () => {
+    stub = stubFetch(() => ({ body: { data: { id: 1 } } }));
+    const c = new PeopleForceClient('t', V2);
+    await c.moveVacancyApplication({ vacancyId: 3, applicationId: 8, pipelineStageId: 55, performAutomations: true });
+    assert.equal(stub.calls[0].method, 'PUT');
+    assert.match(stub.calls[0].url, /\/recruitment\/vacancies\/3\/applications\/8\/move$/);
+    assert.deepEqual(JSON.parse(stub.calls[0].body as string), {
+      pipeline_stage_id: 55,
+      perform_automations: true,
+    });
+  });
+
+  test('disqualifyVacancyApplication POSTs the disqualify contract', async () => {
+    stub = stubFetch(() => ({ body: { data: { id: 1 } } }));
+    const c = new PeopleForceClient('t', V2);
+    await c.disqualifyVacancyApplication({ vacancyApplicationId: 8, disqualifyReasonId: 2, comment: 'nope' });
+    assert.equal(stub.calls[0].method, 'POST');
+    assert.match(stub.calls[0].url, /\/recruitment\/disqualify_vacancy_application$/);
+    assert.deepEqual(JSON.parse(stub.calls[0].body as string), {
+      vacancy_application_id: 8,
+      disqualify_reason_id: 2,
+      comment: 'nope',
+    });
+  });
+
+  test('addCandidateNote POSTs the note body under the candidate', async () => {
+    stub = stubFetch(() => ({ body: { data: { id: 1 } } }));
+    const c = new PeopleForceClient('t', V2);
+    await c.addCandidateNote({ candidateId: 42, body: 'Strong on system design' });
+    assert.equal(stub.calls[0].method, 'POST');
+    assert.match(stub.calls[0].url, /\/recruitment\/candidates\/42\/notes$/);
+    assert.deepEqual(JSON.parse(stub.calls[0].body as string), { body: 'Strong on system design' });
+  });
+
+  test('getPublishedVacancy routes to the careers API host', async () => {
+    stub = stubFetch(() => ({ body: { data: { id: 9 } } }));
+    const c = new PeopleForceClient('t', V2);
+    await c.getPublishedVacancy(9);
+    const url = new URL(stub.calls[0].url);
+    assert.equal(url.pathname, '/api/careers/v1/vacancies/9');
+  });
+
+  test('recruitment calls carry the same auth headers', async () => {
+    stub = stubFetch(() => ({ body: { data: [] } }));
+    const c = new PeopleForceClient('mykey', V2);
+    await c.listRecruitmentPipelines();
+    assert.equal(stub.calls[0].headers['X-API-KEY'], 'mykey');
+    assert.equal(stub.calls[0].headers.Authorization, 'Bearer mykey');
+    assert.equal(new URL(stub.calls[0].url).pathname, '/api/public/v3/recruitment/pipelines');
+  });
+});
+
+// -----------------------------------------------------------------------------
+// getCandidateDossier — best-effort composite
+// -----------------------------------------------------------------------------
+
+describe('getCandidateDossier', () => {
+  let stub: ReturnType<typeof stubFetch> | null = null;
+  const V2 = 'https://x.example.com/api/public/v2';
+
+  afterEach(() => {
+    if (stub) { stub.restore(); stub = null; }
+  });
+
+  test('assembles profile + notes + experiences + educations with no errors', async () => {
+    stub = stubFetch((rec) => {
+      const p = new URL(rec.url).pathname;
+      if (p.endsWith('/recruitment/candidate/42')) return { body: { data: { id: 42, full_name: 'Ada' } } };
+      if (p.endsWith('/notes')) return { body: { data: [{ id: 1, body: 'note' }] } };
+      if (p.endsWith('/experiences')) return { body: { data: [{ id: 2, company: 'Acme' }] } };
+      if (p.endsWith('/educations')) return { body: { data: [{ id: 3, school: 'MIT' }] } };
+      return { body: { data: [] } };
+    });
+    const c = new PeopleForceClient('t', V2);
+    const d = await c.getCandidateDossier({ candidateId: 42 });
+    assert.equal(d.candidate?.full_name, 'Ada');
+    assert.equal(d.notes.length, 1);
+    assert.equal(d.experiences.length, 1);
+    assert.equal(d.educations.length, 1);
+    assert.equal(d.application, undefined);
+    assert.deepEqual(d.errors, []);
+  });
+
+  test('records a partial failure instead of throwing', async () => {
+    stub = stubFetch((rec) => {
+      const p = new URL(rec.url).pathname;
+      if (p.endsWith('/notes')) return { status: 500, body: 'boom' };
+      if (p.endsWith('/recruitment/candidate/42')) return { body: { data: { id: 42 } } };
+      return { body: { data: [] } };
+    });
+    const c = new PeopleForceClient('t', V2);
+    const d = await c.getCandidateDossier({ candidateId: 42 });
+    assert.ok(d.candidate);
+    assert.deepEqual(d.notes, []);
+    assert.deepEqual(d.errors, ['notes']);
+  });
+
+  test('matches the application on the given vacancy by candidate id', async () => {
+    stub = stubFetch((rec) => {
+      const p = new URL(rec.url).pathname;
+      if (p.endsWith('/recruitment/candidate/42')) return { body: { data: { id: 42 } } };
+      if (p.endsWith('/vacancies/3/applications')) {
+        return { body: { data: [{ id: 900, candidate_id: 99 }, { id: 901, candidate: { id: 42 } }] } };
+      }
+      return { body: { data: [] } };
+    });
+    const c = new PeopleForceClient('t', V2);
+    const d = await c.getCandidateDossier({ candidateId: 42, vacancyId: 3 });
+    assert.equal(d.application?.id, 901);
+    assert.deepEqual(d.errors, []);
+  });
+
+  test('records "application (no match…)" when no application matches the candidate', async () => {
+    stub = stubFetch((rec) => {
+      const p = new URL(rec.url).pathname;
+      if (p.endsWith('/recruitment/candidate/42')) return { body: { data: { id: 42 } } };
+      if (p.endsWith('/vacancies/3/applications')) return { body: { data: [{ id: 900, candidate_id: 99 }] } };
+      return { body: { data: [] } };
+    });
+    const c = new PeopleForceClient('t', V2);
+    const d = await c.getCandidateDossier({ candidateId: 42, vacancyId: 3 });
+    assert.equal(d.application, undefined);
+    assert.ok(d.errors.some((e) => /^application \(no match/.test(e)));
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Recruitment formatters
+// -----------------------------------------------------------------------------
+
+describe('formatVacancyList / formatVacancy', () => {
+  test('empty list without pagination', () => {
+    assert.equal(formatVacancyList([]), 'No vacancies found.');
+  });
+
+  test('empty list surfaces pagination context', () => {
+    const out = formatVacancyList([], { page: 4, pages: 2, count: 30, items: 25 });
+    assert.match(out, /Page 4 of 2 \(30 total, 25 per page\)/);
+    assert.match(out, /No vacancies on this page\./);
+  });
+
+  test('prefers title over name and renders status/department/count', () => {
+    const out = formatVacancyList([
+      { id: 5, title: 'Senior Engineer', name: 'ignored', status: 'opened', department: { id: 1, name: 'R&D' }, candidates_count: 12 },
+    ]);
+    assert.match(out, /Senior Engineer/);
+    assert.doesNotMatch(out, /ignored/);
+    assert.match(out, /Status: opened/);
+    assert.match(out, /Department: R&D/);
+    assert.match(out, /Candidates: 12/);
+  });
+
+  test('formatVacancy renders pipeline stages joined by arrows and the description', () => {
+    const out = formatVacancy({
+      id: 5,
+      title: 'Senior Engineer',
+      state: 'opened',
+      pipeline: { id: 1, name: 'Default', stages: [{ id: 1, name: 'Applied' }, { id: 2, name: 'Interview' }] },
+      description_plain: 'Build things.',
+    });
+    assert.match(out, /Status: opened/);
+    assert.match(out, /Pipeline stages: Applied → Interview/);
+    assert.match(out, /## Description/);
+    assert.match(out, /Build things\./);
+  });
+});
+
+describe('formatPipelineList', () => {
+  test('renders stages with their ids', () => {
+    const out = formatPipelineList([
+      { id: 1, name: 'Engineering', stages: [{ id: 10, name: 'Applied' }, { id: 11, name: 'Hired' }] },
+    ]);
+    assert.match(out, /Engineering/);
+    assert.match(out, /Applied \(ID: 10\) → Hired \(ID: 11\)/);
+  });
+
+  test('empty list', () => {
+    assert.equal(formatPipelineList([]), 'No pipelines found.');
+  });
+});
+
+describe('formatCandidateList / formatCandidate', () => {
+  test('list prefers pipeline_stage over stage', () => {
+    const out = formatCandidateList([
+      { id: 7, full_name: 'Ada Lovelace', email: 'ada@x.com', pipeline_stage: { name: 'Interview' }, stage: { name: 'Applied' } },
+    ]);
+    assert.match(out, /Ada Lovelace/);
+    assert.match(out, /Email: ada@x.com/);
+    assert.match(out, /Stage: Interview/);
+    assert.doesNotMatch(out, /Stage: Applied/);
+  });
+
+  test('candidate detail renders phone/salary/skills/disqualified', () => {
+    const out = formatCandidate({
+      id: 7,
+      full_name: 'Ada Lovelace',
+      phone_number: '+15550001111',
+      expected_salary: 120000,
+      skills: [{ id: 1, name: 'TypeScript' }, 'Go'],
+      disqualified: false,
+    });
+    assert.match(out, /Phone: \+15550001111/);
+    assert.match(out, /Salary expectation: 120000/);
+    assert.match(out, /Skills: TypeScript, Go/);
+    assert.match(out, /Disqualified: no/);
+  });
+
+  test('empty candidate list', () => {
+    assert.equal(formatCandidateList([]), 'No candidates found.');
+  });
+});
+
+describe('formatApplicationList', () => {
+  test('renders candidate name, stage and disqualify reason', () => {
+    const out = formatApplicationList([
+      {
+        id: 900,
+        candidate: { id: 42, full_name: 'Grace Hopper' },
+        pipeline_stage: { name: 'Interview' },
+        disqualified: true,
+        disqualify_reason: { id: 2, name: 'Withdrew' },
+      },
+    ]);
+    assert.match(out, /Grace Hopper/);
+    assert.match(out, /Application ID: 900/);
+    assert.match(out, /Candidate ID: 42/);
+    assert.match(out, /Stage: Interview/);
+    assert.match(out, /Disqualified: yes/);
+    assert.match(out, /Disqualify reason: Withdrew/);
+  });
+
+  test('falls back to State when no stage is present', () => {
+    const out = formatApplicationList([{ id: 1, candidate: { full_name: 'A B' }, state: 'active' }]);
+    assert.match(out, /State: active/);
+  });
+
+  test('empty list', () => {
+    assert.equal(formatApplicationList([]), 'No applications found.');
+  });
+});
+
+describe('candidate note/experience/education formatters', () => {
+  test('formatCandidateNotes prefers created_by author and body text', () => {
+    const out = formatCandidateNotes([
+      { id: 1, body: 'Strong hire', created_by: { full_name: 'Interviewer X' }, created_at: '2026-07-01' },
+    ]);
+    assert.match(out, /# Candidate Notes/);
+    assert.match(out, /Interviewer X — 2026-07-01/);
+    assert.match(out, /Strong hire/);
+  });
+
+  test('formatCandidateNotes JSON-dumps a note with no recognizable text', () => {
+    const out = formatCandidateNotes([{ id: 1, foo: 'bar' } as any]);
+    assert.match(out, /```json/);
+    assert.match(out, /"foo": "bar"/);
+  });
+
+  test('formatCandidateNotes empty', () => {
+    assert.equal(formatCandidateNotes([]), 'No notes recorded for this candidate.');
+  });
+
+  test('formatCandidateExperiences renders "role @ company" and the period', () => {
+    const out = formatCandidateExperiences([
+      { id: 1, position: 'Engineer', company: 'Acme', starts_on: '2020-01-01', ends_on: '2023-01-01' },
+    ]);
+    assert.match(out, /Engineer @ Acme/);
+    assert.match(out, /2020-01-01 – 2023-01-01/);
+  });
+
+  test('formatCandidateExperiences renders an open-ended period as "present"', () => {
+    const out = formatCandidateExperiences([{ id: 1, title: 'Lead', company_name: 'Beta', starts_on: '2024-01-01' }]);
+    assert.match(out, /Lead @ Beta/);
+    assert.match(out, /2024-01-01 – present/);
+  });
+
+  test('formatCandidateEducations renders "degree, field @ institution"', () => {
+    const out = formatCandidateEducations([
+      { id: 1, degree: 'BSc', field_of_study: 'CS', institution: 'MIT', starts_on: '2016', ends_on: '2020' },
+    ]);
+    assert.match(out, /BSc, CS @ MIT/);
+    assert.match(out, /2016 – 2020/);
+  });
+
+  test('education/experience empties', () => {
+    assert.equal(formatCandidateExperiences([]), 'No work experience recorded for this candidate.');
+    assert.equal(formatCandidateEducations([]), 'No education recorded for this candidate.');
+  });
+});
+
+describe('formatMovementList', () => {
+  test('renders candidate name and from → to stages', () => {
+    const out = formatMovementList([
+      {
+        id: 1,
+        candidate: { id: 42, full_name: 'Ada Lovelace' },
+        from_stage: { name: 'Applied' },
+        to_stage: { name: 'Interview' },
+        moved_by: { full_name: 'Recruiter Y' },
+        created_at: '2026-07-10',
+      },
+    ]);
+    assert.match(out, /Ada Lovelace: Applied → Interview/);
+    assert.match(out, /Moved by: Recruiter Y/);
+    assert.match(out, /When: 2026-07-10/);
+  });
+
+  test('uses "?" placeholders for missing stages', () => {
+    const out = formatMovementList([{ id: 1, candidate: { full_name: 'A B' } }]);
+    assert.match(out, /A B: \? → \?/);
+  });
+
+  test('empty list', () => {
+    assert.equal(formatMovementList([]), 'No movements found.');
+  });
+});
+
+describe('formatPublishedVacancy', () => {
+  test('unwraps a { data } envelope and renders the description', () => {
+    const out = formatPublishedVacancy({ data: { id: 9, title: 'Backend Engineer', description_plain: 'Do backend.' } });
+    assert.match(out, /# Backend Engineer/);
+    assert.match(out, /## Description/);
+    assert.match(out, /Do backend\./);
+  });
+
+  test('accepts a bare vacancy object (no envelope)', () => {
+    const out = formatPublishedVacancy({ id: 9, name: 'Role', location: { id: 1, name: 'Remote' } });
+    assert.match(out, /# Role/);
+    assert.match(out, /Location: Remote/);
+  });
+
+  test('JSON-dumps when there is no description', () => {
+    const out = formatPublishedVacancy({ id: 9, title: 'Role', foo: 'bar' } as any);
+    assert.match(out, /```json/);
+    assert.match(out, /"foo": "bar"/);
+  });
+
+  test('handles an empty payload', () => {
+    assert.equal(formatPublishedVacancy({}), 'No published job description found.');
+    assert.equal(formatPublishedVacancy({ data: {} }), 'No published job description found.');
+  });
+});
+
+describe('formatCandidateDossier', () => {
+  test('stitches profile, application, notes, experience and education sections', () => {
+    const out = formatCandidateDossier({
+      candidate: { id: 42, full_name: 'Ada Lovelace' },
+      application: { id: 901, pipeline_stage: { name: 'Interview' }, disqualified: false },
+      notes: [{ id: 1, body: 'Strong hire' }],
+      experiences: [{ id: 2, position: 'Engineer', company: 'Acme' }],
+      educations: [{ id: 3, degree: 'BSc', institution: 'MIT' }],
+      errors: [],
+    });
+    assert.match(out, /# Ada Lovelace/);
+    assert.match(out, /## Current Application/);
+    assert.match(out, /Application ID: 901/);
+    assert.match(out, /Stage: Interview/);
+    assert.match(out, /# Candidate Notes/);
+    assert.match(out, /Strong hire/);
+    assert.match(out, /Engineer @ Acme/);
+    assert.match(out, /BSc.*MIT/);
+  });
+
+  test('notes the profile is unavailable and surfaces load errors', () => {
+    const out = formatCandidateDossier({
+      candidate: undefined,
+      notes: [],
+      experiences: [],
+      educations: [],
+      errors: ['notes', 'experiences'],
+    });
+    assert.match(out, /profile unavailable/);
+    assert.match(out, /could not load notes, experiences\./);
   });
 });

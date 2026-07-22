@@ -20,6 +20,70 @@ import { UserSession } from '../userSession.js';
 
 const DEFAULT_BASE_URL = process.env.PEOPLEFORCE_BASE_URL || 'https://app.peopleforce.io/api/public/v2';
 
+// Recruitment lives on the v3 API, not v2 (verified against the developer portal
+// on 2026-07-22: every /recruitment/* path is under /api/public/v3). The public
+// Careers API (published job descriptions) is a separate namespace on the same
+// host. Both use the same X-API-KEY / Bearer auth as v2.
+const DEFAULT_RECRUITMENT_BASE_URL = 'https://app.peopleforce.io/api/public/v3';
+const DEFAULT_CAREERS_BASE_URL = 'https://app.peopleforce.io/api/careers/v1';
+
+/**
+ * Derive the v3 recruitment base from the resolved v2 base by swapping the
+ * version segment. Honors an explicit `PEOPLEFORCE_RECRUITMENT_BASE_URL`
+ * override. The stored base is effectively always `.../api/public/v2` (the
+ * per-connection base is not persisted), so the swap is safe; if a custom base
+ * without the `/v2` marker is in play we fall back to the public v3 base rather
+ * than guessing. Exported for unit tests.
+ */
+export function deriveRecruitmentBaseUrl(v2Base: string): string {
+  const override = process.env.PEOPLEFORCE_RECRUITMENT_BASE_URL;
+  if (override) return override.replace(/\/+$/, '');
+  if (v2Base.includes('/api/public/v2')) {
+    return v2Base.replace('/api/public/v2', '/api/public/v3');
+  }
+  return DEFAULT_RECRUITMENT_BASE_URL;
+}
+
+/**
+ * Derive the Careers API base (`/api/careers/v1`) from the resolved base's
+ * origin. Honors `PEOPLEFORCE_CAREERS_BASE_URL`. Exported for unit tests.
+ */
+export function deriveCareersBaseUrl(v2Base: string): string {
+  const override = process.env.PEOPLEFORCE_CAREERS_BASE_URL;
+  if (override) return override.replace(/\/+$/, '');
+  try {
+    return `${new URL(v2Base).origin}/api/careers/v1`;
+  } catch {
+    return DEFAULT_CAREERS_BASE_URL;
+  }
+}
+
+/**
+ * Query values accepted by the client. Arrays are serialized as repeated
+ * bracketed keys (`skills[]=a&skills[]=b`), which is what the PeopleForce v3
+ * filters expect. Literal bracket keys (`created_at[gte]`) pass through as-is.
+ */
+export type PeopleForceQueryValue = string | number | undefined | null | Array<string | number>;
+export type PeopleForceQueryParams = Record<string, PeopleForceQueryValue>;
+
+/** Append query params onto a URL, expanding arrays into repeated `key[]` entries. */
+export function appendQueryParams(url: URL, query?: PeopleForceQueryParams): void {
+  if (!query) return;
+  for (const [k, v] of Object.entries(query)) {
+    if (v === undefined || v === null) continue;
+    if (Array.isArray(v)) {
+      if (v.length === 0) continue;
+      const key = k.endsWith('[]') ? k : `${k}[]`;
+      for (const item of v) {
+        if (item === undefined || item === null) continue;
+        url.searchParams.append(key, String(item));
+      }
+    } else {
+      url.searchParams.set(k, String(v));
+    }
+  }
+}
+
 // Rich objects the API embeds inside employee records.
 export type PeopleForceRef = {
   id?: number | string;
@@ -135,6 +199,141 @@ export type PeopleForceLeaveRequest = {
   } | null;
 };
 
+// === Recruitment (v3) ===
+// Response bodies for the v3 recruitment endpoints are not published (the portal
+// renders them client-side), so these types are best-effort: they list the
+// fields the docs/webhooks strongly imply, with alternates where the wire name
+// is uncertain. The formatters render whatever is present and JSON-dump records
+// they don't recognize, so nothing is silently dropped if a shape differs.
+
+export type PeopleForceStage = {
+  id?: number | string;
+  name?: string;
+  /** e.g. "hired", "disqualified", "interview" — the terminal/kind marker. */
+  kind?: string;
+  position?: number;
+};
+
+export type PeopleForcePipeline = {
+  id?: number | string;
+  name?: string;
+  stages?: PeopleForceStage[];
+};
+
+export type PeopleForceVacancy = {
+  id?: number | string;
+  title?: string;
+  name?: string;
+  status?: string;
+  state?: string;
+  description?: string;
+  description_plain?: string;
+  department?: PeopleForceRef | string;
+  division?: PeopleForceRef | string;
+  location?: PeopleForceRef | string;
+  pipeline?: PeopleForcePipeline | null;
+  stages?: PeopleForceStage[];
+  candidates_count?: number;
+  created_at?: string;
+};
+
+export type PeopleForceCandidateRef = {
+  id?: number | string;
+  full_name?: string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+};
+
+export type PeopleForceCandidate = {
+  id?: number | string;
+  full_name?: string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  phone?: string;
+  phone_number?: string;
+  location?: PeopleForceRef | string;
+  source?: PeopleForceRef | string;
+  salary_expectation?: string | number;
+  expected_salary?: string | number;
+  skills?: Array<PeopleForceNamed | string> | string;
+  stage?: PeopleForceStage | string;
+  pipeline_stage?: PeopleForceStage | string;
+  vacancy?: PeopleForceRef | string;
+  disqualified?: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type PeopleForceApplication = {
+  id?: number | string;
+  candidate?: PeopleForceCandidateRef | null;
+  candidate_id?: number | string;
+  vacancy?: PeopleForceRef | null;
+  vacancy_id?: number | string;
+  stage?: PeopleForceStage | string;
+  pipeline_stage?: PeopleForceStage | string;
+  applicant_state?: PeopleForceStage | string;
+  state?: string;
+  disqualified?: boolean;
+  disqualify_reason?: PeopleForceRef | string;
+  created_at?: string;
+};
+
+export type PeopleForceCandidateNote = {
+  id?: number | string;
+  body?: string;
+  text?: string;
+  content?: string;
+  author?: PeopleForceRef | { full_name?: string } | string;
+  created_by?: { full_name?: string } | null;
+  created_at?: string;
+};
+
+export type PeopleForceCandidateExperience = {
+  id?: number | string;
+  company?: string;
+  company_name?: string;
+  position?: string;
+  title?: string;
+  starts_on?: string;
+  ends_on?: string;
+  description?: string;
+};
+
+export type PeopleForceCandidateEducation = {
+  id?: number | string;
+  institution?: string;
+  school?: string;
+  degree?: string;
+  field_of_study?: string;
+  starts_on?: string;
+  ends_on?: string;
+};
+
+export type PeopleForceMovement = {
+  id?: number | string;
+  candidate?: PeopleForceCandidateRef | null;
+  vacancy?: PeopleForceRef | null;
+  from_stage?: PeopleForceStage | string;
+  to_stage?: PeopleForceStage | string;
+  moved_by?: { full_name?: string } | null;
+  created_at?: string;
+};
+
+/** Composite payload assembled by {@link PeopleForceClient.getCandidateDossier}. */
+export type PeopleForceCandidateDossier = {
+  candidate?: PeopleForceCandidate;
+  notes: PeopleForceCandidateNote[];
+  experiences: PeopleForceCandidateExperience[];
+  educations: PeopleForceCandidateEducation[];
+  /** Present only when a vacancyId was supplied and a matching application was found. */
+  application?: PeopleForceApplication;
+  /** Human-readable notes about any sub-fetch that failed (dossier is best-effort). */
+  errors: string[];
+};
+
 /** Pagination shape the API actually returns. Server-forced page size. */
 export type PeopleForcePagination = {
   page?: number;
@@ -151,23 +350,35 @@ export type PeopleForceListResponse<T> = {
 
 export class PeopleForceClient {
   public readonly baseUrl: string;
+  /** v3 base for the Recruitment API (candidates, vacancies, applications). */
+  public readonly recruitmentBaseUrl: string;
+  /** Public Careers API base (published job descriptions). */
+  public readonly careersBaseUrl: string;
 
   constructor(private token: string, baseUrl?: string) {
     this.baseUrl = (baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
+    this.recruitmentBaseUrl = deriveRecruitmentBaseUrl(this.baseUrl);
+    this.careersBaseUrl = deriveCareersBaseUrl(this.baseUrl);
   }
 
-  private async request<T>(
+  private request<T>(
     method: string,
     path: string,
     body?: unknown,
-    query?: Record<string, string | number | undefined>,
+    query?: PeopleForceQueryParams,
   ): Promise<T> {
-    const url = new URL(`${this.baseUrl}${path}`);
-    if (query) {
-      for (const [k, v] of Object.entries(query)) {
-        if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
-      }
-    }
+    return this.requestAt<T>(this.baseUrl, method, path, body, query);
+  }
+
+  private async requestAt<T>(
+    base: string,
+    method: string,
+    path: string,
+    body?: unknown,
+    query?: PeopleForceQueryParams,
+  ): Promise<T> {
+    const url = new URL(`${base}${path}`);
+    appendQueryParams(url, query);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
     let res: Response;
@@ -329,6 +540,201 @@ export class PeopleForceClient {
 
   listEmployeeEmergencyContacts(employeeId: string | number): Promise<PeopleForceListResponse<Record<string, unknown>>> {
     return this.request('GET', `/employees/${encodeURIComponent(String(employeeId))}/emergency_contacts`);
+  }
+
+  // === Recruitment (v3) — vacancies ===
+
+  listVacancies(input: {
+    page?: number;
+    status?: string[];
+    tagIds?: Array<string | number>;
+  } = {}): Promise<PeopleForceListResponse<PeopleForceVacancy>> {
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', '/recruitment/vacancies', undefined, {
+      page: input.page,
+      'status[]': input.status,
+      'tag_ids[]': input.tagIds,
+    });
+  }
+
+  getVacancy(id: string | number): Promise<{ data: PeopleForceVacancy }> {
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', `/recruitment/vacancy/${encodeURIComponent(String(id))}`);
+  }
+
+  listRecruitmentPipelines(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForcePipeline>> {
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', '/recruitment/pipelines', undefined, { page: input.page });
+  }
+
+  // === Recruitment (v3) — candidates ===
+
+  listCandidates(input: {
+    page?: number;
+    pipelineStageId?: string | number;
+    skills?: string[];
+    vacancyIds?: Array<string | number>;
+    email?: string;
+    createdAtGte?: string;
+    createdAtLte?: string;
+    updatedAtGte?: string;
+    updatedAtLte?: string;
+  } = {}): Promise<PeopleForceListResponse<PeopleForceCandidate>> {
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', '/recruitment/candidates', undefined, {
+      page: input.page,
+      pipeline_stage_id: input.pipelineStageId,
+      'skills[]': input.skills,
+      'vacancy_ids[]': input.vacancyIds,
+      email: input.email,
+      'created_at[gte]': input.createdAtGte,
+      'created_at[lte]': input.createdAtLte,
+      'updated_at[gte]': input.updatedAtGte,
+      'updated_at[lte]': input.updatedAtLte,
+    });
+  }
+
+  getCandidate(id: string | number): Promise<{ data: PeopleForceCandidate }> {
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', `/recruitment/candidate/${encodeURIComponent(String(id))}`);
+  }
+
+  listCandidateNotes(candidateId: string | number): Promise<PeopleForceListResponse<PeopleForceCandidateNote>> {
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', `/recruitment/candidates/${encodeURIComponent(String(candidateId))}/notes`);
+  }
+
+  listCandidateExperiences(candidateId: string | number): Promise<PeopleForceListResponse<PeopleForceCandidateExperience>> {
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', `/recruitment/candidates/${encodeURIComponent(String(candidateId))}/experiences`);
+  }
+
+  listCandidateEducations(candidateId: string | number): Promise<PeopleForceListResponse<PeopleForceCandidateEducation>> {
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', `/recruitment/candidates/${encodeURIComponent(String(candidateId))}/educations`);
+  }
+
+  listCandidateMovements(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceMovement>> {
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', '/recruitment/candidate_movements', undefined, { page: input.page });
+  }
+
+  // === Recruitment (v3) — applications ===
+
+  listVacancyApplications(input: {
+    vacancyId: string | number;
+    page?: number;
+  }): Promise<PeopleForceListResponse<PeopleForceApplication>> {
+    return this.requestAt(
+      this.recruitmentBaseUrl,
+      'GET',
+      `/recruitment/vacancies/${encodeURIComponent(String(input.vacancyId))}/applications`,
+      undefined,
+      { page: input.page },
+    );
+  }
+
+  getVacancyApplication(input: {
+    vacancyId: string | number;
+    applicationId: string | number;
+  }): Promise<{ data: PeopleForceApplication }> {
+    return this.requestAt(
+      this.recruitmentBaseUrl,
+      'GET',
+      `/recruitment/vacancies/${encodeURIComponent(String(input.vacancyId))}/applications/${encodeURIComponent(String(input.applicationId))}`,
+    );
+  }
+
+  moveVacancyApplication(input: {
+    vacancyId: string | number;
+    applicationId: string | number;
+    pipelineStageId: string | number;
+    performAutomations?: boolean;
+  }): Promise<{ data?: PeopleForceApplication }> {
+    return this.requestAt(
+      this.recruitmentBaseUrl,
+      'PUT',
+      `/recruitment/vacancies/${encodeURIComponent(String(input.vacancyId))}/applications/${encodeURIComponent(String(input.applicationId))}/move`,
+      {
+        pipeline_stage_id: input.pipelineStageId,
+        perform_automations: input.performAutomations,
+      },
+    );
+  }
+
+  disqualifyVacancyApplication(input: {
+    vacancyApplicationId: string | number;
+    disqualifyReasonId: string | number;
+    comment?: string;
+  }): Promise<{ data?: PeopleForceApplication }> {
+    return this.requestAt(this.recruitmentBaseUrl, 'POST', '/recruitment/disqualify_vacancy_application', {
+      vacancy_application_id: input.vacancyApplicationId,
+      disqualify_reason_id: input.disqualifyReasonId,
+      comment: input.comment,
+    });
+  }
+
+  // === Recruitment (v3) — support / lookups ===
+
+  listDisqualifyReasons(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceNamed>> {
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', '/recruitment/disqualify_reasons', undefined, { page: input.page });
+  }
+
+  listRecruitmentSources(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceNamed>> {
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', '/sources', undefined, { page: input.page });
+  }
+
+  addCandidateNote(input: {
+    candidateId: string | number;
+    body: string;
+  }): Promise<{ data?: PeopleForceCandidateNote }> {
+    return this.requestAt(
+      this.recruitmentBaseUrl,
+      'POST',
+      `/recruitment/candidates/${encodeURIComponent(String(input.candidateId))}/notes`,
+      { body: input.body },
+    );
+  }
+
+  // === Careers API — published job descriptions ===
+
+  getPublishedVacancy(id: string | number): Promise<{ data?: PeopleForceVacancy } | PeopleForceVacancy> {
+    return this.requestAt(this.careersBaseUrl, 'GET', `/vacancies/${encodeURIComponent(String(id))}`);
+  }
+
+  /**
+   * Assemble a candidate dossier for AI assessment: profile + notes +
+   * experiences + educations, plus the matching application/stage when a
+   * vacancyId is supplied. Best-effort — a failing sub-fetch is recorded in
+   * `errors` rather than sinking the whole call, so a partial dossier still
+   * reaches the assessor.
+   */
+  async getCandidateDossier(input: {
+    candidateId: string | number;
+    vacancyId?: string | number;
+  }): Promise<PeopleForceCandidateDossier> {
+    const errors: string[] = [];
+    const [candidateRes, notesRes, experiencesRes, educationsRes] = await Promise.allSettled([
+      this.getCandidate(input.candidateId),
+      this.listCandidateNotes(input.candidateId),
+      this.listCandidateExperiences(input.candidateId),
+      this.listCandidateEducations(input.candidateId),
+    ]);
+
+    const candidate =
+      candidateRes.status === 'fulfilled' ? candidateRes.value?.data : (errors.push('profile'), undefined);
+    const notes = notesRes.status === 'fulfilled' ? notesRes.value?.data ?? [] : (errors.push('notes'), []);
+    const experiences =
+      experiencesRes.status === 'fulfilled' ? experiencesRes.value?.data ?? [] : (errors.push('experiences'), []);
+    const educations =
+      educationsRes.status === 'fulfilled' ? educationsRes.value?.data ?? [] : (errors.push('educations'), []);
+
+    let application: PeopleForceApplication | undefined;
+    if (input.vacancyId !== undefined) {
+      try {
+        const apps = await this.listVacancyApplications({ vacancyId: input.vacancyId });
+        const wanted = String(input.candidateId);
+        application = (apps.data ?? []).find(
+          (a) => String(a.candidate?.id ?? a.candidate_id ?? '') === wanted,
+        );
+        if (!application) errors.push('application (no match on vacancy page 1)');
+      } catch {
+        errors.push('application');
+      }
+    }
+
+    return { candidate, notes, experiences, educations, application, errors };
   }
 }
 
@@ -584,6 +990,288 @@ export function formatUnknownItemList(title: string, items: Record<string, unkno
     parts.push('');
   });
   return parts.join('\n').trimEnd();
+}
+
+// ==== Recruitment formatters ====
+
+function stageName(stage: PeopleForceStage | string | undefined | null): string | undefined {
+  if (!stage) return undefined;
+  if (typeof stage === 'string') return stage;
+  return stage.name;
+}
+
+function formatSkillsInline(skills: PeopleForceCandidate['skills']): string | undefined {
+  if (!skills) return undefined;
+  if (typeof skills === 'string') return skills || undefined;
+  if (Array.isArray(skills)) {
+    const names = skills
+      .map((s) => (typeof s === 'string' ? s : s?.name))
+      .filter((s): s is string => Boolean(s));
+    return names.length ? names.join(', ') : undefined;
+  }
+  return undefined;
+}
+
+function datePeriod(startsOn?: string, endsOn?: string): string | undefined {
+  if (!startsOn && !endsOn) return undefined;
+  return `${startsOn ?? '?'} – ${endsOn ?? 'present'}`;
+}
+
+/** Fenced JSON dump — last-resort so an unrecognized record's fields aren't lost. */
+function jsonBlock(value: unknown): string[] {
+  return ['```json', JSON.stringify(value, null, 2), '```'];
+}
+
+export function formatVacancyList(vacancies: PeopleForceVacancy[], pagination?: PeopleForcePagination): string {
+  if (vacancies.length === 0) return renderEmptyList('Vacancies', 'vacancies', pagination);
+  const parts = ['# Vacancies', ''];
+  const pag = renderPaginationLine(pagination);
+  if (pag) { parts.push(pag); parts.push(''); }
+  vacancies.forEach((v, i) => {
+    parts.push(`## ${i + 1}. ${v.title ?? v.name ?? 'Untitled vacancy'}`);
+    parts.push(`ID: ${v.id ?? ''}`);
+    const status = v.status ?? v.state;
+    if (status) parts.push(`Status: ${status}`);
+    const dept = refName(v.department);
+    if (dept) parts.push(`Department: ${dept}`);
+    const loc = refName(v.location);
+    if (loc) parts.push(`Location: ${loc}`);
+    if (typeof v.candidates_count === 'number') parts.push(`Candidates: ${v.candidates_count}`);
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+export function formatVacancy(v: PeopleForceVacancy): string {
+  const parts = [`# ${v.title ?? v.name ?? 'Untitled vacancy'}`];
+  if (v.id !== undefined) parts.push(`ID: ${v.id}`);
+  const status = v.status ?? v.state;
+  if (status) parts.push(`Status: ${status}`);
+  const dept = refName(v.department);
+  if (dept) parts.push(`Department: ${dept}`);
+  const division = refName(v.division);
+  if (division) parts.push(`Division: ${division}`);
+  const loc = refName(v.location);
+  if (loc) parts.push(`Location: ${loc}`);
+  const stages = v.pipeline?.stages ?? v.stages;
+  if (stages && stages.length) {
+    const names = stages.map((s) => stageName(s)).filter(Boolean);
+    if (names.length) parts.push(`Pipeline stages: ${names.join(' → ')}`);
+  }
+  if (typeof v.candidates_count === 'number') parts.push(`Candidates: ${v.candidates_count}`);
+  if (v.created_at) parts.push(`Created: ${v.created_at}`);
+  const description = v.description_plain ?? v.description;
+  if (description) {
+    parts.push('');
+    parts.push('## Description');
+    parts.push(description);
+  }
+  return parts.join('\n');
+}
+
+export function formatPipelineList(pipelines: PeopleForcePipeline[], pagination?: PeopleForcePagination): string {
+  if (pipelines.length === 0) return renderEmptyList('Recruitment Pipelines', 'pipelines', pagination);
+  const parts = ['# Recruitment Pipelines', ''];
+  const pag = renderPaginationLine(pagination);
+  if (pag) { parts.push(pag); parts.push(''); }
+  pipelines.forEach((p, i) => {
+    parts.push(`## ${i + 1}. ${p.name ?? 'Untitled pipeline'}`);
+    parts.push(`ID: ${p.id ?? ''}`);
+    if (p.stages && p.stages.length) {
+      const stageLines = p.stages.map((s) => {
+        const n = stageName(s) ?? 'Stage';
+        return s.id !== undefined ? `${n} (ID: ${s.id})` : n;
+      });
+      parts.push(`Stages: ${stageLines.join(' → ')}`);
+    }
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+export function formatCandidateList(candidates: PeopleForceCandidate[], pagination?: PeopleForcePagination): string {
+  if (candidates.length === 0) return renderEmptyList('Candidates', 'candidates', pagination);
+  const parts = ['# Candidates', ''];
+  const pag = renderPaginationLine(pagination);
+  if (pag) { parts.push(pag); parts.push(''); }
+  candidates.forEach((c, i) => {
+    parts.push(`## ${i + 1}. ${fullName(c)}`);
+    parts.push(`ID: ${c.id ?? ''}`);
+    if (c.email) parts.push(`Email: ${c.email}`);
+    const stage = stageName(c.pipeline_stage ?? c.stage);
+    if (stage) parts.push(`Stage: ${stage}`);
+    const vacancy = refName(c.vacancy);
+    if (vacancy) parts.push(`Vacancy: ${vacancy}`);
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+export function formatCandidate(c: PeopleForceCandidate): string {
+  const parts = [`# ${fullName(c)}`];
+  if (c.id !== undefined) parts.push(`ID: ${c.id}`);
+  if (c.email) parts.push(`Email: ${c.email}`);
+  const phone = c.phone ?? c.phone_number;
+  if (phone) parts.push(`Phone: ${phone}`);
+  const location = refName(c.location);
+  if (location) parts.push(`Location: ${location}`);
+  const source = refName(c.source);
+  if (source) parts.push(`Source: ${source}`);
+  const salary = c.salary_expectation ?? c.expected_salary;
+  if (salary !== undefined && salary !== null && salary !== '') parts.push(`Salary expectation: ${salary}`);
+  const stage = stageName(c.pipeline_stage ?? c.stage);
+  if (stage) parts.push(`Pipeline stage: ${stage}`);
+  const vacancy = refName(c.vacancy);
+  if (vacancy) parts.push(`Vacancy: ${vacancy}`);
+  const skills = formatSkillsInline(c.skills);
+  if (skills) parts.push(`Skills: ${skills}`);
+  if (typeof c.disqualified === 'boolean') parts.push(`Disqualified: ${c.disqualified ? 'yes' : 'no'}`);
+  if (c.created_at) parts.push(`Created: ${c.created_at}`);
+  if (c.updated_at) parts.push(`Updated: ${c.updated_at}`);
+  return parts.join('\n');
+}
+
+export function formatApplicationList(applications: PeopleForceApplication[], pagination?: PeopleForcePagination): string {
+  if (applications.length === 0) return renderEmptyList('Vacancy Applications', 'applications', pagination);
+  const parts = ['# Vacancy Applications', ''];
+  const pag = renderPaginationLine(pagination);
+  if (pag) { parts.push(pag); parts.push(''); }
+  applications.forEach((a, i) => {
+    parts.push(`## ${i + 1}. ${fullName(a.candidate)}`);
+    parts.push(`Application ID: ${a.id ?? ''}`);
+    const candidateId = a.candidate?.id ?? a.candidate_id;
+    if (candidateId !== undefined) parts.push(`Candidate ID: ${candidateId}`);
+    const stage = stageName(a.pipeline_stage ?? a.stage ?? a.applicant_state);
+    if (stage) parts.push(`Stage: ${stage}`);
+    else if (a.state) parts.push(`State: ${a.state}`);
+    if (typeof a.disqualified === 'boolean') parts.push(`Disqualified: ${a.disqualified ? 'yes' : 'no'}`);
+    const reason = refName(a.disqualify_reason);
+    if (reason) parts.push(`Disqualify reason: ${reason}`);
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+function noteAuthor(n: PeopleForceCandidateNote): string | undefined {
+  if (n.created_by?.full_name) return n.created_by.full_name;
+  const a = n.author;
+  if (!a) return undefined;
+  if (typeof a === 'string') return a || undefined;
+  const rec = a as { full_name?: string; name?: string };
+  return rec.full_name ?? rec.name ?? undefined;
+}
+
+export function formatCandidateNotes(notes: PeopleForceCandidateNote[]): string {
+  if (notes.length === 0) return 'No notes recorded for this candidate.';
+  const parts = ['# Candidate Notes', ''];
+  notes.forEach((n, i) => {
+    const author = noteAuthor(n);
+    parts.push(`## ${i + 1}. ${author ?? `Note ${i + 1}`}${n.created_at ? ` — ${n.created_at}` : ''}`);
+    const text = n.body ?? n.text ?? n.content;
+    if (text) parts.push(text);
+    else parts.push(...jsonBlock(n));
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+export function formatCandidateExperiences(experiences: PeopleForceCandidateExperience[]): string {
+  if (experiences.length === 0) return 'No work experience recorded for this candidate.';
+  const parts = ['# Candidate Experience', ''];
+  experiences.forEach((e, i) => {
+    const role = e.position ?? e.title;
+    const company = e.company ?? e.company_name;
+    const heading = [role, company].filter(Boolean).join(' @ ') || `Experience ${i + 1}`;
+    parts.push(`## ${i + 1}. ${heading}`);
+    const period = datePeriod(e.starts_on, e.ends_on);
+    if (period) parts.push(period);
+    if (e.description) parts.push(e.description);
+    if (!role && !company && !period && !e.description) parts.push(...jsonBlock(e));
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+export function formatCandidateEducations(educations: PeopleForceCandidateEducation[]): string {
+  if (educations.length === 0) return 'No education recorded for this candidate.';
+  const parts = ['# Candidate Education', ''];
+  educations.forEach((e, i) => {
+    const inst = e.institution ?? e.school;
+    const degree = [e.degree, e.field_of_study].filter(Boolean).join(', ');
+    const heading = [degree, inst].filter(Boolean).join(' @ ') || `Education ${i + 1}`;
+    parts.push(`## ${i + 1}. ${heading}`);
+    const period = datePeriod(e.starts_on, e.ends_on);
+    if (period) parts.push(period);
+    if (!inst && !degree && !period) parts.push(...jsonBlock(e));
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+export function formatMovementList(movements: PeopleForceMovement[], pagination?: PeopleForcePagination): string {
+  if (movements.length === 0) return renderEmptyList('Candidate Movements', 'movements', pagination);
+  const parts = ['# Candidate Movements', ''];
+  const pag = renderPaginationLine(pagination);
+  if (pag) { parts.push(pag); parts.push(''); }
+  movements.forEach((m, i) => {
+    const from = stageName(m.from_stage) ?? '?';
+    const to = stageName(m.to_stage) ?? '?';
+    parts.push(`## ${i + 1}. ${fullName(m.candidate)}: ${from} → ${to}`);
+    if (m.id !== undefined) parts.push(`ID: ${m.id}`);
+    const vacancy = refName(m.vacancy);
+    if (vacancy) parts.push(`Vacancy: ${vacancy}`);
+    if (m.moved_by?.full_name) parts.push(`Moved by: ${m.moved_by.full_name}`);
+    if (m.created_at) parts.push(`When: ${m.created_at}`);
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+export function formatPublishedVacancy(payload: { data?: PeopleForceVacancy } | PeopleForceVacancy): string {
+  const v = (payload && typeof payload === 'object' && 'data' in payload && payload.data
+    ? payload.data
+    : payload) as PeopleForceVacancy;
+  if (!v || typeof v !== 'object' || Object.keys(v).length === 0) return 'No published job description found.';
+  const parts = [`# ${v.title ?? v.name ?? 'Job description'}`];
+  if (v.id !== undefined) parts.push(`ID: ${v.id}`);
+  const loc = refName(v.location);
+  if (loc) parts.push(`Location: ${loc}`);
+  const dept = refName(v.department);
+  if (dept) parts.push(`Department: ${dept}`);
+  const description = v.description_plain ?? v.description;
+  if (description) {
+    parts.push('');
+    parts.push('## Description');
+    parts.push(description);
+  } else {
+    parts.push('');
+    parts.push(...jsonBlock(v));
+  }
+  return parts.join('\n');
+}
+
+export function formatCandidateDossier(dossier: PeopleForceCandidateDossier): string {
+  const parts: string[] = [];
+  parts.push(dossier.candidate ? formatCandidate(dossier.candidate) : '# Candidate\n(profile unavailable)');
+  if (dossier.application) {
+    parts.push('');
+    parts.push('## Current Application');
+    if (dossier.application.id !== undefined) parts.push(`Application ID: ${dossier.application.id}`);
+    const stage = stageName(
+      dossier.application.pipeline_stage ?? dossier.application.stage ?? dossier.application.applicant_state,
+    );
+    if (stage) parts.push(`Stage: ${stage}`);
+    if (typeof dossier.application.disqualified === 'boolean') {
+      parts.push(`Disqualified: ${dossier.application.disqualified ? 'yes' : 'no'}`);
+    }
+  }
+  parts.push('', '---', formatCandidateNotes(dossier.notes));
+  parts.push('', '---', formatCandidateExperiences(dossier.experiences));
+  parts.push('', '---', formatCandidateEducations(dossier.educations));
+  if (dossier.errors.length) {
+    parts.push('', `_Note: could not load ${dossier.errors.join(', ')}._`);
+  }
+  return parts.join('\n');
 }
 
 // ==== Session + error helpers used by every PeopleForce tool executor ====
