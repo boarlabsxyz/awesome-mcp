@@ -923,13 +923,20 @@ describe('PeopleForceClient — recruitment routing', () => {
     assert.match(stub.calls[0].url, /\/api\/public\/v3\/recruitment\/candidates\/a%2Fb$/);
   });
 
-  test('listCandidateMovements hits /recruitment/candidate-movements (hyphenated)', async () => {
+  test('listCandidateMovements hits /recruitment/movements', async () => {
     stub = stubFetch(() => ({ body: { data: [] } }));
     const c = new PeopleForceClient('t', V2);
     await c.listCandidateMovements({ page: 2 });
     const url = new URL(stub.calls[0].url);
-    assert.equal(url.pathname, '/api/public/v3/recruitment/candidate-movements');
+    assert.equal(url.pathname, '/api/public/v3/recruitment/movements');
     assert.equal(url.searchParams.get('page'), '2');
+  });
+
+  test('listRecruitmentSources hits /recruitment/sources', async () => {
+    stub = stubFetch(() => ({ body: { data: [] } }));
+    const c = new PeopleForceClient('t', V2);
+    await c.listRecruitmentSources();
+    assert.equal(new URL(stub.calls[0].url).pathname, '/api/public/v3/recruitment/sources');
   });
 
   test('listCandidates serializes array filters and literal bracket date filters', async () => {
@@ -1012,7 +1019,8 @@ describe('PeopleForceClient — recruitment routing', () => {
     await c.addCandidateNote({ candidateId: 42, body: 'Strong on system design' });
     assert.equal(stub.calls[0].method, 'POST');
     assert.match(stub.calls[0].url, /\/recruitment\/candidates\/42\/notes$/);
-    assert.deepEqual(JSON.parse(stub.calls[0].body as string), { body: 'Strong on system design' });
+    // v3 note text field is `comment`, not `body`.
+    assert.deepEqual(JSON.parse(stub.calls[0].body as string), { comment: 'Strong on system design' });
   });
 
   test('getPublishedVacancy routes to the careers API host', async () => {
@@ -1188,6 +1196,22 @@ describe('formatCandidateList / formatCandidate', () => {
     assert.match(out, /Disqualified: no/);
   });
 
+  test('candidate detail reads the v3 phone_numbers[] + desired_salary/currency_code', () => {
+    const out = formatCandidate({
+      id: 7,
+      full_name: 'Ada Lovelace',
+      phone_numbers: ['+15550001111', '+15550002222'],
+      desired_salary: 120000,
+      currency_code: 'USD',
+      location: 'Kyiv',
+      source: 'LinkedIn',
+    } as any);
+    assert.match(out, /Phone: \+15550001111, \+15550002222/);
+    assert.match(out, /Salary expectation: 120000 USD/);
+    assert.match(out, /Location: Kyiv/);
+    assert.match(out, /Source: LinkedIn/);
+  });
+
   test('empty candidate list', () => {
     assert.equal(formatCandidateList([]), 'No candidates found.');
   });
@@ -1237,6 +1261,21 @@ describe('formatApplicationList', () => {
     assert.match(out, /Stage: Screening/);
   });
 
+  test('reads the real v3 shape: applicant + pipeline_state + disqualified_at', () => {
+    const out = formatApplicationList([
+      {
+        id: 900,
+        applicant: { id: 42, full_name: 'Grace Hopper', email: 'g@x.com' },
+        pipeline_state: { id: 5, name: 'Interview' },
+        disqualified_at: '2026-07-01T00:00:00Z',
+      } as any,
+    ]);
+    assert.match(out, /Grace Hopper/);
+    assert.match(out, /Candidate ID: 42/);
+    assert.match(out, /Stage: Interview/);
+    assert.match(out, /Disqualified: yes/);
+  });
+
   test('JSON-dumps a row when no candidate name, id, or stage can be extracted', () => {
     const out = formatApplicationList([{ id: 900, some_unknown_field: 'x' } as any]);
     assert.match(out, /Application ID: 900/);
@@ -1257,6 +1296,14 @@ describe('candidate note/experience/education formatters', () => {
     assert.match(out, /# Candidate Notes/);
     assert.match(out, /Interviewer X — 2026-07-01/);
     assert.match(out, /Strong hire/);
+  });
+
+  test('formatCandidateNotes reads the v3 `comment` field', () => {
+    const out = formatCandidateNotes([
+      { id: 1, comment: 'Great systems thinker', created_by: { full_name: 'Recruiter Z' }, created_at: '2026-07-02' },
+    ]);
+    assert.match(out, /Recruiter Z — 2026-07-02/);
+    assert.match(out, /Great systems thinker/);
   });
 
   test('formatCandidateNotes JSON-dumps a note with no recognizable text', () => {
@@ -1291,6 +1338,14 @@ describe('candidate note/experience/education formatters', () => {
     assert.match(out, /2016 – 2020/);
   });
 
+  test('formatCandidateEducations reads the v3 school/name/subject/from_year/to_year shape', () => {
+    const out = formatCandidateEducations([
+      { id: 1, school: 'MIT', name: 'BSc', subject: 'CS', from_year: 2016, to_year: 2020 } as any,
+    ]);
+    assert.match(out, /BSc, CS @ MIT/);
+    assert.match(out, /2016 – 2020/);
+  });
+
   test('education/experience empties', () => {
     assert.equal(formatCandidateExperiences([]), 'No work experience recorded for this candidate.');
     assert.equal(formatCandidateEducations([]), 'No education recorded for this candidate.');
@@ -1314,9 +1369,26 @@ describe('formatMovementList', () => {
     assert.match(out, /When: 2026-07-10/);
   });
 
-  test('uses "?" placeholders for missing stages', () => {
+  test('renders the real v3 shape: vacancy_application + destination stage + created_by + entered_at', () => {
+    const out = formatMovementList([
+      {
+        id: 77,
+        vacancy_application: { id: 901, applicant_id: 42, vacancy_id: 3 },
+        stage: { id: 5, name: 'Interview' },
+        created_by: { full_name: 'Recruiter Z' },
+        entered_at: '2026-07-11T10:00:00Z',
+      } as any,
+    ]);
+    assert.match(out, /Applicant 42: Interview/);
+    assert.match(out, /Vacancy ID: 3/);
+    assert.match(out, /Application ID: 901/);
+    assert.match(out, /Moved by: Recruiter Z/);
+    assert.match(out, /When: 2026-07-11/);
+  });
+
+  test('uses a "?" placeholder when no stage is present', () => {
     const out = formatMovementList([{ id: 1, candidate: { full_name: 'A B' } }]);
-    assert.match(out, /A B: \? → \?/);
+    assert.match(out, /A B: \?/);
   });
 
   test('empty list', () => {
