@@ -142,15 +142,25 @@ jobs:
           retention-days: 30
 
       - name: Post to Slack
+        # Uses chat.postMessage (bot token) instead of an Incoming Webhook so
+        # the target channel can be a Slack Connect (external) channel — those
+        # aren't addressable by webhooks.
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
         run: |
           if [ -f /tmp/release/slack-message.txt ]; then
             SLACK_TEXT=$(cat /tmp/release/slack-message.txt)
-            PAYLOAD=$(jq -n --arg text "$SLACK_TEXT" '{text: $text}')
-            curl -X POST "${SLACK_WEBHOOK_URL}" \
-              -H 'Content-type: application/json' \
-              -d "${PAYLOAD}" || true
+            PAYLOAD=$(jq -n --arg ch "$SLACK_CHANNEL_ID" --arg text "$SLACK_TEXT" \
+              '{channel: $ch, text: $text}')
+            RESPONSE=$(curl -s -X POST https://slack.com/api/chat.postMessage \
+              -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+              -H 'Content-type: application/json; charset=utf-8' \
+              -d "${PAYLOAD}") || true
+            echo "Slack response: $RESPONSE"
+            if [ "$(echo "$RESPONSE" | jq -r '.ok')" != "true" ]; then
+              echo "::warning::Slack chat.postMessage did not succeed"
+            fi
           fi
 
       - name: Send email notifications
