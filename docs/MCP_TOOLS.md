@@ -17,7 +17,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Slack (bot)](#slack-bot-) (7)
 - [Slack (user)](#slack-user-) (7)
 - [Outline](#outline) (27)
-- [PeopleForce](#peopleforce) (20)
+- [PeopleForce](#peopleforce) (38)
 
 ## Shared (every server)
 
@@ -248,7 +248,7 @@ Source: `src/outline/server.ts` — 27 tools.
 | `createDocument` | Creates a new Outline document in a collection. Optionally publishes immediately, sets an icon, or nests under a parent. | — |
 | `updateDocument` | Updates an Outline document. Replaces title/content unless append=true. | — |
 | `moveDocument` | Moves an Outline document to a different collection and/or under a different parent. Must specify at least one destination. | — |
-| `archiveDocument` | Archives an Outline document (removes from collections but keeps searchable). | — |
+| `archiveDocument` | Archives an Outline document (removes from collections but keeps searchable). Reversible via unarchiveDocument. | — |
 | `unarchiveDocument` | Unarchives a previously archived Outline document. | — |
 | `restoreDocument` | Restores an Outline document from the trash back to active status. | — |
 | `deleteDocument` | Moves an Outline document to trash. Set permanent=true to skip trash and delete immediately (irreversible). | — |
@@ -267,7 +267,7 @@ Source: `src/outline/server.ts` — 27 tools.
 
 ## PeopleForce
 
-Source: `src/peopleforce/server.ts` — 20 tools.
+Source: `src/peopleforce/server.ts` — 38 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -291,7 +291,25 @@ Source: `src/peopleforce/server.ts` — 20 tools.
 | `listEmployeeDocuments` | Lists documents attached to a specific employee's profile. Payload shape is dumped as JSON since the public API doesn't document a fixed schema for this endpoint. | — |
 | `listEmployeeNotes` | Lists HR notes on a specific employee's profile. Payload dumped as JSON (undocumented shape). | — |
 | `listEmployeeEmergencyContacts` | Lists emergency contacts on a specific employee's profile. Payload dumped as JSON (undocumented shape). | — |
+| `listVacancies` | Lists recruitment vacancies (job openings). Filter by `status` (drafting, opened, closed, held, cancelled, archived) and/or `tagIds`. Paginated (server-fixed page size). Use this to find the vacancy a candidate pipeline belongs to. | — |
+| `getVacancy` | Retrieves a single recruitment vacancy by ID, including its internal job description and pipeline stages. Use the description to match a candidate against the role. | — |
+| `listRecruitmentPipelines` | Lists recruitment pipelines and their stage definitions (with stage IDs). Call this to find the `pipelineStageId` needed for listCandidates or moveVacancyApplication. | — |
+| `listCandidates` | Lists recruitment candidates. Filter by `vacancyIds` (candidates applied to those vacancies), `pipelineStageId` (candidates at a stage), `skills` (stack), `email`, and created/updated date ranges (YYYY-MM-DD or ISO). This is the entry point for pulling a role's pipeline excerpt. | — |
+| `getCandidate` | Retrieves a single recruitment candidate by ID: full profile (contact, location, source, skills, salary expectation, current stage/vacancy). | — |
+| `listCandidateNotes` | Lists recruiter notes on a candidate — the main place free-text feedback (including technical-assessment comments) is recorded. The public API has no separate scorecard/test-result endpoint. | — |
+| `listCandidateExperiences` | Lists a candidate's work experience entries (company, role, dates) — used to assess years/stack. | — |
+| `listCandidateEducations` | Lists a candidate's education entries (institution, degree, field, dates). | — |
+| `listCandidateMovements` | Lists candidate pipeline movements (stage transitions) across recruitment — the history of who moved where and when. Paginated. | — |
+| `listVacancyApplications` | Lists the applications (candidates) on a specific vacancy with their current pipeline stage — i.e. the vacancy's pipeline excerpt. Paginated. | — |
+| `getVacancyApplication` | Retrieves a single vacancy application by vacancy ID + application ID (candidate, current stage, disqualification). | — |
+| `listDisqualifyReasons` | Lists recruitment disqualify reasons with their IDs. Call this to find the `disqualifyReasonId` needed for disqualifyVacancyApplication. | — |
+| `listRecruitmentSources` | Lists recruitment sources (where candidates came from) with their IDs. | — |
+| `getCandidateDossier` | Assembles a single candidate dossier for assessment: profile + recruiter notes + work experience + education, plus the current application/stage when `vacancyId` is given. One call to gather everything the AI needs to evaluate a candidate against a role. Best-effort: parts that fail to load are noted, not fatal. | — |
+| `getPublishedJobDescription` | Fetches the canonical public job description for a vacancy from the PeopleForce Careers API. Use this to get the exact JD text posted on your careers site for matching. Note: some tenants gate the Careers API behind a separate career-site token — if this returns not-authorized, use getVacancy's description instead. | — |
+| `moveVacancyApplication` | Moves a candidate's vacancy application to a different pipeline stage. Needs the vacancy ID, application ID, and target `pipelineStageId` (from listRecruitmentPipelines or getVacancy). | — |
+| `disqualifyVacancyApplication` | Disqualifies a vacancy application with a reason. Needs the vacancy ID, application ID (from listVacancyApplications), and a `disqualifyReasonId` (from listDisqualifyReasons); an optional comment is recorded. | — |
+| `addCandidateNote` | Adds a note to a candidate — e.g. to record the AI's assessment or interview feedback back into PeopleForce. The note appears on the candidate card. | — |
 
 ---
 
-**Grand total: 189 tools across 12 sections.**
+**Grand total: 207 tools across 12 sections.**

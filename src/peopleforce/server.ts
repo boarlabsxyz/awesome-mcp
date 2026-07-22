@@ -28,6 +28,19 @@ import {
   formatTaskList,
   formatUnknownItemList,
   withPeopleForceClient,
+  // Recruitment (v3)
+  formatVacancyList,
+  formatVacancy,
+  formatPipelineList,
+  formatCandidateList,
+  formatCandidate,
+  formatApplicationList,
+  formatCandidateNotes,
+  formatCandidateExperiences,
+  formatCandidateEducations,
+  formatMovementList,
+  formatPublishedVacancy,
+  formatCandidateDossier,
 } from './apiHelpers.js';
 
 export const peopleForceServer = new FastMCP<UserSession>({
@@ -96,6 +109,34 @@ function addEmployeeScopedListTool<T>(config: {
       withPeopleForceClient(config.errorPrefix, session, log, async (client) => {
         log.info(`${config.name} for employee ${args.employeeId}`);
         const res = await config.fetch(client, args.employeeId);
+        return config.format(res.data ?? []);
+      }),
+  });
+}
+
+/**
+ * Like {@link addEmployeeScopedListTool} but scoped to a recruitment candidate
+ * (notes, experiences, educations). Same "employee-nested endpoints don't
+ * paginate" assumption applies to these candidate-nested v3 endpoints.
+ */
+function addCandidateScopedListTool<T>(config: {
+  name: string;
+  description: string;
+  errorPrefix: string;
+  fetch: (client: PeopleForceClient, candidateId: string | number) => Promise<PeopleForceListResponse<T>>;
+  format: (data: T[]) => string;
+}) {
+  peopleForceServer.addTool({
+    name: config.name,
+    annotations: { readOnlyHint: true },
+    description: config.description,
+    parameters: z.object({
+      candidateId: z.union([z.string(), z.number()]).describe('The recruitment candidate ID.'),
+    }),
+    execute: (args, { log, session }) =>
+      withPeopleForceClient(config.errorPrefix, session, log, async (client) => {
+        log.info(`${config.name} for candidate ${args.candidateId}`);
+        const res = await config.fetch(client, args.candidateId);
         return config.format(res.data ?? []);
       }),
   });
@@ -357,4 +398,316 @@ addEmployeeScopedListTool({
   errorPrefix: 'Failed to list emergency contacts',
   fetch: (client, id) => client.listEmployeeEmergencyContacts(id),
   format: (data) => formatUnknownItemList('Emergency Contacts', data),
+});
+
+// ===========================================================================
+// Recruitment (v3 API)
+// ---------------------------------------------------------------------------
+// These endpoints live on the v3 base (…/api/public/v3/recruitment), derived
+// from the v2 base by PeopleForceClient. PeopleForce does not publish response
+// schemas, so formatters render known fields and fall back to a JSON dump;
+// field-name drift is corrected on first live use.
+//
+// Feedback note: the public API exposes candidate NOTES but NO scorecard /
+// test-result / interview endpoint — technical-assessment feedback surfaces
+// through notes (and whatever is inlined on candidate/application payloads).
+// ===========================================================================
+
+// === Vacancies ===
+
+peopleForceServer.addTool({
+  name: 'listVacancies',
+  annotations: { readOnlyHint: true },
+  description:
+    'Lists recruitment vacancies (job openings). Filter by `status` (drafting, opened, closed, held, cancelled, archived) and/or `tagIds`. Paginated (server-fixed page size). Use this to find the vacancy a candidate pipeline belongs to.',
+  parameters: z.object({
+    page: z.number().int().min(1).optional().default(1).describe('Page number (1-based).'),
+    status: z.array(z.string()).optional().describe('Filter by one or more statuses: drafting, opened, closed, held, cancelled, archived.'),
+    tagIds: z.array(z.union([z.string(), z.number()])).optional().describe('Filter by one or more vacancy tag IDs.'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to list vacancies', session, log, async (client) => {
+      log.info(`Listing PeopleForce vacancies (page=${args.page})`);
+      const res = await client.listVacancies({ page: args.page, status: args.status, tagIds: args.tagIds });
+      return formatVacancyList(res.data ?? [], res.metadata?.pagination);
+    }),
+});
+
+peopleForceServer.addTool({
+  name: 'getVacancy',
+  annotations: { readOnlyHint: true },
+  description:
+    'Retrieves a single recruitment vacancy by ID, including its internal job description and pipeline stages. Use the description to match a candidate against the role.',
+  parameters: z.object({
+    vacancyId: z.union([z.string(), z.number()]).describe('The vacancy ID (from listVacancies).'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to fetch vacancy', session, log, async (client) => {
+      log.info(`Fetching PeopleForce vacancy ${args.vacancyId}`);
+      const res = await client.getVacancy(args.vacancyId);
+      if (!res?.data) throw new UserError('Vacancy not found.');
+      return formatVacancy(res.data);
+    }),
+});
+
+addPaginatedListTool({
+  name: 'listRecruitmentPipelines',
+  description:
+    'Lists recruitment pipelines and their stage definitions (with stage IDs). Call this to find the `pipelineStageId` needed for listCandidates or moveVacancyApplication.',
+  errorPrefix: 'Failed to list recruitment pipelines',
+  fetch: (client, page) => client.listRecruitmentPipelines({ page }),
+  format: formatPipelineList,
+});
+
+// === Candidates ===
+
+peopleForceServer.addTool({
+  name: 'listCandidates',
+  annotations: { readOnlyHint: true },
+  description:
+    'Lists recruitment candidates. Filter by `vacancyIds` (candidates applied to those vacancies), `pipelineStageId` (candidates at a stage), `skills` (stack), `email`, and created/updated date ranges (YYYY-MM-DD or ISO). This is the entry point for pulling a role\'s pipeline excerpt.',
+  parameters: z.object({
+    page: z.number().int().min(1).optional().default(1).describe('Page number (1-based).'),
+    vacancyIds: z.array(z.union([z.string(), z.number()])).optional().describe('Filter to candidates on these vacancy IDs.'),
+    pipelineStageId: z.union([z.string(), z.number()]).optional().describe('Filter to candidates at this pipeline stage ID (from listRecruitmentPipelines).'),
+    skills: z.array(z.string()).optional().describe('Filter by skill names (stack), e.g. ["React","Node.js"].'),
+    email: z.string().optional().describe('Match a candidate by email address.'),
+    createdAtGte: z.string().optional().describe('Only candidates created on/after this date (YYYY-MM-DD or ISO).'),
+    createdAtLte: z.string().optional().describe('Only candidates created on/before this date.'),
+    updatedAtGte: z.string().optional().describe('Only candidates updated on/after this date.'),
+    updatedAtLte: z.string().optional().describe('Only candidates updated on/before this date.'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to list candidates', session, log, async (client) => {
+      log.info(`Listing PeopleForce candidates (page=${args.page})`);
+      const res = await client.listCandidates({
+        page: args.page,
+        vacancyIds: args.vacancyIds,
+        pipelineStageId: args.pipelineStageId,
+        skills: args.skills,
+        email: args.email,
+        createdAtGte: args.createdAtGte,
+        createdAtLte: args.createdAtLte,
+        updatedAtGte: args.updatedAtGte,
+        updatedAtLte: args.updatedAtLte,
+      });
+      return formatCandidateList(res.data ?? [], res.metadata?.pagination);
+    }),
+});
+
+peopleForceServer.addTool({
+  name: 'getCandidate',
+  annotations: { readOnlyHint: true },
+  description:
+    'Retrieves a single recruitment candidate by ID: full profile (contact, location, source, skills, salary expectation, current stage/vacancy).',
+  parameters: z.object({
+    candidateId: z.union([z.string(), z.number()]).describe('The candidate ID.'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to fetch candidate', session, log, async (client) => {
+      log.info(`Fetching PeopleForce candidate ${args.candidateId}`);
+      const res = await client.getCandidate(args.candidateId);
+      if (!res?.data) throw new UserError('Candidate not found.');
+      return formatCandidate(res.data);
+    }),
+});
+
+addCandidateScopedListTool({
+  name: 'listCandidateNotes',
+  description:
+    'Lists recruiter notes on a candidate — the main place free-text feedback (including technical-assessment comments) is recorded. The public API has no separate scorecard/test-result endpoint.',
+  errorPrefix: 'Failed to list candidate notes',
+  fetch: (client, id) => client.listCandidateNotes(id),
+  format: formatCandidateNotes,
+});
+
+addCandidateScopedListTool({
+  name: 'listCandidateExperiences',
+  description: 'Lists a candidate\'s work experience entries (company, role, dates) — used to assess years/stack.',
+  errorPrefix: 'Failed to list candidate experiences',
+  fetch: (client, id) => client.listCandidateExperiences(id),
+  format: formatCandidateExperiences,
+});
+
+addCandidateScopedListTool({
+  name: 'listCandidateEducations',
+  description: 'Lists a candidate\'s education entries (institution, degree, field, dates).',
+  errorPrefix: 'Failed to list candidate educations',
+  fetch: (client, id) => client.listCandidateEducations(id),
+  format: formatCandidateEducations,
+});
+
+peopleForceServer.addTool({
+  name: 'listCandidateMovements',
+  annotations: { readOnlyHint: true },
+  description:
+    'Lists candidate pipeline movements (stage transitions) across recruitment — the history of who moved where and when. Paginated.',
+  parameters: z.object({
+    page: z.number().int().min(1).optional().default(1).describe('Page number (1-based).'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to list candidate movements', session, log, async (client) => {
+      log.info(`Listing PeopleForce candidate movements (page=${args.page})`);
+      const res = await client.listCandidateMovements({ page: args.page });
+      return formatMovementList(res.data ?? [], res.metadata?.pagination);
+    }),
+});
+
+// === Applications ===
+
+peopleForceServer.addTool({
+  name: 'listVacancyApplications',
+  annotations: { readOnlyHint: true },
+  description:
+    'Lists the applications (candidates) on a specific vacancy with their current pipeline stage — i.e. the vacancy\'s pipeline excerpt. Paginated.',
+  parameters: z.object({
+    vacancyId: z.union([z.string(), z.number()]).describe('The vacancy ID (from listVacancies).'),
+    page: z.number().int().min(1).optional().default(1).describe('Page number (1-based).'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to list vacancy applications', session, log, async (client) => {
+      log.info(`Listing applications for vacancy ${args.vacancyId} (page=${args.page})`);
+      const res = await client.listVacancyApplications({ vacancyId: args.vacancyId, page: args.page });
+      return formatApplicationList(res.data ?? [], res.metadata?.pagination);
+    }),
+});
+
+peopleForceServer.addTool({
+  name: 'getVacancyApplication',
+  annotations: { readOnlyHint: true },
+  description: 'Retrieves a single vacancy application by vacancy ID + application ID (candidate, current stage, disqualification).',
+  parameters: z.object({
+    vacancyId: z.union([z.string(), z.number()]).describe('The vacancy ID.'),
+    applicationId: z.union([z.string(), z.number()]).describe('The application ID (from listVacancyApplications).'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to fetch vacancy application', session, log, async (client) => {
+      log.info(`Fetching application ${args.applicationId} on vacancy ${args.vacancyId}`);
+      const res = await client.getVacancyApplication({ vacancyId: args.vacancyId, applicationId: args.applicationId });
+      if (!res?.data) throw new UserError('Vacancy application not found.');
+      return formatApplicationList([res.data]);
+    }),
+});
+
+// === Support / lookups ===
+
+addPaginatedListTool({
+  name: 'listDisqualifyReasons',
+  description:
+    'Lists recruitment disqualify reasons with their IDs. Call this to find the `disqualifyReasonId` needed for disqualifyVacancyApplication.',
+  errorPrefix: 'Failed to list disqualify reasons',
+  fetch: (client, page) => client.listDisqualifyReasons({ page }),
+  format: (data, p) => formatNamedList('Disqualify Reasons', data, p),
+});
+
+addPaginatedListTool({
+  name: 'listRecruitmentSources',
+  description: 'Lists recruitment sources (where candidates came from) with their IDs.',
+  errorPrefix: 'Failed to list recruitment sources',
+  fetch: (client, page) => client.listRecruitmentSources({ page }),
+  format: (data, p) => formatNamedList('Recruitment Sources', data, p),
+});
+
+// === Dossier (bundled read for AI assessment) ===
+
+peopleForceServer.addTool({
+  name: 'getCandidateDossier',
+  annotations: { readOnlyHint: true },
+  description:
+    'Assembles a single candidate dossier for assessment: profile + recruiter notes + work experience + education, plus the current application/stage when `vacancyId` is given. One call to gather everything the AI needs to evaluate a candidate against a role. Best-effort: parts that fail to load are noted, not fatal.',
+  parameters: z.object({
+    candidateId: z.union([z.string(), z.number()]).describe('The candidate ID.'),
+    vacancyId: z.union([z.string(), z.number()]).optional().describe('Optional vacancy ID to also resolve the candidate\'s application + current stage on that vacancy.'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to build candidate dossier', session, log, async (client) => {
+      log.info(`Building dossier for candidate ${args.candidateId}${args.vacancyId ? ` on vacancy ${args.vacancyId}` : ''}`);
+      const dossier = await client.getCandidateDossier({ candidateId: args.candidateId, vacancyId: args.vacancyId });
+      return formatCandidateDossier(dossier);
+    }),
+});
+
+// === Careers API (published job descriptions) ===
+
+peopleForceServer.addTool({
+  name: 'getPublishedJobDescription',
+  annotations: { readOnlyHint: true },
+  description:
+    'Fetches the canonical public job description for a vacancy from the PeopleForce Careers API. Use this to get the exact JD text posted on your careers site for matching. Note: some tenants gate the Careers API behind a separate career-site token — if this returns not-authorized, use getVacancy\'s description instead.',
+  parameters: z.object({
+    vacancyId: z.union([z.string(), z.number()]).describe('The public careers vacancy ID.'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to fetch published job description', session, log, async (client) => {
+      log.info(`Fetching published JD for vacancy ${args.vacancyId}`);
+      const res = await client.getPublishedVacancy(args.vacancyId);
+      return formatPublishedVacancy(res);
+    }),
+});
+
+// === Write actions ===
+
+peopleForceServer.addTool({
+  name: 'moveVacancyApplication',
+  annotations: { readOnlyHint: false },
+  description:
+    'Moves a candidate\'s vacancy application to a different pipeline stage. Needs the vacancy ID, application ID, and target `pipelineStageId` (from listRecruitmentPipelines or getVacancy).',
+  parameters: z.object({
+    vacancyId: z.union([z.string(), z.number()]).describe('The vacancy ID.'),
+    applicationId: z.union([z.string(), z.number()]).describe('The application ID (from listVacancyApplications).'),
+    pipelineStageId: z.union([z.string(), z.number()]).describe('The target pipeline stage ID.'),
+    performAutomations: z.boolean().optional().describe('Whether to run the stage\'s automations (PeopleForce defaults to true).'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to move vacancy application', session, log, async (client) => {
+      log.info(`Moving application ${args.applicationId} on vacancy ${args.vacancyId} to stage ${args.pipelineStageId}`);
+      await client.moveVacancyApplication({
+        vacancyId: args.vacancyId,
+        applicationId: args.applicationId,
+        pipelineStageId: args.pipelineStageId,
+        performAutomations: args.performAutomations,
+      });
+      return `Moved application ${args.applicationId} to pipeline stage ${args.pipelineStageId}.`;
+    }),
+});
+
+peopleForceServer.addTool({
+  name: 'disqualifyVacancyApplication',
+  annotations: { readOnlyHint: false },
+  description:
+    'Disqualifies a vacancy application with a reason. Needs the vacancy ID, application ID (from listVacancyApplications), and a `disqualifyReasonId` (from listDisqualifyReasons); an optional comment is recorded.',
+  parameters: z.object({
+    vacancyId: z.union([z.string(), z.number()]).describe('The vacancy ID.'),
+    applicationId: z.union([z.string(), z.number()]).describe('The application ID (from listVacancyApplications).'),
+    disqualifyReasonId: z.union([z.string(), z.number()]).describe('The disqualify reason ID (from listDisqualifyReasons).'),
+    comment: z.string().optional().describe('Optional comment explaining the disqualification.'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to disqualify vacancy application', session, log, async (client) => {
+      log.info(`Disqualifying application ${args.applicationId} on vacancy ${args.vacancyId} (reason ${args.disqualifyReasonId})`);
+      await client.disqualifyVacancyApplication({
+        vacancyId: args.vacancyId,
+        applicationId: args.applicationId,
+        disqualifyReasonId: args.disqualifyReasonId,
+        comment: args.comment,
+      });
+      return `Disqualified application ${args.applicationId}.`;
+    }),
+});
+
+peopleForceServer.addTool({
+  name: 'addCandidateNote',
+  annotations: { readOnlyHint: false },
+  description:
+    'Adds a note to a candidate — e.g. to record the AI\'s assessment or interview feedback back into PeopleForce. The note appears on the candidate card.',
+  parameters: z.object({
+    candidateId: z.union([z.string(), z.number()]).describe('The candidate ID.'),
+    body: z.string().min(1).describe('The note text.'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to add candidate note', session, log, async (client) => {
+      log.info(`Adding note to candidate ${args.candidateId}`);
+      await client.addCandidateNote({ candidateId: args.candidateId, body: args.body });
+      return `Note added to candidate ${args.candidateId}.`;
+    }),
 });
