@@ -236,6 +236,8 @@ export type PeopleForceVacancy = {
   location?: PeopleForceRef | string;
   pipeline?: PeopleForcePipeline | null;
   stages?: PeopleForceStage[];
+  /** Real v3 field; `candidates_count` kept as a legacy alias. */
+  applications_count?: number;
   candidates_count?: number;
   created_at?: string;
 };
@@ -254,10 +256,15 @@ export type PeopleForceCandidate = {
   first_name?: string;
   last_name?: string;
   email?: string;
+  /** v3 returns an array of phone strings; the scalar aliases are legacy fallbacks. */
+  phone_numbers?: string[];
   phone?: string;
   phone_number?: string;
   location?: PeopleForceRef | string;
   source?: PeopleForceRef | string;
+  /** v3 salary is `desired_salary` (+ `currency_code`); the *_expectation names are legacy. */
+  desired_salary?: string | number;
+  currency_code?: string;
   salary_expectation?: string | number;
   expected_salary?: string | number;
   skills?: Array<PeopleForceNamed | string> | string;
@@ -278,11 +285,15 @@ export type PeopleForceApplication = {
   applicant_id?: number | string;
   vacancy?: PeopleForceRef | null;
   vacancy_id?: number | string;
+  /** v3 current-stage field is `pipeline_state` {id,name}; the others are fallbacks. */
+  pipeline_state?: PeopleForceStage | string;
   stage?: PeopleForceStage | string;
   pipeline_stage?: PeopleForceStage | string;
   applicant_state?: PeopleForceStage | string;
   state?: string;
   disqualified?: boolean;
+  /** v3 marks disqualification with a timestamp rather than a boolean. */
+  disqualified_at?: string | null;
   disqualify_reason?: PeopleForceRef | string;
   created_at?: string;
 };
@@ -299,6 +310,8 @@ function applicationCandidateId(a: PeopleForceApplication): number | string | un
 
 export type PeopleForceCandidateNote = {
   id?: number | string;
+  /** v3 note text field; body/text/content kept as legacy fallbacks. */
+  comment?: string;
   body?: string;
   text?: string;
   content?: string;
@@ -320,16 +333,32 @@ export type PeopleForceCandidateExperience = {
 
 export type PeopleForceCandidateEducation = {
   id?: number | string;
-  institution?: string;
+  /** v3 uses school/name/subject/from_year/to_year; the others are legacy fallbacks. */
   school?: string;
+  name?: string;
+  subject?: string;
+  from_year?: number | string;
+  to_year?: number | string;
+  description?: string;
+  institution?: string;
   degree?: string;
   field_of_study?: string;
   starts_on?: string;
   ends_on?: string;
 };
 
+/**
+ * A pipeline movement as v3 returns it: the destination `stage`, the
+ * `vacancy_application` it belongs to (carrying `applicant_id`/`vacancy_id`),
+ * who moved it (`created_by`) and when (`entered_at`). The from/to/candidate
+ * fields are legacy fallbacks kept for older/webhook shapes.
+ */
 export type PeopleForceMovement = {
   id?: number | string;
+  vacancy_application?: { id?: number | string; applicant_id?: number | string; vacancy_id?: number | string } | null;
+  stage?: PeopleForceStage | string;
+  created_by?: { full_name?: string } | null;
+  entered_at?: string;
   candidate?: PeopleForceCandidateRef | null;
   vacancy?: PeopleForceRef | null;
   from_stage?: PeopleForceStage | string;
@@ -623,7 +652,7 @@ export class PeopleForceClient {
   }
 
   listCandidateMovements(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceMovement>> {
-    return this.requestAt(this.recruitmentBaseUrl, 'GET', '/recruitment/candidate-movements', undefined, { page: input.page });
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', '/recruitment/movements', undefined, { page: input.page });
   }
 
   // === Recruitment (v3) — applications ===
@@ -693,7 +722,7 @@ export class PeopleForceClient {
   }
 
   listRecruitmentSources(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceNamed>> {
-    return this.requestAt(this.recruitmentBaseUrl, 'GET', '/sources', undefined, { page: input.page });
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', '/recruitment/sources', undefined, { page: input.page });
   }
 
   addCandidateNote(input: {
@@ -704,7 +733,7 @@ export class PeopleForceClient {
       this.recruitmentBaseUrl,
       'POST',
       `/recruitment/candidates/${encodeURIComponent(String(input.candidateId))}/notes`,
-      { body: input.body },
+      { comment: input.body },
     );
   }
 
@@ -1055,7 +1084,8 @@ export function formatVacancyList(vacancies: PeopleForceVacancy[], pagination?: 
     if (dept) parts.push(`Department: ${dept}`);
     const loc = refName(v.location);
     if (loc) parts.push(`Location: ${loc}`);
-    if (typeof v.candidates_count === 'number') parts.push(`Candidates: ${v.candidates_count}`);
+    const applicantCount = v.applications_count ?? v.candidates_count;
+    if (typeof applicantCount === 'number') parts.push(`Candidates: ${applicantCount}`);
     parts.push('');
   });
   return parts.join('\n').trimEnd();
@@ -1077,7 +1107,8 @@ export function formatVacancy(v: PeopleForceVacancy): string {
     const names = stages.map((s) => stageName(s)).filter(Boolean);
     if (names.length) parts.push(`Pipeline stages: ${names.join(' → ')}`);
   }
-  if (typeof v.candidates_count === 'number') parts.push(`Candidates: ${v.candidates_count}`);
+  const applicantCount = v.applications_count ?? v.candidates_count;
+  if (typeof applicantCount === 'number') parts.push(`Candidates: ${applicantCount}`);
   if (v.created_at) parts.push(`Created: ${v.created_at}`);
   const description = v.description_plain ?? v.description;
   if (description) {
@@ -1130,14 +1161,17 @@ export function formatCandidate(c: PeopleForceCandidate): string {
   const parts = [`# ${fullName(c)}`];
   if (c.id !== undefined) parts.push(`ID: ${c.id}`);
   if (c.email) parts.push(`Email: ${c.email}`);
-  const phone = c.phone ?? c.phone_number;
+  const phone =
+    (Array.isArray(c.phone_numbers) && c.phone_numbers.filter(Boolean).join(', ')) || c.phone || c.phone_number;
   if (phone) parts.push(`Phone: ${phone}`);
   const location = refName(c.location);
   if (location) parts.push(`Location: ${location}`);
   const source = refName(c.source);
   if (source) parts.push(`Source: ${source}`);
-  const salary = c.salary_expectation ?? c.expected_salary;
-  if (salary !== undefined && salary !== null && salary !== '') parts.push(`Salary expectation: ${salary}`);
+  const salary = c.desired_salary ?? c.salary_expectation ?? c.expected_salary;
+  if (salary !== undefined && salary !== null && salary !== '') {
+    parts.push(`Salary expectation: ${salary}${c.currency_code ? ` ${c.currency_code}` : ''}`);
+  }
   const stage = stageName(c.pipeline_stage ?? c.stage);
   if (stage) parts.push(`Pipeline stage: ${stage}`);
   const vacancy = refName(c.vacancy);
@@ -1162,10 +1196,13 @@ export function formatApplicationList(applications: PeopleForceApplication[], pa
     parts.push(`Application ID: ${a.id ?? ''}`);
     const candidateId = applicationCandidateId(a);
     if (candidateId !== undefined) parts.push(`Candidate ID: ${candidateId}`);
-    const stage = stageName(a.pipeline_stage ?? a.stage ?? a.applicant_state);
+    const stage = stageName(a.pipeline_state ?? a.pipeline_stage ?? a.stage ?? a.applicant_state);
     if (stage) parts.push(`Stage: ${stage}`);
     else if (a.state) parts.push(`State: ${a.state}`);
-    if (typeof a.disqualified === 'boolean') parts.push(`Disqualified: ${a.disqualified ? 'yes' : 'no'}`);
+    // v3 flags disqualification with a timestamp, not a boolean.
+    const disqualified =
+      typeof a.disqualified === 'boolean' ? a.disqualified : a.disqualified_at ? true : undefined;
+    if (disqualified !== undefined) parts.push(`Disqualified: ${disqualified ? 'yes' : 'no'}`);
     const reason = refName(a.disqualify_reason);
     if (reason) parts.push(`Disqualify reason: ${reason}`);
     // If the record didn't yield a candidate name or a stage, the wire shape
@@ -1194,7 +1231,7 @@ export function formatCandidateNotes(notes: PeopleForceCandidateNote[]): string 
   notes.forEach((n, i) => {
     const author = noteAuthor(n);
     parts.push(`## ${i + 1}. ${author ?? `Note ${i + 1}`}${n.created_at ? ` — ${n.created_at}` : ''}`);
-    const text = n.body ?? n.text ?? n.content;
+    const text = n.comment ?? n.body ?? n.text ?? n.content;
     if (text) parts.push(text);
     else parts.push(...jsonBlock(n));
     parts.push('');
@@ -1223,13 +1260,18 @@ export function formatCandidateEducations(educations: PeopleForceCandidateEducat
   if (educations.length === 0) return 'No education recorded for this candidate.';
   const parts = ['# Candidate Education', ''];
   educations.forEach((e, i) => {
-    const inst = e.institution ?? e.school;
-    const degree = [e.degree, e.field_of_study].filter(Boolean).join(', ');
+    const inst = e.school ?? e.institution;
+    // v3: `name` is the degree/qualification, `subject` the field of study.
+    const degree = [e.degree ?? e.name, e.field_of_study ?? e.subject].filter(Boolean).join(', ');
     const heading = [degree, inst].filter(Boolean).join(' @ ') || `Education ${i + 1}`;
     parts.push(`## ${i + 1}. ${heading}`);
-    const period = datePeriod(e.starts_on, e.ends_on);
+    // v3 gives from_year/to_year; fall back to full dates when present.
+    const period =
+      datePeriod(e.starts_on, e.ends_on) ??
+      (e.from_year || e.to_year ? `${e.from_year ?? '?'} – ${e.to_year ?? 'present'}` : undefined);
     if (period) parts.push(period);
-    if (!inst && !degree && !period) parts.push(...jsonBlock(e));
+    if (e.description) parts.push(e.description);
+    if (!inst && !degree && !period && !e.description) parts.push(...jsonBlock(e));
     parts.push('');
   });
   return parts.join('\n').trimEnd();
@@ -1241,14 +1283,27 @@ export function formatMovementList(movements: PeopleForceMovement[], pagination?
   const pag = renderPaginationLine(pagination);
   if (pag) { parts.push(pag); parts.push(''); }
   movements.forEach((m, i) => {
-    const from = stageName(m.from_stage) ?? '?';
-    const to = stageName(m.to_stage) ?? '?';
-    parts.push(`## ${i + 1}. ${fullName(m.candidate)}: ${from} → ${to}`);
+    // v3 gives the destination `stage` plus a `vacancy_application` ref (no
+    // candidate name); fall back to the legacy candidate/from→to shape.
+    const applicantId = m.vacancy_application?.applicant_id;
+    const who = m.candidate ? fullName(m.candidate) : applicantId !== undefined ? `Applicant ${applicantId}` : 'Applicant';
+    const to = stageName(m.stage ?? m.to_stage);
+    const from = stageName(m.from_stage);
+    const transition = from ? `${from} → ${to ?? '?'}` : (to ?? '?');
+    parts.push(`## ${i + 1}. ${who}: ${transition}`);
     if (m.id !== undefined) parts.push(`ID: ${m.id}`);
-    const vacancy = refName(m.vacancy);
-    if (vacancy) parts.push(`Vacancy: ${vacancy}`);
-    if (m.moved_by?.full_name) parts.push(`Moved by: ${m.moved_by.full_name}`);
-    if (m.created_at) parts.push(`When: ${m.created_at}`);
+    const vacancyId = m.vacancy_application?.vacancy_id;
+    if (vacancyId !== undefined) parts.push(`Vacancy ID: ${vacancyId}`);
+    else {
+      const vacancy = refName(m.vacancy);
+      if (vacancy) parts.push(`Vacancy: ${vacancy}`);
+    }
+    const applicationId = m.vacancy_application?.id;
+    if (applicationId !== undefined) parts.push(`Application ID: ${applicationId}`);
+    const movedBy = m.created_by?.full_name ?? m.moved_by?.full_name;
+    if (movedBy) parts.push(`Moved by: ${movedBy}`);
+    const when = m.entered_at ?? m.created_at;
+    if (when) parts.push(`When: ${when}`);
     parts.push('');
   });
   return parts.join('\n').trimEnd();
