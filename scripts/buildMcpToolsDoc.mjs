@@ -67,11 +67,28 @@ function loadRestCatalog() {
 // Per-file tool extraction — walks the addTool({ … }) blocks with brace
 // counting (skipping over string literals) so we don't get confused by curly
 // braces inside Zod schemas or example strings.
+//
+// Besides the raw `.addTool({ … })` registration, some servers register tools
+// through thin wrapper helpers whose call sites still pass a literal `name:` +
+// `description:` (e.g. PeopleForce's addPaginatedListTool /
+// addEmployeeScopedListTool / addCandidateScopedListTool). We match those call
+// sites too so helper-registered tools aren't silently dropped from the doc.
+// The helpers' own definitions call `.addTool({ name: config.name })` — those
+// blocks have no literal name and are harmlessly skipped as unparseable.
 // ---------------------------------------------------------------------------
+
+const REGISTRATION_OPENERS = [
+  'addTool',
+  'addPaginatedListTool',
+  'addEmployeeScopedListTool',
+  'addCandidateScopedListTool',
+];
 
 function findAddToolBlocks(src) {
   const blocks = [];
-  const opener = /addTool\(\s*\{/g;
+  // Require `(` immediately after the name so generic helper *definitions*
+  // (`function addPaginatedListTool<T>(config: {`) aren't matched — only calls.
+  const opener = new RegExp(`(?:${REGISTRATION_OPENERS.join('|')})\\(\\s*\\{`, 'g');
   let m;
   while ((m = opener.exec(src)) !== null) {
     const start = m.index + m[0].length;
