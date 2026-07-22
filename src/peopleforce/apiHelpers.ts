@@ -209,6 +209,9 @@ export type PeopleForceLeaveRequest = {
 export type PeopleForceStage = {
   id?: number | string;
   name?: string;
+  /** Alternate labels seen on the wire for the same concept. */
+  title?: string;
+  label?: string;
   /** e.g. "hired", "disqualified", "interview" — the terminal/kind marker. */
   kind?: string;
   position?: number;
@@ -270,6 +273,9 @@ export type PeopleForceApplication = {
   id?: number | string;
   candidate?: PeopleForceCandidateRef | null;
   candidate_id?: number | string;
+  /** Some responses key the candidate as "applicant" instead of "candidate". */
+  applicant?: PeopleForceCandidateRef | null;
+  applicant_id?: number | string;
   vacancy?: PeopleForceRef | null;
   vacancy_id?: number | string;
   stage?: PeopleForceStage | string;
@@ -280,6 +286,16 @@ export type PeopleForceApplication = {
   disqualify_reason?: PeopleForceRef | string;
   created_at?: string;
 };
+
+/** The candidate reference an application carries, under whichever key. */
+function applicationCandidate(a: PeopleForceApplication): PeopleForceCandidateRef | null | undefined {
+  return a.candidate ?? a.applicant;
+}
+
+/** The candidate id an application carries, under whichever key. */
+function applicationCandidateId(a: PeopleForceApplication): number | string | undefined {
+  return applicationCandidate(a)?.id ?? a.candidate_id ?? a.applicant_id;
+}
 
 export type PeopleForceCandidateNote = {
   id?: number | string;
@@ -557,7 +573,7 @@ export class PeopleForceClient {
   }
 
   getVacancy(id: string | number): Promise<{ data: PeopleForceVacancy }> {
-    return this.requestAt(this.recruitmentBaseUrl, 'GET', `/recruitment/vacancy/${encodeURIComponent(String(id))}`);
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', `/recruitment/vacancies/${encodeURIComponent(String(id))}`);
   }
 
   listRecruitmentPipelines(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForcePipeline>> {
@@ -591,7 +607,7 @@ export class PeopleForceClient {
   }
 
   getCandidate(id: string | number): Promise<{ data: PeopleForceCandidate }> {
-    return this.requestAt(this.recruitmentBaseUrl, 'GET', `/recruitment/candidate/${encodeURIComponent(String(id))}`);
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', `/recruitment/candidates/${encodeURIComponent(String(id))}`);
   }
 
   listCandidateNotes(candidateId: string | number): Promise<PeopleForceListResponse<PeopleForceCandidateNote>> {
@@ -607,7 +623,7 @@ export class PeopleForceClient {
   }
 
   listCandidateMovements(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceMovement>> {
-    return this.requestAt(this.recruitmentBaseUrl, 'GET', '/recruitment/candidate_movements', undefined, { page: input.page });
+    return this.requestAt(this.recruitmentBaseUrl, 'GET', '/recruitment/candidate-movements', undefined, { page: input.page });
   }
 
   // === Recruitment (v3) — applications ===
@@ -730,9 +746,7 @@ export class PeopleForceClient {
       try {
         const apps = await this.listVacancyApplications({ vacancyId: input.vacancyId });
         const wanted = String(input.candidateId);
-        application = (apps.data ?? []).find(
-          (a) => String(a.candidate?.id ?? a.candidate_id ?? '') === wanted,
-        );
+        application = (apps.data ?? []).find((a) => String(applicationCandidateId(a) ?? '') === wanted);
         if (!application) errors.push('application (no match on vacancy page 1)');
       } catch {
         errors.push('application');
@@ -1002,7 +1016,7 @@ export function formatUnknownItemList(title: string, items: Record<string, unkno
 function stageName(stage: PeopleForceStage | string | undefined | null): string | undefined {
   if (!stage) return undefined;
   if (typeof stage === 'string') return stage;
-  return stage.name;
+  return stage.name ?? stage.title ?? stage.label;
 }
 
 function formatSkillsInline(skills: PeopleForceCandidate['skills']): string | undefined {
@@ -1142,9 +1156,11 @@ export function formatApplicationList(applications: PeopleForceApplication[], pa
   const pag = renderPaginationLine(pagination);
   if (pag) { parts.push(pag); parts.push(''); }
   applications.forEach((a, i) => {
-    parts.push(`## ${i + 1}. ${fullName(a.candidate)}`);
+    const candidate = applicationCandidate(a);
+    const name = fullName(candidate);
+    parts.push(`## ${i + 1}. ${name}`);
     parts.push(`Application ID: ${a.id ?? ''}`);
-    const candidateId = a.candidate?.id ?? a.candidate_id;
+    const candidateId = applicationCandidateId(a);
     if (candidateId !== undefined) parts.push(`Candidate ID: ${candidateId}`);
     const stage = stageName(a.pipeline_stage ?? a.stage ?? a.applicant_state);
     if (stage) parts.push(`Stage: ${stage}`);
@@ -1152,6 +1168,12 @@ export function formatApplicationList(applications: PeopleForceApplication[], pa
     if (typeof a.disqualified === 'boolean') parts.push(`Disqualified: ${a.disqualified ? 'yes' : 'no'}`);
     const reason = refName(a.disqualify_reason);
     if (reason) parts.push(`Disqualify reason: ${reason}`);
+    // If the record didn't yield a candidate name or a stage, the wire shape
+    // differs from what we know — dump it verbatim so no field is lost (the
+    // PeopleForce v3 application schema is not published).
+    if (name === 'Unknown' && candidateId === undefined && !stage) {
+      parts.push(...jsonBlock(a));
+    }
     parts.push('');
   });
   return parts.join('\n').trimEnd();
