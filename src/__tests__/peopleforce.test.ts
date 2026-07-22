@@ -909,11 +909,27 @@ describe('PeopleForceClient — recruitment routing', () => {
     assert.deepEqual(url.searchParams.getAll('tag_ids[]'), ['7', '9']);
   });
 
-  test('getVacancy hits the singular v3 path and URL-encodes the id', async () => {
+  test('getVacancy hits the plural /vacancies/{id} v3 path and URL-encodes the id', async () => {
     stub = stubFetch(() => ({ body: { data: { id: 'a/b' } } }));
     const c = new PeopleForceClient('t', V2);
     await c.getVacancy('a/b');
-    assert.match(stub.calls[0].url, /\/api\/public\/v3\/recruitment\/vacancy\/a%2Fb$/);
+    assert.match(stub.calls[0].url, /\/api\/public\/v3\/recruitment\/vacancies\/a%2Fb$/);
+  });
+
+  test('getCandidate hits the plural /candidates/{id} v3 path and URL-encodes the id', async () => {
+    stub = stubFetch(() => ({ body: { data: { id: 'a/b' } } }));
+    const c = new PeopleForceClient('t', V2);
+    await c.getCandidate('a/b');
+    assert.match(stub.calls[0].url, /\/api\/public\/v3\/recruitment\/candidates\/a%2Fb$/);
+  });
+
+  test('listCandidateMovements hits /recruitment/candidate-movements (hyphenated)', async () => {
+    stub = stubFetch(() => ({ body: { data: [] } }));
+    const c = new PeopleForceClient('t', V2);
+    await c.listCandidateMovements({ page: 2 });
+    const url = new URL(stub.calls[0].url);
+    assert.equal(url.pathname, '/api/public/v3/recruitment/candidate-movements');
+    assert.equal(url.searchParams.get('page'), '2');
   });
 
   test('listCandidates serializes array filters and literal bracket date filters', async () => {
@@ -1032,7 +1048,7 @@ describe('getCandidateDossier', () => {
   test('assembles profile + notes + experiences + educations with no errors', async () => {
     stub = stubFetch((rec) => {
       const p = new URL(rec.url).pathname;
-      if (p.endsWith('/recruitment/candidate/42')) return { body: { data: { id: 42, full_name: 'Ada' } } };
+      if (p.endsWith('/recruitment/candidates/42')) return { body: { data: { id: 42, full_name: 'Ada' } } };
       if (p.endsWith('/notes')) return { body: { data: [{ id: 1, body: 'note' }] } };
       if (p.endsWith('/experiences')) return { body: { data: [{ id: 2, company: 'Acme' }] } };
       if (p.endsWith('/educations')) return { body: { data: [{ id: 3, school: 'MIT' }] } };
@@ -1052,7 +1068,7 @@ describe('getCandidateDossier', () => {
     stub = stubFetch((rec) => {
       const p = new URL(rec.url).pathname;
       if (p.endsWith('/notes')) return { status: 500, body: 'boom' };
-      if (p.endsWith('/recruitment/candidate/42')) return { body: { data: { id: 42 } } };
+      if (p.endsWith('/recruitment/candidates/42')) return { body: { data: { id: 42 } } };
       return { body: { data: [] } };
     });
     const c = new PeopleForceClient('t', V2);
@@ -1065,7 +1081,7 @@ describe('getCandidateDossier', () => {
   test('matches the application on the given vacancy by candidate id', async () => {
     stub = stubFetch((rec) => {
       const p = new URL(rec.url).pathname;
-      if (p.endsWith('/recruitment/candidate/42')) return { body: { data: { id: 42 } } };
+      if (p.endsWith('/recruitment/candidates/42')) return { body: { data: { id: 42 } } };
       if (p.endsWith('/vacancies/3/applications')) {
         return { body: { data: [{ id: 900, candidate_id: 99 }, { id: 901, candidate: { id: 42 } }] } };
       }
@@ -1080,7 +1096,7 @@ describe('getCandidateDossier', () => {
   test('records "application (no match…)" when no application matches the candidate', async () => {
     stub = stubFetch((rec) => {
       const p = new URL(rec.url).pathname;
-      if (p.endsWith('/recruitment/candidate/42')) return { body: { data: { id: 42 } } };
+      if (p.endsWith('/recruitment/candidates/42')) return { body: { data: { id: 42 } } };
       if (p.endsWith('/vacancies/3/applications')) return { body: { data: [{ id: 900, candidate_id: 99 }] } };
       return { body: { data: [] } };
     });
@@ -1199,6 +1215,33 @@ describe('formatApplicationList', () => {
   test('falls back to State when no stage is present', () => {
     const out = formatApplicationList([{ id: 1, candidate: { full_name: 'A B' }, state: 'active' }]);
     assert.match(out, /State: active/);
+  });
+
+  test('reads the candidate from an "applicant" key and stage from applicant_state', () => {
+    const out = formatApplicationList([
+      {
+        id: 900,
+        applicant: { id: 42, full_name: 'Grace Hopper' },
+        applicant_state: { id: 5, name: 'Interview' },
+      } as any,
+    ]);
+    assert.match(out, /Grace Hopper/);
+    assert.match(out, /Candidate ID: 42/);
+    assert.match(out, /Stage: Interview/);
+  });
+
+  test('reads a stage whose label field is `title` instead of `name`', () => {
+    const out = formatApplicationList([
+      { id: 900, candidate: { id: 42, full_name: 'X Y' }, applicant_state: { id: 5, title: 'Screening' } as any },
+    ]);
+    assert.match(out, /Stage: Screening/);
+  });
+
+  test('JSON-dumps a row when no candidate name, id, or stage can be extracted', () => {
+    const out = formatApplicationList([{ id: 900, some_unknown_field: 'x' } as any]);
+    assert.match(out, /Application ID: 900/);
+    assert.match(out, /```json/);
+    assert.match(out, /"some_unknown_field": "x"/);
   });
 
   test('empty list', () => {
