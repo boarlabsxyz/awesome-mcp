@@ -12,8 +12,12 @@ import { stripTrailingSlashes } from '../util/url.js';
 
 const BASE_URL = stripTrailingSlashes(process.env.BASE_URL || 'http://localhost:8080');
 
-const SERVICE_VALUES: [RestService, ...RestService[]] = [
+// Keep in sync with the RestService union in restCatalog.ts — a service missing
+// here is silently rejected by the z.enum on the `service` param below, even
+// though it has entries in REST_CATALOG. (restCatalog.test.ts guards the drift.)
+export const SERVICE_VALUES: [RestService, ...RestService[]] = [
   'docs', 'sheets', 'calendar', 'drive', 'gmail', 'slides', 'clickup', 'slack',
+  'outline', 'peopleforce', 'hubspot',
 ];
 
 export function registerListRestEndpoints(server: FastMCP<UserSession>): void {

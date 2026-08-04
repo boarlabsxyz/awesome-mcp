@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { z } from 'zod';
 import {
   REST_CATALOG,
   endpointsForTool,
   endpointsForService,
   restHintForTool,
 } from '../restCatalog.js';
+import { SERVICE_VALUES } from '../sharedTools/listRestEndpoints.js';
 
 describe('restCatalog', () => {
   describe('REST_CATALOG shape', () => {
@@ -54,6 +56,21 @@ describe('restCatalog', () => {
     it('returns empty array for an unused service (only known services in catalog)', () => {
       // Using `as any` because the type forbids invalid services.
       assert.deepEqual(endpointsForService('nonexistent' as any), []);
+    });
+  });
+
+  describe('listRestEndpoints SERVICE_VALUES', () => {
+    const serviceEnum = z.enum(SERVICE_VALUES);
+
+    it("accepts service: 'hubspot' through the z.enum validation path", () => {
+      assert.equal(serviceEnum.safeParse('hubspot').success, true);
+    });
+
+    it('accepts every service that has catalog entries (no silent rejection)', () => {
+      const inCatalog = new Set(REST_CATALOG.map(e => e.service));
+      for (const svc of inCatalog) {
+        assert.equal(serviceEnum.safeParse(svc).success, true, `service "${svc}" is in REST_CATALOG but rejected by SERVICE_VALUES`);
+      }
     });
   });
 

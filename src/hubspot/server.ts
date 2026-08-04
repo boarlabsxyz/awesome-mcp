@@ -68,7 +68,9 @@ hubspotServer.addTool({
       if ((search.total ?? 0) > 0) {
         return `Company already exists:\n\n${formatCompany(search.results?.[0])}`;
       }
-      const created = await client.createCompany({ name: args.name, ...(args.properties ?? {}) });
+      // Spread caller properties first so the canonical `name` (the value we
+      // just deduped on) always wins over a stray properties.name.
+      const created = await client.createCompany({ ...(args.properties ?? {}), name: args.name });
       return `Created company.\n\n${formatCompany(created)}`;
     }),
 });
@@ -161,7 +163,7 @@ hubspotServer.addTool({
   }),
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to create contact', session, log, async (client) => {
-      log.info(`createContact ${args.firstname} ${args.lastname}`);
+      log.info('createContact');
       const filters = [
         { propertyName: 'firstname', value: args.firstname },
         { propertyName: 'lastname', value: args.lastname },
@@ -174,11 +176,13 @@ hubspotServer.addTool({
       if ((search.total ?? 0) > 0) {
         return `Contact already exists:\n\n${formatContact(search.results?.[0])}`;
       }
+      // Spread caller properties first so the canonical firstname/lastname/email
+      // (the values we just deduped on) always win over stray property values.
       const properties: Record<string, unknown> = {
+        ...(args.properties ?? {}),
         firstname: args.firstname,
         lastname: args.lastname,
         ...(args.email ? { email: args.email } : {}),
-        ...(args.properties ?? {}),
       };
       const created = await client.createContact(properties);
       return `Created contact.\n\n${formatContact(created)}`;
