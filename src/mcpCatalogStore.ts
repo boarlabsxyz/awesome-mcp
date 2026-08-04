@@ -544,5 +544,25 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
+  // HubSpot MCP (paste-token provider — user pastes a private-app access token)
+  const hubspotMcpUrl = normalizeUrl(process.env.HUBSPOT_MCP_URL, '/hubspot');
+
+  await createMcpCatalog({
+    slug: 'hubspot',
+    name: 'HubSpot MCP',
+    description: 'Read and manage HubSpot CRM data (contacts, companies, properties) via the CRM API',
+    iconUrl: 'https://www.hubspot.com/hubfs/HubSpot_Logos/HubSpot-Inversed-Favicon.png',
+    mcpUrl: hubspotMcpUrl,
+    provider: 'hubspot',
+    scopes: [],
+    googleClientId: null,
+    googleClientSecret: null,
+    oauthAuthorizationUrl: '',
+    oauthTokenUrl: '',
+    oauthScopes: [],
+    isLocal: !process.env.HUBSPOT_MCP_URL,
+    isActive: true,
+  });
+
   console.error('Default MCP catalog entries seeded.');
 }

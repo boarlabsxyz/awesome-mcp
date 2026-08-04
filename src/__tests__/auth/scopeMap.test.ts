@@ -72,6 +72,14 @@ describe('scopeMap', () => {
       assert.equal(getRequiredScope('/peopleforce-sse'), 'mcp:peopleforce');
     });
 
+    it('should return mcp:hubspot for /hubspot', () => {
+      assert.equal(getRequiredScope('/hubspot'), 'mcp:hubspot');
+    });
+
+    it('should return mcp:hubspot for /hubspot-sse', () => {
+      assert.equal(getRequiredScope('/hubspot-sse'), 'mcp:hubspot');
+    });
+
     it('should return null for unknown routes', () => {
       assert.equal(getRequiredScope('/health'), null);
       assert.equal(getRequiredScope('/api/config'), null);
@@ -85,8 +93,8 @@ describe('scopeMap', () => {
   });
 
   describe('ALL_SCOPES', () => {
-    it('should contain all 11 scopes', () => {
-      assert.equal(ALL_SCOPES.length, 11);
+    it('should contain all 12 scopes', () => {
+      assert.equal(ALL_SCOPES.length, 12);
       assert.ok(ALL_SCOPES.includes('mcp:docs'));
       assert.ok(ALL_SCOPES.includes('mcp:calendar'));
       assert.ok(ALL_SCOPES.includes('mcp:sheets'));
@@ -98,6 +106,7 @@ describe('scopeMap', () => {
       assert.ok(ALL_SCOPES.includes('mcp:slack'));
       assert.ok(ALL_SCOPES.includes('mcp:outline'));
       assert.ok(ALL_SCOPES.includes('mcp:peopleforce'));
+      assert.ok(ALL_SCOPES.includes('mcp:hubspot'));
     });
   });
 
@@ -114,6 +123,7 @@ describe('scopeMap', () => {
       assert.deepEqual(getScopesForSlug('slack'), ['mcp:slack']);
       assert.deepEqual(getScopesForSlug('outline'), ['mcp:outline']);
       assert.deepEqual(getScopesForSlug('peopleforce'), ['mcp:peopleforce']);
+      assert.deepEqual(getScopesForSlug('hubspot'), ['mcp:hubspot']);
     });
 
     it('should return all scopes for unknown slugs', () => {

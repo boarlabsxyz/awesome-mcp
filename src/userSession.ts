@@ -37,6 +37,9 @@ export interface UserSession {
   peopleForceAccessToken?: string;
   /** Optional per-connection PeopleForce base URL; falls back to PEOPLEFORCE_BASE_URL or the public default. */
   peopleForceBaseUrl?: string;
+  hubspotAccessToken?: string;
+  /** Optional per-connection HubSpot base URL; falls back to HUBSPOT_BASE_URL or the public default. */
+  hubspotBaseUrl?: string;
 }
 
 // Cache sessions to avoid recreating clients per request
@@ -345,6 +348,49 @@ export function createPeopleForceSession(
     peopleForceAccessToken: accessToken,
     peopleForceBaseUrl: baseUrl,
     // Null placeholders for Google clients (PeopleForce MCP won't use them)
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
+  };
+
+  mcpSessionCache.set(cacheKey, session);
+  return session;
+}
+
+/**
+ * Create a user session for HubSpot connections.
+ *
+ * HubSpot uses a private-app access token (a bearer token) that the user pastes
+ * into the dashboard. The connection's `providerTokens.access_token` holds it;
+ * `providerTokens.baseUrl` lets a non-default deployment override the endpoint.
+ */
+export function createHubSpotSession(
+  user: UserRecord,
+  connection: McpConnection,
+): UserSession {
+  const providerTokens = connection.providerTokens as { access_token?: string; baseUrl?: string } | undefined;
+  const accessToken = providerTokens?.access_token;
+  if (!accessToken) {
+    throw new Error(`HubSpot access token missing for connection ${connection.instanceId}. Please reconnect.`);
+  }
+  const baseUrl = providerTokens?.baseUrl || process.env.HUBSPOT_BASE_URL || undefined;
+
+  const cacheKey = `${user.apiKey}:${connection.instanceId}`;
+  const cached = mcpSessionCache.get(cacheKey);
+  if (cached) return cached;
+
+  const session: UserSession = {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: connection.mcpSlug,
+    hubspotAccessToken: accessToken,
+    hubspotBaseUrl: baseUrl,
+    // Null placeholders for Google clients (HubSpot MCP won't use them)
     googleDocs: null as any,
     googleDrive: null as any,
     googleSheets: null as any,

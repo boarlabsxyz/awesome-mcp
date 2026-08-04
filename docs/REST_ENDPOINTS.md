@@ -152,9 +152,24 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `listDepartments` | `GET /api/v1/peopleforce/departments` | planned | List PeopleForce departments |
 | `listLeaveRequests` | `GET /api/v1/peopleforce/leave-requests` | planned | List PeopleForce leave requests |
 
+### HubSpot (`hubspot`)
+
+| MCP tool | REST endpoint | Status | Summary |
+|---|---|---|---|
+| `getActiveCompanies` | `GET /api/v1/hubspot/companies` | planned | Get most recently active HubSpot companies |
+| `getCompany` | `GET /api/v1/hubspot/companies/{companyId}` | planned | Get a single HubSpot company |
+| `getCompanyActivity` | `GET /api/v1/hubspot/companies/{companyId}/activity` | planned | Get activity history for a HubSpot company |
+| `getActiveContacts` | `GET /api/v1/hubspot/contacts` | planned | Get most recently active HubSpot contacts |
+| `getContact` | `GET /api/v1/hubspot/contacts/{contactId}` | planned | Get a single HubSpot contact |
+| `getRecentConversations` | `GET /api/v1/hubspot/conversations` | planned | Get recent HubSpot conversation threads |
+| `getTickets` | `GET /api/v1/hubspot/tickets` | planned | Get HubSpot tickets by criteria |
+| `getTicketConversationThreads` | `GET /api/v1/hubspot/tickets/{ticketId}/conversation-threads` | planned | Get conversation threads for a HubSpot ticket |
+| `searchData` | `GET /api/v1/hubspot/search` | planned | Semantic search across retrieved HubSpot data |
+| `getProperty` | `GET /api/v1/hubspot/properties/{objectType}/{propertyName}` | planned | Get a HubSpot property definition |
+
 ## Status legend
 
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 72 endpoints.
+Catalog size: 82 endpoints.

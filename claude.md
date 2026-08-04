@@ -21,6 +21,7 @@ FastMCP server with 43 tools for Google Docs, Sheets, and Drive.
 - **Resolved status:** May not persist in Google Docs UI (Drive API limitation)
 - **editTableCell:** Not implemented (complex cell index calculation)
 - **fixListFormatting:** Experimental, may not work reliably
+- **HubSpot stubbed tools:** `getCompanyActivity`, `getRecentConversations`, `getTickets`, `getTicketConversationThreads`, and `searchData` are TODO stubs (throw "not yet implemented"). They depend on engagement fan-out, thread caching, retry/backoff, or a FAISS vector store not present here. The other 11 HubSpot tools are fully wired.
 
 ## Parameter Patterns
 
@@ -44,6 +45,8 @@ FastMCP server with 43 tools for Google Docs, Sheets, and Drive.
 | `src/outline/server.ts` | Outline wiki tool definitions (self-hosted at wiki.gluzdov.com; base URL via `OUTLINE_BASE_URL`, defaults to dev wiki) |
 | `src/outline/apiHelpers.ts` | `OutlineClient` — Bearer-token HTTP client for Outline REST API |
 | `src/peopleforce/server.ts` | PeopleForce HRIS tool definitions (base URL via `PEOPLEFORCE_BASE_URL`, defaults to app.peopleforce.io/api/public/v2) |
+| `src/hubspot/server.ts` | HubSpot CRM tool definitions (base URL via `HUBSPOT_BASE_URL`, defaults to api.hubapi.com) |
+| `src/hubspot/apiHelpers.ts` | `HubSpotClient` — bearer-token HTTP client for the HubSpot CRM v3 REST API |
 | `src/peopleforce/apiHelpers.ts` | `PeopleForceClient` — API-key/Bearer HTTP client for PeopleForce REST API |
 | `src/website/webServer.ts` | Express app, proxy routes, registration/OAuth pages |
 | `src/website/oauthServer.ts` | MCP OAuth 2.1 authorization server |

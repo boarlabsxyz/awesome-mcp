@@ -311,6 +311,7 @@ import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
 import { exchangeOutlineOauthCode, buildOutlineInstanceName } from '../outline/oauthCallback.js';
 import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceNameFromToken } from '../outline/connectToken.js';
 import { validatePeopleForceToken, buildPeopleForceInstanceName } from '../peopleforce/connectToken.js';
+import { validateHubSpotToken, buildHubSpotInstanceName } from '../hubspot/connectToken.js';
 import {
   connectMcp,
   getMcpConnection,
@@ -1336,6 +1337,36 @@ function registerSharedRoutes(app: express.Express): void {
           'peopleforce', providerTokens, providerEmail
         );
         console.error(`User ${user.id} connected PeopleForce MCP: ${connection.instanceId}`);
+        res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
+        return;
+      }
+
+      if (mcpSlug === 'hubspot') {
+        // HubSpot paste-token flow: the request body carries { token,
+        // instanceName? }. We validate the private-app access token against the
+        // public CRM API (/crm/v3/objects/companies?limit=1), then store just
+        // the access_token — HubSpot uses a fixed base URL for the vast majority
+        // of tenants, and the HUBSPOT_BASE_URL env var covers the rest.
+        const validate = await validateHubSpotToken({ token });
+        if (!validate.ok) {
+          console.error(`[connect-token] ${validate.logMessage}`);
+          res.status(validate.status).json({ error: validate.userMessage });
+          return;
+        }
+
+        const providerEmail = null;
+        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const providerTokens = { access_token: token };
+        const hsInstanceName = buildHubSpotInstanceName({
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          providedInstanceName: instanceName,
+        });
+
+        const connection = await createMcpInstance(
+          user.id, mcpSlug, hsInstanceName, emptyGoogleTokens, null,
+          'hubspot', providerTokens, providerEmail
+        );
+        console.error(`User ${user.id} connected HubSpot MCP: ${connection.instanceId}`);
         res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
         return;
       }
