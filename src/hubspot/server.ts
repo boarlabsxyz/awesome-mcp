@@ -1,14 +1,17 @@
 // src/hubspot/server.ts
 // HubSpot CRM MCP server. Tools cover contacts, companies, and property
-// definitions on the public CRM v3 REST API, plus stubbed read tools for the
+// definitions on the public CRM v3 REST API, plus read tools for the
 // engagement/conversation/ticket surface.
 //
 // Ported from https://github.com/baryhuang/mcp-hubspot@4a8345f2507b4159fc84eb500c74669329076f53
-// The reference exposed 16 tools. 11 are translated here against the HubSpot
-// CRM v3 REST API; 5 (get_company_activity, get_recent_conversations,
-// get_tickets, get_ticket_conversation_threads, search_data) are TODO stubs —
-// they rely on engagement fan-out, thread caching, retry/backoff, or a local
-// FAISS vector store that has no equivalent in this codebase.
+// The reference exposed 16 tools. 15 are implemented here against the HubSpot
+// REST API; searchData remains a TODO stub — it relies on a local FAISS vector
+// store that has no equivalent in this codebase.
+//
+// Each tool's operation lives in an exported `op*` function (client, args) →
+// string; the addTool `execute` is a thin wrapper that resolves the client,
+// logs a breadcrumb, and delegates. Keeping the operations pure makes them
+// directly unit-testable without going through the MCP transport.
 
 import { FastMCP, UserError } from 'fastmcp';
 import { z } from 'zod';
@@ -16,6 +19,7 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import {
+  HubSpotClient,
   eqFilterGroup,
   formatCompany,
   formatCompanyActivity,
@@ -29,6 +33,7 @@ import {
   recentContactsSearch,
   withHubSpotClient,
   type HubSpotMessage,
+  type HubSpotObjectType,
   type RenderedThread,
 } from './apiHelpers.js';
 
@@ -49,198 +54,14 @@ const propertyOption = z.object({
   displayOrder: z.number().int().optional().describe('Optional sort order for the option.'),
 });
 
-// ---------------------------------------------------------------------------
-// Company tools
-// ---------------------------------------------------------------------------
-
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/company_handler.py:105
-hubspotServer.addTool({
-  name: 'createCompany',
-  description: 'Create a new company in HubSpot (skips creation if a company with the same name already exists).',
-  parameters: z.object({
-    name: z.string().describe('Company name.'),
-    properties: z.record(z.string(), z.any()).optional().describe('Additional company properties (e.g. domain, industry).'),
-  }),
-  execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to create company', session, log, async (client) => {
-      log.info(`createCompany name=${args.name}`);
-      const search = await client.searchCompanies(eqFilterGroup([{ propertyName: 'name', value: args.name }]));
-      if ((search.total ?? 0) > 0) {
-        return `Company already exists:\n\n${formatCompany(search.results?.[0])}`;
-      }
-      // Spread caller properties first so the canonical `name` (the value we
-      // just deduped on) always wins over a stray properties.name.
-      const created = await client.createCompany({ ...(args.properties ?? {}), name: args.name });
-      return `Created company.\n\n${formatCompany(created)}`;
-    }),
-});
-
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/company_handler.py:193
-hubspotServer.addTool({
-  name: 'getActiveCompanies',
-  annotations: { readOnlyHint: true },
-  description: 'Get most recently active companies from HubSpot (sorted by last-modified date).',
-  parameters: z.object({
-    limit: z.number().int().min(1).optional().default(10).describe('Maximum number of companies to return (default: 10).'),
-  }),
-  execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to get active companies', session, log, async (client) => {
-      log.info(`getActiveCompanies limit=${args.limit}`);
-      const res = await client.searchCompanies(recentCompaniesSearch(args.limit));
-      return formatObjectList(res.results ?? [], 'companies');
-    }),
-});
-
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/company_handler.py:219
-hubspotServer.addTool({
-  name: 'getCompany',
-  annotations: { readOnlyHint: true },
-  description: 'Get a specific company by ID from HubSpot.',
-  parameters: z.object({
-    companyId: z.string().describe('HubSpot company ID.'),
-    properties: z.array(z.string()).optional().describe('Optional list of properties to retrieve. If omitted, returns the default set.'),
-  }),
-  execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to get company', session, log, async (client) => {
-      log.info(`getCompany id=${args.companyId}`);
-      const obj = await client.getCompany(args.companyId, args.properties);
-      return formatCompany(obj);
-    }),
-});
-
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/company_handler.py:245
-hubspotServer.addTool({
-  name: 'updateCompany',
-  description: 'Update an existing company record in HubSpot.',
-  parameters: z.object({
-    companyId: z.string().describe('HubSpot company ID to update.'),
-    properties: z.record(z.string(), z.any()).describe('Object containing the properties to update.'),
-  }),
-  execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to update company', session, log, async (client) => {
-      log.info(`updateCompany id=${args.companyId}`);
-      const obj = await client.updateCompany(args.companyId, args.properties);
-      return `Updated company.\n\n${formatCompany(obj)}`;
-    }),
-});
-
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/company_handler.py:171
-// (company_client.get_activity): associations-v4 companies→engagements fan-out
-// + per-id /engagements/v1 detail fetch + type-specific content formatting.
+// Cap on how many engagement detail records getCompanyActivity fetches.
 const MAX_ACTIVITY_FETCH = 100;
-hubspotServer.addTool({
-  name: 'getCompanyActivity',
-  annotations: { readOnlyHint: true },
-  description: 'Get activity/engagement history (notes, emails, calls, meetings, tasks) for a specific company.',
-  parameters: z.object({
-    companyId: z.string().describe('HubSpot company ID.'),
-  }),
-  execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to get company activity', session, log, async (client) => {
-      log.info(`getCompanyActivity id=${args.companyId}`);
-      const ids = await client.getCompanyEngagementIds(args.companyId);
-      const capped = ids.slice(0, MAX_ACTIVITY_FETCH);
-      const details = await Promise.all(
-        capped.map(id => client.getEngagementDetail(id).catch(() => null)),
-      );
-      return formatCompanyActivity(details.filter((d): d is NonNullable<typeof d> => d !== null), ids.length - capped.length);
-    }),
-});
 
-// ---------------------------------------------------------------------------
-// Contact tools
-// ---------------------------------------------------------------------------
-
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/contact_handler.py:92
-hubspotServer.addTool({
-  name: 'createContact',
-  description: 'Create a new contact in HubSpot (skips creation if a matching contact already exists).',
-  parameters: z.object({
-    firstname: z.string().describe("Contact's first name."),
-    lastname: z.string().describe("Contact's last name."),
-    email: z.string().optional().describe("Contact's email address."),
-    properties: z.record(z.string(), z.any()).optional().describe('Additional contact properties (e.g. company, phone).'),
-  }),
-  execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to create contact', session, log, async (client) => {
-      log.info('createContact');
-      const filters = [
-        { propertyName: 'firstname', value: args.firstname },
-        { propertyName: 'lastname', value: args.lastname },
-      ];
-      const company = (args.properties ?? {})['company'];
-      if (typeof company === 'string' && company) {
-        filters.push({ propertyName: 'company', value: company });
-      }
-      const search = await client.searchContacts(eqFilterGroup(filters));
-      if ((search.total ?? 0) > 0) {
-        return `Contact already exists:\n\n${formatContact(search.results?.[0])}`;
-      }
-      // Spread caller properties first so the canonical firstname/lastname/email
-      // (the values we just deduped on) always win over stray property values.
-      const properties: Record<string, unknown> = {
-        ...(args.properties ?? {}),
-        firstname: args.firstname,
-        lastname: args.lastname,
-        ...(args.email ? { email: args.email } : {}),
-      };
-      const created = await client.createContact(properties);
-      return `Created contact.\n\n${formatContact(created)}`;
-    }),
-});
-
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/contact_handler.py:179
-hubspotServer.addTool({
-  name: 'getActiveContacts',
-  annotations: { readOnlyHint: true },
-  description: 'Get most recently active contacts from HubSpot (sorted by last-modified date).',
-  parameters: z.object({
-    limit: z.number().int().min(1).optional().default(10).describe('Maximum number of contacts to return (default: 10).'),
-  }),
-  execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to get active contacts', session, log, async (client) => {
-      log.info(`getActiveContacts limit=${args.limit}`);
-      const res = await client.searchContacts(recentContactsSearch(args.limit));
-      return formatObjectList(res.results ?? [], 'contacts');
-    }),
-});
-
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/contact_handler.py:205
-hubspotServer.addTool({
-  name: 'getContact',
-  annotations: { readOnlyHint: true },
-  description: 'Get a specific contact by ID from HubSpot.',
-  parameters: z.object({
-    contactId: z.string().describe('HubSpot contact ID.'),
-    properties: z.array(z.string()).optional().describe('Optional list of properties to retrieve. If omitted, returns the default set.'),
-  }),
-  execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to get contact', session, log, async (client) => {
-      log.info(`getContact id=${args.contactId}`);
-      const obj = await client.getContact(args.contactId, args.properties);
-      return formatContact(obj);
-    }),
-});
-
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/contact_handler.py:231
-hubspotServer.addTool({
-  name: 'updateContact',
-  description: 'Update an existing contact record in HubSpot.',
-  parameters: z.object({
-    contactId: z.string().describe('HubSpot contact ID to update.'),
-    properties: z.record(z.string(), z.any()).describe('Object containing the properties to update.'),
-  }),
-  execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to update contact', session, log, async (client) => {
-      log.info(`updateContact id=${args.contactId}`);
-      const obj = await client.updateContact(args.contactId, args.properties);
-      return `Updated contact.\n\n${formatContact(obj)}`;
-    }),
-});
-
-// ---------------------------------------------------------------------------
-// Conversation tools
-// ---------------------------------------------------------------------------
+// Ticket properties requested on every search (mirrors the reference client).
+const TICKET_PROPERTIES = [
+  'subject', 'content', 'hs_pipeline', 'hs_pipeline_stage', 'hs_ticket_status',
+  'status', 'hs_ticket_priority', 'createdate', 'closedate', 'hs_lastmodifieddate',
+];
 
 /**
  * Fetch a thread's messages and render it for output: keep only real MESSAGE
@@ -259,11 +80,331 @@ async function renderThread(
   return { id: thread.id, status: thread.status, messages };
 }
 
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/conversation_handler.py:39
-// (conversation_client.get_recent_threads): list threads via /conversations/v3
-// then fetch each thread's messages. The reference's on-disk thread cache is
-// intentionally dropped — this server has no local storage — so every call
-// hits the live API.
+// ===========================================================================
+// Operations — pure (client, args) → string. Exported for direct unit testing.
+// Attribution comments reference the ported source handler.
+// ===========================================================================
+
+// company_handler.py:105 — dedupe by name, then create.
+export async function opCreateCompany(
+  client: HubSpotClient,
+  args: { name: string; properties?: Record<string, unknown> },
+): Promise<string> {
+  const search = await client.searchCompanies(eqFilterGroup([{ propertyName: 'name', value: args.name }]));
+  if ((search.total ?? 0) > 0) {
+    return `Company already exists:\n\n${formatCompany(search.results?.[0])}`;
+  }
+  // Spread caller properties first so the canonical `name` (the value we just
+  // deduped on) always wins over a stray properties.name.
+  const created = await client.createCompany({ ...(args.properties ?? {}), name: args.name });
+  return `Created company.\n\n${formatCompany(created)}`;
+}
+
+// company_handler.py:193
+export async function opGetActiveCompanies(client: HubSpotClient, args: { limit: number }): Promise<string> {
+  const res = await client.searchCompanies(recentCompaniesSearch(args.limit));
+  return formatObjectList(res.results ?? [], 'companies');
+}
+
+// company_handler.py:219
+export async function opGetCompany(client: HubSpotClient, args: { companyId: string; properties?: string[] }): Promise<string> {
+  return formatCompany(await client.getCompany(args.companyId, args.properties));
+}
+
+// company_handler.py:245
+export async function opUpdateCompany(
+  client: HubSpotClient,
+  args: { companyId: string; properties: Record<string, unknown> },
+): Promise<string> {
+  const obj = await client.updateCompany(args.companyId, args.properties);
+  return `Updated company.\n\n${formatCompany(obj)}`;
+}
+
+// company_handler.py:171 — associations-v4 fan-out + per-id engagement detail.
+export async function opGetCompanyActivity(client: HubSpotClient, args: { companyId: string }): Promise<string> {
+  const ids = await client.getCompanyEngagementIds(args.companyId);
+  const capped = ids.slice(0, MAX_ACTIVITY_FETCH);
+  const details = await Promise.all(capped.map(id => client.getEngagementDetail(id).catch(() => null)));
+  return formatCompanyActivity(
+    details.filter((d): d is NonNullable<typeof d> => d !== null),
+    ids.length - capped.length,
+  );
+}
+
+// contact_handler.py:92 — dedupe by name (+ company), then create.
+export async function opCreateContact(
+  client: HubSpotClient,
+  args: { firstname: string; lastname: string; email?: string; properties?: Record<string, unknown> },
+): Promise<string> {
+  const filters = [
+    { propertyName: 'firstname', value: args.firstname },
+    { propertyName: 'lastname', value: args.lastname },
+  ];
+  const company = (args.properties ?? {})['company'];
+  if (typeof company === 'string' && company) {
+    filters.push({ propertyName: 'company', value: company });
+  }
+  const search = await client.searchContacts(eqFilterGroup(filters));
+  if ((search.total ?? 0) > 0) {
+    return `Contact already exists:\n\n${formatContact(search.results?.[0])}`;
+  }
+  // Spread caller properties first so the canonical firstname/lastname/email
+  // (the values we just deduped on) always win over stray property values.
+  const properties: Record<string, unknown> = {
+    ...(args.properties ?? {}),
+    firstname: args.firstname,
+    lastname: args.lastname,
+    ...(args.email ? { email: args.email } : {}),
+  };
+  return `Created contact.\n\n${formatContact(await client.createContact(properties))}`;
+}
+
+// contact_handler.py:179
+export async function opGetActiveContacts(client: HubSpotClient, args: { limit: number }): Promise<string> {
+  const res = await client.searchContacts(recentContactsSearch(args.limit));
+  return formatObjectList(res.results ?? [], 'contacts');
+}
+
+// contact_handler.py:205
+export async function opGetContact(client: HubSpotClient, args: { contactId: string; properties?: string[] }): Promise<string> {
+  return formatContact(await client.getContact(args.contactId, args.properties));
+}
+
+// contact_handler.py:231
+export async function opUpdateContact(
+  client: HubSpotClient,
+  args: { contactId: string; properties: Record<string, unknown> },
+): Promise<string> {
+  const obj = await client.updateContact(args.contactId, args.properties);
+  return `Updated contact.\n\n${formatContact(obj)}`;
+}
+
+// conversation_handler.py:39 — list threads then fetch each thread's messages.
+export async function opGetRecentConversations(
+  client: HubSpotClient,
+  args: { limit: number; after?: string },
+): Promise<string> {
+  const page = await client.listConversationThreads({ limit: args.limit, after: args.after });
+  const threads = await Promise.all(
+    (page.results ?? []).map(t => renderThread(() => client.getThreadMessages(String(t.id)), t)),
+  );
+  return formatThreads(threads, page.paging?.next?.after);
+}
+
+// ticket_handler.py:58 — criteria-based filter groups + retry (in searchTickets).
+export async function opGetTickets(
+  client: HubSpotClient,
+  args: { criteria: 'default' | 'Closed'; limit: number; maxRetries: number; retryDelay: number },
+  nowMs: number = Date.now(),
+): Promise<string> {
+  // Trim milliseconds to match HubSpot's expected `YYYY-MM-DDTHH:MM:SSZ` form.
+  const oneDayAgo = new Date(nowMs - 24 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const filterGroups = args.criteria === 'Closed'
+    ? [
+        { filters: [{ propertyName: 'hs_pipeline_stage', operator: 'EQ', value: '4' }] },
+        { filters: [{ propertyName: 'hs_pipeline_stage', operator: 'EQ', value: 'Closed' }] },
+      ]
+    : [
+        { filters: [{ propertyName: 'closedate', operator: 'GT', value: oneDayAgo }] },
+        { filters: [{ propertyName: 'hs_lastmodifieddate', operator: 'GT', value: oneDayAgo }] },
+      ];
+  const body = {
+    filterGroups,
+    sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }],
+    limit: args.limit,
+    properties: TICKET_PROPERTIES,
+  };
+  const res = await client.searchTickets(body, { maxRetries: args.maxRetries, retryDelay: args.retryDelay });
+  return formatTickets(res.results ?? [], res.total, res.paging?.next?.after);
+}
+
+// ticket_handler.py:133 — tickets→conversation associations + per-thread messages.
+export async function opGetTicketConversationThreads(client: HubSpotClient, args: { ticketId: string }): Promise<string> {
+  const threadIds = await client.getTicketConversationIds(args.ticketId);
+  const threads = await Promise.all(threadIds.map(id => renderThread(() => client.getThreadMessages(id), { id })));
+  return formatThreads(threads);
+}
+
+// property_handler.py:139
+export async function opGetProperty(
+  client: HubSpotClient,
+  args: { objectType: HubSpotObjectType; propertyName: string },
+): Promise<string> {
+  return formatProperty(await client.getProperty(args.objectType, args.propertyName));
+}
+
+// property_handler.py:157
+export async function opUpdateProperty(
+  client: HubSpotClient,
+  args: { objectType: HubSpotObjectType; propertyName: string; options: unknown[]; label?: string; description?: string },
+): Promise<string> {
+  const body: Record<string, unknown> = { options: args.options };
+  if (args.label !== undefined) body.label = args.label;
+  if (args.description !== undefined) body.description = args.description;
+  const prop = await client.updateProperty(args.objectType, args.propertyName, body);
+  return `Updated property.\n\n${formatProperty(prop)}`;
+}
+
+// property_handler.py:180
+export async function opCreateProperty(
+  client: HubSpotClient,
+  args: {
+    objectType: HubSpotObjectType; name: string; label: string; type: string;
+    fieldType: string; groupName: string; options?: unknown[]; description?: string;
+  },
+): Promise<string> {
+  const body: Record<string, unknown> = {
+    name: args.name,
+    label: args.label,
+    type: args.type,
+    fieldType: args.fieldType,
+    groupName: args.groupName,
+  };
+  if (args.options !== undefined) body.options = args.options;
+  if (args.description !== undefined) body.description = args.description;
+  return `Created property.\n\n${formatProperty(await client.createProperty(args.objectType, body))}`;
+}
+
+// ===========================================================================
+// Tool registration — thin wrappers: resolve client, log breadcrumb, delegate.
+// ===========================================================================
+
+// --- Company tools ---
+
+hubspotServer.addTool({
+  name: 'createCompany',
+  description: 'Create a new company in HubSpot (skips creation if a company with the same name already exists).',
+  parameters: z.object({
+    name: z.string().describe('Company name.'),
+    properties: z.record(z.string(), z.any()).optional().describe('Additional company properties (e.g. domain, industry).'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to create company', session, log, (client) => {
+      log.info(`createCompany name=${args.name}`);
+      return opCreateCompany(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'getActiveCompanies',
+  annotations: { readOnlyHint: true },
+  description: 'Get most recently active companies from HubSpot (sorted by last-modified date).',
+  parameters: z.object({
+    limit: z.number().int().min(1).optional().default(10).describe('Maximum number of companies to return (default: 10).'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to get active companies', session, log, (client) => {
+      log.info(`getActiveCompanies limit=${args.limit}`);
+      return opGetActiveCompanies(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'getCompany',
+  annotations: { readOnlyHint: true },
+  description: 'Get a specific company by ID from HubSpot.',
+  parameters: z.object({
+    companyId: z.string().describe('HubSpot company ID.'),
+    properties: z.array(z.string()).optional().describe('Optional list of properties to retrieve. If omitted, returns the default set.'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to get company', session, log, (client) => {
+      log.info(`getCompany id=${args.companyId}`);
+      return opGetCompany(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'updateCompany',
+  description: 'Update an existing company record in HubSpot.',
+  parameters: z.object({
+    companyId: z.string().describe('HubSpot company ID to update.'),
+    properties: z.record(z.string(), z.any()).describe('Object containing the properties to update.'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to update company', session, log, (client) => {
+      log.info(`updateCompany id=${args.companyId}`);
+      return opUpdateCompany(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'getCompanyActivity',
+  annotations: { readOnlyHint: true },
+  description: 'Get activity/engagement history (notes, emails, calls, meetings, tasks) for a specific company.',
+  parameters: z.object({
+    companyId: z.string().describe('HubSpot company ID.'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to get company activity', session, log, (client) => {
+      log.info(`getCompanyActivity id=${args.companyId}`);
+      return opGetCompanyActivity(client, args);
+    }),
+});
+
+// --- Contact tools ---
+
+hubspotServer.addTool({
+  name: 'createContact',
+  description: 'Create a new contact in HubSpot (skips creation if a matching contact already exists).',
+  parameters: z.object({
+    firstname: z.string().describe("Contact's first name."),
+    lastname: z.string().describe("Contact's last name."),
+    email: z.string().optional().describe("Contact's email address."),
+    properties: z.record(z.string(), z.any()).optional().describe('Additional contact properties (e.g. company, phone).'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to create contact', session, log, (client) => {
+      log.info('createContact');
+      return opCreateContact(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'getActiveContacts',
+  annotations: { readOnlyHint: true },
+  description: 'Get most recently active contacts from HubSpot (sorted by last-modified date).',
+  parameters: z.object({
+    limit: z.number().int().min(1).optional().default(10).describe('Maximum number of contacts to return (default: 10).'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to get active contacts', session, log, (client) => {
+      log.info(`getActiveContacts limit=${args.limit}`);
+      return opGetActiveContacts(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'getContact',
+  annotations: { readOnlyHint: true },
+  description: 'Get a specific contact by ID from HubSpot.',
+  parameters: z.object({
+    contactId: z.string().describe('HubSpot contact ID.'),
+    properties: z.array(z.string()).optional().describe('Optional list of properties to retrieve. If omitted, returns the default set.'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to get contact', session, log, (client) => {
+      log.info(`getContact id=${args.contactId}`);
+      return opGetContact(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'updateContact',
+  description: 'Update an existing contact record in HubSpot.',
+  parameters: z.object({
+    contactId: z.string().describe('HubSpot contact ID to update.'),
+    properties: z.record(z.string(), z.any()).describe('Object containing the properties to update.'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to update contact', session, log, (client) => {
+      log.info(`updateContact id=${args.contactId}`);
+      return opUpdateContact(client, args);
+    }),
+});
+
+// --- Conversation tool ---
+
 hubspotServer.addTool({
   name: 'getRecentConversations',
   annotations: { readOnlyHint: true },
@@ -273,29 +414,14 @@ hubspotServer.addTool({
     after: z.string().optional().describe('Pagination token from a previous call.'),
   }),
   execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to get recent conversations', session, log, async (client) => {
+    withHubSpotClient('Failed to get recent conversations', session, log, (client) => {
       log.info(`getRecentConversations limit=${args.limit}`);
-      const page = await client.listConversationThreads({ limit: args.limit, after: args.after });
-      const threads = await Promise.all(
-        (page.results ?? []).map(t => renderThread(() => client.getThreadMessages(String(t.id)), t)),
-      );
-      return formatThreads(threads, page.paging?.next?.after);
+      return opGetRecentConversations(client, args);
     }),
 });
 
-// ---------------------------------------------------------------------------
-// Ticket tools
-// ---------------------------------------------------------------------------
+// --- Ticket tools ---
 
-// Ticket properties requested on every search (mirrors the reference client).
-const TICKET_PROPERTIES = [
-  'subject', 'content', 'hs_pipeline', 'hs_pipeline_stage', 'hs_ticket_status',
-  'status', 'hs_ticket_priority', 'createdate', 'closedate', 'hs_lastmodifieddate',
-];
-
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/ticket_handler.py:58
-// (ticket_client.get_tickets): CRM v3 ticket search with criteria-based filter
-// groups, newest-first sort, and exponential backoff on 429/5xx (in searchTickets).
 hubspotServer.addTool({
   name: 'getTickets',
   annotations: { readOnlyHint: true },
@@ -307,33 +433,12 @@ hubspotServer.addTool({
     retryDelay: z.number().min(0).optional().default(1.0).describe('Initial delay between retries in seconds; doubles each attempt (default: 1.0).'),
   }),
   execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to get tickets', session, log, async (client) => {
+    withHubSpotClient('Failed to get tickets', session, log, (client) => {
       log.info(`getTickets criteria=${args.criteria} limit=${args.limit}`);
-      // Trim milliseconds to match HubSpot's expected `YYYY-MM-DDTHH:MM:SSZ` form.
-      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
-      const filterGroups = args.criteria === 'Closed'
-        ? [
-            { filters: [{ propertyName: 'hs_pipeline_stage', operator: 'EQ', value: '4' }] },
-            { filters: [{ propertyName: 'hs_pipeline_stage', operator: 'EQ', value: 'Closed' }] },
-          ]
-        : [
-            { filters: [{ propertyName: 'closedate', operator: 'GT', value: oneDayAgo }] },
-            { filters: [{ propertyName: 'hs_lastmodifieddate', operator: 'GT', value: oneDayAgo }] },
-          ];
-      const body = {
-        filterGroups,
-        sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }],
-        limit: args.limit,
-        properties: TICKET_PROPERTIES,
-      };
-      const res = await client.searchTickets(body, { maxRetries: args.maxRetries, retryDelay: args.retryDelay });
-      return formatTickets(res.results ?? [], res.total, res.paging?.next?.after);
+      return opGetTickets(client, args);
     }),
 });
 
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/ticket_handler.py:133
-// (ticket_client.get_conversation_threads): associations-v4 tickets→conversation,
-// then fetch each thread's messages via /conversations/v3.
 hubspotServer.addTool({
   name: 'getTicketConversationThreads',
   annotations: { readOnlyHint: true },
@@ -342,19 +447,13 @@ hubspotServer.addTool({
     ticketId: z.string().describe('ID of the ticket to retrieve conversation threads for.'),
   }),
   execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to get ticket conversation threads', session, log, async (client) => {
+    withHubSpotClient('Failed to get ticket conversation threads', session, log, (client) => {
       log.info(`getTicketConversationThreads ticket=${args.ticketId}`);
-      const threadIds = await client.getTicketConversationIds(args.ticketId);
-      const threads = await Promise.all(
-        threadIds.map(id => renderThread(() => client.getThreadMessages(id), { id })),
-      );
-      return formatThreads(threads);
+      return opGetTicketConversationThreads(client, args);
     }),
 });
 
-// ---------------------------------------------------------------------------
-// Search tool (stub — depends on FAISS vector store)
-// ---------------------------------------------------------------------------
+// --- Search tool (stub — depends on a FAISS vector store) ---
 
 // TODO stub — the reference searches a local FAISS index of previously-fetched
 // data; this codebase has no vector store, so there is nothing to search.
@@ -367,12 +466,6 @@ hubspotServer.addTool({
     query: z.string().describe('Text query to search for.'),
     limit: z.number().int().min(1).optional().default(10).describe('Maximum number of results to return (default: 10).'),
   }),
-  // Original source (search_handler.search_data):
-  /*
-    results, _ = search_in_faiss(faiss_manager=self.faiss_manager, query=query,
-                                 model=self.embedding_model, limit=limit)
-    return self.create_text_response(results)
-  */
   execute: async () => {
     throw new UserError(
       'searchData is not yet implemented — the reference depends on a local FAISS vector store that this codebase does not have.',
@@ -380,11 +473,8 @@ hubspotServer.addTool({
   },
 });
 
-// ---------------------------------------------------------------------------
-// Property tools
-// ---------------------------------------------------------------------------
+// --- Property tools ---
 
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/property_handler.py:139
 hubspotServer.addTool({
   name: 'getProperty',
   annotations: { readOnlyHint: true },
@@ -394,14 +484,12 @@ hubspotServer.addTool({
     propertyName: z.string().describe('Name of the property.'),
   }),
   execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to get property', session, log, async (client) => {
+    withHubSpotClient('Failed to get property', session, log, (client) => {
       log.info(`getProperty ${args.objectType}.${args.propertyName}`);
-      const prop = await client.getProperty(args.objectType, args.propertyName);
-      return formatProperty(prop);
+      return opGetProperty(client, args);
     }),
 });
 
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/property_handler.py:157
 hubspotServer.addTool({
   name: 'updateProperty',
   description: 'Update a HubSpot property definition (e.g., add dropdown options).',
@@ -413,17 +501,12 @@ hubspotServer.addTool({
     description: z.string().optional().describe('Optional new description.'),
   }),
   execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to update property', session, log, async (client) => {
+    withHubSpotClient('Failed to update property', session, log, (client) => {
       log.info(`updateProperty ${args.objectType}.${args.propertyName}`);
-      const body: Record<string, unknown> = { options: args.options };
-      if (args.label !== undefined) body.label = args.label;
-      if (args.description !== undefined) body.description = args.description;
-      const prop = await client.updateProperty(args.objectType, args.propertyName, body);
-      return `Updated property.\n\n${formatProperty(prop)}`;
+      return opUpdateProperty(client, args);
     }),
 });
 
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/property_handler.py:180
 hubspotServer.addTool({
   name: 'createProperty',
   description: 'Create a new custom property in HubSpot.',
@@ -438,18 +521,8 @@ hubspotServer.addTool({
     description: z.string().optional().describe('Property description.'),
   }),
   execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to create property', session, log, async (client) => {
+    withHubSpotClient('Failed to create property', session, log, (client) => {
       log.info(`createProperty ${args.objectType}.${args.name}`);
-      const body: Record<string, unknown> = {
-        name: args.name,
-        label: args.label,
-        type: args.type,
-        fieldType: args.fieldType,
-        groupName: args.groupName,
-      };
-      if (args.options !== undefined) body.options = args.options;
-      if (args.description !== undefined) body.description = args.description;
-      const prop = await client.createProperty(args.objectType, body);
-      return `Created property.\n\n${formatProperty(prop)}`;
+      return opCreateProperty(client, args);
     }),
 });

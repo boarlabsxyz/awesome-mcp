@@ -4,13 +4,26 @@
 // HubSpot REST endpoints and shape responses correctly.
 import { test, mock, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { UserError } from 'fastmcp';
 import {
   HubSpotClient,
   hubspotSenderType,
   formatCompanyActivity,
   formatThreads,
   formatTickets,
+  formatCompany,
+  formatContact,
+  formatObjectList,
+  formatProperty,
+  recentCompaniesSearch,
+  recentContactsSearch,
+  eqFilterGroup,
+  getHubSpotClient,
+  mapHubSpotError,
+  withHubSpotClient,
 } from '../../hubspot/apiHelpers.js';
+
+const noopLog = { info: () => {}, error: () => {} };
 
 type FakeResponse = {
   ok: boolean;
@@ -167,4 +180,172 @@ test('formatTickets renders subject + total + pagination', () => {
   assert.match(out, /Priority: HIGH/);
   assert.match(out, /pagination token: AFTER/);
   assert.equal(formatTickets([]), 'No tickets found.');
+});
+
+// --- CRUD client methods: correct verb, path, and body ---
+
+test('company CRUD methods hit the right endpoints', async () => {
+  const calls = stubFetch(() => jsonResponse({ id: 'c1', properties: { name: 'Acme' } }));
+  const client = new HubSpotClient('tok');
+
+  await client.searchCompanies({ q: 1 });
+  assert.match(calls[0][0], /\/crm\/v3\/objects\/companies\/search$/);
+  assert.equal(calls[0][1].method, 'POST');
+
+  await client.createCompany({ name: 'Acme' });
+  assert.match(calls[1][0], /\/crm\/v3\/objects\/companies$/);
+  assert.equal(calls[1][1].method, 'POST');
+  assert.deepEqual(JSON.parse(calls[1][1].body), { properties: { name: 'Acme' } });
+
+  await client.getCompany('c1', ['name', 'domain']);
+  assert.match(calls[2][0], /\/crm\/v3\/objects\/companies\/c1\?archived=false&properties=name,domain$/);
+  assert.equal(calls[2][1].method, 'GET');
+
+  await client.updateCompany('c1', { name: 'New' });
+  assert.match(calls[3][0], /\/crm\/v3\/objects\/companies\/c1$/);
+  assert.equal(calls[3][1].method, 'PATCH');
+  assert.deepEqual(JSON.parse(calls[3][1].body), { properties: { name: 'New' } });
+});
+
+test('getCompany omits the properties query when none requested', async () => {
+  const calls = stubFetch(() => jsonResponse({ id: 'c1' }));
+  await new HubSpotClient('tok').getCompany('c1');
+  assert.match(calls[0][0], /\/crm\/v3\/objects\/companies\/c1\?archived=false$/);
+});
+
+test('contact CRUD methods hit the right endpoints', async () => {
+  const calls = stubFetch(() => jsonResponse({ id: 'p1', properties: {} }));
+  const client = new HubSpotClient('tok');
+
+  await client.searchContacts({ q: 1 });
+  assert.match(calls[0][0], /\/crm\/v3\/objects\/contacts\/search$/);
+
+  await client.createContact({ firstname: 'A' });
+  assert.match(calls[1][0], /\/crm\/v3\/objects\/contacts$/);
+  assert.deepEqual(JSON.parse(calls[1][1].body), { properties: { firstname: 'A' } });
+
+  await client.getContact('p1');
+  assert.match(calls[2][0], /\/crm\/v3\/objects\/contacts\/p1\?archived=false$/);
+
+  await client.updateContact('p1', { email: 'x@y.com' });
+  assert.match(calls[3][0], /\/crm\/v3\/objects\/contacts\/p1$/);
+  assert.equal(calls[3][1].method, 'PATCH');
+});
+
+test('property methods hit the right endpoints', async () => {
+  const calls = stubFetch(() => jsonResponse({ name: 'p', label: 'P' }));
+  const client = new HubSpotClient('tok');
+
+  await client.getProperty('companies', 'industry');
+  assert.match(calls[0][0], /\/crm\/v3\/properties\/companies\/industry$/);
+
+  await client.updateProperty('contacts', 'lifecyclestage', { options: [] });
+  assert.match(calls[1][0], /\/crm\/v3\/properties\/contacts\/lifecyclestage$/);
+  assert.equal(calls[1][1].method, 'PATCH');
+
+  await client.createProperty('companies', { name: 'x' });
+  assert.match(calls[2][0], /\/crm\/v3\/properties\/companies$/);
+  assert.equal(calls[2][1].method, 'POST');
+});
+
+test('non-2xx CRUD response throws an error carrying the status', async () => {
+  stubFetch(() => jsonResponse({ message: 'bad' }, 404));
+  await assert.rejects(() => new HubSpotClient('tok').getCompany('missing'), (err: any) => err.status === 404);
+});
+
+// --- Search-request builders ---
+
+test('recentCompaniesSearch / recentContactsSearch sort by last-modified', () => {
+  const co = recentCompaniesSearch(5) as any;
+  assert.equal(co.limit, 5);
+  assert.equal(co.sorts[0].propertyName, 'hs_lastmodifieddate');
+  assert.equal(co.sorts[0].direction, 'DESCENDING');
+
+  const ct = recentContactsSearch(3) as any;
+  assert.equal(ct.limit, 3);
+  assert.equal(ct.sorts[0].propertyName, 'lastmodifieddate');
+});
+
+test('eqFilterGroup builds an EQ filter group', () => {
+  const fg = eqFilterGroup([{ propertyName: 'name', value: 'Acme' }]) as any;
+  assert.deepEqual(fg, { filterGroups: [{ filters: [{ propertyName: 'name', value: 'Acme', operator: 'EQ' }] }] });
+});
+
+// --- CRUD formatters ---
+
+test('formatCompany / formatContact render id + properties', () => {
+  const co = formatCompany({ id: 'c1', properties: { name: 'Acme', domain: 'acme.com', blank: '' }, updatedAt: '2020' });
+  assert.match(co, /Company:/);
+  assert.match(co, /ID: c1/);
+  assert.match(co, /name: Acme/);
+  assert.match(co, /domain: acme.com/);
+  assert.doesNotMatch(co, /blank:/, 'empty values are skipped');
+  assert.equal(formatCompany(undefined), 'No Company data returned.');
+
+  assert.match(formatContact({ id: 'p1', properties: { email: 'a@b.com' } }), /Contact:/);
+});
+
+test('formatObjectList counts and labels entries by name/email/fallback', () => {
+  const out = formatObjectList(
+    [
+      { id: 'c1', properties: { name: 'Acme' } },
+      { id: 'p1', properties: { firstname: 'Ada', lastname: 'Lovelace' } },
+      { id: 'p2', properties: { email: 'x@y.com' } },
+      { id: 'p3', properties: {} },
+    ],
+    'records',
+  );
+  assert.match(out, /Found 4 records:/);
+  assert.match(out, /Acme/);
+  assert.match(out, /Ada Lovelace/);
+  assert.match(out, /x@y.com/);
+  assert.match(out, /\(unnamed\)/);
+  assert.equal(formatObjectList([], 'records'), 'No records found.');
+});
+
+test('formatProperty renders definition + options', () => {
+  const out = formatProperty({
+    name: 'stage', label: 'Stage', type: 'enumeration', fieldType: 'select', groupName: 'g',
+    description: 'the stage', options: [{ label: 'New', value: 'new' }],
+  });
+  assert.match(out, /Property: Stage/);
+  assert.match(out, /Type: enumeration/);
+  assert.match(out, /Options \(1\)/);
+  assert.match(out, /New = new/);
+  assert.equal(formatProperty(undefined), 'No property data returned.');
+});
+
+// --- session + error helpers ---
+
+test('getHubSpotClient throws when not connected, builds a client when connected', () => {
+  assert.throws(() => getHubSpotClient(undefined), UserError);
+  assert.throws(() => getHubSpotClient({} as any), /not connected/i);
+  const client = getHubSpotClient({ hubspotAccessToken: 'tok', hubspotBaseUrl: 'https://eu.hubapi.com/' } as any);
+  assert.equal(client.baseUrl, 'https://eu.hubapi.com');
+});
+
+test('mapHubSpotError maps status codes to friendly UserErrors', () => {
+  assert.throws(() => mapHubSpotError('Op', { status: 401 }, noopLog), /not authorized/i);
+  assert.throws(() => mapHubSpotError('Op', { status: 403 }, noopLog), /not authorized/i);
+  assert.throws(() => mapHubSpotError('Op', { status: 404 }, noopLog), /not found/i);
+  assert.throws(() => mapHubSpotError('Op', { message: 'weird' }, noopLog), /Op: weird/);
+});
+
+test('withHubSpotClient returns fn result on success', async () => {
+  const out = await withHubSpotClient('Op', { hubspotAccessToken: 'tok' } as any, noopLog, async (c) => {
+    assert.ok(c instanceof HubSpotClient);
+    return 'ok';
+  });
+  assert.equal(out, 'ok');
+});
+
+test('withHubSpotClient maps a thrown API error, but surfaces not-connected verbatim', async () => {
+  await assert.rejects(
+    () => withHubSpotClient('Op', { hubspotAccessToken: 'tok' } as any, noopLog, async () => { throw { status: 404 }; }),
+    /Op: not found/i,
+  );
+  await assert.rejects(
+    () => withHubSpotClient('Op', undefined, noopLog, async () => 'never'),
+    /not connected/i,
+  );
 });
