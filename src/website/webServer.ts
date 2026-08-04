@@ -310,7 +310,9 @@ import { clearSessionCache, createUserSession, createUserSessionFromConnection, 
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
 import { exchangeOutlineOauthCode, buildOutlineInstanceName } from '../outline/oauthCallback.js';
 import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceNameFromToken } from '../outline/connectToken.js';
-import { validatePeopleForceToken, buildPeopleForceInstanceName } from '../peopleforce/connectToken.js';
+import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
+import { validateHubSpotToken } from '../hubspot/connectToken.js';
+import { buildSimpleInstanceName, type ValidateResult } from '../util/pasteTokenValidation.js';
 import {
   connectMcp,
   getMcpConnection,
@@ -1240,6 +1242,35 @@ function registerSharedRoutes(app: express.Express): void {
       if (!googleId) { res.status(401).json({ error: 'Not authenticated' }); return; }
       const user = await getUserByGoogleId(googleId);
       if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
+      const userId = user.id;
+
+      // Shared paste-token connect flow for simple bearer/API-key providers:
+      // validate the pasted credential, then store just { access_token }. Each
+      // provider differs only in its validate() call, provider slug, and log label.
+      const connectPasteToken = async (
+        provider: string,
+        serviceLogName: string,
+        validate: () => Promise<ValidateResult>,
+      ): Promise<void> => {
+        const result = await validate();
+        if (!result.ok) {
+          console.error(`[connect-token] ${result.logMessage}`);
+          res.status(result.status).json({ error: result.userMessage });
+          return;
+        }
+        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const providerTokens = { access_token: token };
+        const name = buildSimpleInstanceName({
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          providedInstanceName: instanceName,
+        });
+        const connection = await createMcpInstance(
+          userId, mcpSlug, name, emptyGoogleTokens, null,
+          provider, providerTokens, null,
+        );
+        console.error(`User ${userId} connected ${serviceLogName} MCP: ${connection.instanceId}`);
+        res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
+      };
 
       if (mcpSlug === 'slack-bot') {
         // Validate the xoxb- bot token by calling auth.test
@@ -1311,32 +1342,18 @@ function registerSharedRoutes(app: express.Express): void {
       }
 
       if (mcpSlug === 'peopleforce') {
-        // PeopleForce paste-token flow: the request body carries { token,
-        // instanceName? }. We validate the key by hitting the public API's
-        // /employees endpoint, then store just the access_token — PeopleForce
-        // uses a fixed base URL for the vast majority of tenants, and the
+        // Validate against the public API's /employees endpoint, then store the
+        // access_token. PeopleForce uses a fixed base URL for most tenants; the
         // per-service PEOPLEFORCE_BASE_URL env var covers the rest.
-        const validate = await validatePeopleForceToken({ token });
-        if (!validate.ok) {
-          console.error(`[connect-token] ${validate.logMessage}`);
-          res.status(validate.status).json({ error: validate.userMessage });
-          return;
-        }
+        await connectPasteToken('peopleforce', 'PeopleForce', () => validatePeopleForceToken({ token }));
+        return;
+      }
 
-        const providerEmail = null;
-        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
-        const providerTokens = { access_token: token };
-        const pfInstanceName = buildPeopleForceInstanceName({
-          serviceName: mcp.name.replace(' MCP', '').trim(),
-          providedInstanceName: instanceName,
-        });
-
-        const connection = await createMcpInstance(
-          user.id, mcpSlug, pfInstanceName, emptyGoogleTokens, null,
-          'peopleforce', providerTokens, providerEmail
-        );
-        console.error(`User ${user.id} connected PeopleForce MCP: ${connection.instanceId}`);
-        res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
+      if (mcpSlug === 'hubspot') {
+        // Validate the private-app access token against the public CRM API
+        // (/crm/v3/objects/companies?limit=1), then store the access_token.
+        // HubSpot uses a fixed base URL for most tenants; HUBSPOT_BASE_URL covers the rest.
+        await connectPasteToken('hubspot', 'HubSpot', () => validateHubSpotToken({ token }));
         return;
       }
 

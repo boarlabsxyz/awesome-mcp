@@ -13,6 +13,7 @@ const ROUTE_SCOPE_MAP: Record<string, string> = {
   slack: 'mcp:slack',
   outline: 'mcp:outline',
   peopleforce: 'mcp:peopleforce',
+  hubspot: 'mcp:hubspot',
 };
 
 /** All supported MCP scopes (single source of truth). */
@@ -31,6 +32,7 @@ const SLUG_SCOPE_MAP: Record<string, string> = {
   'slack': 'mcp:slack',
   'outline': 'mcp:outline',
   'peopleforce': 'mcp:peopleforce',
+  'hubspot': 'mcp:hubspot',
 };
 
 /** Return the scope for a given MCP_SLUG, or all scopes if unknown. */

@@ -18,6 +18,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Slack (user)](#slack-user-) (7)
 - [Outline](#outline) (27)
 - [PeopleForce](#peopleforce) (38)
+- [HubSpot](#hubspot) (16)
 
 ## Shared (every server)
 
@@ -310,6 +311,29 @@ Source: `src/peopleforce/server.ts` — 38 tools.
 | `disqualifyVacancyApplication` | Disqualifies a vacancy application with a reason. Needs the vacancy ID, application ID (from listVacancyApplications), and a `disqualifyReasonId` (from listDisqualifyReasons); an optional comment is recorded. | — |
 | `addCandidateNote` | Adds a note to a candidate — e.g. to record the AI's assessment or interview feedback back into PeopleForce. The note appears on the candidate card. | — |
 
+## HubSpot
+
+Source: `src/hubspot/server.ts` — 16 tools.
+
+| Tool | Description | REST |
+|---|---|---|
+| `createCompany` | Create a new company in HubSpot (skips creation if a company with the same name already exists). | — |
+| `getActiveCompanies` | Get most recently active companies from HubSpot (sorted by last-modified date). | — |
+| `getCompany` | Get a specific company by ID from HubSpot. | — |
+| `updateCompany` | Update an existing company record in HubSpot. | — |
+| `getCompanyActivity` | Get activity/engagement history (notes, emails, calls, meetings, tasks) for a specific company. | — |
+| `createContact` | Create a new contact in HubSpot (skips creation if a matching contact already exists). | — |
+| `getActiveContacts` | Get most recently active contacts from HubSpot (sorted by last-modified date). | — |
+| `getContact` | Get a specific contact by ID from HubSpot. | — |
+| `updateContact` | Update an existing contact record in HubSpot. | — |
+| `getRecentConversations` | Get recent conversation threads from HubSpot with their messages. | — |
+| `getTickets` | Get tickets from HubSpot based on configurable selection criteria. | — |
+| `getTicketConversationThreads` | Get conversation threads (and their messages) associated with a specific ticket. | — |
+| `searchData` | Semantic search across previously-retrieved HubSpot data (requires a vector store). | — |
+| `getProperty` | Get details of a specific HubSpot property definition. | — |
+| `updateProperty` | Update a HubSpot property definition (e.g., add dropdown options). | — |
+| `createProperty` | Create a new custom property in HubSpot. | — |
+
 ---
 
-**Grand total: 207 tools across 12 sections.**
+**Grand total: 223 tools across 13 sections.**

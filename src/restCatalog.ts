@@ -16,7 +16,8 @@ export type RestService =
   | 'clickup'
   | 'slack'
   | 'outline'
-  | 'peopleforce';
+  | 'peopleforce'
+  | 'hubspot';
 
 export interface RestEndpoint {
   service: RestService;
@@ -126,6 +127,18 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/employees/{employeeId}', summary: 'Get a single PeopleForce employee', mcpToolName: 'getEmployee', openapiOperationId: 'getPeopleForceEmployee', status: 'planned' },
   { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/departments', summary: 'List PeopleForce departments', mcpToolName: 'listDepartments', openapiOperationId: 'listPeopleForceDepartments', status: 'planned' },
   { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/leave-requests', summary: 'List PeopleForce leave requests', mcpToolName: 'listLeaveRequests', openapiOperationId: 'listPeopleForceLeaveRequests', status: 'planned' },
+
+  // HubSpot (read-only tools). All planned until the /api/v1/hubspot/* routes are wired in webServer.ts.
+  { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/companies', summary: 'Get most recently active HubSpot companies', mcpToolName: 'getActiveCompanies', openapiOperationId: 'getHubSpotActiveCompanies', status: 'planned' },
+  { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/companies/{companyId}', summary: 'Get a single HubSpot company', mcpToolName: 'getCompany', openapiOperationId: 'getHubSpotCompany', status: 'planned' },
+  { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/companies/{companyId}/activity', summary: 'Get activity history for a HubSpot company', mcpToolName: 'getCompanyActivity', openapiOperationId: 'getHubSpotCompanyActivity', status: 'planned' },
+  { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/contacts', summary: 'Get most recently active HubSpot contacts', mcpToolName: 'getActiveContacts', openapiOperationId: 'getHubSpotActiveContacts', status: 'planned' },
+  { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/contacts/{contactId}', summary: 'Get a single HubSpot contact', mcpToolName: 'getContact', openapiOperationId: 'getHubSpotContact', status: 'planned' },
+  { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/conversations', summary: 'Get recent HubSpot conversation threads', mcpToolName: 'getRecentConversations', openapiOperationId: 'getHubSpotRecentConversations', status: 'planned' },
+  { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/tickets', summary: 'Get HubSpot tickets by criteria', mcpToolName: 'getTickets', openapiOperationId: 'getHubSpotTickets', status: 'planned' },
+  { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/tickets/{ticketId}/conversation-threads', summary: 'Get conversation threads for a HubSpot ticket', mcpToolName: 'getTicketConversationThreads', openapiOperationId: 'getHubSpotTicketConversationThreads', status: 'planned' },
+  { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/search', summary: 'Semantic search across retrieved HubSpot data', mcpToolName: 'searchData', openapiOperationId: 'searchHubSpotData', status: 'planned' },
+  { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/properties/{objectType}/{propertyName}', summary: 'Get a HubSpot property definition', mcpToolName: 'getProperty', openapiOperationId: 'getHubSpotProperty', status: 'planned' },
 ];
 
 export function endpointsForTool(mcpToolName: string): RestEndpoint[] {
