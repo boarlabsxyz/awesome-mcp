@@ -18,12 +18,18 @@ import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import {
   eqFilterGroup,
   formatCompany,
+  formatCompanyActivity,
   formatContact,
   formatObjectList,
   formatProperty,
+  formatThreads,
+  formatTickets,
+  hubspotSenderType,
   recentCompaniesSearch,
   recentContactsSearch,
   withHubSpotClient,
+  type HubSpotMessage,
+  type RenderedThread,
 } from './apiHelpers.js';
 
 export const hubspotServer = new FastMCP<UserSession>({
@@ -116,28 +122,27 @@ hubspotServer.addTool({
     }),
 });
 
-// TODO stub — engagement fan-out has no simple REST equivalent here.
 // Adapted from baryhuang/mcp-hubspot@4a8345f handlers/company_handler.py:171
+// (company_client.get_activity): associations-v4 companies→engagements fan-out
+// + per-id /engagements/v1 detail fetch + type-specific content formatting.
+const MAX_ACTIVITY_FETCH = 100;
 hubspotServer.addTool({
   name: 'getCompanyActivity',
   annotations: { readOnlyHint: true },
-  description: 'Get activity/engagement history for a specific company.',
+  description: 'Get activity/engagement history (notes, emails, calls, meetings, tasks) for a specific company.',
   parameters: z.object({
     companyId: z.string().describe('HubSpot company ID.'),
   }),
-  // Original source (company_client.get_activity):
-  /*
-    associated_engagements = self._get_company_engagements(company_id)   # associations v4 get_page → engagements
-    engagement_ids = self._extract_engagement_ids(associated_engagements)
-    activities = self._get_engagement_details(engagement_ids)            # per-id GET /engagements/v1/engagements/{id}
-    converted_activities = convert_datetime_fields(activities)           # + type-specific NOTE/EMAIL/TASK/MEETING/CALL formatting
-    return json.dumps(converted_activities)
-  */
-  execute: async () => {
-    throw new UserError(
-      'getCompanyActivity is not yet implemented — porting the associations-v4 engagement fan-out + /engagements/v1 detail fetch is pending.',
-    );
-  },
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to get company activity', session, log, async (client) => {
+      log.info(`getCompanyActivity id=${args.companyId}`);
+      const ids = await client.getCompanyEngagementIds(args.companyId);
+      const capped = ids.slice(0, MAX_ACTIVITY_FETCH);
+      const details = await Promise.all(
+        capped.map(id => client.getEngagementDetail(id).catch(() => null)),
+      );
+      return formatCompanyActivity(details.filter((d): d is NonNullable<typeof d> => d !== null), ids.length - capped.length);
+    }),
 });
 
 // ---------------------------------------------------------------------------
@@ -230,83 +235,117 @@ hubspotServer.addTool({
 });
 
 // ---------------------------------------------------------------------------
-// Conversation tools (stub)
+// Conversation tools
 // ---------------------------------------------------------------------------
 
-// TODO stub — thread caching + message truncation has no equivalent here.
+/**
+ * Fetch a thread's messages and render it for output: keep only real MESSAGE
+ * entries (drop system events), classify the sender, and sort oldest-first.
+ * Shared by getRecentConversations and getTicketConversationThreads.
+ */
+async function renderThread(
+  fetchMessages: () => Promise<{ results?: HubSpotMessage[] }>,
+  thread: { id?: string | number; status?: string },
+): Promise<RenderedThread> {
+  const page = await fetchMessages().catch(() => ({ results: [] as HubSpotMessage[] }));
+  const messages = (page.results ?? [])
+    .filter(m => m.type === 'MESSAGE')
+    .map(m => ({ created_at: m.createdAt, sender_type: hubspotSenderType(m), text: m.text ?? '' }))
+    .sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')));
+  return { id: thread.id, status: thread.status, messages };
+}
+
 // Adapted from baryhuang/mcp-hubspot@4a8345f handlers/conversation_handler.py:39
+// (conversation_client.get_recent_threads): list threads via /conversations/v3
+// then fetch each thread's messages. The reference's on-disk thread cache is
+// intentionally dropped — this server has no local storage — so every call
+// hits the live API.
 hubspotServer.addTool({
   name: 'getRecentConversations',
   annotations: { readOnlyHint: true },
   description: 'Get recent conversation threads from HubSpot with their messages.',
   parameters: z.object({
     limit: z.number().int().min(1).optional().default(10).describe('Maximum number of threads to return (default: 10).'),
-    after: z.string().optional().describe('Pagination token.'),
-    refreshCache: z.boolean().optional().default(false).describe('Whether to refresh the threads cache (default: false).'),
+    after: z.string().optional().describe('Pagination token from a previous call.'),
   }),
-  // Original source (conversation_handler.get_recent_conversations):
-  /*
-    results = self.hubspot.get_recent_threads(limit, after, refresh_cache)   # conversations API + ThreadStorage cache
-    self._store_conversations_in_faiss(results, limit, after)                # per-thread FAISS indexing
-    truncated_results = self._truncate_conversation_messages(results)        # cap message text/rich_text at 200 chars
-    return self.create_text_response(truncated_results)
-  */
-  execute: async () => {
-    throw new UserError(
-      'getRecentConversations is not yet implemented — porting the conversations threads API + thread cache is pending.',
-    );
-  },
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to get recent conversations', session, log, async (client) => {
+      log.info(`getRecentConversations limit=${args.limit}`);
+      const page = await client.listConversationThreads({ limit: args.limit, after: args.after });
+      const threads = await Promise.all(
+        (page.results ?? []).map(t => renderThread(() => client.getThreadMessages(String(t.id)), t)),
+      );
+      return formatThreads(threads, page.paging?.next?.after);
+    }),
 });
 
 // ---------------------------------------------------------------------------
-// Ticket tools (stubs)
+// Ticket tools
 // ---------------------------------------------------------------------------
 
-// TODO stub — retry/backoff + criteria selection not yet ported.
+// Ticket properties requested on every search (mirrors the reference client).
+const TICKET_PROPERTIES = [
+  'subject', 'content', 'hs_pipeline', 'hs_pipeline_stage', 'hs_ticket_status',
+  'status', 'hs_ticket_priority', 'createdate', 'closedate', 'hs_lastmodifieddate',
+];
+
 // Adapted from baryhuang/mcp-hubspot@4a8345f handlers/ticket_handler.py:58
+// (ticket_client.get_tickets): CRM v3 ticket search with criteria-based filter
+// groups, newest-first sort, and exponential backoff on 429/5xx (in searchTickets).
 hubspotServer.addTool({
   name: 'getTickets',
   annotations: { readOnlyHint: true },
   description: 'Get tickets from HubSpot based on configurable selection criteria.',
   parameters: z.object({
-    criteria: z.enum(['default', 'Closed']).optional().default('default').describe("'default' (recently closed/modified) or 'Closed' (status = Closed)."),
+    criteria: z.enum(['default', 'Closed']).optional().default('default').describe("'default' (closed or last-modified within the last day) or 'Closed' (pipeline stage = Closed)."),
     limit: z.number().int().min(1).optional().default(50).describe('Maximum number of tickets to return (default: 50).'),
-    maxRetries: z.number().int().min(0).optional().default(3).describe('Maximum retry attempts for rate limiting (default: 3).'),
-    retryDelay: z.number().optional().default(1.0).describe('Initial delay between retries in seconds (default: 1.0).'),
+    maxRetries: z.number().int().min(0).optional().default(3).describe('Maximum retry attempts on rate limiting / 5xx (default: 3).'),
+    retryDelay: z.number().min(0).optional().default(1.0).describe('Initial delay between retries in seconds; doubles each attempt (default: 1.0).'),
   }),
-  // Original source (ticket_handler.get_tickets → ticket_client.get_tickets):
-  /*
-    results = self.hubspot.get_tickets(criteria, limit, max_retries, retry_delay)  # search API w/ criteria + exponential backoff on 429
-    self._store_tickets_in_faiss(results, criteria, limit)
-    return self.create_text_response(results)
-  */
-  execute: async () => {
-    throw new UserError(
-      'getTickets is not yet implemented — porting the ticket search criteria + retry/backoff logic is pending.',
-    );
-  },
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to get tickets', session, log, async (client) => {
+      log.info(`getTickets criteria=${args.criteria} limit=${args.limit}`);
+      // Trim milliseconds to match HubSpot's expected `YYYY-MM-DDTHH:MM:SSZ` form.
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      const filterGroups = args.criteria === 'Closed'
+        ? [
+            { filters: [{ propertyName: 'hs_pipeline_stage', operator: 'EQ', value: '4' }] },
+            { filters: [{ propertyName: 'hs_pipeline_stage', operator: 'EQ', value: 'Closed' }] },
+          ]
+        : [
+            { filters: [{ propertyName: 'closedate', operator: 'GT', value: oneDayAgo }] },
+            { filters: [{ propertyName: 'hs_lastmodifieddate', operator: 'GT', value: oneDayAgo }] },
+          ];
+      const body = {
+        filterGroups,
+        sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }],
+        limit: args.limit,
+        properties: TICKET_PROPERTIES,
+      };
+      const res = await client.searchTickets(body, { maxRetries: args.maxRetries, retryDelay: args.retryDelay });
+      return formatTickets(res.results ?? [], res.total, res.paging?.next?.after);
+    }),
 });
 
-// TODO stub — ticket→conversation thread association fan-out not yet ported.
 // Adapted from baryhuang/mcp-hubspot@4a8345f handlers/ticket_handler.py:133
+// (ticket_client.get_conversation_threads): associations-v4 tickets→conversation,
+// then fetch each thread's messages via /conversations/v3.
 hubspotServer.addTool({
   name: 'getTicketConversationThreads',
   annotations: { readOnlyHint: true },
-  description: 'Get conversation threads associated with a specific ticket.',
+  description: 'Get conversation threads (and their messages) associated with a specific ticket.',
   parameters: z.object({
     ticketId: z.string().describe('ID of the ticket to retrieve conversation threads for.'),
   }),
-  // Original source (ticket_handler.get_ticket_conversation_threads):
-  /*
-    results = self.hubspot.get_ticket_conversation_threads(ticket_id)   # associations → threads → messages aggregation
-    self._store_ticket_threads_in_faiss(results, ticket_id)
-    return self.create_text_response(results)
-  */
-  execute: async () => {
-    throw new UserError(
-      'getTicketConversationThreads is not yet implemented — porting the ticket→thread association aggregation is pending.',
-    );
-  },
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to get ticket conversation threads', session, log, async (client) => {
+      log.info(`getTicketConversationThreads ticket=${args.ticketId}`);
+      const threadIds = await client.getTicketConversationIds(args.ticketId);
+      const threads = await Promise.all(
+        threadIds.map(id => renderThread(() => client.getThreadMessages(id), { id })),
+      );
+      return formatThreads(threads);
+    }),
 });
 
 // ---------------------------------------------------------------------------

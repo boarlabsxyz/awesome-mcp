@@ -21,7 +21,7 @@ FastMCP server with 43 tools for Google Docs, Sheets, and Drive.
 - **Resolved status:** May not persist in Google Docs UI (Drive API limitation)
 - **editTableCell:** Not implemented (complex cell index calculation)
 - **fixListFormatting:** Experimental, may not work reliably
-- **HubSpot stubbed tools:** `getCompanyActivity`, `getRecentConversations`, `getTickets`, `getTicketConversationThreads`, and `searchData` are TODO stubs (throw "not yet implemented"). They depend on engagement fan-out, thread caching, retry/backoff, or a FAISS vector store not present here. The other 11 HubSpot tools are fully wired.
+- **HubSpot `searchData`:** stubbed (throws "not yet implemented"). It does semantic search over a local FAISS vector index in the reference; this codebase has no vector store, so there's nothing to search. The other 15 HubSpot tools — including `getCompanyActivity`, `getRecentConversations`, `getTickets`, and `getTicketConversationThreads` — are implemented against the official HubSpot REST API.
 
 ## Parameter Patterns
 

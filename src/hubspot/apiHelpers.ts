@@ -54,6 +54,48 @@ export type HubSpotPropertyOption = {
   displayOrder?: number;
 };
 
+/** A page of associations-v4 results (`toObjectId` is the associated record). */
+export type HubSpotAssociationPage = {
+  results?: Array<{ toObjectId?: string | number; id?: string | number }>;
+};
+
+/** Legacy `/engagements/v1` detail shape. */
+export type HubSpotEngagementDetail = {
+  engagement?: { id?: string | number; type?: string; timestamp?: number | string };
+  metadata?: Record<string, any>;
+};
+
+/** A conversation message (`/conversations/v3`). */
+export type HubSpotMessage = {
+  id?: string;
+  type?: string;
+  text?: string;
+  createdAt?: string;
+  direction?: string;
+  senders?: Array<{ actorId?: string; senderField?: string }>;
+};
+
+export type HubSpotMessagePage = { results?: HubSpotMessage[] };
+
+/** A conversation thread (`/conversations/v3`). */
+export type HubSpotThread = {
+  id?: string | number;
+  status?: string;
+  createdAt?: string;
+};
+
+export type HubSpotThreadPage = {
+  results?: HubSpotThread[];
+  paging?: { next?: { after?: string } };
+};
+
+/** A thread rendered for output: header fields plus normalized messages. */
+export type RenderedThread = {
+  id?: string | number;
+  status?: string;
+  messages: Array<{ created_at?: string; sender_type?: string; text?: string }>;
+};
+
 export class HubSpotClient {
   /** Base URL of the HubSpot API this client talks to (no trailing slash). */
   public readonly baseUrl: string;
@@ -154,6 +196,75 @@ export class HubSpotClient {
   createProperty(objectType: HubSpotObjectType, body: Record<string, unknown>): Promise<HubSpotProperty> {
     return this.request('POST', `/crm/v3/properties/${objectType}`, body);
   }
+
+  // === Company activity (engagements) ===
+
+  /** IDs of engagements associated with a company (associations v4). */
+  async getCompanyEngagementIds(companyId: string): Promise<string[]> {
+    const res = await this.request<HubSpotAssociationPage>(
+      'GET',
+      `/crm/v4/objects/companies/${encodeURIComponent(companyId)}/associations/engagements?limit=500`,
+    );
+    return (res.results ?? [])
+      .map(r => String(r.toObjectId ?? r.id ?? ''))
+      .filter(Boolean);
+  }
+
+  /** Legacy engagement detail: `{ engagement, metadata, associations }`. */
+  getEngagementDetail(engagementId: string): Promise<HubSpotEngagementDetail> {
+    return this.request('GET', `/engagements/v1/engagements/${encodeURIComponent(engagementId)}`);
+  }
+
+  // === Tickets ===
+
+  /**
+   * Ticket search with exponential backoff on 429 / 5xx (mirrors the
+   * reference client's retry loop). `retryDelay` is in seconds; the nth retry
+   * waits `retryDelay * 2^(n-1)` seconds.
+   */
+  async searchTickets(
+    body: unknown,
+    opts: { maxRetries: number; retryDelay: number },
+  ): Promise<HubSpotSearchResponse> {
+    let attempt = 0;
+    for (;;) {
+      try {
+        return await this.request<HubSpotSearchResponse>('POST', '/crm/v3/objects/tickets/search', body);
+      } catch (err: any) {
+        const status = err?.status;
+        const retryable = status === 429 || (typeof status === 'number' && status >= 500 && status < 600);
+        if (!retryable || attempt >= opts.maxRetries) throw err;
+        attempt += 1;
+        const sleepMs = opts.retryDelay * 1000 * Math.pow(2, attempt - 1);
+        await new Promise(resolve => setTimeout(resolve, sleepMs));
+      }
+    }
+  }
+
+  /** IDs of conversation threads associated with a ticket (associations v4). */
+  async getTicketConversationIds(ticketId: string): Promise<string[]> {
+    const res = await this.request<HubSpotAssociationPage>(
+      'GET',
+      `/crm/v4/objects/tickets/${encodeURIComponent(ticketId)}/associations/conversation`,
+    );
+    return (res.results ?? [])
+      .map(r => String(r.toObjectId ?? r.id ?? ''))
+      .filter(Boolean);
+  }
+
+  // === Conversations ===
+
+  /** A page of conversation threads, newest first. */
+  listConversationThreads(input: { limit: number; after?: string }): Promise<HubSpotThreadPage> {
+    const qs = new URLSearchParams({ limit: String(input.limit), sort: '-id' });
+    if (input.after) qs.set('after', input.after);
+    return this.request('GET', `/conversations/v3/conversations/threads?${qs.toString()}`);
+  }
+
+  /** All messages on a conversation thread. */
+  getThreadMessages(threadId: string): Promise<HubSpotMessagePage> {
+    return this.request('GET', `/conversations/v3/conversations/threads/${encodeURIComponent(threadId)}/messages`);
+  }
 }
 
 // ==== Search-request builders (ported from the reference clients) ====
@@ -235,6 +346,104 @@ export function formatProperty(prop: HubSpotProperty | undefined): string {
     for (const o of prop.options) lines.push(`    - ${o.label ?? ''} = ${o.value ?? ''}`);
   }
   return lines.join('\n');
+}
+
+/** Cap free-text fields so a tool response can't balloon past a few lines. */
+const TEXT_CAP = 200;
+function cap(v: unknown): string {
+  const s = typeof v === 'string' ? v : '';
+  return s.length > TEXT_CAP ? `${s.slice(0, TEXT_CAP)}…` : s;
+}
+
+/**
+ * Classify a conversation message's sender as AGENT / CUSTOMER / UNKNOWN.
+ * Ported from ticket_client._determine_sender_type: HubSpot agents send with
+ * `senderField === 'FROM'` and an actorId prefixed by an agent/team namespace.
+ */
+export function hubspotSenderType(msg: HubSpotMessage): string {
+  const senders = msg?.senders;
+  if (Array.isArray(senders) && senders.length > 0) {
+    const s = senders[0];
+    const actorId = typeof s?.actorId === 'string' ? s.actorId : '';
+    if (s?.senderField === 'FROM' && (actorId.startsWith('0-1') || actorId.startsWith('0-2'))) {
+      return 'AGENT';
+    }
+    return 'CUSTOMER';
+  }
+  return 'UNKNOWN';
+}
+
+/** Render one engagement's content by type (ported from company_client). */
+function engagementContent(type: string, metadata: Record<string, any>): string {
+  switch (type) {
+    case 'NOTE':
+      return cap(metadata?.body);
+    case 'EMAIL': {
+      const subject = metadata?.subject ? `Subject: ${metadata.subject}; ` : '';
+      const from = metadata?.from?.email || metadata?.from?.raw || '';
+      const fromStr = from ? `From: ${from}; ` : '';
+      return `${subject}${fromStr}${cap(metadata?.text || metadata?.html)}`.trim();
+    }
+    case 'TASK':
+      return `${metadata?.subject ?? ''} ${cap(metadata?.body)} ${metadata?.status ? `[${metadata.status}]` : ''}`.trim();
+    case 'MEETING':
+      return `${metadata?.title ?? ''} ${cap(metadata?.body)}`.trim();
+    case 'CALL':
+      return `${cap(metadata?.body)} ${metadata?.status ? `[${metadata.status}]` : ''}`.trim();
+    default:
+      return '';
+  }
+}
+
+export function formatCompanyActivity(details: HubSpotEngagementDetail[], omitted = 0): string {
+  if (details.length === 0) return 'No activity found for this company.';
+  const parts = [`Found ${details.length} activit${details.length === 1 ? 'y' : 'ies'}:`, ''];
+  details.forEach((d, i) => {
+    const e = d?.engagement ?? {};
+    const type = e?.type ?? 'UNKNOWN';
+    parts.push(`${i + 1}. ${type} (id ${e?.id ?? ''})`);
+    if (e?.timestamp) parts.push(`   When: ${e.timestamp}`);
+    const content = engagementContent(type, d?.metadata ?? {});
+    if (content) parts.push(`   ${content}`);
+    parts.push('');
+  });
+  if (omitted > 0) parts.push(`(+${omitted} more activities not shown)`);
+  return parts.join('\n').trimEnd();
+}
+
+export function formatThreads(threads: RenderedThread[], nextAfter?: string): string {
+  if (threads.length === 0) return 'No conversation threads found.';
+  const parts = [`Found ${threads.length} conversation thread${threads.length === 1 ? '' : 's'}:`, ''];
+  threads.forEach((t, i) => {
+    const status = t.status ? ` [${t.status}]` : '';
+    parts.push(`${i + 1}. Thread ${t.id ?? ''}${status}`);
+    parts.push(`   ${t.messages.length} message${t.messages.length === 1 ? '' : 's'}`);
+    for (const m of t.messages) {
+      const who = m.sender_type && m.sender_type !== 'UNKNOWN' ? `${m.sender_type}: ` : '';
+      parts.push(`   - ${who}${cap(m.text)}`);
+    }
+    parts.push('');
+  });
+  if (nextAfter) parts.push(`More available. Pass after="${nextAfter}" to page.`);
+  return parts.join('\n').trimEnd();
+}
+
+export function formatTickets(tickets: HubSpotObject[], total?: number, nextAfter?: string): string {
+  if (tickets.length === 0) return 'No tickets found.';
+  const header = total ? `Found ${tickets.length} of ${total} tickets:` : `Found ${tickets.length} tickets:`;
+  const parts = [header, ''];
+  tickets.forEach((t, i) => {
+    const p = (t.properties ?? {}) as Record<string, any>;
+    parts.push(`${i + 1}. ${p.subject ?? '(no subject)'}`);
+    parts.push(`   ID: ${t.id ?? ''}`);
+    if (p.hs_ticket_priority) parts.push(`   Priority: ${p.hs_ticket_priority}`);
+    if (p.hs_pipeline_stage) parts.push(`   Stage: ${p.hs_pipeline_stage}`);
+    if (p.createdate) parts.push(`   Created: ${p.createdate}`);
+    if (p.closedate) parts.push(`   Closed: ${p.closedate}`);
+    parts.push('');
+  });
+  if (nextAfter) parts.push(`More available (pagination token: ${nextAfter}).`);
+  return parts.join('\n').trimEnd();
 }
 
 // ==== Session + error helpers used by every HubSpot tool executor ====

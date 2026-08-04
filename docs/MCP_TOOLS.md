@@ -321,14 +321,14 @@ Source: `src/hubspot/server.ts` — 16 tools.
 | `getActiveCompanies` | Get most recently active companies from HubSpot (sorted by last-modified date). | — |
 | `getCompany` | Get a specific company by ID from HubSpot. | — |
 | `updateCompany` | Update an existing company record in HubSpot. | — |
-| `getCompanyActivity` | Get activity/engagement history for a specific company. | — |
+| `getCompanyActivity` | Get activity/engagement history (notes, emails, calls, meetings, tasks) for a specific company. | — |
 | `createContact` | Create a new contact in HubSpot (skips creation if a matching contact already exists). | — |
 | `getActiveContacts` | Get most recently active contacts from HubSpot (sorted by last-modified date). | — |
 | `getContact` | Get a specific contact by ID from HubSpot. | — |
 | `updateContact` | Update an existing contact record in HubSpot. | — |
 | `getRecentConversations` | Get recent conversation threads from HubSpot with their messages. | — |
 | `getTickets` | Get tickets from HubSpot based on configurable selection criteria. | — |
-| `getTicketConversationThreads` | Get conversation threads associated with a specific ticket. | — |
+| `getTicketConversationThreads` | Get conversation threads (and their messages) associated with a specific ticket. | — |
 | `searchData` | Semantic search across previously-retrieved HubSpot data (requires a vector store). | — |
 | `getProperty` | Get details of a specific HubSpot property definition. | — |
 | `updateProperty` | Update a HubSpot property definition (e.g., add dropdown options). | — |
