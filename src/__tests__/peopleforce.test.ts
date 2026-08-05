@@ -7,6 +7,7 @@ import {
   PeopleForceClient,
   formatEmployeeList,
   formatEmployee,
+  formatCustomFields,
   formatDepartmentList,
   formatLeaveRequestList,
   formatLeaveTypeList,
@@ -35,6 +36,11 @@ import {
   formatMovementList,
   formatPublishedVacancy,
   formatCandidateDossier,
+  formatObjectiveList,
+  formatKpiList,
+  formatKnowledgeCategoryList,
+  formatKnowledgeArticleList,
+  formatKnowledgeArticle,
 } from '../peopleforce/apiHelpers.js';
 
 // -----------------------------------------------------------------------------
@@ -167,6 +173,13 @@ describe('formatEmployeeList', () => {
     assert.match(inactive, /Status: inactive/);
   });
 
+  test('surfaces custom fields per employee when the list payload carries them', () => {
+    const out = formatEmployeeList([
+      { id: 1, full_name: 'Ada', custom_fields: [{ name: 'Dev Sprint', value: 'Sprint 42' }] },
+    ]);
+    assert.match(out, /Dev Sprint: Sprint 42/);
+  });
+
   test('renders pagination with the API-native shape', () => {
     const out = formatEmployeeList(
       [{ id: 1, first_name: 'A', last_name: 'B' }],
@@ -231,6 +244,65 @@ describe('formatEmployee', () => {
   test('falls back to Unknown when no name is provided', () => {
     const out = formatEmployee({ id: 1 });
     assert.match(out, /# Unknown/);
+  });
+
+  test('renders tenant custom fields (array shape) under a Custom Fields section', () => {
+    const out = formatEmployee({
+      id: 1,
+      full_name: 'Ada Lovelace',
+      custom_fields: [
+        { id: 10, name: 'Dev Sprint', value: 'Sprint 42' },
+        { id: 11, name: 'Development', value: 'React, Node.js' },
+      ],
+    });
+    assert.match(out, /## Custom Fields/);
+    assert.match(out, /Dev Sprint: Sprint 42/);
+    assert.match(out, /Development: React, Node\.js/);
+  });
+
+  test('renders custom fields provided as a name→value map', () => {
+    const out = formatEmployee({
+      id: 1,
+      full_name: 'Ada Lovelace',
+      custom_field_values: { 'Dev Sprint': 'Sprint 7' } as any,
+    });
+    assert.match(out, /Dev Sprint: Sprint 7/);
+  });
+
+  test('omits the Custom Fields section when there are none', () => {
+    const out = formatEmployee({ id: 1, full_name: 'Ada Lovelace' });
+    assert.doesNotMatch(out, /Custom Fields/);
+  });
+});
+
+describe('formatCustomFields', () => {
+  test('handles undefined / empty', () => {
+    assert.deepEqual(formatCustomFields(undefined), []);
+    assert.deepEqual(formatCustomFields([]), []);
+    assert.deepEqual(formatCustomFields({}), []);
+  });
+
+  test('drops fields with blank values but keeps the rest', () => {
+    const lines = formatCustomFields([
+      { name: 'Dev Sprint', value: 'Sprint 42' },
+      { name: 'Empty', value: '' },
+      { name: 'Nullish', value: null },
+    ]);
+    assert.deepEqual(lines, ['Dev Sprint: Sprint 42']);
+  });
+
+  test('renders booleans, refs, and multi-select arrays', () => {
+    const lines = formatCustomFields([
+      { name: 'Onboarded', value: true },
+      { name: 'Team', value: { id: 3, name: 'Platform' } },
+      { name: 'Stack', values: ['React', { name: 'Node.js' }] },
+    ]);
+    assert.deepEqual(lines, ['Onboarded: yes', 'Team: Platform', 'Stack: React, Node.js']);
+  });
+
+  test('skips array entries without a label', () => {
+    const lines = formatCustomFields([{ value: 'orphan' }, { name: 'Dev Sprint', value: 'S1' }]);
+    assert.deepEqual(lines, ['Dev Sprint: S1']);
   });
 });
 
@@ -1452,5 +1524,88 @@ describe('formatCandidateDossier', () => {
     });
     assert.match(out, /profile unavailable/);
     assert.match(out, /could not load notes, experiences\./);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Performance & Learning (v3) formatters
+// -----------------------------------------------------------------------------
+
+describe('formatObjectiveList', () => {
+  test('handles empty list', () => {
+    assert.equal(formatObjectiveList([]), 'No objectives found.');
+  });
+
+  test('renders objective with owner, progress, period and key results', () => {
+    const out = formatObjectiveList([
+      {
+        id: 5,
+        title: 'Grow platform skills',
+        progress: 60,
+        status: 'on_track',
+        starts_on: '2026-01-01',
+        ends_on: '2026-06-30',
+        owner: { id: 1, first_name: 'Ada', last_name: 'Lovelace', email: 'ada@example.com' },
+        key_results: [{ id: 9, title: 'Ship 3 courses', progress: 66, status: 'on_track' }],
+      },
+    ]);
+    assert.match(out, /## 1\. Grow platform skills/);
+    assert.match(out, /Owner: Ada Lovelace/);
+    assert.match(out, /Progress: 60%/);
+    assert.match(out, /Status: on_track/);
+    assert.match(out, /Period: 2026-01-01 – 2026-06-30/);
+    assert.match(out, /Ship 3 courses — 66% — on_track/);
+  });
+});
+
+describe('formatKpiList', () => {
+  test('handles empty list', () => {
+    assert.equal(formatKpiList([]), 'No KPIs found.');
+  });
+
+  test('renders KPI with type, scope and progress', () => {
+    const out = formatKpiList([
+      {
+        id: 7,
+        title: 'Training hours per head',
+        kpi_type: 'department',
+        department: { id: 2, name: 'Engineering' },
+        progress_percentage: 80,
+        status: 'on_track',
+      },
+    ]);
+    assert.match(out, /## 1\. Training hours per head/);
+    assert.match(out, /Type: department/);
+    assert.match(out, /Scope: Engineering/);
+    assert.match(out, /Progress: 80%/);
+  });
+});
+
+describe('knowledge base formatters', () => {
+  test('formatKnowledgeCategoryList renders name + description', () => {
+    const out = formatKnowledgeCategoryList([{ id: 1, name: 'Onboarding', description: 'New joiner guides', emoji: '📘' }]);
+    assert.match(out, /## 1\. Onboarding/);
+    assert.match(out, /Description: New joiner guides/);
+  });
+
+  test('formatKnowledgeArticleList renders title, category and author', () => {
+    const out = formatKnowledgeArticleList([
+      { id: 3, title: 'React Basics', category: { id: 1, name: 'Frontend' }, created_by: { first_name: 'Ada', last_name: 'L' } },
+    ]);
+    assert.match(out, /## 1\. React Basics/);
+    assert.match(out, /Category: Frontend/);
+    assert.match(out, /Author: Ada L/);
+  });
+
+  test('formatKnowledgeArticle renders the body content', () => {
+    const out = formatKnowledgeArticle({ id: 3, title: 'React Basics', body: 'Components and hooks.' });
+    assert.match(out, /# React Basics/);
+    assert.match(out, /## Content/);
+    assert.match(out, /Components and hooks\./);
+  });
+
+  test('formatKnowledgeArticle falls back to body_html when body is absent', () => {
+    const out = formatKnowledgeArticle({ id: 3, title: 'X', body_html: '<p>hi</p>' });
+    assert.match(out, /<p>hi<\/p>/);
   });
 });
