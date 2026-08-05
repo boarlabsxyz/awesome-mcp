@@ -544,18 +544,15 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
-  // HubSpot MCP — dual-mode, like Outline:
-  //   OAuth      — set HUBSPOT_CLIENT_ID / HUBSPOT_CLIENT_SECRET (a registered
-  //                HubSpot app). The dashboard then shows a "Connect" button and
-  //                /connect/hubspot runs the authorization_code exchange.
-  //   Paste-token — no app. Each user creates a Private App in HubSpot
-  //                (Settings → Integrations → Private Apps) and pastes the
-  //                Access Token into the dashboard's connect form.
-  // If the OAuth env vars aren't set the OAuth URLs stay blank, which routes the
-  // dashboard through the paste-token flow.
+  // HubSpot MCP — OAuth 2.0 ("Connect with HubSpot") by default. The catalog
+  // always advertises the OAuth endpoints so the dashboard shows the Connect
+  // button (never the paste-token form). The client_id/secret come from a
+  // registered HubSpot app via HUBSPOT_CLIENT_ID / HUBSPOT_CLIENT_SECRET —
+  // these MUST be set (on both the web service and the hubspot MCP service) or
+  // the connect flow has no client and fails. Redirect URL to register in the
+  // HubSpot app: <BASE_URL>/connect/hubspot/callback.
   const hubspotClientId = process.env.HUBSPOT_CLIENT_ID || null;
   const hubspotClientSecret = process.env.HUBSPOT_CLIENT_SECRET || null;
-  const hubspotOauthEnabled = !!(hubspotClientId && hubspotClientSecret);
   const hubspotMcpUrl = normalizeUrl(process.env.HUBSPOT_MCP_URL, '/hubspot');
 
   await createMcpCatalog({
@@ -568,20 +565,17 @@ export async function seedDefaultCatalogs(): Promise<void> {
     scopes: [],
     googleClientId: hubspotClientId,
     googleClientSecret: hubspotClientSecret,
-    oauthAuthorizationUrl: hubspotOauthEnabled ? 'https://app.hubspot.com/oauth/authorize' : '',
-    oauthTokenUrl:         hubspotOauthEnabled ? 'https://api.hubapi.com/oauth/v1/token'    : '',
-    // Granular CRM scopes the tools use. Only sent when OAuth is enabled; the
-    // paste-token flow ignores them. Must be a subset of what the HubSpot app
-    // is configured to request.
-    oauthScopes: hubspotOauthEnabled
-      ? [
-          'crm.objects.contacts.read', 'crm.objects.contacts.write',
-          'crm.objects.companies.read', 'crm.objects.companies.write',
-          'crm.schemas.contacts.read', 'crm.schemas.contacts.write',
-          'crm.schemas.companies.read', 'crm.schemas.companies.write',
-          'tickets', 'conversations.read',
-        ]
-      : [],
+    oauthAuthorizationUrl: 'https://app.hubspot.com/oauth/authorize',
+    oauthTokenUrl: 'https://api.hubapi.com/oauth/v1/token',
+    // Granular CRM scopes the tools use. Must be a subset of what the HubSpot
+    // app is configured to request.
+    oauthScopes: [
+      'crm.objects.contacts.read', 'crm.objects.contacts.write',
+      'crm.objects.companies.read', 'crm.objects.companies.write',
+      'crm.schemas.contacts.read', 'crm.schemas.contacts.write',
+      'crm.schemas.companies.read', 'crm.schemas.companies.write',
+      'tickets', 'conversations.read',
+    ],
     isLocal: !process.env.HUBSPOT_MCP_URL,
     isActive: true,
   });
