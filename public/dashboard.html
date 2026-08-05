@@ -1313,8 +1313,14 @@
         tokenInput.placeholder = 'pat-…';
         tokenHint.innerHTML =
           'In <span translate="no">HubSpot</span>: <strong>Settings → Integrations → Private Apps → Create a private app</strong>. ' +
-          'Grant CRM scopes (<code translate="no">crm.objects.contacts</code>, <code translate="no">crm.objects.companies</code>), ' +
-          'then copy the private-app <strong>Access Token</strong> and paste it here.';
+          'Grant read scopes for lookups and write scopes for create/update — at minimum ' +
+          '<code translate="no">crm.objects.contacts.read</code>, <code translate="no">crm.objects.contacts.write</code>, ' +
+          '<code translate="no">crm.objects.companies.read</code>, <code translate="no">crm.objects.companies.write</code>. ' +
+          'For the property tools also grant <code translate="no">crm.schemas.contacts.read</code>, ' +
+          '<code translate="no">crm.schemas.contacts.write</code>, <code translate="no">crm.schemas.companies.read</code>, ' +
+          '<code translate="no">crm.schemas.companies.write</code>; for the ticket &amp; conversation tools add ' +
+          '<code translate="no">tickets</code> and <code translate="no">conversations.read</code>. ' +
+          'Then copy the private-app <strong>Access Token</strong> and paste it here.';
         urlSection.style.display = 'none';
         // No user-entered name — backend falls back to the service name via
         // buildHubSpotInstanceName.
