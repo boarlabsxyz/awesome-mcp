@@ -41,6 +41,12 @@ import {
   formatMovementList,
   formatPublishedVacancy,
   formatCandidateDossier,
+  // Performance & Learning (v3)
+  formatObjectiveList,
+  formatKpiList,
+  formatKnowledgeCategoryList,
+  formatKnowledgeArticleList,
+  formatKnowledgeArticle,
 } from './apiHelpers.js';
 
 export const peopleForceServer = new FastMCP<UserSession>({
@@ -182,7 +188,7 @@ peopleForceServer.addTool({
   name: 'listEmployees',
   annotations: { readOnlyHint: true },
   description:
-    'Lists PeopleForce employees, 50 per page (server-fixed). Use `page` to paginate; `status` narrows the cohort (e.g. "active", "terminated").',
+    'Lists PeopleForce employees, 50 per page (server-fixed). Use `page` to paginate; `status` narrows the cohort (e.g. "active", "terminated"). Tenant-defined custom fields (e.g. "Dev Sprint", "Development") are included per employee when the list payload carries them.',
   parameters: z.object({
     page: z.number().int().min(1).optional().default(1).describe('Page number (1-based). 50 employees per page (server-fixed).'),
     status: z.string().optional().describe('Filter by employee status (e.g. "active", "terminated").'),
@@ -202,7 +208,7 @@ peopleForceServer.addTool({
   name: 'getEmployee',
   annotations: { readOnlyHint: true },
   description:
-    'Retrieves a single PeopleForce employee by ID. Returns full profile: contact, position, department, division, employment type, location, reporting line, and hiring dates.',
+    'Retrieves a single PeopleForce employee by ID. Returns full profile: contact, position, department, division, employment type, location, reporting line, hiring dates, and any tenant-defined custom fields (e.g. "Dev Sprint", "Development") under a Custom Fields section.',
   parameters: z.object({
     employeeId: z.union([z.string(), z.number()]).describe('The PeopleForce employee ID.'),
   }),
@@ -398,6 +404,76 @@ addEmployeeScopedListTool({
   errorPrefix: 'Failed to list emergency contacts',
   fetch: (client, id) => client.listEmployeeEmergencyContacts(id),
   format: (data) => formatUnknownItemList('Emergency Contacts', data),
+});
+
+// ===========================================================================
+// Performance & Learning (v3 API)
+// ---------------------------------------------------------------------------
+// Read-only coverage of the L&D-relevant surface the public API exposes as
+// first-class objects: OKR objectives, KPIs, and the Knowledge Base ("Learning")
+// articles. Note: the public API has NO courses/enrollments/participation or
+// L&D-spend endpoints — that kind of data is only reachable when a tenant records
+// it as employee custom fields (see getEmployee's Custom Fields section).
+// ===========================================================================
+
+addPaginatedListTool({
+  name: 'listObjectives',
+  description:
+    'Lists performance objectives (OKRs) with owner, progress %, status, period, and key results. Use for development-goal analytics. Paginated (server-fixed page size).',
+  errorPrefix: 'Failed to list objectives',
+  fetch: (client, page) => client.listObjectives({ page }),
+  format: formatObjectiveList,
+});
+
+addPaginatedListTool({
+  name: 'listKeyPerformanceIndicators',
+  description:
+    'Lists key performance indicators (KPIs) with owner/scope (individual, department, division, location, company), progress %, and status. Paginated (server-fixed page size).',
+  errorPrefix: 'Failed to list KPIs',
+  fetch: (client, page) => client.listKeyPerformanceIndicators({ page }),
+  format: formatKpiList,
+});
+
+addPaginatedListTool({
+  name: 'listKnowledgeBaseCategories',
+  description:
+    'Lists Knowledge Base ("Learning") categories with IDs. Call this to get the `categoryId` needed for listKnowledgeBaseArticles. Paginated (server-fixed page size).',
+  errorPrefix: 'Failed to list knowledge base categories',
+  fetch: (client, page) => client.listKnowledgeBaseCategories({ page }),
+  format: formatKnowledgeCategoryList,
+});
+
+peopleForceServer.addTool({
+  name: 'listKnowledgeBaseArticles',
+  annotations: { readOnlyHint: true },
+  description:
+    'Lists Knowledge Base ("Learning") articles within a category (title, category, author, timestamps). Needs a `categoryId` from listKnowledgeBaseCategories. Paginated.',
+  parameters: z.object({
+    categoryId: z.union([z.string(), z.number()]).describe('The knowledge base category ID (from listKnowledgeBaseCategories).'),
+    page: z.number().int().min(1).optional().default(1).describe('Page number (1-based). Server-fixed page size.'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to list knowledge base articles', session, log, async (client) => {
+      log.info(`Listing PeopleForce knowledge base articles for category ${args.categoryId} (page=${args.page})`);
+      const res = await client.listKnowledgeBaseArticles({ categoryId: args.categoryId, page: args.page });
+      return formatKnowledgeArticleList(res.data ?? [], res.metadata?.pagination);
+    }),
+});
+
+peopleForceServer.addTool({
+  name: 'getKnowledgeBaseArticle',
+  annotations: { readOnlyHint: true },
+  description: 'Retrieves a single Knowledge Base ("Learning") article by ID, including its full body text.',
+  parameters: z.object({
+    articleId: z.union([z.string(), z.number()]).describe('The knowledge base article ID.'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to fetch knowledge base article', session, log, async (client) => {
+      log.info(`Fetching PeopleForce knowledge base article ${args.articleId}`);
+      const res = await client.getKnowledgeBaseArticle(args.articleId);
+      if (!res?.data) throw new UserError('Knowledge base article not found.');
+      return formatKnowledgeArticle(res.data);
+    }),
 });
 
 // ===========================================================================

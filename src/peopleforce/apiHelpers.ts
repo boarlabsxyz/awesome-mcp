@@ -142,6 +142,22 @@ export type PeopleForceTask = {
   created_by?: { id?: number | string; full_name?: string; email?: string } | null;
 };
 
+/**
+ * A PeopleForce custom ("additional") profile field. The People-directory
+ * sections a tenant adds (e.g. "Dev Sprint", "Development") come through here.
+ * Wire shape varies by tenant/endpoint, so every plausible key is optional and
+ * {@link formatCustomFields} renders whichever are present.
+ */
+export type PeopleForceCustomField = {
+  id?: number | string;
+  name?: string;
+  label?: string;
+  value?: unknown;
+  /** Multi-select custom fields return an array of values instead of a scalar. */
+  values?: unknown[];
+  field_type?: string;
+};
+
 export type PeopleForceEmployee = {
   id?: number | string;
   active?: boolean;
@@ -166,6 +182,15 @@ export type PeopleForceEmployee = {
   reporting_to?: PeopleForceRef;
   job_profile?: PeopleForceRef;
   avatar_url?: string | null;
+  /**
+   * Tenant-defined custom fields from the People-directory profile (e.g.
+   * "Dev Sprint", "Development"). PeopleForce returns these either as an array
+   * of {name,value} records or as a {name: value} map depending on the tenant;
+   * `custom_field_values` is a seen alias. {@link formatCustomFields} handles
+   * every shape, so a renamed/added field surfaces with no code change.
+   */
+  custom_fields?: PeopleForceCustomField[] | Record<string, unknown>;
+  custom_field_values?: PeopleForceCustomField[] | Record<string, unknown>;
 };
 
 export type PeopleForceDepartment = {
@@ -379,6 +404,88 @@ export type PeopleForceCandidateDossier = {
   errors: string[];
 };
 
+// === Performance & Learning (v3) ===
+// Objectives (OKRs), KPIs, and the Knowledge Base ("Learning") surface all live
+// on the same v3 base as recruitment. Shapes below are transcribed from the
+// public developer portal (developer.peopleforce.io); formatters fall back to a
+// JSON dump if a record doesn't match, so nothing is silently dropped.
+
+/** The compact employee reference (`owner`, `created_by`) these v3 payloads embed. */
+export type PeopleForceEmployeeShort = {
+  id?: number | string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+};
+
+export type PeopleForceKeyResult = {
+  id?: number | string;
+  title?: string;
+  progress?: number;
+  start?: number;
+  target?: number;
+  metric?: string;
+  weight?: number;
+  status?: string;
+  currency_code?: string;
+};
+
+export type PeopleForceObjective = {
+  id?: number | string;
+  title?: string;
+  progress?: number;
+  status?: string;
+  starts_on?: string;
+  ends_on?: string;
+  owner?: PeopleForceEmployeeShort | null;
+  created_at?: string;
+  updated_at?: string;
+  key_results?: PeopleForceKeyResult[];
+};
+
+export type PeopleForceKpi = {
+  id?: number | string;
+  title?: string;
+  description?: string;
+  weight?: number;
+  currency_code?: string;
+  metric?: string;
+  status?: string;
+  /** "individual" | "department" | "location" | "division" | "company". */
+  kpi_type?: string;
+  progress_percentage?: number;
+  location?: PeopleForceNamed | null;
+  division?: PeopleForceNamed | null;
+  department?: PeopleForceNamed | null;
+  owner?: PeopleForceEmployeeShort | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type PeopleForceKnowledgeCategory = {
+  id?: number | string;
+  name?: string;
+  description?: string;
+  emoji?: string;
+  hex_color?: string;
+  position?: number;
+  created_by?: PeopleForceEmployeeShort | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type PeopleForceKnowledgeArticle = {
+  id?: number | string;
+  title?: string;
+  body?: string;
+  body_html?: string;
+  position?: number;
+  created_by?: PeopleForceEmployeeShort | null;
+  category?: PeopleForceNamed | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
 /** Pagination shape the API actually returns. Server-forced page size. */
 export type PeopleForcePagination = {
   page?: number;
@@ -404,6 +511,15 @@ export class PeopleForceClient {
     this.baseUrl = (baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
     this.recruitmentBaseUrl = deriveRecruitmentBaseUrl(this.baseUrl);
     this.careersBaseUrl = deriveCareersBaseUrl(this.baseUrl);
+  }
+
+  /**
+   * The v3 API base. Recruitment, Performance (objectives/KPIs) and the
+   * Knowledge Base all share it — this alias reads clearly at the non-recruitment
+   * call sites without introducing a second derivation.
+   */
+  private get apiV3BaseUrl(): string {
+    return this.recruitmentBaseUrl;
   }
 
   private request<T>(
@@ -737,6 +853,37 @@ export class PeopleForceClient {
     );
   }
 
+  // === Performance & Learning (v3) ===
+
+  listObjectives(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceObjective>> {
+    return this.requestAt(this.apiV3BaseUrl, 'GET', '/performance/objectives', undefined, { page: input.page });
+  }
+
+  listKeyPerformanceIndicators(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceKpi>> {
+    return this.requestAt(this.apiV3BaseUrl, 'GET', '/performance/key_performance_indicators', undefined, { page: input.page });
+  }
+
+  listKnowledgeBaseCategories(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceKnowledgeCategory>> {
+    return this.requestAt(this.apiV3BaseUrl, 'GET', '/knowledge_base/categories', undefined, { page: input.page });
+  }
+
+  listKnowledgeBaseArticles(input: {
+    categoryId: string | number;
+    page?: number;
+  }): Promise<PeopleForceListResponse<PeopleForceKnowledgeArticle>> {
+    return this.requestAt(
+      this.apiV3BaseUrl,
+      'GET',
+      `/knowledge_base/categories/${encodeURIComponent(String(input.categoryId))}/articles`,
+      undefined,
+      { page: input.page },
+    );
+  }
+
+  getKnowledgeBaseArticle(id: string | number): Promise<{ data: PeopleForceKnowledgeArticle }> {
+    return this.requestAt(this.apiV3BaseUrl, 'GET', `/knowledge_base/articles/${encodeURIComponent(String(id))}`);
+  }
+
   // === Careers API — published job descriptions ===
 
   getPublishedVacancy(id: string | number): Promise<{ data?: PeopleForceVacancy } | PeopleForceVacancy> {
@@ -841,9 +988,64 @@ export function formatEmployeeList(
     const dept = refName(e.department);
     if (dept) parts.push(`Department: ${dept}`);
     if (typeof e.active === 'boolean') parts.push(`Status: ${e.active ? 'active' : 'inactive'}`);
+    // Surface tenant custom fields (Dev Sprint, Development, …) when the list
+    // payload carries them, so they're scannable across the cohort without a
+    // per-employee getEmployee round-trip.
+    for (const line of formatCustomFields(e.custom_fields ?? e.custom_field_values)) parts.push(line);
     parts.push('');
   });
   return parts.join('\n').trimEnd();
+}
+
+/**
+ * Render a single custom-field value. Handles scalars, booleans, `{id,name}`
+ * reference objects (dropdown/reference fields), and arrays of any of those
+ * (multi-select). Empty/blank values return undefined so the caller can drop
+ * the line entirely rather than print "Field: ".
+ */
+function customFieldValueText(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (Array.isArray(value)) {
+    const parts = value.map((v) => customFieldValueText(v)).filter((s): s is string => Boolean(s));
+    return parts.length ? parts.join(', ') : undefined;
+  }
+  if (typeof value === 'boolean') return value ? 'yes' : 'no';
+  if (typeof value === 'object') {
+    const rec = value as { name?: string; label?: string; value?: unknown };
+    if (rec.name) return rec.name;
+    if (rec.label) return rec.label;
+    if (rec.value !== undefined) return customFieldValueText(rec.value);
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+/**
+ * Normalize PeopleForce custom fields into `Label: value` lines. The API can
+ * return them as an array of `{name/label, value/values}` records OR as a plain
+ * `{ "Field Name": value }` map depending on tenant/endpoint — both are handled.
+ * Fields with an empty value are dropped. Exported for unit tests.
+ */
+export function formatCustomFields(
+  raw: PeopleForceCustomField[] | Record<string, unknown> | undefined | null,
+): string[] {
+  if (!raw) return [];
+  const entries: Array<{ label: string; value: unknown }> = [];
+  if (Array.isArray(raw)) {
+    for (const f of raw) {
+      const label = f?.name ?? f?.label;
+      if (!label) continue;
+      entries.push({ label, value: f?.value ?? f?.values });
+    }
+  } else if (typeof raw === 'object') {
+    for (const [label, value] of Object.entries(raw)) entries.push({ label, value });
+  }
+  const lines: string[] = [];
+  for (const { label, value } of entries) {
+    const text = customFieldValueText(value);
+    if (text !== undefined) lines.push(`${label}: ${text}`);
+  }
+  return lines;
 }
 
 export function formatEmployee(employee: PeopleForceEmployee): string {
@@ -872,6 +1074,13 @@ export function formatEmployee(employee: PeopleForceEmployee): string {
   if (employee.hired_on) parts.push(`Hired: ${employee.hired_on}`);
   if (employee.probation_ends_on) parts.push(`Probation ends: ${employee.probation_ends_on}`);
   if (employee.date_of_birth) parts.push(`Date of birth: ${employee.date_of_birth}`);
+  // Tenant-defined People-directory custom fields (Dev Sprint, Development, …).
+  const customFields = formatCustomFields(employee.custom_fields ?? employee.custom_field_values);
+  if (customFields.length) {
+    parts.push('');
+    parts.push('## Custom Fields');
+    parts.push(...customFields);
+  }
   return parts.join('\n');
 }
 
@@ -1328,6 +1537,110 @@ export function formatPublishedVacancy(payload: { data?: PeopleForceVacancy } | 
   } else {
     parts.push('');
     parts.push(...jsonBlock(v));
+  }
+  return parts.join('\n');
+}
+
+// ==== Performance & Learning formatters ====
+
+export function formatObjectiveList(objectives: PeopleForceObjective[], pagination?: PeopleForcePagination): string {
+  if (objectives.length === 0) return renderEmptyList('Objectives', 'objectives', pagination);
+  const parts = ['# Objectives', ''];
+  const pag = renderPaginationLine(pagination);
+  if (pag) { parts.push(pag); parts.push(''); }
+  objectives.forEach((o, i) => {
+    parts.push(`## ${i + 1}. ${o.title ?? 'Untitled objective'}`);
+    if (o.id !== undefined) parts.push(`ID: ${o.id}`);
+    const owner = o.owner ? fullName(o.owner) : undefined;
+    if (owner && owner !== 'Unknown') parts.push(`Owner: ${owner}`);
+    if (typeof o.progress === 'number') parts.push(`Progress: ${o.progress}%`);
+    if (o.status) parts.push(`Status: ${o.status}`);
+    const period = datePeriod(o.starts_on, o.ends_on);
+    if (period) parts.push(`Period: ${period}`);
+    if (o.key_results && o.key_results.length) {
+      parts.push(`Key results:`);
+      o.key_results.forEach((kr) => {
+        const bits = [kr.title ?? 'Key result'];
+        if (typeof kr.progress === 'number') bits.push(`${kr.progress}%`);
+        if (kr.status) bits.push(kr.status);
+        parts.push(`  - ${bits.join(' — ')}`);
+      });
+    }
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+export function formatKpiList(kpis: PeopleForceKpi[], pagination?: PeopleForcePagination): string {
+  if (kpis.length === 0) return renderEmptyList('Key Performance Indicators', 'KPIs', pagination);
+  const parts = ['# Key Performance Indicators', ''];
+  const pag = renderPaginationLine(pagination);
+  if (pag) { parts.push(pag); parts.push(''); }
+  kpis.forEach((k, i) => {
+    parts.push(`## ${i + 1}. ${k.title ?? 'Untitled KPI'}`);
+    if (k.id !== undefined) parts.push(`ID: ${k.id}`);
+    if (k.kpi_type) parts.push(`Type: ${k.kpi_type}`);
+    const owner = k.owner ? fullName(k.owner) : undefined;
+    if (owner && owner !== 'Unknown') parts.push(`Owner: ${owner}`);
+    const scope = refName(k.department) ?? refName(k.division) ?? refName(k.location);
+    if (scope) parts.push(`Scope: ${scope}`);
+    if (typeof k.progress_percentage === 'number') parts.push(`Progress: ${k.progress_percentage}%`);
+    if (k.status) parts.push(`Status: ${k.status}`);
+    if (k.description) parts.push(`Description: ${k.description}`);
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+export function formatKnowledgeCategoryList(
+  categories: PeopleForceKnowledgeCategory[],
+  pagination?: PeopleForcePagination,
+): string {
+  return formatNamedList('Knowledge Base Categories', categories, pagination, (item) => {
+    const c = item as PeopleForceKnowledgeCategory;
+    const lines: string[] = [];
+    if (c.emoji) lines.push(`Emoji: ${c.emoji}`);
+    if (c.description) lines.push(`Description: ${c.description}`);
+    return lines;
+  });
+}
+
+export function formatKnowledgeArticleList(
+  articles: PeopleForceKnowledgeArticle[],
+  pagination?: PeopleForcePagination,
+): string {
+  if (articles.length === 0) return renderEmptyList('Knowledge Base Articles', 'articles', pagination);
+  const parts = ['# Knowledge Base Articles', ''];
+  const pag = renderPaginationLine(pagination);
+  if (pag) { parts.push(pag); parts.push(''); }
+  articles.forEach((a, i) => {
+    parts.push(`## ${i + 1}. ${a.title ?? 'Untitled article'}`);
+    if (a.id !== undefined) parts.push(`ID: ${a.id}`);
+    const category = refName(a.category);
+    if (category) parts.push(`Category: ${category}`);
+    const author = a.created_by ? fullName(a.created_by) : undefined;
+    if (author && author !== 'Unknown') parts.push(`Author: ${author}`);
+    if (a.updated_at) parts.push(`Updated: ${a.updated_at}`);
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+export function formatKnowledgeArticle(article: PeopleForceKnowledgeArticle): string {
+  const parts = [`# ${article.title ?? 'Untitled article'}`];
+  if (article.id !== undefined) parts.push(`ID: ${article.id}`);
+  const category = refName(article.category);
+  if (category) parts.push(`Category: ${category}`);
+  const author = article.created_by ? fullName(article.created_by) : undefined;
+  if (author && author !== 'Unknown') parts.push(`Author: ${author}`);
+  if (article.created_at) parts.push(`Created: ${article.created_at}`);
+  if (article.updated_at) parts.push(`Updated: ${article.updated_at}`);
+  // Prefer the plain-text body; the API also returns body_html.
+  const body = article.body ?? article.body_html;
+  if (body) {
+    parts.push('');
+    parts.push('## Content');
+    parts.push(body);
   }
   return parts.join('\n');
 }
