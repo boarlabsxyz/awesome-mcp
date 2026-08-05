@@ -21,6 +21,7 @@ import {
   getHubSpotClient,
   mapHubSpotError,
   withHubSpotClient,
+  maybeRefreshHubSpotToken,
 } from '../../hubspot/apiHelpers.js';
 
 const noopLog = { info: () => {}, error: () => {} };
@@ -348,4 +349,45 @@ test('withHubSpotClient maps a thrown API error, but surfaces not-connected verb
     () => withHubSpotClient('Op', undefined, noopLog, async () => 'never'),
     /not connected/i,
   );
+});
+
+// --- OAuth token refresh (maybeRefreshHubSpotToken) ---
+
+test('maybeRefreshHubSpotToken is a no-op for paste-token sessions', async () => {
+  const calls = stubFetch(() => jsonResponse({}));
+  const session: any = { hubspotAccessToken: 'AT' }; // no expiry / refresh / creds
+  await maybeRefreshHubSpotToken(session, noopLog);
+  assert.equal(session.hubspotAccessToken, 'AT');
+  assert.equal(calls.length, 0, 'must not hit the token endpoint');
+});
+
+test('maybeRefreshHubSpotToken refreshes an expiring OAuth token in place', async () => {
+  const calls = stubFetch(() => jsonResponse({ access_token: 'NEW', expires_in: 1800 }));
+  const session: any = {
+    hubspotAccessToken: 'OLD',
+    hubspotTokenExpiry: Date.now() - 1000, // already expired
+    hubspotRefreshToken: 'RT',
+    hubspotOauthClientId: 'cid',
+    hubspotOauthClientSecret: 'sec',
+    // no hubspotInstanceId → skip the DB persist branch
+  };
+  await maybeRefreshHubSpotToken(session, noopLog);
+  assert.equal(session.hubspotAccessToken, 'NEW');
+  assert.equal(session.hubspotRefreshToken, 'RT', 'HubSpot does not rotate — keep the old refresh token');
+  assert.ok(session.hubspotTokenExpiry > Date.now(), 'expiry pushed into the future');
+  assert.match(calls[0][0], /\/oauth\/v1\/token$/);
+});
+
+test('maybeRefreshHubSpotToken skips refresh when the token is still fresh', async () => {
+  const calls = stubFetch(() => jsonResponse({ access_token: 'NEW' }));
+  const session: any = {
+    hubspotAccessToken: 'OLD',
+    hubspotTokenExpiry: Date.now() + 3_600_000, // an hour out
+    hubspotRefreshToken: 'RT',
+    hubspotOauthClientId: 'cid',
+    hubspotOauthClientSecret: 'sec',
+  };
+  await maybeRefreshHubSpotToken(session, noopLog);
+  assert.equal(session.hubspotAccessToken, 'OLD');
+  assert.equal(calls.length, 0);
 });

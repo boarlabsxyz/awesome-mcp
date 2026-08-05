@@ -12,6 +12,7 @@
 
 import { UserError } from 'fastmcp';
 import { UserSession } from '../userSession.js';
+import { refreshHubSpotToken, HUBSPOT_TOKEN_URL } from './oauthCallback.js';
 
 const DEFAULT_BASE_URL = process.env.HUBSPOT_BASE_URL || 'https://api.hubapi.com';
 
@@ -473,10 +474,102 @@ export function mapHubSpotError(prefix: string, error: any, log: HubSpotToolLog)
   throw new UserError(`${prefix}: ${error?.message ?? 'Unknown error'}`);
 }
 
+/** Refresh proactively this many ms before the access token's stated expiry. */
+const HUBSPOT_REFRESH_SKEW_MS = 60_000;
+
+// Single-flight guard: collapse concurrent refreshes for the same connection so
+// only one refresh grant is in flight at a time. Keyed by hubspotInstanceId when
+// present; the WeakMap covers the (rare) session without a stable instance id.
+const inflightHubSpotRefreshById = new Map<string, Promise<void>>();
+const inflightHubSpotRefreshBySession = new WeakMap<UserSession, Promise<void>>();
+
+/**
+ * If this is an OAuth HubSpot session whose access token is at/near expiry,
+ * exchange the refresh token for a fresh access token, mutate the (cached,
+ * by-reference) session in place, and persist the new tokens. Concurrent calls
+ * for the same connection share a single in-flight refresh.
+ *
+ * Best-effort and never throws: on any failure the existing access token is
+ * left in place so the tool call still proceeds (and surfaces a normal 401 via
+ * mapHubSpotError if the token really is dead). No-ops for paste-token sessions
+ * (no refresh_token / expiry / client creds) — so the paste-token flow is
+ * completely unaffected.
+ */
+export async function maybeRefreshHubSpotToken(
+  session: UserSession | undefined,
+  log: HubSpotToolLog,
+): Promise<void> {
+  if (!session) return;
+  const expiry = session.hubspotTokenExpiry;
+  // Only OAuth connections carry all of these; anything else skips refresh.
+  if (!expiry || !session.hubspotRefreshToken || !session.hubspotOauthClientId || !session.hubspotOauthClientSecret) {
+    return;
+  }
+  if (Date.now() < expiry - HUBSPOT_REFRESH_SKEW_MS) return;
+
+  const instanceId = session.hubspotInstanceId;
+  const existing = instanceId
+    ? inflightHubSpotRefreshById.get(instanceId)
+    : inflightHubSpotRefreshBySession.get(session);
+  if (existing) {
+    await existing;
+    return;
+  }
+
+  const refresh = performHubSpotRefresh(session, log).finally(() => {
+    if (instanceId) inflightHubSpotRefreshById.delete(instanceId);
+    else inflightHubSpotRefreshBySession.delete(session);
+  });
+  if (instanceId) inflightHubSpotRefreshById.set(instanceId, refresh);
+  else inflightHubSpotRefreshBySession.set(session, refresh);
+  await refresh;
+}
+
+/**
+ * Perform the refresh_token exchange, update the session tokens in place, and
+ * persist them. Never throws (best-effort) so single-flight awaiters always
+ * resolve cleanly. HubSpot does not rotate refresh tokens, so we keep the
+ * existing one when the response omits a new one.
+ */
+async function performHubSpotRefresh(session: UserSession, log: HubSpotToolLog): Promise<void> {
+  const refreshToken = session.hubspotRefreshToken;
+  const clientId = session.hubspotOauthClientId;
+  const clientSecret = session.hubspotOauthClientSecret;
+  if (!refreshToken || !clientId || !clientSecret) return;
+
+  const result = await refreshHubSpotToken({ tokenUrl: HUBSPOT_TOKEN_URL, refreshToken, clientId, clientSecret });
+  if (!result.ok) {
+    log.error(`HubSpot token refresh failed (${result.status}); using existing token. ${result.logMessage}`);
+    return;
+  }
+
+  const newRefresh = result.refreshToken ?? refreshToken;
+  const newExpiry = result.expiresIn ? Date.now() + result.expiresIn * 1000 : undefined;
+  session.hubspotAccessToken = result.accessToken;
+  session.hubspotRefreshToken = newRefresh;
+  session.hubspotTokenExpiry = newExpiry;
+
+  const instanceId = session.hubspotInstanceId;
+  if (instanceId) {
+    try {
+      const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+      await updateMcpInstanceProviderTokens(instanceId, {
+        access_token: result.accessToken,
+        refresh_token: newRefresh,
+        expiry_date: newExpiry,
+        baseUrl: session.hubspotBaseUrl,
+      });
+    } catch (err: any) {
+      log.error(`Failed to persist refreshed HubSpot tokens for ${instanceId}: ${err?.message ?? err}`);
+    }
+  }
+}
+
 /**
  * Wrap a tool body with the standard client-fetch + error-mapping pattern.
- * `getHubSpotClient` runs BEFORE the callback so a missing token is surfaced
- * verbatim (no double-wrapping via mapHubSpotError).
+ * A proactive OAuth-token refresh runs first (no-op for paste-token sessions);
+ * `getHubSpotClient` then runs BEFORE the callback so a missing token is
+ * surfaced verbatim (no double-wrapping via mapHubSpotError).
  */
 export async function withHubSpotClient<T>(
   prefix: string,
@@ -484,6 +577,7 @@ export async function withHubSpotClient<T>(
   log: HubSpotToolLog,
   fn: (client: HubSpotClient) => Promise<T>,
 ): Promise<T> {
+  await maybeRefreshHubSpotToken(session, log);
   const client = getHubSpotClient(session);
   try {
     return await fn(client);

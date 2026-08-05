@@ -309,6 +309,7 @@ import { selectTabContent, extractDocBodyText, truncateJsonByLength } from './do
 import { clearSessionCache, createUserSession, createUserSessionFromConnection, UserSession } from '../userSession.js';
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
 import { exchangeOutlineOauthCode, buildOutlineInstanceName } from '../outline/oauthCallback.js';
+import { exchangeHubSpotOauthCode, buildHubSpotOauthInstanceName, HUBSPOT_TOKEN_URL } from '../hubspot/oauthCallback.js';
 import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceNameFromToken } from '../outline/connectToken.js';
 import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
@@ -1132,6 +1133,49 @@ function registerSharedRoutes(app: express.Express): void {
           'outline', outlineProviderTokens, exchange.email
         );
         console.error(`User ${user.id} connected Outline MCP: ${connection.instanceId}`);
+      } else if (provider === 'hubspot') {
+        // HubSpot OAuth 2.0 authorization_code exchange (see src/hubspot/oauthCallback.ts).
+        const exchange = await exchangeHubSpotOauthCode({
+          tokenUrl: mcp.oauthTokenUrl || HUBSPOT_TOKEN_URL,
+          code,
+          clientId: client_id,
+          clientSecret: client_secret,
+          redirectUri,
+        });
+        if (!exchange.ok) {
+          console.error(`[MCP Connect] ${exchange.logMessage}`);
+          res.status(exchange.status).send(exchange.userMessage);
+          return;
+        }
+        console.error(`[MCP Connect] HubSpot portal: ${exchange.hubDomain}, user: ${exchange.email}`);
+
+        // HubSpot access tokens expire (~30 min); store refresh_token + expiry_date
+        // to drive the tool-call-time refresh in createHubSpotSession/withHubSpotClient.
+        const hubspotProviderTokens = {
+          access_token: exchange.accessToken,
+          refresh_token: exchange.refreshToken ?? undefined,
+          expiry_date: exchange.expiresIn ? Date.now() + exchange.expiresIn * 1000 : undefined,
+        };
+        const emptyGoogleTokensForHubSpot = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const hubspotInstanceName = buildHubSpotOauthInstanceName({
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          providedInstanceName: stateData.instanceName,
+          hubDomain: exchange.hubDomain,
+          email: exchange.email,
+        });
+
+        const hubspotConnections = await getUserConnectedMcps(user.id);
+        const existingHubSpot = hubspotConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === hubspotInstanceName);
+        if (existingHubSpot) {
+          console.error(`User ${user.id} already has ${mcpSlug} for ${exchange.hubDomain}: ${existingHubSpot.instanceId}`);
+          res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingHubSpot.instanceName));
+          return;
+        }
+        connection = await createMcpInstance(
+          user.id, mcpSlug, hubspotInstanceName, emptyGoogleTokensForHubSpot, null,
+          'hubspot', hubspotProviderTokens, exchange.email
+        );
+        console.error(`User ${user.id} connected HubSpot MCP: ${connection.instanceId}`);
       } else {
         // Google OAuth (default)
         const oauthClient = new OAuth2Client(client_id, client_secret, redirectUri);

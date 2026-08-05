@@ -54,6 +54,31 @@ describe('createHubSpotSession', () => {
     assert.equal(s.hubspotBaseUrl, undefined);
   });
 
+  test('populates OAuth refresh plumbing from tokens + env', () => {
+    process.env.HUBSPOT_CLIENT_ID = 'cid';
+    process.env.HUBSPOT_CLIENT_SECRET = 'sec';
+    try {
+      const { user, connection } = fixtures({ access_token: 'AT', refresh_token: 'RT', expiry_date: 4242 });
+      const s = createHubSpotSession(user, connection);
+      assert.equal(s.hubspotAccessToken, 'AT');
+      assert.equal(s.hubspotRefreshToken, 'RT');
+      assert.equal(s.hubspotTokenExpiry, 4242);
+      assert.equal(s.hubspotOauthClientId, 'cid');
+      assert.equal(s.hubspotOauthClientSecret, 'sec');
+      assert.equal(s.hubspotInstanceId, connection.instanceId);
+    } finally {
+      delete process.env.HUBSPOT_CLIENT_ID;
+      delete process.env.HUBSPOT_CLIENT_SECRET;
+    }
+  });
+
+  test('paste-token connection carries no refresh plumbing', () => {
+    const { user, connection } = fixtures({ access_token: 'AT' });
+    const s = createHubSpotSession(user, connection);
+    assert.equal(s.hubspotRefreshToken, undefined);
+    assert.equal(s.hubspotTokenExpiry, undefined);
+  });
+
   test('throws a reconnect-friendly error when the access token is missing', () => {
     const { user, connection } = fixtures({});
     assert.throws(() => createHubSpotSession(user, connection), /access token missing/i);
