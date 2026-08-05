@@ -40,8 +40,9 @@ Use a single AskUserQuestion call to collect:
 - **Route path** — defaults to slug, e.g. `notion` becomes `/notion` and `/notion-sse`.
 
 For third-party, also ask:
+- **Auth method** — **prefer OAuth 2.0 by default when the provider supports it** ("Connect with X"), falling back to paste-token only when the provider has no OAuth app model (e.g. Slack bot tokens) or the user explicitly wants it. OAuth is the better UX (one-click connect, no manual key handling) and the platform already has the machinery (Slack/ClickUp/Outline/HubSpot). It costs more wiring — a token-exchange + refresh module and a `/connect/<slug>/callback` branch (step 5g) — and requires the user to register an app in the provider's developer console. Paste-token is simpler but asks each user to create and paste a key. Recommend OAuth; let the user opt down to paste-token.
 - **Session token field** — name of the field on `UserSession` that holds the token. Default: `<camelCaseSlug>AccessToken`.
-- **OAuth authorize / token URLs** — optional, stored in the catalog for the OAuth proxy.
+- **OAuth authorize / token URLs** — for OAuth providers, the provider's authorize + token endpoints (stored in the catalog). For HubSpot: `https://app.hubspot.com/oauth/authorize` + `https://api.hubapi.com/oauth/v1/token`.
 
 For Google, ask:
 - **Which `session.google<X>` client to reuse**, OR a new API + version (e.g. `photos/v1`). If a new client is needed, the skill must also extend `UserSession` and instantiate the client in the three factory functions in `src/userSession.ts`.
@@ -174,6 +175,14 @@ Third-party entry — same shape plus `provider`, `oauthAuthorizationUrl`, `oaut
 - **`src/website/webServer.ts`** — in the `/api/connect-token` handler, add an `if (mcpSlug === '<slug>')` branch that calls the shared `connectPasteToken('<slug>', '<ServiceName>', () => validate<X>Token({ token }))` helper (peopleforce + hubspot already share it).
 - **`public/dashboard.html`** — the step most often missed; its symptom is the runtime error `"<slug> uses direct token authentication. Please connect via the dashboard."` the instant the user clicks Connect. In `selectMcpType`, add the provider to the `isTokenProvider` allowlist; add a `provider === '<slug>'` block that sets the token label / placeholder / hint (and hides the URL field); add the provider to the `autoName` set in `connectWithToken` (so it uses `build<X>InstanceName`'s fallback); and add its empty-token validation message. Without this, Connect routes to the OAuth `/connect/<slug>` flow, which 400s for paste-token providers. `public/` is baked into the image at build (`cp -r public dist/public`), so the **web** service must be redeployed for the change to take effect.
 
+**g. OAuth 2.0 connect flow (third-party OAuth providers)** — the preferred path (step 2). Model it on Outline/HubSpot (`src/hubspot/oauthCallback.ts` is the cleanest worked example).
+
+- **`src/<slug>/oauthCallback.ts`** (new) — export `exchange<X>OauthCode` (authorization_code → tokens) and `refresh<X>Token` (refresh_token grant), plus a best-effort user/account lookup for naming the instance. Factor the token-POST fetch/error mapping into small helpers so it does NOT clone `outline/oauthCallback.ts` (the CPD gate flags a ~25-line copy otherwise). Add a unit test mirroring `src/__tests__/hubspot/oauthCallback.test.ts`.
+- **`src/userSession.ts`** — add OAuth session fields (`<slug>RefreshToken`, `<slug>TokenExpiry`, `<slug>OauthClientId`, `<slug>OauthClientSecret`, `<slug>InstanceId`) and populate them in `create<X>Session` from `providerTokens` + the client-cred env vars. No-op for any paste-token connection (no refresh token/expiry).
+- **`src/<slug>/apiHelpers.ts`** — add `maybeRefresh<X>Token` / `perform<X>Refresh` (single-flight guard) and call `await maybeRefresh<X>Token(session, log)` at the top of `with<X>Client`. Access tokens that expire (HubSpot ≈ 30 min) are refreshed at tool-call time, the cached session is mutated in place, and the rotated tokens are persisted via `updateMcpInstanceProviderTokens`.
+- **`src/website/webServer.ts`** — the generic authorize redirect in `/connect/:mcpSlug` already covers OAuth 2.0 (`response_type=code` + space-joined `scope`); you only add an `else if (provider === '<slug>')` branch in the `/connect/:mcpSlug/callback` handler that calls `exchange<X>OauthCode`, builds `providerTokens` = `{ access_token, refresh_token, expiry_date }`, names the instance, and `createMcpInstance(...)`.
+- **`src/mcpCatalogStore.ts` — `seedDefaultCatalogs()`** — set `oauthAuthorizationUrl` / `oauthTokenUrl` / `oauthScopes` and `googleClientId`/`googleClientSecret` (from `<SLUG_UPPER>_CLIENT_ID` / `_CLIENT_SECRET`). Two flavors: **env-gated** (Outline) sets the OAuth URLs only when the creds are present, so an unconfigured deploy falls back to paste-token; **OAuth-by-default** (HubSpot) sets the URLs unconditionally so the dashboard always shows "Connect with X" — but then the connect button breaks if the creds are unset, so only do this when the user wants OAuth-only. The **dashboard needs no change** for OAuth — `isTokenProvider` is false whenever `oauthAuthorizationUrl` is set, so it shows the Connect button automatically.
+
 ### 6. Wire the REST catalog and doc generators
 
 The two markdown docs under `docs/` are generated. Both need the new service registered before regeneration.
@@ -260,6 +269,20 @@ Each of these is here because we've seen the failure mode in the wild or it prod
 - **`CLAUDE.md` tool count drifts** — it's manually maintained. Don't try to keep it exact; `docs/MCP_TOOLS.md` is authoritative and auto-regenerates.
 - **Dashboard paste-token form is a separate allowlist** — `public/dashboard.html`'s `selectMcpType` hardcodes which providers show the token-input form (step 5f). A paste-token provider missing there routes to the OAuth `/connect/<slug>` flow, which 400s with `"<slug> uses direct token authentication. Please connect via the dashboard."` The catalog, session router, and `/api/connect-token` branch can all be correct and the user still can't connect. Symptom is a *runtime* error in the browser, not a build/test failure — the scaffold looks done.
 - **`TRANSPORT` typo bricks a per-service deploy** — the boot only treats `httpStream` / `http` / `remote` as multi-user HTTP mode (`src/google-docs/server.ts`); any other value (a stray `httpsStream`) silently falls back to stdio, which calls `initializeGoogleClient()` and hard-exits when Google creds are absent — so `/health` never binds and the healthcheck fails. If a newly-created per-service MCP fails its healthcheck, check `TRANSPORT=httpStream`, `MCP_MODE=mcp`, `MCP_SLUG=<slug>` on that Railway service before suspecting the scaffold.
+- **OAuth client creds must be on BOTH services** — the web service uses `<SLUG_UPPER>_CLIENT_ID`/`_CLIENT_SECRET` for the catalog seed + `/connect/<slug>` exchange; the MCP service uses the same vars for the tool-call-time refresh. Set them only on the web service and connect succeeds but tools 401 once the access token expires. With **OAuth-by-default** catalogs (unconditional `oauthAuthorizationUrl`), missing creds are worse — the Connect button redirects with an invalid client and there is no paste-token fallback in the UI. Prefer the env-gated catalog unless the user explicitly wants OAuth-only.
+
+## OAuth 2.0 provider setup — HubSpot worked example
+
+After the code is wired (step 5g), the user must register an app in the provider's developer console and set the client credentials. Hand them these HubSpot steps (adapt the URLs/scopes for other providers):
+
+1. **Create a HubSpot app** — go to a HubSpot **developer account** (`developers.hubspot.com` → *Apps → Create app*). This is separate from a normal HubSpot account/portal.
+2. **Set the redirect URL** — in the app's *Auth* tab, add **`<BASE_URL>/connect/hubspot/callback`** exactly (the web-service domain, e.g. `https://your-web-service.up.railway.app/connect/hubspot/callback`). HubSpot requires an exact match; a trailing-slash or host mismatch fails the callback.
+3. **Select scopes** — the app's scopes must be a **superset** of the catalog's `oauthScopes`: `crm.objects.contacts.read`/`.write`, `crm.objects.companies.read`/`.write`, `crm.schemas.contacts.read`/`.write`, `crm.schemas.companies.read`/`.write`, `tickets`, `conversations.read`. If the authorize request asks for a scope the app doesn't have, HubSpot shows an error page instead of the consent screen.
+4. **Copy the Client ID + Client Secret** from the app's Auth tab.
+5. **Set env vars on BOTH services** — `HUBSPOT_CLIENT_ID` and `HUBSPOT_CLIENT_SECRET` on the **web** service (drives the catalog seed + the `/connect/hubspot` exchange) **and** the **hubspot MCP** service (drives the tool-call-time token refresh in `createHubSpotSession` / `withHubSpotClient`). Miss the MCP service and connect works but tools 401 after the first ~30 minutes.
+6. **Redeploy both**, then the dashboard shows **"Connect with HubSpot"**. Access tokens expire (~30 min) and refresh automatically; the refresh token is long-lived and does not rotate.
+
+Verify end-to-end with a real connect **and** a tool call made >30 min later (or with a deliberately short expiry) to exercise the refresh path — mocked-`fetch` unit tests can't prove the live refresh works.
 
 ## Conventions reference
 
