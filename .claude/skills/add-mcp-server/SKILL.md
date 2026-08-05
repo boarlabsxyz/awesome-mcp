@@ -99,6 +99,8 @@ Without this, the new server compiles but never runs — the symptom is the wron
 
 If the user picked a new Google API, also add the client field to `UserSession`, instantiate it via `google.<api>({ version: '<v>', auth: oauthClient })` in the two real-session factories, and null-default it in the third-party-only factory.
 
+Then wire the session **router** in `src/mcpAuthenticate.ts` — a factory that nothing dispatches to is dead code, and the pasted token never reaches the tools. Add the factory to the `AuthDeps` interface and to `defaultDeps`, then add a branch in `sessionFromConnection`: `if (connection.provider === '<slug>') return deps.create<X>Session(user, connection);` (mirror the `outline` / `peopleforce` branches). Two tests build a mock `AuthDeps` — `src/__tests__/mcpAuthenticate.test.ts` and `src/__tests__/clickup/auth.test.ts` — and will fail typecheck until the new factory is added to each mock. We hit exactly this gap with HubSpot: catalog + session field wired, but the token never flowed because the router branch was missing.
+
 **d. `src/mcpCatalogStore.ts` — `seedDefaultCatalogs()`** — this is the *authoritative* seed. It runs on every boot against whatever backend is active (Postgres in dev/prod, JSON file locally when `DATABASE_URL` is unset) and `INSERT … ON CONFLICT DO UPDATE`s the row for each slug. **A new server that skips this step will silently vanish from `/api/v1/catalogs` and the dashboard on every fresh environment**, even after the code, scopeMap, dispatch router, and session token field are all wired correctly — we hit exactly that in #63/#68 with the Outline connector.
 
 Add a `createMcpCatalog({...})` block alongside the existing providers at the bottom of `seedDefaultCatalogs()`. Use an env-configurable URL following the pattern of the other in-process connectors:
@@ -166,11 +168,19 @@ Third-party entry — same shape plus `provider`, `oauthAuthorizationUrl`, `oaut
 }
 ```
 
+**f. Paste-token connect flow (third-party paste-token providers only)** — three edits let a user actually *connect* from the dashboard. Skip for Google and OAuth-proxy providers. All three are easy to forget because the scaffold compiles and the catalog looks complete without them.
+
+- **`src/<slug>/connectToken.ts`** — export `validate<X>Token` and `build<X>InstanceName`. Do NOT hand-roll the fetch / timeout / redirect-guard / status-mapping — delegate to `src/util/pasteTokenValidation.ts` (`validatePasteToken` + `buildSimpleInstanceName`), passing the provider's validation URL, headers, base-URL resolver, and message labels. Mirror `src/peopleforce/connectToken.ts`. Hand-rolling it instead duplicates ~130 lines and trips the SonarCloud duplication gate. Add a unit test mirroring `src/__tests__/peopleforce/connectToken.test.ts`.
+- **`src/website/webServer.ts`** — in the `/api/connect-token` handler, add an `if (mcpSlug === '<slug>')` branch that calls the shared `connectPasteToken('<slug>', '<ServiceName>', () => validate<X>Token({ token }))` helper (peopleforce + hubspot already share it).
+- **`public/dashboard.html`** — the step most often missed; its symptom is the runtime error `"<slug> uses direct token authentication. Please connect via the dashboard."` the instant the user clicks Connect. In `selectMcpType`, add the provider to the `isTokenProvider` allowlist; add a `provider === '<slug>'` block that sets the token label / placeholder / hint (and hides the URL field); add the provider to the `autoName` set in `connectWithToken` (so it uses `build<X>InstanceName`'s fallback); and add its empty-token validation message. Without this, Connect routes to the OAuth `/connect/<slug>` flow, which 400s for paste-token providers. `public/` is baked into the image at build (`cp -r public dist/public`), so the **web** service must be redeployed for the change to take effect.
+
 ### 6. Wire the REST catalog and doc generators
 
 The two markdown docs under `docs/` are generated. Both need the new service registered before regeneration.
 
 **a. `src/restCatalog.ts`** — add the slug to the `RestService` union type. Then append entries for every *read-only* tool (annotations `readOnlyHint: true`). Mark each `status: 'planned'` unless you're also wiring the actual `/api/v1/<slug>/*` routes in `src/website/webServer.ts` right now (usually you aren't — that's a follow-up). `openapiOperationId` values must be unique globally, so prefix common names with the service (`getComment` → `getOutlineComment`).
+
+Then add the slug to the `SERVICE_VALUES` array in **`src/sharedTools/listRestEndpoints.ts`** — it's a *separate* `z.enum` from the `RestService` union, and a slug missing there is silently rejected when a client calls `listRestEndpoints({ service: '<slug>' })`, even though the catalog has entries. `src/__tests__/restCatalog.test.ts` guards this (it asserts every in-catalog service validates), so a miss shows up as a test failure, not just a typecheck error.
 
 **b. `scripts/buildMcpToolsDoc.mjs`** — append a row to the `SERVICES` array: `['src/<slug>/server.ts', '<Display Name>', '<slug>']` (or `null` as the third field if this server has no REST siblings at all).
 
@@ -219,6 +229,8 @@ End with a tight summary:
   - Wire web+mcp combined mode (port constant, `.start()` call, `createWebApp` signature, proxy route) if skipped in step 5b.
   - Wire the planned REST routes in `webServer.ts` and flip `status: 'planned'` → `'live'` in `src/restCatalog.ts`, then re-run the doc generators.
   - Set the `<SLUG_UPPER>_MCP_URL` env var in each Railway service that runs the combined web app (dev/prod). Without it the catalog seeds `isLocal: true` and the mcpUrl defaults to the relative `/<route>`, which works only in single-service `MCP_MODE=all` deployments.
+  - For a per-service (`MCP_MODE=mcp`) deploy, the new service needs `TRANSPORT=httpStream`, `MCP_MODE=mcp`, and `MCP_SLUG=<slug>` (match a working sibling). A `TRANSPORT` typo silently falls back to stdio and fails the healthcheck — see failure modes.
+  - For a paste-token provider, redeploy the **web** service after step 5f so the updated `public/dashboard.html` ships (it's baked into the image at build).
   - `data/mcp-catalog.json` was edited locally but is gitignored — the PR contains the `seedDefaultCatalogs()` edit, which is what actually seeds dev/prod. Both are correct; just mention them so the user isn't surprised.
 
 Then offer the soft chain:
@@ -246,6 +258,8 @@ Each of these is here because we've seen the failure mode in the wild or it prod
 - **Web+mcp combined mode wiring is separate** — the dispatch ternary in `MCP_MODE=mcp` covers per-service deployment; the combined mode has its own port constants, `.start()` calls, `createWebApp` signature, and proxy routes in `webServer.ts`. If the user runs the combined mode and you only wired the ternary, `/<slug>` silently 404s.
 - **REST catalog entries default to `planned`** — until the actual `/api/v1/<slug>/*` routes are wired in `webServer.ts`, marking anything `live` is a lie. The doc generator honors the status: `planned` entries show `—` in `docs/MCP_TOOLS.md`'s REST column, which is correct behavior.
 - **`CLAUDE.md` tool count drifts** — it's manually maintained. Don't try to keep it exact; `docs/MCP_TOOLS.md` is authoritative and auto-regenerates.
+- **Dashboard paste-token form is a separate allowlist** — `public/dashboard.html`'s `selectMcpType` hardcodes which providers show the token-input form (step 5f). A paste-token provider missing there routes to the OAuth `/connect/<slug>` flow, which 400s with `"<slug> uses direct token authentication. Please connect via the dashboard."` The catalog, session router, and `/api/connect-token` branch can all be correct and the user still can't connect. Symptom is a *runtime* error in the browser, not a build/test failure — the scaffold looks done.
+- **`TRANSPORT` typo bricks a per-service deploy** — the boot only treats `httpStream` / `http` / `remote` as multi-user HTTP mode (`src/google-docs/server.ts`); any other value (a stray `httpsStream`) silently falls back to stdio, which calls `initializeGoogleClient()` and hard-exits when Google creds are absent — so `/health` never binds and the healthcheck fails. If a newly-created per-service MCP fails its healthcheck, check `TRANSPORT=httpStream`, `MCP_MODE=mcp`, `MCP_SLUG=<slug>` on that Railway service before suspecting the scaffold.
 
 ## Conventions reference
 

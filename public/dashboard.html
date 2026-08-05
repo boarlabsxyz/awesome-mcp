@@ -1253,7 +1253,7 @@
       // authorize URL (OUTLINE_CLIENT_ID/SECRET/BASE_URL), otherwise it falls
       // back to the URL + API key paste form.
       const isTokenProvider =
-        (provider === 'slack-bot' || provider === 'outline' || provider === 'peopleforce')
+        (provider === 'slack-bot' || provider === 'outline' || provider === 'peopleforce' || provider === 'hubspot')
         && !selectedMcpType.oauthAuthorizationUrl;
 
       // For OAuth providers, skip naming step — name is auto-generated on the backend
@@ -1308,6 +1308,25 @@
         nameSection.style.display = 'none';
         nameInput.value = '';
         tokenInput.focus();
+      } else if (provider === 'hubspot') {
+        tokenLabel.textContent = 'Access Token';
+        tokenInput.placeholder = 'pat-…';
+        tokenHint.innerHTML =
+          'In <span translate="no">HubSpot</span>: <strong>Settings → Integrations → Private Apps → Create a private app</strong>. ' +
+          'Grant read scopes for lookups and write scopes for create/update — at minimum ' +
+          '<code translate="no">crm.objects.contacts.read</code>, <code translate="no">crm.objects.contacts.write</code>, ' +
+          '<code translate="no">crm.objects.companies.read</code>, <code translate="no">crm.objects.companies.write</code>. ' +
+          'For the property tools also grant <code translate="no">crm.schemas.contacts.read</code>, ' +
+          '<code translate="no">crm.schemas.contacts.write</code>, <code translate="no">crm.schemas.companies.read</code>, ' +
+          '<code translate="no">crm.schemas.companies.write</code>; for the ticket &amp; conversation tools add ' +
+          '<code translate="no">tickets</code> and <code translate="no">conversations.read</code>. ' +
+          'Then copy the private-app <strong>Access Token</strong> and paste it here.';
+        urlSection.style.display = 'none';
+        // No user-entered name — backend falls back to the service name via
+        // buildHubSpotInstanceName.
+        nameSection.style.display = 'none';
+        nameInput.value = '';
+        tokenInput.focus();
       } else {
         tokenLabel.textContent = 'Bot Token';
         tokenInput.placeholder = 'xoxb-…';
@@ -1351,7 +1370,7 @@
       // still asks the user because bot tokens don't carry workspace metadata
       // we can display.
       const isOutline = provider === 'outline';
-      const autoName = isOutline || provider === 'peopleforce';
+      const autoName = isOutline || provider === 'peopleforce' || provider === 'hubspot';
       const name = autoName ? '' : document.getElementById('instanceNameInput').value.trim();
       if (!autoName && !name) { alert('Please enter a name for this instance'); return; }
       const token = document.getElementById('tokenInput').value.trim();
@@ -1359,6 +1378,7 @@
         const provider = selectedMcpType.provider;
         const msg = provider === 'outline' ? 'Please enter your Outline API key'
                   : provider === 'peopleforce' ? 'Please enter your PeopleForce API key'
+                  : provider === 'hubspot' ? 'Please enter your HubSpot access token'
                   : 'Please enter a bot token';
         alert(msg);
         return;
