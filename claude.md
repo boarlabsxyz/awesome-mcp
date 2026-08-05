@@ -21,6 +21,7 @@ FastMCP server with 43 tools for Google Docs, Sheets, and Drive.
 - **Resolved status:** May not persist in Google Docs UI (Drive API limitation)
 - **editTableCell:** Not implemented (complex cell index calculation)
 - **fixListFormatting:** Experimental, may not work reliably
+- **HubSpot auth is dual-mode:** paste a private-app access token, OR OAuth 2.0 ("Connect with HubSpot") when `HUBSPOT_CLIENT_ID`/`HUBSPOT_CLIENT_SECRET` are set (mirrors Outline). OAuth access tokens expire (~30 min) and are refreshed at tool-call time via `maybeRefreshHubSpotToken`; the paste-token flow never expires and skips refresh. The dashboard shows the OAuth "Connect" button when `oauthAuthorizationUrl` is seeded, else the paste-token form.
 - **HubSpot `searchData`:** stubbed (throws "not yet implemented"). It does semantic search over a local FAISS vector index in the reference; this codebase has no vector store, so there's nothing to search. The other 15 HubSpot tools — including `getCompanyActivity`, `getRecentConversations`, `getTickets`, and `getTicketConversationThreads` — are implemented against the official HubSpot REST API.
 
 ## Parameter Patterns
@@ -46,7 +47,9 @@ FastMCP server with 43 tools for Google Docs, Sheets, and Drive.
 | `src/outline/apiHelpers.ts` | `OutlineClient` — Bearer-token HTTP client for Outline REST API |
 | `src/peopleforce/server.ts` | PeopleForce HRIS tool definitions (base URL via `PEOPLEFORCE_BASE_URL`, defaults to app.peopleforce.io/api/public/v2) |
 | `src/hubspot/server.ts` | HubSpot CRM tool definitions (base URL via `HUBSPOT_BASE_URL`, defaults to api.hubapi.com) |
-| `src/hubspot/apiHelpers.ts` | `HubSpotClient` — bearer-token HTTP client for the HubSpot CRM v3 REST API |
+| `src/hubspot/apiHelpers.ts` | `HubSpotClient` — bearer-token HTTP client for the HubSpot CRM v3 REST API; OAuth token-refresh plumbing |
+| `src/hubspot/connectToken.ts` | Paste-token validation (`validateHubSpotToken`) for the private-app access-token connect flow |
+| `src/hubspot/oauthCallback.ts` | HubSpot OAuth 2.0 code exchange + refresh grant (`exchangeHubSpotOauthCode`, `refreshHubSpotToken`) |
 | `src/peopleforce/apiHelpers.ts` | `PeopleForceClient` — API-key/Bearer HTTP client for PeopleForce REST API |
 | `src/website/webServer.ts` | Express app, proxy routes, registration/OAuth pages |
 | `src/website/oauthServer.ts` | MCP OAuth 2.1 authorization server |

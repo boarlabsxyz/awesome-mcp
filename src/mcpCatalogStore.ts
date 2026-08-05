@@ -544,7 +544,18 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
-  // HubSpot MCP (paste-token provider — user pastes a private-app access token)
+  // HubSpot MCP — dual-mode, like Outline:
+  //   OAuth      — set HUBSPOT_CLIENT_ID / HUBSPOT_CLIENT_SECRET (a registered
+  //                HubSpot app). The dashboard then shows a "Connect" button and
+  //                /connect/hubspot runs the authorization_code exchange.
+  //   Paste-token — no app. Each user creates a Private App in HubSpot
+  //                (Settings → Integrations → Private Apps) and pastes the
+  //                Access Token into the dashboard's connect form.
+  // If the OAuth env vars aren't set the OAuth URLs stay blank, which routes the
+  // dashboard through the paste-token flow.
+  const hubspotClientId = process.env.HUBSPOT_CLIENT_ID || null;
+  const hubspotClientSecret = process.env.HUBSPOT_CLIENT_SECRET || null;
+  const hubspotOauthEnabled = !!(hubspotClientId && hubspotClientSecret);
   const hubspotMcpUrl = normalizeUrl(process.env.HUBSPOT_MCP_URL, '/hubspot');
 
   await createMcpCatalog({
@@ -555,11 +566,22 @@ export async function seedDefaultCatalogs(): Promise<void> {
     mcpUrl: hubspotMcpUrl,
     provider: 'hubspot',
     scopes: [],
-    googleClientId: null,
-    googleClientSecret: null,
-    oauthAuthorizationUrl: '',
-    oauthTokenUrl: '',
-    oauthScopes: [],
+    googleClientId: hubspotClientId,
+    googleClientSecret: hubspotClientSecret,
+    oauthAuthorizationUrl: hubspotOauthEnabled ? 'https://app.hubspot.com/oauth/authorize' : '',
+    oauthTokenUrl:         hubspotOauthEnabled ? 'https://api.hubapi.com/oauth/v1/token'    : '',
+    // Granular CRM scopes the tools use. Only sent when OAuth is enabled; the
+    // paste-token flow ignores them. Must be a subset of what the HubSpot app
+    // is configured to request.
+    oauthScopes: hubspotOauthEnabled
+      ? [
+          'crm.objects.contacts.read', 'crm.objects.contacts.write',
+          'crm.objects.companies.read', 'crm.objects.companies.write',
+          'crm.schemas.contacts.read', 'crm.schemas.contacts.write',
+          'crm.schemas.companies.read', 'crm.schemas.companies.write',
+          'tickets', 'conversations.read',
+        ]
+      : [],
     isLocal: !process.env.HUBSPOT_MCP_URL,
     isActive: true,
   });
