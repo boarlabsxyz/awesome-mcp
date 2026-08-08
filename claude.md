@@ -54,7 +54,7 @@ FastMCP server with 43 tools for Google Docs, Sheets, and Drive.
 | `src/hubspot/connectToken.ts` | Paste-token validation (`validateHubSpotToken`) for the private-app access-token connect flow |
 | `src/hubspot/oauthCallback.ts` | HubSpot OAuth 2.0 code exchange + refresh grant (`exchangeHubSpotOauthCode`, `refreshHubSpotToken`) |
 | `src/peopleforce/apiHelpers.ts` | `PeopleForceClient` — API-key/Bearer HTTP client for PeopleForce REST API |
-| `src/peopleforce/snapshot/` | L&D time-series snapshot collector (Postgres `pf_*_snapshot` tables) for Grafana trend dashboards; `npm run snapshot:peopleforce`. See its `README.md`. |
+| `src/peopleforce/snapshot/` | L&D time-series snapshot collector (Postgres `pf_*_snapshot` tables) for Grafana trend dashboards; `npm run snapshot:peopleforce`. Also: `pf_employee_dim` + `pf_owner_resolution` (owner→team join, `resolve.ts`), `pf_kb_article_snapshot` (content-authored), and an LLM objective classifier (`classify.ts`, `npm run classify:peopleforce-objectives`, versioned + confidence-gated). See its `README.md`. |
 | `src/website/webServer.ts` | Express app, proxy routes, registration/OAuth pages |
 | `src/website/oauthServer.ts` | MCP OAuth 2.1 authorization server |
 | `src/website/sessionStore.ts` | Session management (cookie/Redis) |

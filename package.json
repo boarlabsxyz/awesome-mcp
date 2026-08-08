@@ -8,6 +8,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "snapshot:peopleforce": "node --import tsx src/peopleforce/snapshot/collect.ts",
+    "classify:peopleforce-objectives": "node --import tsx src/peopleforce/snapshot/classify.ts",
     "test": "node --import tsx --test tests/*.test.js $(find src -name '*.test.ts')",
     "test:watch": "node --import tsx --test --watch tests/*.test.js $(find src -name '*.test.ts')",
     "test:coverage": "c8 --reporter=lcov --reporter=text node --import tsx --test tests/*.test.js $(find src -name '*.test.ts')"
@@ -17,6 +18,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",
     "express": "^5.2.1",
