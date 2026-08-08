@@ -940,7 +940,7 @@ export class PeopleForceClient {
 
 // ==== Formatting helpers ====
 
-function fullName(
+export function fullName(
   person: { full_name?: string; first_name?: string; last_name?: string } | undefined | null,
 ): string {
   if (!person) return 'Unknown';
@@ -949,7 +949,7 @@ function fullName(
   return parts.length > 0 ? parts.join(' ') : 'Unknown';
 }
 
-function refName(ref: PeopleForceRef | string | undefined): string | undefined {
+export function refName(ref: PeopleForceRef | string | undefined): string | undefined {
   if (!ref) return undefined;
   if (typeof ref === 'string') return ref;
   return ref.name;
@@ -1047,14 +1047,16 @@ function customFieldValueText(value: unknown): string | undefined {
 }
 
 /**
- * Normalize PeopleForce custom fields into `Label: value` lines. The API can
+ * Normalize PeopleForce custom fields into `{ name, value }` entries. The API can
  * return them as an array of `{name/label, value/values}` records OR as a plain
  * `{ "Field Name": value }` map depending on tenant/endpoint — both are handled.
- * Fields with an empty value are dropped. Exported for unit tests.
+ * Values are HTML-stripped/trimmed and entries with an empty value are dropped.
+ * Shared by {@link formatCustomFields} (display) and the snapshot collector
+ * (structured rows), so both apply identical normalization. Exported for tests.
  */
-export function formatCustomFields(
+export function customFieldEntries(
   raw: PeopleForceCustomField[] | Record<string, unknown> | undefined | null,
-): string[] {
+): Array<{ name: string; value: string }> {
   if (!raw) return [];
   const entries: Array<{ label: string; value: unknown }> = [];
   if (Array.isArray(raw)) {
@@ -1066,12 +1068,22 @@ export function formatCustomFields(
   } else if (typeof raw === 'object') {
     for (const [label, value] of Object.entries(raw)) entries.push({ label, value });
   }
-  const lines: string[] = [];
+  const out: Array<{ name: string; value: string }> = [];
   for (const { label, value } of entries) {
     const text = customFieldValueText(value);
-    if (text !== undefined) lines.push(`${label}: ${text}`);
+    if (text !== undefined) out.push({ name: label, value: text });
   }
-  return lines;
+  return out;
+}
+
+/**
+ * Render custom fields as `Label: value` display lines. Fields with an empty
+ * value are dropped. Exported for unit tests.
+ */
+export function formatCustomFields(
+  raw: PeopleForceCustomField[] | Record<string, unknown> | undefined | null,
+): string[] {
+  return customFieldEntries(raw).map((e) => `${e.name}: ${e.value}`);
 }
 
 export function formatEmployee(employee: PeopleForceEmployee): string {
