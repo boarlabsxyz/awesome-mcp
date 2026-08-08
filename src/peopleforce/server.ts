@@ -188,7 +188,7 @@ peopleForceServer.addTool({
   name: 'listEmployees',
   annotations: { readOnlyHint: true },
   description:
-    'Lists PeopleForce employees, 50 per page (server-fixed). Use `page` to paginate; `status` narrows the cohort (e.g. "active", "terminated"). Tenant-defined custom fields (e.g. "Dev Sprint", "Development") are included per employee when the list payload carries them.',
+    'Lists PeopleForce employees, 50 per page (server-fixed). Use `page` to paginate; `status` narrows the cohort (e.g. "active", "terminated"). Any tenant-defined custom fields are included per employee when the list payload carries them (field names and availability vary by tenant).',
   parameters: z.object({
     page: z.number().int().min(1).optional().default(1).describe('Page number (1-based). 50 employees per page (server-fixed).'),
     status: z.string().optional().describe('Filter by employee status (e.g. "active", "terminated").'),
@@ -208,7 +208,7 @@ peopleForceServer.addTool({
   name: 'getEmployee',
   annotations: { readOnlyHint: true },
   description:
-    'Retrieves a single PeopleForce employee by ID. Returns full profile: contact, position, department, division, employment type, location, reporting line, hiring dates, and any tenant-defined custom fields (e.g. "Dev Sprint", "Development") under a Custom Fields section.',
+    'Retrieves a single PeopleForce employee by ID. Returns full profile: contact, position, department, division, employment type, location, reporting line, and hiring dates. Any tenant-defined custom fields the profile carries are shown under a Custom Fields section (field names and availability vary by tenant; the section is omitted when the record has none).',
   parameters: z.object({
     employeeId: z.union([z.string(), z.number()]).describe('The PeopleForce employee ID.'),
   }),

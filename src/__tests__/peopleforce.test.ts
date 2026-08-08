@@ -304,6 +304,18 @@ describe('formatCustomFields', () => {
     const lines = formatCustomFields([{ value: 'orphan' }, { name: 'Dev Sprint', value: 'S1' }]);
     assert.deepEqual(lines, ['Dev Sprint: S1']);
   });
+
+  test('strips HTML tags and decodes entities in values', () => {
+    const lines = formatCustomFields([
+      { name: 'Previous experience', value: '<strong>Acme</strong>&nbsp;Corp &amp; Co' },
+    ]);
+    assert.deepEqual(lines, ['Previous experience: Acme Corp & Co']);
+  });
+
+  test('drops a value that is only markup/whitespace', () => {
+    const lines = formatCustomFields([{ name: 'Empty', value: '<p>&nbsp;</p>' }]);
+    assert.deepEqual(lines, []);
+  });
 });
 
 describe('formatDepartmentList', () => {
@@ -1556,6 +1568,19 @@ describe('formatObjectiveList', () => {
     assert.match(out, /Period: 2026-01-01 – 2026-06-30/);
     assert.match(out, /Ship 3 courses — 66% — on_track/);
   });
+
+  test('surfaces owner id and email so downstream joins are not name-based', () => {
+    const out = formatObjectiveList([
+      { id: 1, title: 'X', owner: { id: 42, first_name: 'Dasha', last_name: 'Nori', email: 'dasha@x.io' } },
+    ]);
+    assert.match(out, /Owner: Dasha Nori \(ID: 42, dasha@x\.io\)/);
+  });
+
+  test('renders owner name alone when no id/email is present', () => {
+    const out = formatObjectiveList([{ id: 1, title: 'X', owner: { first_name: 'Dasha', last_name: 'Nori' } }]);
+    assert.match(out, /Owner: Dasha Nori/);
+    assert.doesNotMatch(out, /Owner: Dasha Nori \(/);
+  });
 });
 
 describe('formatKpiList', () => {
@@ -1607,5 +1632,16 @@ describe('knowledge base formatters', () => {
   test('formatKnowledgeArticle falls back to body_html when body is absent', () => {
     const out = formatKnowledgeArticle({ id: 3, title: 'X', body_html: '<p>hi</p>' });
     assert.match(out, /<p>hi<\/p>/);
+  });
+
+  test('formatKnowledgeArticle serializes a structured (object) body instead of [object Object]', () => {
+    const out = formatKnowledgeArticle({
+      id: 3,
+      title: 'X',
+      body: { type: 'doc', content: [{ text: 'hi' }] },
+    });
+    assert.doesNotMatch(out, /\[object Object\]/);
+    assert.match(out, /"type": "doc"/);
+    assert.match(out, /hi/);
   });
 });
