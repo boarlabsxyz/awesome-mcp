@@ -4,9 +4,9 @@
 // engagement/conversation/ticket surface.
 //
 // Ported from https://github.com/baryhuang/mcp-hubspot@4a8345f2507b4159fc84eb500c74669329076f53
-// The reference exposed 16 tools. 15 are implemented here against the HubSpot
-// REST API; searchData remains a TODO stub — it relies on a local FAISS vector
-// store that has no equivalent in this codebase.
+// The reference exposed 16 tools; 15 are implemented here against the HubSpot
+// REST API. The 16th (searchData) relied on a local FAISS vector store with no
+// equivalent here, so it is intentionally not registered (see below).
 //
 // Each tool's operation lives in an exported `op*` function (client, args) →
 // string; the addTool `execute` is a thin wrapper that resolves the client,
@@ -29,6 +29,7 @@ import {
   formatThreads,
   formatTickets,
   hubspotSenderType,
+  missingPropertiesNote,
   recentCompaniesSearch,
   recentContactsSearch,
   withHubSpotClient,
@@ -108,7 +109,10 @@ export async function opGetActiveCompanies(client: HubSpotClient, args: { limit:
 
 // company_handler.py:219
 export async function opGetCompany(client: HubSpotClient, args: { companyId: string; properties?: string[] }): Promise<string> {
-  return formatCompany(await client.getCompany(args.companyId, args.properties));
+  const obj = await client.getCompany(args.companyId, args.properties);
+  // Reads are loud: HubSpot silently omits unknown property keys, so flag any
+  // the caller asked for but didn't get back.
+  return formatCompany(obj) + missingPropertiesNote(args.properties, obj);
 }
 
 // company_handler.py:245
@@ -116,8 +120,11 @@ export async function opUpdateCompany(
   client: HubSpotClient,
   args: { companyId: string; properties: Record<string, unknown> },
 ): Promise<string> {
-  const obj = await client.updateCompany(args.companyId, args.properties);
-  return `Updated company.\n\n${formatCompany(obj)}`;
+  await client.updateCompany(args.companyId, args.properties);
+  // Re-read so the response is the same shape as getCompany — HubSpot's PATCH
+  // echo returns only internal/changed fields and omits populated name/domain.
+  const fresh = await client.getCompany(args.companyId);
+  return `Updated company.\n\n${formatCompany(fresh)}`;
 }
 
 // company_handler.py:171 — associations-v4 fan-out + per-id engagement detail.
@@ -167,7 +174,8 @@ export async function opGetActiveContacts(client: HubSpotClient, args: { limit: 
 
 // contact_handler.py:205
 export async function opGetContact(client: HubSpotClient, args: { contactId: string; properties?: string[] }): Promise<string> {
-  return formatContact(await client.getContact(args.contactId, args.properties));
+  const obj = await client.getContact(args.contactId, args.properties);
+  return formatContact(obj) + missingPropertiesNote(args.properties, obj);
 }
 
 // contact_handler.py:231
@@ -175,7 +183,9 @@ export async function opUpdateContact(
   client: HubSpotClient,
   args: { contactId: string; properties: Record<string, unknown> },
 ): Promise<string> {
-  const obj = await client.updateContact(args.contactId, args.properties);
+  await client.updateContact(args.contactId, args.properties);
+  // Re-read for a consistent read shape (see opUpdateCompany).
+  const obj = await client.getContact(args.contactId);
   return `Updated contact.\n\n${formatContact(obj)}`;
 }
 
@@ -197,8 +207,11 @@ export async function opGetTickets(
   args: { criteria: 'default' | 'Closed'; limit: number; maxRetries: number; retryDelay: number },
   nowMs: number = Date.now(),
 ): Promise<string> {
-  // Trim milliseconds to match HubSpot's expected `YYYY-MM-DDTHH:MM:SSZ` form.
-  const oneDayAgo = new Date(nowMs - 24 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  // HubSpot's search API compares datetime properties (closedate,
+  // hs_lastmodifieddate) against epoch MILLISECONDS, not ISO-8601. Passing an
+  // ISO string 400s the request — which is why the `default` branch failed
+  // while `Closed` (a string stage filter) worked.
+  const oneDayAgo = String(nowMs - 24 * 60 * 60 * 1000);
   const filterGroups = args.criteria === 'Closed'
     ? [
         { filters: [{ propertyName: 'hs_pipeline_stage', operator: 'EQ', value: '4' }] },
@@ -319,7 +332,9 @@ hubspotServer.addTool({
   description: 'Update an existing company record in HubSpot.',
   parameters: z.object({
     companyId: z.string().describe('HubSpot company ID to update.'),
-    properties: z.record(z.string(), z.any()).describe('Object containing the properties to update.'),
+    properties: z.record(z.string(), z.any())
+      .refine(o => Object.keys(o).length > 0, { message: 'Provide at least one property to update.' })
+      .describe('Object containing the properties to update (at least one).'),
   }),
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to update company', session, log, (client) => {
@@ -394,7 +409,9 @@ hubspotServer.addTool({
   description: 'Update an existing contact record in HubSpot.',
   parameters: z.object({
     contactId: z.string().describe('HubSpot contact ID to update.'),
-    properties: z.record(z.string(), z.any()).describe('Object containing the properties to update.'),
+    properties: z.record(z.string(), z.any())
+      .refine(o => Object.keys(o).length > 0, { message: 'Provide at least one property to update.' })
+      .describe('Object containing the properties to update (at least one).'),
   }),
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to update contact', session, log, (client) => {
@@ -453,25 +470,9 @@ hubspotServer.addTool({
     }),
 });
 
-// --- Search tool (stub — depends on a FAISS vector store) ---
-
-// TODO stub — the reference searches a local FAISS index of previously-fetched
-// data; this codebase has no vector store, so there is nothing to search.
-// Adapted from baryhuang/mcp-hubspot@4a8345f handlers/search_handler.py:46
-hubspotServer.addTool({
-  name: 'searchData',
-  annotations: { readOnlyHint: true },
-  description: 'Semantic search across previously-retrieved HubSpot data (requires a vector store).',
-  parameters: z.object({
-    query: z.string().describe('Text query to search for.'),
-    limit: z.number().int().min(1).optional().default(10).describe('Maximum number of results to return (default: 10).'),
-  }),
-  execute: async () => {
-    throw new UserError(
-      'searchData is not yet implemented — the reference depends on a local FAISS vector store that this codebase does not have.',
-    );
-  },
-});
+// The reference exposed a `searchData` tool backed by a local FAISS vector
+// store. This codebase has no vector store, so rather than advertise a tool
+// that always throws, it is intentionally not registered. See CLAUDE.md.
 
 // --- Property tools ---
 

@@ -22,6 +22,8 @@ import {
   mapHubSpotError,
   withHubSpotClient,
   maybeRefreshHubSpotToken,
+  epochToIso,
+  missingPropertiesNote,
 } from '../../hubspot/apiHelpers.js';
 
 const noopLog = { info: () => {}, error: () => {} };
@@ -302,6 +304,21 @@ test('formatObjectList counts and labels entries by name/email/fallback', () => 
   assert.match(out, /x@y.com/);
   assert.match(out, /\(unnamed\)/);
   assert.equal(formatObjectList([], 'records'), 'No records found.');
+});
+
+test('epochToIso normalizes epoch millis (number or numeric string) to ISO, passes others through', () => {
+  assert.equal(epochToIso(1786187594925), new Date(1786187594925).toISOString());
+  assert.equal(epochToIso('1786187594925'), new Date(1786187594925).toISOString());
+  assert.equal(epochToIso(''), '');
+  assert.equal(epochToIso(undefined), '');
+  assert.equal(epochToIso('2020-01-01T00:00:00Z'), '2020-01-01T00:00:00Z'); // already ISO → unchanged
+});
+
+test('missingPropertiesNote flags requested-but-absent keys only', () => {
+  const obj = { id: 'c1', properties: { name: 'Acme', domain: '' } };
+  assert.equal(missingPropertiesNote(undefined, obj), '');           // nothing requested
+  assert.equal(missingPropertiesNote(['name', 'domain'], obj), '');  // present (domain empty but present)
+  assert.match(missingPropertiesNote(['name', 'bogus'], obj), /not returned.*bogus/i);
 });
 
 test('formatProperty renders definition + options', () => {

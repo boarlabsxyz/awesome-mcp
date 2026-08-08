@@ -18,7 +18,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Slack (user)](#slack-user-) (7)
 - [Outline](#outline) (27)
 - [PeopleForce](#peopleforce) (38)
-- [HubSpot](#hubspot) (16)
+- [HubSpot](#hubspot) (15)
 
 ## Shared (every server)
 
@@ -313,7 +313,7 @@ Source: `src/peopleforce/server.ts` — 38 tools.
 
 ## HubSpot
 
-Source: `src/hubspot/server.ts` — 16 tools.
+Source: `src/hubspot/server.ts` — 15 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -329,7 +329,6 @@ Source: `src/hubspot/server.ts` — 16 tools.
 | `getRecentConversations` | Get recent conversation threads from HubSpot with their messages. | — |
 | `getTickets` | Get tickets from HubSpot based on configurable selection criteria. | — |
 | `getTicketConversationThreads` | Get conversation threads (and their messages) associated with a specific ticket. | — |
-| `searchData` | Semantic search across previously-retrieved HubSpot data (requires a vector store). | — |
 | `getProperty` | Get details of a specific HubSpot property definition. | — |
 | `updateProperty` | Update a HubSpot property definition (e.g., add dropdown options). | — |
 | `createProperty` | Create a new custom property in HubSpot. | — |
