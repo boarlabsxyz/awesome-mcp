@@ -1023,6 +1023,17 @@ function stripHtml(s: string): string {
 }
 
 /**
+ * Normalize a custom-field string value: strip HTML/entities, trim, and return
+ * undefined when nothing meaningful remains. Shared by the scalar and the
+ * reference-object (name/label) paths so whitespace-only and HTML-containing
+ * values are handled identically. (stripHtml only trims in its markup branch;
+ * the extra .trim() here also collapses plain whitespace-only strings to blank.)
+ */
+function cleanFieldString(s: string): string | undefined {
+  return stripHtml(s).trim() || undefined;
+}
+
+/**
  * Render a single custom-field value. Handles scalars, booleans, `{id,name}`
  * reference objects (dropdown/reference fields), and arrays of any of those
  * (multi-select), stripping any embedded HTML. Empty/blank values (including
@@ -1038,12 +1049,18 @@ function customFieldValueText(value: unknown): string | undefined {
   if (typeof value === 'boolean') return value ? 'yes' : 'no';
   if (typeof value === 'object') {
     const rec = value as { name?: string; label?: string; value?: unknown };
-    if (rec.name) return rec.name;
-    if (rec.label) return rec.label;
+    if (rec.name) {
+      const name = cleanFieldString(String(rec.name));
+      if (name) return name;
+    }
+    if (rec.label) {
+      const label = cleanFieldString(String(rec.label));
+      if (label) return label;
+    }
     if (rec.value !== undefined) return customFieldValueText(rec.value);
     return JSON.stringify(value);
   }
-  return stripHtml(String(value)) || undefined;
+  return cleanFieldString(String(value));
 }
 
 /**
