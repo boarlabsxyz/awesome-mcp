@@ -22,7 +22,34 @@ PeopleForce API ──(nightly)──▶ collect.ts ──▶ Postgres (pf_*_sna
 | `pf_employee_custom_field_snapshot` | employee custom fields | Dev Sprint / courses / L&D spend (when a tenant records them) |
 | `pf_objective_snapshot` | `listObjectives` | development activities, dev sprints & courses (as OKR prose) |
 | `pf_kpi_snapshot` | `listKeyPerformanceIndicators` | performance KPIs |
+| `pf_kb_article_snapshot` | `listKnowledgeBaseArticles` | L&D content authored per quarter (articles carry `created_at`) |
+| `pf_employee_dim` | `listEmployees` (upserted, current-state) | team dimension for owner joins |
+| `pf_owner_resolution` | derived | objective/KPI owner → employee mapping (with `manual_override`) |
+| `pf_objective_classification` | LLM (separate step) | is-learning / activity_type / provider / completion / confidence |
 | `pf_snapshot_run` | — | run log (status + per-table counts) |
+
+### Owner resolution (Feature B)
+
+Objective/KPI owners often arrive name-only. The collector maintains `pf_employee_dim` (current-state) and resolves each distinct owner to an `employee_id` in `pf_owner_resolution` — by email, then unique normalized name. Ambiguous or unknown owners land as `method = 'unresolved'`; reconcile those **once by hand** and set `manual_override = TRUE` so the collector never overwrites them:
+
+```sql
+-- The unresolved tail to reconcile (usually a handful of rows)
+SELECT owner_key, owner_name, owner_email FROM pf_owner_resolution WHERE method = 'unresolved';
+-- Fix one and pin it:
+UPDATE pf_owner_resolution SET employee_id = '12345', method = 'manual', manual_override = TRUE
+WHERE owner_key = 'name:some person';
+```
+
+### Objective classification (Feature C)
+
+`npm run classify:peopleforce-objectives` runs **after** the collector: it reads the latest objective snapshot and classifies each title with an LLM (is it L&D? course/book/sprint/…? which provider?) into `pf_objective_classification`. Needs `ANTHROPIC_API_KEY` + `DATABASE_URL`; model defaults to `claude-opus-4-8` (override with `PEOPLEFORCE_CLASSIFIER_MODEL`, e.g. `claude-haiku-4-5` for cost).
+
+- Verdicts are keyed on `(objective_id, text_hash, classifier_version)` — a re-worded objective or a version bump re-classifies; nothing else does, so **historical dashboard counts don't shift silently**. Bump `CLASSIFIER_VERSION` only in a deliberate migration.
+- `completion` is derived from the objective's structured `progress`, **not** the LLM (the reliable signal shouldn't inherit the fuzzy one's error).
+- Low-confidence verdicts get `needs_review = TRUE` — a manual queue, not a silent count:
+  ```sql
+  SELECT * FROM pf_objective_classification WHERE needs_review ORDER BY confidence;
+  ```
 
 ## Run it
 
@@ -91,14 +118,33 @@ WHERE captured_at = (SELECT MAX(captured_at) FROM pf_objective_snapshot)
   AND daterange(starts_on, ends_on, '[]') && daterange($__timeFrom()::date, $__timeTo()::date, '[]');
 ```
 
-**Participation trends across teams** — objectives joined to department via the
-roster snapshot (uses `owner_email`, a stable key, not name matching):
+**Participation trends across teams** — objectives joined to team via the
+resolved owner mapping + employee dimension (stable `employee_id`, not name matching):
 ```sql
-SELECT o.captured_at AS "time", e.department, COUNT(*) AS objectives
+SELECT o.captured_at AS "time", d.department, COUNT(*) AS objectives
 FROM pf_objective_snapshot o
-LEFT JOIN pf_employee_snapshot e
-  ON e.captured_at = o.captured_at AND e.email = o.owner_email
-GROUP BY o.captured_at, e.department ORDER BY o.captured_at;
+JOIN pf_owner_resolution r
+  ON r.owner_key = COALESCE('email:' || lower(o.owner_email), 'name:' || lower(o.owner_name))
+JOIN pf_employee_dim d ON d.employee_id = r.employee_id
+GROUP BY o.captured_at, d.department ORDER BY o.captured_at;
+```
+
+**L&D content authored per quarter** (free — articles carry their own `created_at`):
+```sql
+SELECT date_trunc('quarter', created_at) AS "time", author_name, COUNT(*) AS articles
+FROM pf_kb_article_snapshot
+WHERE captured_at = (SELECT MAX(captured_at) FROM pf_kb_article_snapshot)
+GROUP BY 1, author_name ORDER BY 1;
+```
+
+**Learning activities by type over time** (uses the classifier — trustworthy, with a confidence floor):
+```sql
+SELECT o.captured_at AS "time", c.activity_type, COUNT(*) AS learning_objectives
+FROM pf_objective_snapshot o
+JOIN pf_objective_classification c
+  ON c.objective_id = o.objective_id AND c.text_hash = encode(sha256(o.title::bytea), 'hex')
+WHERE c.is_learning AND NOT c.needs_review
+GROUP BY o.captured_at, c.activity_type ORDER BY o.captured_at;
 ```
 
 **Overall L&D investment** (only if a tenant records spend as a custom field):

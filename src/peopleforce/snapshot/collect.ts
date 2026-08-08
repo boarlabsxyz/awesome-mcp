@@ -15,9 +15,15 @@ import {
   PeopleForceListResponse,
   PeopleForceEmployee,
   PeopleForceEmployeeSkill,
+  PeopleForceKnowledgeArticle,
+  PeopleForceKnowledgeCategory,
+  fullName,
 } from '../apiHelpers.js';
 import { ensureSnapshotTables } from './schema.js';
-import { employeeRows, customFieldRows, employeeSkillRows, objectiveRows, kpiRows } from './rows.js';
+import {
+  employeeRows, customFieldRows, employeeSkillRows, objectiveRows, kpiRows, kbArticleRows, employeeDimRows,
+} from './rows.js';
+import { resolveOwners, OwnerInput, ResolverEmployee } from './resolve.js';
 
 /** Minimal DB surface the collector needs — a pg Pool/PoolClient satisfies it. */
 export interface SnapshotDb {
@@ -83,6 +89,89 @@ export async function insertRows(
   return inserted;
 }
 
+/**
+ * Batch upsert keyed on `conflictKey`; every other column is overwritten with the
+ * incoming value. Used for the maintained (non-append-only) dimension and
+ * owner-resolution tables.
+ */
+export async function upsertRows(
+  db: SnapshotDb,
+  table: string,
+  columns: string[],
+  conflictKey: string,
+  rows: readonly object[],
+  chunkSize = 500,
+): Promise<number> {
+  const setClause = columns
+    .filter((c) => c !== conflictKey)
+    .map((c) => `${c} = EXCLUDED.${c}`)
+    .join(', ');
+  let n = 0;
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const params: unknown[] = [];
+    const tuples = chunk.map((row, ri) => {
+      const rec = row as Record<string, unknown>;
+      const placeholders = columns.map((_, ci) => `$${ri * columns.length + ci + 1}`);
+      for (const col of columns) params.push(rec[col] ?? null);
+      return `(${placeholders.join(', ')})`;
+    });
+    await db.query(
+      `INSERT INTO ${table} (${columns.join(', ')}) VALUES ${tuples.join(', ')} ` +
+        `ON CONFLICT (${conflictKey}) DO UPDATE SET ${setClause}`,
+      params,
+    );
+    n += chunk.length;
+  }
+  return n;
+}
+
+/**
+ * Refresh the employee dimension and re-resolve objective/KPI owners to
+ * employees, persisting the mapping. Manual-override resolution rows are left
+ * untouched. Returns the count of still-unresolved owners (surface as an alert).
+ */
+export async function resolveAndPersistOwners(deps: {
+  db: SnapshotDb;
+  employees: PeopleForceEmployee[];
+  owners: OwnerInput[];
+  updatedAt: string;
+  log?: SnapshotLog;
+}): Promise<{ employees: number; resolutions: number; unmatched: number }> {
+  const { db, employees, owners, updatedAt } = deps;
+  const log = deps.log ?? NOOP_LOG;
+
+  const empCount = await upsertRows(
+    db, 'pf_employee_dim',
+    ['employee_id', 'full_name', 'email', 'department', 'division', 'position', 'active', 'updated_at'],
+    'employee_id',
+    employeeDimRows(employees, updatedAt),
+  );
+
+  const dim: ResolverEmployee[] = employees
+    .filter((e) => e.id !== undefined && e.id !== null)
+    .map((e) => ({ employee_id: String(e.id), full_name: fullName(e), email: e.email ?? null }));
+
+  const manualRes = await db.query(
+    `SELECT owner_key FROM pf_owner_resolution WHERE manual_override = TRUE`,
+  );
+  const manualKeys = new Set<string>((manualRes.rows ?? []).map((r) => String(r.owner_key)));
+
+  const { resolutions, unmatched } = resolveOwners(owners, dim, manualKeys);
+  const resolutionRows = resolutions.map((r) => ({ ...r, manual_override: false, updated_at: updatedAt }));
+  const resCount = await upsertRows(
+    db, 'pf_owner_resolution',
+    ['owner_key', 'owner_email', 'owner_name', 'employee_id', 'method', 'confidence', 'manual_override', 'updated_at'],
+    'owner_key',
+    resolutionRows,
+  );
+
+  if (unmatched.length) {
+    log.error(`unresolved owners: ${unmatched.length} (review pf_owner_resolution WHERE method='unresolved')`);
+  }
+  return { employees: empCount, resolutions: resCount, unmatched: unmatched.length };
+}
+
 export interface SnapshotResult {
   capturedAt: string;
   counts: Record<string, number>;
@@ -127,6 +216,25 @@ export async function runSnapshot(deps: {
   const kpis = await fetchAllPages((page) => client.listKeyPerformanceIndicators({ page }));
   log.info(`kpis: ${kpis.length}`);
 
+  // Knowledge Base articles — walk every category, then its articles. Articles
+  // carry their own created_at, so this backfills "content authored" history.
+  const categories = await fetchAllPages<PeopleForceKnowledgeCategory>((page) =>
+    client.listKnowledgeBaseCategories({ page }),
+  );
+  const kbArticles: PeopleForceKnowledgeArticle[] = [];
+  for (const c of categories) {
+    if (c.id === undefined || c.id === null) continue;
+    try {
+      const arts = await fetchAllPages<PeopleForceKnowledgeArticle>((page) =>
+        client.listKnowledgeBaseArticles({ categoryId: c.id as string | number, page }),
+      );
+      kbArticles.push(...arts);
+    } catch (err: any) {
+      log.error(`kb articles for category ${c.id}: ${err?.message ?? err}`);
+    }
+  }
+  log.info(`kb articles: ${kbArticles.length}`);
+
   const counts: Record<string, number> = {};
   counts.employees = await insertRows(
     db, 'pf_employee_snapshot',
@@ -153,6 +261,22 @@ export async function runSnapshot(deps: {
     ['captured_at', 'kpi_id', 'title', 'kpi_type', 'owner_id', 'owner_email', 'scope', 'progress_percentage', 'status'],
     kpiRows(kpis, capturedAt),
   );
+  counts.kb_articles = await insertRows(
+    db, 'pf_kb_article_snapshot',
+    ['captured_at', 'article_id', 'title', 'category_id', 'category_name', 'author_id', 'author_name', 'created_at', 'updated_at'],
+    kbArticleRows(kbArticles, capturedAt),
+  );
+
+  // Employee dimension + owner resolution (from objective & KPI owners).
+  const owners: OwnerInput[] = [...objectives, ...kpis].map((x) => ({
+    employee_id: x.owner?.id != null ? String(x.owner.id) : null,
+    email: x.owner?.email ?? null,
+    name: x.owner ? fullName(x.owner) : null,
+  }));
+  const resolved = await resolveAndPersistOwners({ db, employees, owners, updatedAt: capturedAt, log });
+  counts.employee_dim = resolved.employees;
+  counts.owner_resolutions = resolved.resolutions;
+  counts.owners_unresolved = resolved.unmatched;
 
   return { capturedAt, counts };
 }

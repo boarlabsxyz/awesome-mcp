@@ -7,6 +7,7 @@ import {
   PeopleForceEmployeeSkill,
   PeopleForceObjective,
   PeopleForceKpi,
+  PeopleForceKnowledgeArticle,
   PeopleForceEmployeeShort,
   fullName,
   refName,
@@ -59,6 +60,17 @@ export interface KpiRow {
   progress_percentage: number | null;
   status: string | null;
 }
+export interface KbArticleRow {
+  captured_at: string;
+  article_id: string;
+  title: string | null;
+  category_id: string | null;
+  category_name: string | null;
+  author_id: string | null;
+  author_name: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
 
 /** Coerce a value to a non-empty string or null (empty/absent -> null column). */
 function str(v: unknown): string | null {
@@ -84,6 +96,33 @@ export function employeeRows(employees: PeopleForceEmployee[], capturedAt: strin
       department: refName(e.department) ?? null,
       division: refName(e.division) ?? null,
       position: refName(e.position) ?? null,
+    }));
+}
+
+export interface EmployeeDimRow {
+  employee_id: string;
+  full_name: string | null;
+  email: string | null;
+  department: string | null;
+  division: string | null;
+  position: string | null;
+  active: boolean | null;
+  updated_at: string;
+}
+
+/** Current-state dimension rows (for upsert), keyed by employee_id. */
+export function employeeDimRows(employees: PeopleForceEmployee[], updatedAt: string): EmployeeDimRow[] {
+  return employees
+    .filter((e) => e.id !== undefined && e.id !== null)
+    .map((e) => ({
+      employee_id: String(e.id),
+      full_name: ownerName(e as PeopleForceEmployeeShort),
+      email: str(e.email),
+      department: refName(e.department) ?? null,
+      division: refName(e.division) ?? null,
+      position: refName(e.position) ?? null,
+      active: typeof e.active === 'boolean' ? e.active : null,
+      updated_at: updatedAt,
     }));
 }
 
@@ -131,6 +170,22 @@ export function objectiveRows(objectives: PeopleForceObjective[], capturedAt: st
       status: str(o.status),
       starts_on: str(o.starts_on),
       ends_on: str(o.ends_on),
+    }));
+}
+
+export function kbArticleRows(articles: PeopleForceKnowledgeArticle[], capturedAt: string): KbArticleRow[] {
+  return articles
+    .filter((a) => a.id !== undefined && a.id !== null)
+    .map((a) => ({
+      captured_at: capturedAt,
+      article_id: String(a.id),
+      title: str(a.title),
+      category_id: str(a.category && typeof a.category === 'object' ? a.category.id : undefined),
+      category_name: refName(a.category) ?? null,
+      author_id: str(a.created_by?.id),
+      author_name: ownerName(a.created_by),
+      created_at: str(a.created_at),
+      updated_at: str(a.updated_at),
     }));
 }
 
