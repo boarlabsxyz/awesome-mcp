@@ -477,8 +477,13 @@ export type PeopleForceKnowledgeCategory = {
 export type PeopleForceKnowledgeArticle = {
   id?: number | string;
   title?: string;
-  body?: string;
-  body_html?: string;
+  /**
+   * Docs say string, but live tenants return the rich-text body as a structured
+   * object — hence `unknown`. {@link formatKnowledgeArticle} serializes it rather
+   * than coercing to "[object Object]".
+   */
+  body?: unknown;
+  body_html?: unknown;
   position?: number;
   created_by?: PeopleForceEmployeeShort | null;
   category?: PeopleForceNamed | null;
@@ -998,10 +1003,31 @@ export function formatEmployeeList(
 }
 
 /**
+ * Strip HTML tags and decode the entities PeopleForce rich-text fields emit, so
+ * a custom-field value is plain text ready for ingestion. Raw values seen live
+ * include `<strong>…</strong>`, `&nbsp;`, and pasted-markup attributes like
+ * `id="isPasted"`. No-op when the string carries no markup.
+ */
+function stripHtml(s: string): string {
+  if (!s.includes('<') && !s.includes('&')) return s;
+  return s
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0?39;|&apos;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
  * Render a single custom-field value. Handles scalars, booleans, `{id,name}`
  * reference objects (dropdown/reference fields), and arrays of any of those
- * (multi-select). Empty/blank values return undefined so the caller can drop
- * the line entirely rather than print "Field: ".
+ * (multi-select), stripping any embedded HTML. Empty/blank values (including
+ * markup that strips to nothing) return undefined so the caller can drop the
+ * line entirely rather than print "Field: ".
  */
 function customFieldValueText(value: unknown): string | undefined {
   if (value === undefined || value === null || value === '') return undefined;
@@ -1017,7 +1043,7 @@ function customFieldValueText(value: unknown): string | undefined {
     if (rec.value !== undefined) return customFieldValueText(rec.value);
     return JSON.stringify(value);
   }
-  return String(value);
+  return stripHtml(String(value)) || undefined;
 }
 
 /**
@@ -1543,6 +1569,22 @@ export function formatPublishedVacancy(payload: { data?: PeopleForceVacancy } | 
 
 // ==== Performance & Learning formatters ====
 
+/**
+ * Render an owner/created_by reference with a joinable key. Owners come back with
+ * only a name in some tenants; surfacing the id and/or email (when present) gives
+ * downstream analytics a stable key to join on instead of matching by name.
+ */
+function ownerLine(owner: PeopleForceEmployeeShort | null | undefined): string | undefined {
+  if (!owner) return undefined;
+  const name = fullName(owner);
+  const bits: string[] = [];
+  if (owner.id !== undefined) bits.push(`ID: ${owner.id}`);
+  if (owner.email) bits.push(owner.email);
+  const suffix = bits.length ? ` (${bits.join(', ')})` : '';
+  if (name === 'Unknown' && !suffix) return undefined;
+  return `Owner: ${name}${suffix}`;
+}
+
 export function formatObjectiveList(objectives: PeopleForceObjective[], pagination?: PeopleForcePagination): string {
   if (objectives.length === 0) return renderEmptyList('Objectives', 'objectives', pagination);
   const parts = ['# Objectives', ''];
@@ -1551,8 +1593,8 @@ export function formatObjectiveList(objectives: PeopleForceObjective[], paginati
   objectives.forEach((o, i) => {
     parts.push(`## ${i + 1}. ${o.title ?? 'Untitled objective'}`);
     if (o.id !== undefined) parts.push(`ID: ${o.id}`);
-    const owner = o.owner ? fullName(o.owner) : undefined;
-    if (owner && owner !== 'Unknown') parts.push(`Owner: ${owner}`);
+    const owner = ownerLine(o.owner);
+    if (owner) parts.push(owner);
     if (typeof o.progress === 'number') parts.push(`Progress: ${o.progress}%`);
     if (o.status) parts.push(`Status: ${o.status}`);
     const period = datePeriod(o.starts_on, o.ends_on);
@@ -1580,8 +1622,8 @@ export function formatKpiList(kpis: PeopleForceKpi[], pagination?: PeopleForcePa
     parts.push(`## ${i + 1}. ${k.title ?? 'Untitled KPI'}`);
     if (k.id !== undefined) parts.push(`ID: ${k.id}`);
     if (k.kpi_type) parts.push(`Type: ${k.kpi_type}`);
-    const owner = k.owner ? fullName(k.owner) : undefined;
-    if (owner && owner !== 'Unknown') parts.push(`Owner: ${owner}`);
+    const owner = ownerLine(k.owner);
+    if (owner) parts.push(owner);
     const scope = refName(k.department) ?? refName(k.division) ?? refName(k.location);
     if (scope) parts.push(`Scope: ${scope}`);
     if (typeof k.progress_percentage === 'number') parts.push(`Progress: ${k.progress_percentage}%`);
@@ -1626,6 +1668,21 @@ export function formatKnowledgeArticleList(
   return parts.join('\n').trimEnd();
 }
 
+/**
+ * Resolve an article body to text. Prefers a non-empty string field; if the body
+ * came back as a structured object (as live tenants return), serialize it as
+ * JSON rather than letting it string-coerce to "[object Object]".
+ */
+function articleBodyText(article: PeopleForceKnowledgeArticle): string | undefined {
+  for (const cand of [article.body, article.body_html]) {
+    if (typeof cand === 'string' && cand.trim()) return cand;
+  }
+  for (const cand of [article.body, article.body_html]) {
+    if (cand && typeof cand === 'object') return JSON.stringify(cand, null, 2);
+  }
+  return undefined;
+}
+
 export function formatKnowledgeArticle(article: PeopleForceKnowledgeArticle): string {
   const parts = [`# ${article.title ?? 'Untitled article'}`];
   if (article.id !== undefined) parts.push(`ID: ${article.id}`);
@@ -1635,8 +1692,7 @@ export function formatKnowledgeArticle(article: PeopleForceKnowledgeArticle): st
   if (author && author !== 'Unknown') parts.push(`Author: ${author}`);
   if (article.created_at) parts.push(`Created: ${article.created_at}`);
   if (article.updated_at) parts.push(`Updated: ${article.updated_at}`);
-  // Prefer the plain-text body; the API also returns body_html.
-  const body = article.body ?? article.body_html;
+  const body = articleBodyText(article);
   if (body) {
     parts.push('');
     parts.push('## Content');
