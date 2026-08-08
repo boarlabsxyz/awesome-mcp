@@ -37,7 +37,12 @@ Grep `src/<provider>/server.ts` for `name: '<toolName>'`. If present, abort — 
 Use one AskUserQuestion call to collect:
 
 - **Description**: one-line, action-first. The LLM uses it to pick the tool, so be concrete.
-- **Read or write**: read-only tools get `annotations: { readOnlyHint: true }` and go in `READ_TOOLS`; write tools omit the annotation and go in `WRITE_TOOLS`. The rule of thumb from `references/tool-pattern.md`: anything that changes state in the user's account is write. When unsure, ask the user; getting this wrong has runbook consequences (the e2e readonly connector unchecks `WRITE_TOOLS`).
+- **Read or write** — mark every tool; never leave it unannotated. Three cases:
+  - **read** (get/list/search/read/inspect) → `annotations: { readOnlyHint: true }`, goes in `READ_TOOLS`.
+  - **write** (create/update/append/insert/set/format/move/copy) → `annotations: { readOnlyHint: false }`, goes in `WRITE_TOOLS`.
+  - **delete/destructive** (delete/remove/clear/archive/trash/resolve) → `annotations: { readOnlyHint: false, destructiveHint: true }`, goes in `WRITE_TOOLS`.
+
+  **Do this automatically from the tool's verb/effect** — infer the class from the name and the API call and apply the matching annotation without prompting; only ask the user when it's genuinely ambiguous (rule of thumb from `references/tool-pattern.md`: anything that changes state in the user's account is write; anything that removes/overwrites data is destructive). Getting it wrong has runbook consequences (the e2e readonly connector unchecks `WRITE_TOOLS`), and *omitting* the annotation entirely — the old advice — leaves the tool un-flagged to the MCP client and inconsistent with the other 40+ tools, so it's never correct.
 - **Parameters**: name + type + required/optional + one-line description for each. Reuse shared Zod fragments from `src/types.ts` where they exist (`DocumentIdParameter`, `RangeParameters`, `TextStyleParameters`, etc.).
 
 For Google providers also confirm which `session.google<X>` client this tool needs (usually obvious from the SDK call). For third-party providers, the client is whatever `get<X>Client` returns in that server file.
@@ -55,7 +60,10 @@ Use one of:
 
 Substitute the placeholders (`{{toolName}}`, `{{description}}`, `{{zodFields}}`, `{{executeBody}}`, `{{readOnlyAnnotationLine}}`, etc.). For `{{executeBody}}`, write the actual API call; pattern-match against an existing tool in the same server file to get the SDK call right.
 
-For read-only tools, `{{readOnlyAnnotationLine}}` is `annotations: { readOnlyHint: true },`. For write tools, leave the line empty (remove it from the substituted output — don't leave `annotations: undefined`).
+Fill `{{readOnlyAnnotationLine}}` from the step-3 classification — **always emit a line, never leave it empty**:
+- read → `annotations: { readOnlyHint: true },`
+- write → `annotations: { readOnlyHint: false },`
+- delete/destructive → `annotations: { readOnlyHint: false, destructiveHint: true },`
 
 ### 6. Insert at the right location
 

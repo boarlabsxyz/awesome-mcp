@@ -273,6 +273,7 @@ export async function opCreateProperty(
 
 hubspotServer.addTool({
   name: 'createCompany',
+  annotations: { readOnlyHint: false },
   description: 'Create a new company in HubSpot (skips creation if a company with the same name already exists).',
   parameters: z.object({
     name: z.string().describe('Company name.'),
@@ -316,6 +317,7 @@ hubspotServer.addTool({
 
 hubspotServer.addTool({
   name: 'updateCompany',
+  annotations: { readOnlyHint: false },
   description: 'Update an existing company record in HubSpot.',
   parameters: z.object({
     companyId: z.string().describe('HubSpot company ID to update.'),
@@ -346,6 +348,7 @@ hubspotServer.addTool({
 
 hubspotServer.addTool({
   name: 'createContact',
+  annotations: { readOnlyHint: false },
   description: 'Create a new contact in HubSpot (skips creation if a matching contact already exists).',
   parameters: z.object({
     firstname: z.string().describe("Contact's first name."),
@@ -391,6 +394,7 @@ hubspotServer.addTool({
 
 hubspotServer.addTool({
   name: 'updateContact',
+  annotations: { readOnlyHint: false },
   description: 'Update an existing contact record in HubSpot.',
   parameters: z.object({
     contactId: z.string().describe('HubSpot contact ID to update.'),
@@ -492,6 +496,7 @@ hubspotServer.addTool({
 
 hubspotServer.addTool({
   name: 'updateProperty',
+  annotations: { readOnlyHint: false },
   description: 'Update a HubSpot property definition (e.g., add dropdown options).',
   parameters: z.object({
     objectType: objectTypeParam,
@@ -509,6 +514,7 @@ hubspotServer.addTool({
 
 hubspotServer.addTool({
   name: 'createProperty',
+  annotations: { readOnlyHint: false },
   description: 'Create a new custom property in HubSpot.',
   parameters: z.object({
     objectType: objectTypeParam,

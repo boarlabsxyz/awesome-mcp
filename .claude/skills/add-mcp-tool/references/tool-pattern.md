@@ -9,7 +9,7 @@ Every tool calls `addTool({ name, annotations, description, parameters, execute 
 ```ts
 <serverConst>.addTool({
   name: '<toolName>',
-  annotations: { readOnlyHint: true },        // ← include for read-only tools; omit for write tools
+  annotations: { readOnlyHint: true },        // read → {readOnlyHint:true}; write → {readOnlyHint:false}; delete/destructive → {readOnlyHint:false, destructiveHint:true}. Always present, never omitted.
   description: '<one-line, action-first description>',
   parameters: z.object({
     <paramName>: z.<type>()<modifiers>.describe('<what the param means>'),
@@ -34,7 +34,12 @@ Every tool calls `addTool({ name, annotations, description, parameters, execute 
 
 ## Why each piece is there
 
-- **`annotations: { readOnlyHint: true }`** lets the MCP client (Claude Desktop, ChatGPT) display read-only tools differently and is the signal the e2e harness uses to decide read vs write fixturing. Adding this to a write tool will silently mis-categorize it; omitting it from a read tool will block it on the readonly connector. Match the intent.
+- **`annotations`** let the MCP client (Claude Desktop, ChatGPT) display tools by risk and are the signal the e2e harness uses to decide read vs write fixturing. **Every tool carries one** — mark it from the verb/effect, don't omit it:
+  - read (get/list/search/inspect) → `{ readOnlyHint: true }`
+  - write (create/update/append/insert/set/format/move/copy) → `{ readOnlyHint: false }`
+  - delete/destructive (delete/remove/clear/archive/trash/resolve) → `{ readOnlyHint: false, destructiveHint: true }`
+
+  Mis-marking mis-categorizes the tool (a read tagged write is needlessly unchecked on the readonly connector; a write/delete left un-marked or tagged read can corrupt the readonly fixture account). Match the intent.
 - **`description` is action-first** because the LLM uses it to pick which tool to call. `"Lists all calendars accessible to the user."` is good; `"Calendars endpoint"` is not. Keep it under ~120 characters.
 - **Zod parameters with `.describe()` on every field** — the LLM uses the descriptions to fill arguments. Optional fields use `.optional()` (no value passed) or `.optional().default(...)` (default applied on the server side).
 - **`log.info` before the API call** leaves a breadcrumb in the e2e forensics bundle that makes failures triagable. Pass the key argument (`documentId`, `calendarId`, the query) — not the whole `args` object, which can be noisy.
