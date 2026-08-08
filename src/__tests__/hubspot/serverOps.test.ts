@@ -69,12 +69,21 @@ test('opGetActiveCompanies / opGetActiveContacts format the search results', asy
   assert.match(await opGetActiveContacts(client(), { limit: 10 }), /Found 1 contacts:/);
 });
 
-test('opGetCompany / opUpdateCompany', async () => {
+test('opGetCompany flags unknown requested properties (reads are loud)', async () => {
   router(() => ({ body: { id: 'c1', properties: { name: 'Acme' } } }));
-  assert.match(await opGetCompany(client(), { companyId: 'c1' }), /Company:/);
+  const got = await opGetCompany(client(), { companyId: 'c1', properties: ['name', 'totally_fake_property_xyz'] });
+  assert.match(got, /Company:/);
+  assert.match(got, /not returned.*totally_fake_property_xyz/i);
+  // no note when nothing was explicitly requested
+  router(() => ({ body: { id: 'c1', properties: { name: 'Acme' } } }));
+  assert.doesNotMatch(await opGetCompany(client(), { companyId: 'c1' }), /not returned/i);
+});
+
+test('opUpdateCompany re-reads for a consistent read shape (PATCH then GET)', async () => {
   const calls = router(() => ({ body: { id: 'c1', properties: { name: 'New' } } }));
   assert.match(await opUpdateCompany(client(), { companyId: 'c1', properties: { name: 'New' } }), /Updated company/);
   assert.equal(calls[0].method, 'PATCH');
+  assert.equal(calls[1].method, 'GET', 'update must re-read the record');
 });
 
 test('opGetCompanyActivity fans out to engagement details and reports omissions', async () => {
@@ -82,11 +91,14 @@ test('opGetCompanyActivity fans out to engagement details and reports omissions'
   const calls = router((method, url) =>
     url.includes('/associations/engagements')
       ? { body: { results: ids } }
-      : { body: { engagement: { id: 1, type: 'NOTE' }, metadata: { body: 'note body' } } },
+      : { body: { engagement: { id: 1, type: 'NOTE', timestamp: 1786187594925 }, metadata: { body: 'note body' } } },
   );
   const out = await opGetCompanyActivity(client(), { companyId: 'c1' });
   assert.match(out, /Found 100 activities:/);          // capped at MAX_ACTIVITY_FETCH
   assert.match(out, /\+2 more activities not shown/);
+  // epoch millis rendered as ISO-8601, not raw (P1 fix)
+  assert.match(out, /When: 20\d\d-\d\d-\d\dT/);
+  assert.doesNotMatch(out, /1786187594925/);
   // 1 association call + 100 detail calls
   assert.equal(calls.filter(c => c.url.includes('/engagements/v1/')).length, 100);
 });
@@ -104,12 +116,15 @@ test('opCreateContact dedupes (with company filter) and enforces canonical field
   assert.equal(createCall.body.properties.email, 'ada@x.com');
 });
 
-test('opGetContact / opUpdateContact', async () => {
+test('opGetContact; opUpdateContact re-reads (PATCH then GET)', async () => {
   router(() => ({ body: { id: 'p1', properties: { email: 'a@b.com' } } }));
   assert.match(await opGetContact(client(), { contactId: 'p1' }), /Contact:/);
-  const calls = router(() => ({ body: { id: 'p1', properties: {} } }));
-  assert.match(await opUpdateContact(client(), { contactId: 'p1', properties: { email: 'z@z.com' } }), /Updated contact/);
+  const calls = router(() => ({ body: { id: 'p1', properties: { firstname: 'Ada', email: 'z@z.com' } } }));
+  const out = await opUpdateContact(client(), { contactId: 'p1', properties: { email: 'z@z.com' } });
+  assert.match(out, /Updated contact/);
+  assert.match(out, /firstname: Ada/, 're-read surfaces populated fields the PATCH echo omits');
   assert.equal(calls[0].method, 'PATCH');
+  assert.equal(calls[1].method, 'GET');
 });
 
 test('opGetRecentConversations renders threads with their MESSAGE entries', async () => {
@@ -136,7 +151,9 @@ test('opGetTickets builds default vs Closed filter groups', async () => {
   let fg = calls[0].body.filterGroups;
   assert.equal(fg[0].filters[0].propertyName, 'closedate');
   assert.equal(fg[0].filters[0].operator, 'GT');
-  assert.equal(fg[0].filters[0].value, '2026-01-01T00:00:00Z'); // NOW - 1 day, ms trimmed
+  // HubSpot search wants epoch millis for datetime props, not ISO (P0 fix).
+  assert.equal(fg[0].filters[0].value, String(NOW - 24 * 60 * 60 * 1000));
+  assert.match(fg[0].filters[0].value, /^\d+$/);
   assert.equal(fg[1].filters[0].propertyName, 'hs_lastmodifieddate');
 
   calls = router(() => ({ body: { total: 1, results: [{ id: 't1', properties: { subject: 'X' } }] } }));

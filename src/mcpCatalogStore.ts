@@ -575,6 +575,9 @@ export async function seedDefaultCatalogs(): Promise<void> {
       'crm.schemas.contacts.read', 'crm.schemas.contacts.write',
       'crm.schemas.companies.read', 'crm.schemas.companies.write',
       'tickets', 'conversations.read',
+      // Without sales-email-read, getCompanyActivity gets EMAIL engagement
+      // bodies redacted (meetings/calls come through fine).
+      'sales-email-read',
     ],
     isLocal: !process.env.HUBSPOT_MCP_URL,
     isActive: true,

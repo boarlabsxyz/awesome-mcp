@@ -137,7 +137,6 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/conversations', summary: 'Get recent HubSpot conversation threads', mcpToolName: 'getRecentConversations', openapiOperationId: 'getHubSpotRecentConversations', status: 'planned' },
   { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/tickets', summary: 'Get HubSpot tickets by criteria', mcpToolName: 'getTickets', openapiOperationId: 'getHubSpotTickets', status: 'planned' },
   { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/tickets/{ticketId}/conversation-threads', summary: 'Get conversation threads for a HubSpot ticket', mcpToolName: 'getTicketConversationThreads', openapiOperationId: 'getHubSpotTicketConversationThreads', status: 'planned' },
-  { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/search', summary: 'Semantic search across retrieved HubSpot data', mcpToolName: 'searchData', openapiOperationId: 'searchHubSpotData', status: 'planned' },
   { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/properties/{objectType}/{propertyName}', summary: 'Get a HubSpot property definition', mcpToolName: 'getProperty', openapiOperationId: 'getHubSpotProperty', status: 'planned' },
 ];
 

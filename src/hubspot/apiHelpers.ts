@@ -396,6 +396,33 @@ function engagementContent(type: string, metadata: Record<string, any>): string 
   }
 }
 
+/**
+ * Render a HubSpot timestamp as ISO-8601 for output consistency. The
+ * /engagements/v1 API returns epoch milliseconds (number or numeric string);
+ * every other tool emits ISO, so normalize here. Non-timestamp values pass
+ * through unchanged.
+ */
+export function epochToIso(v: unknown): string {
+  if (v === null || v === undefined || v === '') return '';
+  const ms = typeof v === 'number' ? v : /^\d+$/.test(String(v)) ? Number(v) : NaN;
+  if (!Number.isFinite(ms)) return String(v);
+  const d = new Date(ms);
+  return Number.isNaN(d.getTime()) ? String(v) : d.toISOString();
+}
+
+/**
+ * When a read requested specific property keys, flag any that HubSpot didn't
+ * return — it silently drops unknown keys, so this makes reads "loud" instead
+ * of quietly returning a partial record. Returns '' when nothing is missing.
+ */
+export function missingPropertiesNote(requested: string[] | undefined, obj: HubSpotObject | undefined): string {
+  if (!requested?.length) return '';
+  const props = obj?.properties ?? {};
+  const missing = requested.filter(p => !(p in props));
+  if (missing.length === 0) return '';
+  return `\n\n⚠ Requested properties not returned (unknown or unavailable on this record): ${missing.join(', ')}`;
+}
+
 export function formatCompanyActivity(details: HubSpotEngagementDetail[], omitted = 0): string {
   if (details.length === 0) return 'No activity found for this company.';
   const parts = [`Found ${details.length} activit${details.length === 1 ? 'y' : 'ies'}:`, ''];
@@ -403,7 +430,7 @@ export function formatCompanyActivity(details: HubSpotEngagementDetail[], omitte
     const e = d?.engagement ?? {};
     const type = e?.type ?? 'UNKNOWN';
     parts.push(`${i + 1}. ${type} (id ${e?.id ?? ''})`);
-    if (e?.timestamp) parts.push(`   When: ${e.timestamp}`);
+    if (e?.timestamp) parts.push(`   When: ${epochToIso(e.timestamp)}`);
     const content = engagementContent(type, d?.metadata ?? {});
     if (content) parts.push(`   ${content}`);
     parts.push('');

@@ -164,7 +164,6 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `getRecentConversations` | `GET /api/v1/hubspot/conversations` | planned | Get recent HubSpot conversation threads |
 | `getTickets` | `GET /api/v1/hubspot/tickets` | planned | Get HubSpot tickets by criteria |
 | `getTicketConversationThreads` | `GET /api/v1/hubspot/tickets/{ticketId}/conversation-threads` | planned | Get conversation threads for a HubSpot ticket |
-| `searchData` | `GET /api/v1/hubspot/search` | planned | Semantic search across retrieved HubSpot data |
 | `getProperty` | `GET /api/v1/hubspot/properties/{objectType}/{propertyName}` | planned | Get a HubSpot property definition |
 
 ## Status legend
@@ -172,4 +171,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 82 endpoints.
+Catalog size: 81 endpoints.
