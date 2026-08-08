@@ -316,6 +316,21 @@ describe('formatCustomFields', () => {
     const lines = formatCustomFields([{ name: 'Empty', value: '<p>&nbsp;</p>' }]);
     assert.deepEqual(lines, []);
   });
+
+  test('drops a scalar value that is only whitespace', () => {
+    const lines = formatCustomFields([{ name: 'Blank', value: '   ' }]);
+    assert.deepEqual(lines, []);
+  });
+
+  test('strips HTML and trims reference-field name values', () => {
+    const lines = formatCustomFields([{ name: 'Team', value: { name: '  <strong>Platform</strong> ' } }]);
+    assert.deepEqual(lines, ['Team: Platform']);
+  });
+
+  test('treats a whitespace-only reference name as blank and falls through', () => {
+    const lines = formatCustomFields([{ name: 'Team', value: { name: '   ', value: 'Fallback' } }]);
+    assert.deepEqual(lines, ['Team: Fallback']);
+  });
 });
 
 describe('formatDepartmentList', () => {
