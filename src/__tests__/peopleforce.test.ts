@@ -1721,8 +1721,45 @@ describe('formatEmployeeTable', () => {
     assert.doesNotMatch(out, /note:/); // empty cell skipped
   });
 
-  test('reports when an employee has no rows', () => {
+  test('reports "no rows" only when a rows array is present but empty', () => {
     const out = formatEmployeeTable({ name: 'Dev Sprint participation', rows: [] });
     assert.match(out, /No rows recorded for this employee\./);
+    assert.doesNotMatch(out, /Unrecognized payload/);
+  });
+
+  test('unwraps a { data: {...} } envelope and renders the rows inside', () => {
+    const out = formatEmployeeTable({
+      data: { name: 'Dev Sprint participation', rows: [{ id: 1, columns: { ds_name: 'Int Mar-Apr 26' } }] },
+    });
+    assert.match(out, /## Row 1 \(ID: 1\)/);
+    assert.match(out, /ds_name: Int Mar-Apr 26/);
+    assert.doesNotMatch(out, /Unrecognized payload/);
+  });
+
+  test('dumps the raw payload (does NOT claim "no rows") when there is no rows array', () => {
+    // e.g. rows nested under an unexpected key — must fail loudly, not read as 0.
+    const out = formatEmployeeTable({ name: 'X', values: [{ ds_name: 'y' }] } as any);
+    assert.match(out, /Unrecognized payload/);
+    assert.match(out, /"values"/);
+    assert.doesNotMatch(out, /No rows recorded/);
+  });
+});
+
+describe('PeopleForceClient.getEmployeeTable', () => {
+  let stub: ReturnType<typeof stubFetch> | null = null;
+  afterEach(() => {
+    if (stub) { stub.restore(); stub = null; }
+  });
+
+  test('unwraps the { data } envelope so rows are reachable', async () => {
+    stub = stubFetch(() => ({
+      body: { data: { internal_name: 'timeline', name: 'Dev Sprint', rows: [{ id: 9, columns: { ds_name: 'Int' } }] } },
+    }));
+    const client = new PeopleForceClient('k');
+    const table = await client.getEmployeeTable(125556, 'timeline');
+    assert.equal(table.internal_name, 'timeline');
+    assert.equal(table.rows?.length, 1);
+    assert.equal(table.rows?.[0].id, 9);
+    assert.match(stub.calls[0].url, /\/employees\/125556\/tables\/timeline$/);
   });
 });
