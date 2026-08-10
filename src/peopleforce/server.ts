@@ -47,6 +47,8 @@ import {
   formatKnowledgeCategoryList,
   formatKnowledgeArticleList,
   formatKnowledgeArticle,
+  formatEmployeeTableList,
+  formatEmployeeTable,
 } from './apiHelpers.js';
 
 export const peopleForceServer = new FastMCP<UserSession>({
@@ -457,6 +459,35 @@ peopleForceServer.addTool({
       log.info(`Listing PeopleForce knowledge base articles for category ${args.categoryId} (page=${args.page})`);
       const res = await client.listKnowledgeBaseArticles({ categoryId: args.categoryId, page: args.page });
       return formatKnowledgeArticleList(res.data ?? [], res.metadata?.pagination);
+    }),
+});
+
+// === Employee custom tables ===
+
+addPaginatedListTool({
+  name: 'listEmployeeTables',
+  description:
+    'Lists PeopleForce employee custom tables (repeating-row profile sections, e.g. "Dev Sprint participation") with their columns and — critically — each table\'s `internal_name`, which getEmployeeTable needs. Server-fixed page size.',
+  errorPrefix: 'Failed to list employee tables',
+  fetch: (client, page) => client.listEmployeeTables({ page }),
+  format: formatEmployeeTableList,
+});
+
+peopleForceServer.addTool({
+  name: 'getEmployeeTable',
+  annotations: { readOnlyHint: true },
+  description:
+    'Retrieves the row-level data of one custom table for a specific employee — e.g. an employee\'s "Dev Sprint participation" rows (each row\'s columns and values). Needs the employee ID and the table\'s `internalName` (from listEmployeeTables).',
+  parameters: z.object({
+    employeeId: z.union([z.string(), z.number()]).describe('The PeopleForce employee ID.'),
+    tableInternalName: z.string().describe('The table\'s internal_name (from listEmployeeTables), e.g. "dev_sprint_participation".'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to fetch employee table', session, log, async (client) => {
+      log.info(`Fetching PeopleForce table ${args.tableInternalName} for employee ${args.employeeId}`);
+      const data = await client.getEmployeeTable(args.employeeId, args.tableInternalName);
+      if (!data || typeof data !== 'object') throw new UserError('Employee table not found.');
+      return formatEmployeeTable(data);
     }),
 });
 
