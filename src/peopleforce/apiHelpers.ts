@@ -954,12 +954,16 @@ export class PeopleForceClient {
   }
 
   /** Row-level data of one custom table for a specific employee. Not paginated (returns the table with all rows). */
-  getEmployeeTable(employeeId: string | number, internalName: string): Promise<PeopleForceEmployeeTableData> {
-    return this.requestAt(
+  async getEmployeeTable(employeeId: string | number, internalName: string): Promise<PeopleForceEmployeeTableData> {
+    const body = await this.requestAt<{ data?: PeopleForceEmployeeTableData } & PeopleForceEmployeeTableData>(
       this.apiV3BaseUrl,
       'GET',
       `/employees/${encodeURIComponent(String(employeeId))}/tables/${encodeURIComponent(internalName)}`,
     );
+    // PeopleForce wraps single-resource GETs in `{ data: {...} }` (as getEmployee/
+    // getCandidate do); the table docs omit it but live responses include it.
+    // Reading `.rows` off the wrapper yielded an empty set for everyone — unwrap.
+    return body && typeof body === 'object' && 'data' in body && body.data ? body.data : body;
   }
 
   // === Careers API — published job descriptions ===
@@ -1849,17 +1853,30 @@ function tableCellText(value: PeopleForceTableCellValue): string {
   return String(value);
 }
 
-export function formatEmployeeTable(data: PeopleForceEmployeeTableData): string {
-  const parts = [`# ${data.name ?? 'Employee Table'}`];
-  if (data.internal_name) parts.push(`Internal name: ${data.internal_name}`);
-  if (data.description) parts.push(`Description: ${data.description}`);
-  const rows = data.rows ?? [];
-  if (rows.length === 0) {
+export function formatEmployeeTable(
+  payload: PeopleForceEmployeeTableData | { data?: PeopleForceEmployeeTableData },
+): string {
+  // Defensively unwrap a `{ data: {...} }` envelope in case a raw payload reaches here.
+  const data = (payload && typeof payload === 'object' && 'data' in payload && (payload as { data?: PeopleForceEmployeeTableData }).data
+    ? (payload as { data?: PeopleForceEmployeeTableData }).data
+    : payload) as PeopleForceEmployeeTableData;
+  const parts = [`# ${data?.name ?? 'Employee Table'}`];
+  if (data?.internal_name) parts.push(`Internal name: ${data.internal_name}`);
+  if (data?.description) parts.push(`Description: ${data.description}`);
+  // Distinguish "genuinely no rows" from "couldn't find a rows array". A false
+  // "no rows" silently reads as 0 participants downstream — dump the raw payload
+  // instead so the real shape is visible (same fail-loud stance as the KB body fix).
+  if (!data || !Array.isArray(data.rows)) {
+    parts.push('', '## Unrecognized payload (no `rows` array) — raw response');
+    parts.push('```json', JSON.stringify(payload, null, 2), '```');
+    return parts.join('\n');
+  }
+  if (data.rows.length === 0) {
     parts.push('', 'No rows recorded for this employee.');
     return parts.join('\n');
   }
   parts.push('');
-  rows.forEach((row, i) => {
+  data.rows.forEach((row, i) => {
     parts.push(`## Row ${i + 1}${row.id !== undefined ? ` (ID: ${row.id})` : ''}`);
     const cells = row.columns ?? {};
     for (const [key, value] of Object.entries(cells)) {

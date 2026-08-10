@@ -480,7 +480,7 @@ peopleForceServer.addTool({
     'Retrieves the row-level data of one custom table for a specific employee — e.g. an employee\'s "Dev Sprint participation" rows (each row\'s columns and values). Needs the employee ID and the table\'s `internalName` (from listEmployeeTables).',
   parameters: z.object({
     employeeId: z.union([z.string(), z.number()]).describe('The PeopleForce employee ID.'),
-    tableInternalName: z.string().describe('The table\'s internal_name (from listEmployeeTables), e.g. "dev_sprint_participation".'),
+    tableInternalName: z.string().describe('The table\'s internal_name — get the exact value from listEmployeeTables (it is a system-generated slug, often unrelated to the display name; do not guess it).'),
   }),
   execute: (args, { log, session }) =>
     withPeopleForceClient('Failed to fetch employee table', session, log, async (client) => {
