@@ -131,7 +131,21 @@ export const SNAPSHOT_DDL: string[] = [
     classified_at      TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (objective_id, text_hash, classifier_version)
   );`,
+  // Employee custom-table cells, one row per (employee, table, row, column, value).
+  // Multi-select cells (e.g. Attendance chips) are expanded to one row per value,
+  // so participation counts and team trends are plain GROUP BY. This is the
+  // participation data the API has no dedicated object for — read from tables.
+  `CREATE TABLE IF NOT EXISTS pf_employee_table_cell_snapshot (
+    captured_at         TIMESTAMPTZ NOT NULL,
+    employee_id         VARCHAR(64) NOT NULL,
+    table_internal_name VARCHAR(128) NOT NULL,
+    table_name          TEXT,
+    row_id              VARCHAR(64),
+    column_name         TEXT NOT NULL,
+    value               TEXT
+  );`,
   `CREATE INDEX IF NOT EXISTS idx_pf_emp_skill_captured ON pf_employee_skill_snapshot(captured_at);`,
+  `CREATE INDEX IF NOT EXISTS idx_pf_table_cell_captured ON pf_employee_table_cell_snapshot(captured_at, table_internal_name, column_name);`,
   `CREATE INDEX IF NOT EXISTS idx_pf_obj_class_review ON pf_objective_classification(needs_review) WHERE needs_review = TRUE;`,
   `CREATE INDEX IF NOT EXISTS idx_pf_owner_resolution_unresolved ON pf_owner_resolution(method) WHERE method = 'unresolved';`,
   `CREATE INDEX IF NOT EXISTS idx_pf_kb_article_created ON pf_kb_article_snapshot(captured_at, created_at);`,

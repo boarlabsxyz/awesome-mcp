@@ -11,6 +11,7 @@ import {
   kpiRows,
   kbArticleRows,
   employeeDimRows,
+  employeeTableCellRows,
 } from '../peopleforce/snapshot/rows.js';
 import { insertRows, fetchAllPages, runSnapshot, SnapshotDb } from '../peopleforce/snapshot/collect.js';
 import { resolveOwners, ownerKey, normalizeName } from '../peopleforce/snapshot/resolve.js';
@@ -193,6 +194,16 @@ describe('runSnapshot', () => {
       if (/\/employees\/\d+\/skills/.test(url)) {
         return { data: [{ level: 'expert', skill: { id: 1, name: 'React' } }] };
       }
+      if (/\/employees\/\d+\/tables\//.test(url)) {
+        return {
+          internal_name: 'dev_sprint',
+          name: 'Dev Sprint',
+          rows: [{ id: 1, columns: { ds_name: 'Int Mar-Apr', attendance: [{ value: 'Launch WS' }, { value: 'peer 1' }] } }],
+        };
+      }
+      if (/\/employee_tables(\?|$)/.test(url)) {
+        return { data: [{ EmployeeTable: { internal_name: 'dev_sprint', name: 'Dev Sprint' } }], metadata: { pagination: { page: 1, pages: 1 } } };
+      }
       if (/\/employees(\?|$)/.test(url)) {
         return {
           data: [{ id: 101, full_name: 'Ada', custom_fields: [{ name: 'Dev Sprint', value: 'S1' }] }],
@@ -219,6 +230,7 @@ describe('runSnapshot', () => {
       objectives: 1,
       kpis: 1,
       kb_articles: 0,
+      table_cells: 3, // ds_name (1) + attendance (2 chips expanded)
       employee_dim: 1,
       owner_resolutions: 1,
       owners_unresolved: 1,
@@ -228,6 +240,47 @@ describe('runSnapshot', () => {
     const skillInsert = db.calls.find((c) => c.text.startsWith('INSERT INTO pf_employee_skill_snapshot'));
     assert.ok(skillInsert, 'expected a skills insert');
     assert.ok(skillInsert!.params?.includes('React'));
+    // Attendance chips landed as expanded cell rows.
+    const cellInsert = db.calls.find((c) => c.text.startsWith('INSERT INTO pf_employee_table_cell_snapshot'));
+    assert.ok(cellInsert, 'expected a table-cell insert');
+    assert.ok(cellInsert!.params?.includes('Launch WS'));
+    assert.ok(cellInsert!.params?.includes('peer 1'));
+  });
+});
+
+describe('employeeTableCellRows', () => {
+  test('flattens rows and expands multi-select cells to one row per value', () => {
+    const rows = employeeTableCellRows(
+      [
+        {
+          employeeId: 101,
+          table: {
+            internal_name: 'dev_sprint_participation',
+            name: 'Dev Sprint participation',
+            rows: [
+              {
+                id: 11,
+                columns: {
+                  ds_name: 'Int Mar-Apr 26',
+                  coach: { id: 2, full_name: 'Tania Shum' },
+                  attendance: [{ id: 1, value: 'Launch WS' }, { id: 2, value: 'peer 1' }, { id: 3, value: 'Retro' }],
+                  note: '',
+                },
+              },
+            ],
+          },
+        },
+      ],
+      CAP,
+    );
+    // ds_name(1) + coach(1) + attendance(3) = 5; empty note dropped
+    assert.equal(rows.length, 5);
+    const attendance = rows.filter((r) => r.column_name === 'attendance').map((r) => r.value);
+    assert.deepEqual(attendance, ['Launch WS', 'peer 1', 'Retro']);
+    assert.deepEqual(rows.find((r) => r.column_name === 'coach')!.value, 'Tania Shum');
+    assert.equal(rows[0].employee_id, '101');
+    assert.equal(rows[0].table_internal_name, 'dev_sprint_participation');
+    assert.equal(rows[0].row_id, '11');
   });
 });
 
