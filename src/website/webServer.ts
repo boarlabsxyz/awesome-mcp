@@ -490,6 +490,9 @@ export function registerClickUpDocImageRoutes(app: express.Express): void {
       }
       res
         .type(img.mime)
+        // nosniff: don't let a browser re-interpret stored bytes as HTML/SVG
+        // (defense-in-depth against XSS; ingest already rejects SVG).
+        .set('X-Content-Type-Options', 'nosniff')
         .set('Cache-Control', 'public, max-age=31536000, immutable')
         .send(img.bytes);
     } catch (err: any) {

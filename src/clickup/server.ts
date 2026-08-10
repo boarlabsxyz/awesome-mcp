@@ -12,7 +12,7 @@ import {
   parseTimestampInput,
 } from './apiHelpers.js';
 import { formatTask, formatTaskList } from './formatHelpers.js';
-import { fetchRemoteImage, storeDocImage } from './docImageStore.js';
+import { assertDocImagesReady, deleteDocImage, fetchRemoteImage, storeDocImage } from './docImageStore.js';
 import {
   CAPTURED_EVENTS,
   debugTaskEventSubscriptionFlow,
@@ -38,14 +38,20 @@ function getClickUpClient(session?: UserSession): ClickUpClient {
   return new ClickUpClient(session.clickUpAccessToken);
 }
 
-// Builds the public URL for a re-hosted doc image from its stored id, using the
-// same BASE_URL pattern as the webhook callback (see subscribeToTaskEvents).
-function buildDocImageUrl(id: string): string {
+// Validates and returns the public base URL for serving re-hosted doc images,
+// using the same BASE_URL pattern as the webhook callback (see
+// subscribeToTaskEvents). Callers use this to fail fast before fetching/storing.
+function getImageServeBaseUrl(): string {
   const baseUrl = (process.env.BASE_URL || '').replace(/\/+$/, '');
   if (!baseUrl) {
     throw new UserError('BASE_URL env var must be set to host images (needed to build a public image URL).');
   }
-  return `${baseUrl}/images/clickup-doc/${id}`;
+  return baseUrl;
+}
+
+// Builds the public URL for a re-hosted doc image from its stored id.
+function buildDocImageUrl(id: string): string {
+  return `${getImageServeBaseUrl()}/images/clickup-doc/${id}`;
 }
 
 // formatTask / formatCustomFieldValue / formatTaskList moved to ./formatHelpers.js
@@ -1233,22 +1239,31 @@ clickUpServer.addTool({
     workspaceId: z.string().describe('The workspace (team) ID.'),
     docId: z.string().describe('The doc ID.'),
     pageId: z.string().describe('The page ID to add the image to.'),
-    imageUrl: z.string().describe('Public http(s) URL of the image to embed (jpg, png, gif, bmp, webp, or svg; max 20 MB).'),
+    imageUrl: z.string().describe('Public http(s) URL of the image to embed (jpg, png, gif, bmp, or webp; max 20 MB).'),
     altText: z.string().optional().default('').describe('Alt text for the image.'),
     editMode: z.enum(['append', 'prepend', 'replace']).optional().default('append').describe('How to place the image: append (default), prepend, or replace the page content.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
+    // Validate hosting config up front, before spending a fetch or writing a row.
+    getImageServeBaseUrl();
+    assertDocImagesReady();
     const { bytes, mime } = await fetchRemoteImage(args.imageUrl);
     const createdBy = session?.userId != null ? String(session.userId) : undefined;
     const { id } = await storeDocImage(bytes, mime, createdBy);
     const url = buildDocImageUrl(id);
     const editMode = args.editMode || 'append';
-    await client.editPage(args.workspaceId, args.docId, args.pageId, {
-      content: `![${args.altText || ''}](${url})`,
-      content_format: 'text/md',
-      content_edit_mode: editMode,
-    });
+    try {
+      await client.editPage(args.workspaceId, args.docId, args.pageId, {
+        content: `![${args.altText || ''}](${url})`,
+        content_format: 'text/md',
+        content_edit_mode: editMode,
+      });
+    } catch (err) {
+      // The page edit failed, so the stored bytes are now an orphan — drop them.
+      await deleteDocImage(id).catch(() => { /* best-effort */ });
+      throw err;
+    }
     return `Image added to page ${args.pageId} (${editMode}).\nHosted at: ${url}`;
   },
 });
@@ -1258,9 +1273,12 @@ clickUpServer.addTool({
   annotations: { readOnlyHint: false },
   description: 'Fetch an image from a public URL, re-host it on this server, and return a public URL you can embed in a ClickUp Doc page as markdown (![](url)). Use this when you want the URL without immediately writing to a page; otherwise use insertImageIntoPage. Requires DATABASE_URL and BASE_URL to be configured.',
   parameters: z.object({
-    imageUrl: z.string().describe('Public http(s) URL of the image to re-host (jpg, png, gif, bmp, webp, or svg; max 20 MB).'),
+    imageUrl: z.string().describe('Public http(s) URL of the image to re-host (jpg, png, gif, bmp, or webp; max 20 MB).'),
   }),
   execute: async (args, { session }) => {
+    // Validate hosting config up front, before spending a fetch or writing a row.
+    getImageServeBaseUrl();
+    assertDocImagesReady();
     const { bytes, mime } = await fetchRemoteImage(args.imageUrl);
     const createdBy = session?.userId != null ? String(session.userId) : undefined;
     const { id } = await storeDocImage(bytes, mime, createdBy);
