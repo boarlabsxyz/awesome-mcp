@@ -9,6 +9,8 @@ import {
   PeopleForceKpi,
   PeopleForceKnowledgeArticle,
   PeopleForceEmployeeShort,
+  PeopleForceEmployeeTableData,
+  PeopleForceTableCellValue,
   fullName,
   refName,
   customFieldEntries,
@@ -171,6 +173,64 @@ export function objectiveRows(objectives: PeopleForceObjective[], capturedAt: st
       starts_on: str(o.starts_on),
       ends_on: str(o.ends_on),
     }));
+}
+
+export interface EmployeeTableCellRow {
+  captured_at: string;
+  employee_id: string;
+  table_internal_name: string;
+  table_name: string | null;
+  row_id: string | null;
+  column_name: string;
+  value: string;
+}
+
+/** Expand a table cell into its value(s): multi-select → many, ref → name, empty → none. */
+function cellValues(value: PeopleForceTableCellValue): string[] {
+  if (value === null || value === undefined || value === '') return [];
+  if (Array.isArray(value)) {
+    return value.map((v) => v?.value).filter((v): v is string => Boolean(v));
+  }
+  if (typeof value === 'boolean') return [value ? 'yes' : 'no'];
+  if (typeof value === 'object') {
+    const rec = value as { value?: string; full_name?: string; email?: string };
+    const v = rec.value ?? rec.full_name ?? rec.email;
+    return v ? [String(v)] : [JSON.stringify(value)];
+  }
+  return [String(value)];
+}
+
+/**
+ * Flatten each employee's custom-table rows into one cell row per (row, column,
+ * value). Multi-select cells fan out to one row per value so attendance/
+ * participation counts are a plain GROUP BY.
+ */
+export function employeeTableCellRows(
+  tables: Array<{ employeeId: string | number; table: PeopleForceEmployeeTableData }>,
+  capturedAt: string,
+): EmployeeTableCellRow[] {
+  const out: EmployeeTableCellRow[] = [];
+  for (const { employeeId, table } of tables) {
+    const internal = table.internal_name;
+    if (!internal) continue;
+    for (const row of table.rows ?? []) {
+      const cols = row.columns ?? {};
+      for (const [column_name, value] of Object.entries(cols)) {
+        for (const v of cellValues(value)) {
+          out.push({
+            captured_at: capturedAt,
+            employee_id: String(employeeId),
+            table_internal_name: internal,
+            table_name: table.name ?? null,
+            row_id: row.id !== undefined && row.id !== null ? String(row.id) : null,
+            column_name,
+            value: v,
+          });
+        }
+      }
+    }
+  }
+  return out;
 }
 
 export function kbArticleRows(articles: PeopleForceKnowledgeArticle[], capturedAt: string): KbArticleRow[] {

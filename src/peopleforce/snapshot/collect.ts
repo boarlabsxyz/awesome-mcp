@@ -17,11 +17,14 @@ import {
   PeopleForceEmployeeSkill,
   PeopleForceKnowledgeArticle,
   PeopleForceKnowledgeCategory,
+  PeopleForceEmployeeTableListItem,
+  PeopleForceEmployeeTableData,
   fullName,
 } from '../apiHelpers.js';
 import { ensureSnapshotTables } from './schema.js';
 import {
   employeeRows, customFieldRows, employeeSkillRows, objectiveRows, kpiRows, kbArticleRows, employeeDimRows,
+  employeeTableCellRows,
 } from './rows.js';
 import { resolveOwners, OwnerInput, ResolverEmployee } from './resolve.js';
 
@@ -172,6 +175,24 @@ export async function resolveAndPersistOwners(deps: {
   return { employees: empCount, resolutions: resCount, unmatched: unmatched.length };
 }
 
+/**
+ * Which custom tables to snapshot: the PEOPLEFORCE_SNAPSHOT_TABLES env
+ * (comma-separated internal_names) if set, else every table discovered via
+ * listEmployeeTables. Explicit config is recommended when a tenant has many
+ * tables (row fetch is employees×tables calls).
+ */
+export async function discoverTableInternalNames(client: PeopleForceClient): Promise<string[]> {
+  const configured = (process.env.PEOPLEFORCE_SNAPSHOT_TABLES || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (configured.length) return configured;
+  const defs = await fetchAllPages<PeopleForceEmployeeTableListItem>((page) => client.listEmployeeTables({ page }));
+  return defs
+    .map((d) => (d.EmployeeTable ?? d).internal_name)
+    .filter((n): n is string => Boolean(n));
+}
+
 export interface SnapshotResult {
   capturedAt: string;
   counts: Record<string, number>;
@@ -235,6 +256,28 @@ export async function runSnapshot(deps: {
   }
   log.info(`kb articles: ${kbArticles.length}`);
 
+  // Employee custom tables (e.g. "Dev Sprint participation") — the participation
+  // data the API has no dedicated object for. Which tables to capture: the
+  // PEOPLEFORCE_SNAPSHOT_TABLES env (comma-separated internal_names), else every
+  // discovered table. Row fetch is employees×tables calls (like skills), so a
+  // 404 = employee doesn't have the table (skipped); other errors are logged.
+  const tableNames = await discoverTableInternalNames(client);
+  const capturedTables: Array<{ employeeId: string | number; table: PeopleForceEmployeeTableData }> = [];
+  if (tableNames.length) {
+    log.info(`employee tables: [${tableNames.join(', ')}] (~${employees.length * tableNames.length} calls)`);
+    for (const e of employees) {
+      if (e.id === undefined || e.id === null) continue;
+      for (const name of tableNames) {
+        try {
+          const data = await client.getEmployeeTable(e.id, name);
+          if (data && (data.rows?.length ?? 0) > 0) capturedTables.push({ employeeId: e.id, table: data });
+        } catch (err: any) {
+          if (err?.status !== 404) log.error(`table ${name} for employee ${e.id}: ${err?.message ?? err}`);
+        }
+      }
+    }
+  }
+
   const counts: Record<string, number> = {};
   counts.employees = await insertRows(
     db, 'pf_employee_snapshot',
@@ -265,6 +308,11 @@ export async function runSnapshot(deps: {
     db, 'pf_kb_article_snapshot',
     ['captured_at', 'article_id', 'title', 'category_id', 'category_name', 'author_id', 'author_name', 'created_at', 'updated_at'],
     kbArticleRows(kbArticles, capturedAt),
+  );
+  counts.table_cells = await insertRows(
+    db, 'pf_employee_table_cell_snapshot',
+    ['captured_at', 'employee_id', 'table_internal_name', 'table_name', 'row_id', 'column_name', 'value'],
+    employeeTableCellRows(capturedTables, capturedAt),
   );
 
   // Employee dimension + owner resolution (from objective & KPI owners).

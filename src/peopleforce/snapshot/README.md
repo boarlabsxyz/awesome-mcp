@@ -23,6 +23,7 @@ PeopleForce API ──(nightly)──▶ collect.ts ──▶ Postgres (pf_*_sna
 | `pf_objective_snapshot` | `listObjectives` | development activities, dev sprints & courses (as OKR prose) |
 | `pf_kpi_snapshot` | `listKeyPerformanceIndicators` | performance KPIs |
 | `pf_kb_article_snapshot` | `listKnowledgeBaseArticles` | L&D content authored per quarter (articles carry `created_at`) |
+| `pf_employee_table_cell_snapshot` | `listEmployeeTables` + `getEmployeeTable` | **participation** — custom-table cells (e.g. Dev Sprint attendance), one row per value |
 | `pf_employee_dim` | `listEmployees` (upserted, current-state) | team dimension for owner joins |
 | `pf_owner_resolution` | derived | objective/KPI owner → employee mapping (with `manual_override`) |
 | `pf_objective_classification` | LLM (separate step) | is-learning / activity_type / provider / completion / confidence |
@@ -88,6 +89,15 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 ```
 
+### Participation (Dev Sprint tables)
+
+Which custom tables to capture: set `PEOPLEFORCE_SNAPSHOT_TABLES` to a
+comma-separated list of table `internal_name`s (from `listEmployeeTables`), e.g.
+`PEOPLEFORCE_SNAPSHOT_TABLES=dev_sprint_participation`. If unset, **every**
+discovered table is captured — row fetch is `employees × tables` calls, so name
+the tables you actually want. Multi-select cells (attendance chips) are expanded
+to one row per value, so counts are a plain `GROUP BY`.
+
 ## Grafana queries
 
 Point a Grafana **PostgreSQL** data source at the same DB. Each snapshot run
@@ -127,6 +137,25 @@ JOIN pf_owner_resolution r
   ON r.owner_key = COALESCE('email:' || lower(o.owner_email), 'name:' || lower(o.owner_name))
 JOIN pf_employee_dim d ON d.employee_id = r.employee_id
 GROUP BY o.captured_at, d.department ORDER BY o.captured_at;
+```
+
+**Participation counts per activity** (#1 — latest snapshot):
+```sql
+SELECT value AS activity, COUNT(DISTINCT employee_id) AS people
+FROM pf_employee_table_cell_snapshot
+WHERE captured_at = (SELECT MAX(captured_at) FROM pf_employee_table_cell_snapshot)
+  AND table_internal_name = 'dev_sprint_participation'
+  AND column_name = 'attendance'
+GROUP BY value ORDER BY people DESC;
+```
+
+**Participation trends across teams over time** (#5 — cell rows are per-employee, so join the dimension directly):
+```sql
+SELECT c.captured_at AS "time", d.department, COUNT(DISTINCT c.employee_id) AS participants
+FROM pf_employee_table_cell_snapshot c
+JOIN pf_employee_dim d ON d.employee_id = c.employee_id
+WHERE c.table_internal_name = 'dev_sprint_participation' AND c.column_name = 'attendance'
+GROUP BY c.captured_at, d.department ORDER BY c.captured_at;
 ```
 
 **L&D content authored per quarter** (free — articles carry their own `created_at`):
