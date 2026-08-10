@@ -56,6 +56,21 @@ export function assertDocImagesReady(): void {
 }
 
 /**
+ * Races a promise against the shared abort deadline. The SSRF DNS lookup doesn't
+ * observe the fetch AbortSignal, so without this a slow resolve could outlast
+ * FETCH_TIMEOUT_MS. The abort listener is always removed once the race settles.
+ */
+function raceAbort<T>(p: Promise<T>, signal: AbortSignal, url: string): Promise<T> {
+  const timeoutErr = () => new UserError(`Image fetch timed out after ${FETCH_TIMEOUT_MS / 1000}s: ${url}`);
+  if (signal.aborted) return Promise.reject(timeoutErr());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(timeoutErr());
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
+/**
  * Fetch a remote image with the same SSRF and size protections used by the
  * Google Docs image path. Returns the raw bytes and a best-effort MIME type.
  */
@@ -77,7 +92,8 @@ export async function fetchRemoteImage(url: string): Promise<{ bytes: Buffer; mi
 
     while (true) {
       const parsed = validateFetchUrl(currentUrl);
-      await rejectPrivateAddress(parsed.hostname);
+      // Race the SSRF DNS lookup against the same deadline as the fetch.
+      await raceAbort(rejectPrivateAddress(parsed.hostname), controller.signal, url);
       finalUrl = parsed;
 
       try {
@@ -127,7 +143,7 @@ export async function fetchRemoteImage(url: string): Promise<{ bytes: Buffer; mi
         if (done) break;
         totalBytes += value.byteLength;
         if (totalBytes > MAX_IMAGE_SIZE) {
-          reader.cancel();
+          await reader.cancel().catch(() => { /* ignore */ });
           throw new UserError(`Image exceeds max size (${MAX_IMAGE_SIZE} bytes): ${url}`);
         }
         chunks.push(value);
@@ -143,11 +159,15 @@ export async function fetchRemoteImage(url: string): Promise<{ bytes: Buffer; mi
 
     const bytes = Buffer.concat(chunks.map((c) => Buffer.from(c)));
 
-    // Derive MIME: prefer a recognized file extension, else the response header.
+    // Derive MIME: trust the server's declared Content-Type when it names an
+    // image type (it's more authoritative than a spoofable URL extension, and
+    // this is what catches an image/svg+xml body served from a ".png" URL). Fall
+    // back to the extension only when the header is absent or generic (many CDNs
+    // send application/octet-stream for images).
     const path = await import('path');
     const ext = path.extname(finalUrl.pathname).toLowerCase();
     const headerMime = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    const mime = MIME_BY_EXT[ext] || headerMime || 'application/octet-stream';
+    const mime = (headerMime.startsWith('image/') ? headerMime : (MIME_BY_EXT[ext] || headerMime)) || 'application/octet-stream';
 
     // Block SVG explicitly: a .svg extension or an image/svg+xml Content-Type
     // must not establish image validity, since we'd re-serve it from our own
