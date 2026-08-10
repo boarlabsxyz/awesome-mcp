@@ -41,8 +41,21 @@ const MIME_BY_EXT: { [key: string]: string } = {
   '.webp': 'image/webp',
 };
 
+// Test seam: unit tests inject a fake pool here so the DB-backed paths can be
+// exercised without a live Postgres (ESM has no module-mocking in this runner).
+// Null in production — only a test helper ever sets it.
+type PoolLike = { query: (text: string, params?: any[]) => Promise<{ rows: any[] }> };
+let testPool: PoolLike | null = null;
+export function __setDocImagePoolForTests(p: PoolLike | null): void {
+  testPool = p;
+}
+
+function activePool(): PoolLike {
+  return testPool ?? (getPool() as unknown as PoolLike);
+}
+
 function requireDb(): void {
-  if (!isDatabaseAvailable()) {
+  if (testPool == null && !isDatabaseAvailable()) {
     throw new UserError('ClickUp doc images require Postgres. Set DATABASE_URL and REDIS_URL.');
   }
 }
@@ -195,7 +208,7 @@ export async function storeDocImage(
 ): Promise<{ id: string }> {
   requireDb();
   const id = randomUUID();
-  await getPool().query(
+  await activePool().query(
     `INSERT INTO clickup_doc_images (id, bytes, mime, byte_size, created_by)
      VALUES ($1, $2, $3, $4, $5)`,
     [id, bytes, mime, bytes.length, createdBy ?? null],
@@ -209,7 +222,7 @@ export async function storeDocImage(
  */
 export async function deleteDocImage(id: string): Promise<void> {
   requireDb();
-  await getPool().query(`DELETE FROM clickup_doc_images WHERE id = $1`, [id]);
+  await activePool().query(`DELETE FROM clickup_doc_images WHERE id = $1`, [id]);
 }
 
 /**
@@ -217,7 +230,7 @@ export async function deleteDocImage(id: string): Promise<void> {
  */
 export async function getDocImage(id: string): Promise<{ bytes: Buffer; mime: string } | null> {
   requireDb();
-  const result = await getPool().query(
+  const result = await activePool().query(
     `SELECT bytes, mime FROM clickup_doc_images WHERE id = $1`,
     [id],
   );
