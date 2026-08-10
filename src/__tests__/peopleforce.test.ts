@@ -41,6 +41,8 @@ import {
   formatKnowledgeCategoryList,
   formatKnowledgeArticleList,
   formatKnowledgeArticle,
+  formatEmployeeTableList,
+  formatEmployeeTable,
 } from '../peopleforce/apiHelpers.js';
 
 // -----------------------------------------------------------------------------
@@ -1658,5 +1660,69 @@ describe('knowledge base formatters', () => {
     assert.doesNotMatch(out, /\[object Object\]/);
     assert.match(out, /"type": "doc"/);
     assert.match(out, /hi/);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Employee custom tables
+// -----------------------------------------------------------------------------
+
+describe('formatEmployeeTableList', () => {
+  test('unwraps the EmployeeTable wrapper and surfaces internal_name + columns', () => {
+    const out = formatEmployeeTableList([
+      {
+        EmployeeTable: {
+          id: 5,
+          name: 'Dev Sprint participation',
+          internal_name: 'dev_sprint_participation',
+          group: { id: 1, name: 'Development' },
+          columns: [{ name: 'DS Name', internal_name: 'ds_name', type: 'text' }, { name: 'Coach', internal_name: 'coach', type: 'hr_manager' }],
+        },
+      },
+    ]);
+    assert.match(out, /## 1\. Dev Sprint participation/);
+    assert.match(out, /Internal name: dev_sprint_participation/);
+    assert.match(out, /getEmployeeTable/);
+    assert.match(out, /Group: Development/);
+    assert.match(out, /Columns: DS Name, Coach/);
+  });
+
+  test('handles empty list', () => {
+    assert.equal(formatEmployeeTableList([]), 'No employee tables found.');
+  });
+});
+
+describe('formatEmployeeTable', () => {
+  test('renders rows across cell types and skips empty cells', () => {
+    const out = formatEmployeeTable({
+      name: 'Dev Sprint participation',
+      internal_name: 'dev_sprint_participation',
+      rows: [
+        {
+          id: 11,
+          columns: {
+            ds_name: 'Int Mar-Apr 26',
+            coach: { id: 2, full_name: 'Tania Shum', email: 't@x.io' },
+            attendance: [{ id: 1, value: 'Launch WS' }, { id: 2, value: 'peer 1' }, { id: 3, value: 'Retro' }],
+            stage: { id: 9, value: 'Closing' },
+            done: true,
+            note: '',
+          },
+        },
+      ],
+    });
+    assert.match(out, /# Dev Sprint participation/);
+    assert.match(out, /## Row 1 \(ID: 11\)/);
+    assert.match(out, /ds_name: Int Mar-Apr 26/);
+    assert.match(out, /coach: Tania Shum/);
+    assert.match(out, /attendance: Launch WS, peer 1, Retro/);
+    assert.match(out, /stage: Closing/);
+    assert.match(out, /done: yes/);
+    assert.doesNotMatch(out, /note:/); // empty cell skipped
+  });
+
+  test('reports when an employee has no rows', () => {
+    const out = formatEmployeeTable({ name: 'Dev Sprint participation', rows: [] });
+    assert.match(out, /No rows recorded for this employee\./);
   });
 });

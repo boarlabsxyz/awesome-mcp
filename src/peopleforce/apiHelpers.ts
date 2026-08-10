@@ -491,6 +491,64 @@ export type PeopleForceKnowledgeArticle = {
   updated_at?: string;
 };
 
+// === Employee custom tables (v3) ===
+// PeopleForce "tables" are repeating-row custom sections on a profile (e.g. a
+// "Dev Sprint participation" table). Definitions come from /employee_tables;
+// a specific employee's rows come from /employees/{id}/tables/{internal_name}.
+
+export type PeopleForceTableColumnOption = { id?: number | string; value?: string };
+
+export type PeopleForceTableColumnDef = {
+  id?: number | string;
+  name?: string;
+  internal_name?: string;
+  type?: string;
+  options?: PeopleForceTableColumnOption[];
+};
+
+export type PeopleForceEmployeeTableDef = {
+  id?: number | string;
+  name?: string;
+  internal_name?: string;
+  description?: string;
+  group?: PeopleForceNamed | null;
+  columns?: PeopleForceTableColumnDef[];
+  created_at?: string;
+  updated_at?: string;
+};
+
+/** List items are wrapped in an `EmployeeTable` key; also accept the bare shape. */
+export type PeopleForceEmployeeTableListItem = { EmployeeTable?: PeopleForceEmployeeTableDef } & PeopleForceEmployeeTableDef;
+
+/**
+ * A single cell value. Type depends on the column: scalar, a `{id,value}` option
+ * (single-select), an array of them (multi-select), or an employee ref.
+ */
+export type PeopleForceTableCellValue =
+  | string
+  | number
+  | boolean
+  | null
+  | { id?: number | string; value?: string }
+  | Array<{ id?: number | string; value?: string }>
+  | { id?: number | string; full_name?: string; email?: string };
+
+export type PeopleForceEmployeeTableRow = {
+  id?: number | string;
+  /** Keyed by column internal_name → typed cell value. */
+  columns?: Record<string, PeopleForceTableCellValue>;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type PeopleForceEmployeeTableData = {
+  id?: number | string;
+  internal_name?: string;
+  name?: string;
+  description?: string;
+  rows?: PeopleForceEmployeeTableRow[];
+};
+
 /** Pagination shape the API actually returns. Server-forced page size. */
 export type PeopleForcePagination = {
   page?: number;
@@ -887,6 +945,21 @@ export class PeopleForceClient {
 
   getKnowledgeBaseArticle(id: string | number): Promise<{ data: PeopleForceKnowledgeArticle }> {
     return this.requestAt(this.apiV3BaseUrl, 'GET', `/knowledge_base/articles/${encodeURIComponent(String(id))}`);
+  }
+
+  // === Employee custom tables (v3) ===
+
+  listEmployeeTables(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceEmployeeTableListItem>> {
+    return this.requestAt(this.apiV3BaseUrl, 'GET', '/employee_tables', undefined, { page: input.page });
+  }
+
+  /** Row-level data of one custom table for a specific employee. Not paginated (returns the table with all rows). */
+  getEmployeeTable(employeeId: string | number, internalName: string): Promise<PeopleForceEmployeeTableData> {
+    return this.requestAt(
+      this.apiV3BaseUrl,
+      'GET',
+      `/employees/${encodeURIComponent(String(employeeId))}/tables/${encodeURIComponent(internalName)}`,
+    );
   }
 
   // === Careers API — published job descriptions ===
@@ -1728,6 +1801,74 @@ export function formatKnowledgeArticle(article: PeopleForceKnowledgeArticle): st
     parts.push(body);
   }
   return parts.join('\n');
+}
+
+// ==== Employee custom-table formatters ====
+
+/** Unwrap the `EmployeeTable` list wrapper, tolerating the bare shape. */
+function tableDef(item: PeopleForceEmployeeTableListItem): PeopleForceEmployeeTableDef {
+  return item.EmployeeTable ?? item;
+}
+
+export function formatEmployeeTableList(
+  items: PeopleForceEmployeeTableListItem[],
+  pagination?: PeopleForcePagination,
+): string {
+  if (items.length === 0) return renderEmptyList('Employee Tables', 'employee tables', pagination);
+  const parts = ['# Employee Tables', ''];
+  const pag = renderPaginationLine(pagination);
+  if (pag) { parts.push(pag); parts.push(''); }
+  items.forEach((it, i) => {
+    const t = tableDef(it);
+    parts.push(`## ${i + 1}. ${t.name ?? 'Untitled table'}`);
+    if (t.internal_name) parts.push(`Internal name: ${t.internal_name}  ← pass to getEmployeeTable`);
+    if (t.id !== undefined) parts.push(`ID: ${t.id}`);
+    const group = refName(t.group);
+    if (group) parts.push(`Group: ${group}`);
+    if (t.description) parts.push(`Description: ${t.description}`);
+    if (t.columns && t.columns.length) {
+      const cols = t.columns.map((c) => c.name ?? c.internal_name).filter(Boolean);
+      if (cols.length) parts.push(`Columns: ${cols.join(', ')}`);
+    }
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+/** Render a single custom-table cell value across the union of column types. */
+function tableCellText(value: PeopleForceTableCellValue): string {
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value)) {
+    return value.map((v) => v?.value ?? '').filter(Boolean).join(', ');
+  }
+  if (typeof value === 'boolean') return value ? 'yes' : 'no';
+  if (typeof value === 'object') {
+    const rec = value as { value?: string; full_name?: string; email?: string };
+    return rec.value ?? rec.full_name ?? rec.email ?? JSON.stringify(value);
+  }
+  return String(value);
+}
+
+export function formatEmployeeTable(data: PeopleForceEmployeeTableData): string {
+  const parts = [`# ${data.name ?? 'Employee Table'}`];
+  if (data.internal_name) parts.push(`Internal name: ${data.internal_name}`);
+  if (data.description) parts.push(`Description: ${data.description}`);
+  const rows = data.rows ?? [];
+  if (rows.length === 0) {
+    parts.push('', 'No rows recorded for this employee.');
+    return parts.join('\n');
+  }
+  parts.push('');
+  rows.forEach((row, i) => {
+    parts.push(`## Row ${i + 1}${row.id !== undefined ? ` (ID: ${row.id})` : ''}`);
+    const cells = row.columns ?? {};
+    for (const [key, value] of Object.entries(cells)) {
+      const text = tableCellText(value);
+      if (text !== '') parts.push(`${key}: ${text}`);
+    }
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
 }
 
 export function formatCandidateDossier(dossier: PeopleForceCandidateDossier): string {
