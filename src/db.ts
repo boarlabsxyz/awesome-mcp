@@ -196,6 +196,20 @@ CREATE INDEX IF NOT EXISTS idx_clickup_events_sub_time
   ON clickup_task_events(subscription_id, occurred_at DESC);
 `;
 
+// Re-hosted images for ClickUp Docs. ClickUp Doc pages render markdown, so an
+// image is embedded as ![alt](url) pointing at our own public serve route
+// (/images/clickup-doc/:id). Bytes live here; see src/clickup/docImageStore.ts.
+const CREATE_CLICKUP_DOC_IMAGES_TABLE = `
+CREATE TABLE IF NOT EXISTS clickup_doc_images (
+  id          TEXT PRIMARY KEY,
+  bytes       BYTEA NOT NULL,
+  mime        TEXT NOT NULL,
+  byte_size   INTEGER NOT NULL,
+  created_by  TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+`;
+
 // Add unique constraint on instance_id (each instance must be unique)
 const ADD_INSTANCE_ID_UNIQUE_CONSTRAINT = `
 DO $$
@@ -310,6 +324,8 @@ export async function initDatabase(): Promise<void> {
     await pool.query(CREATE_CLICKUP_EVENTS_WORKSPACE_TASK_INDEX);
     await pool.query(CREATE_CLICKUP_EVENTS_SUBSCRIPTION_INDEX);
     console.error('ClickUp task events indexes ensured.');
+    await pool.query(CREATE_CLICKUP_DOC_IMAGES_TABLE);
+    console.error('ClickUp doc images table ensured.');
 
     dbAvailable = true;
 

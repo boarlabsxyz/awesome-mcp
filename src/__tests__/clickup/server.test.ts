@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it, afterEach } from 'node:test';
 import { UserError } from 'fastmcp';
+import { __setDocImagePoolForTests } from '../../clickup/docImageStore.js';
 
 // ---------------------------------------------------------------------------
 // Capture tools from the FastMCP instance.
@@ -81,13 +82,14 @@ describe('ClickUp server tools', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('should have registered all 45 tools', () => {
-    // 43 ClickUp-specific tools (incl. tag-management + filterTeamTasks +
+  it('should have registered all 47 tools', () => {
+    // 45 ClickUp-specific tools (incl. tag-management + filterTeamTasks +
     // subscribeToTaskEvents + getTaskEventHistory + listTaskEventSubscriptions
-    // + debugTaskEventSubscription + unsubscribeFromTaskEvents) + 2 shared
+    // + debugTaskEventSubscription + unsubscribeFromTaskEvents + doc-image
+    // tools insertImageIntoPage + uploadClickUpDocImage) + 2 shared
     // (mintRestBearerForCurl, listRestEndpoints) registered on every FastMCP
     // server.
-    assert.equal(toolMap.size, 45);
+    assert.equal(toolMap.size, 47);
   });
 
   // === getClickUpClient / auth guard ===
@@ -1061,6 +1063,130 @@ describe('ClickUp server tools', () => {
       mockFetch([{ status: 200, body: { teams: [{ id: '999', name: 'Other', members: [] }] } }]);
       const result = await callTool('listWorkspaceMembers', { workspaceId: '123' });
       assert.ok(result.includes('not found'));
+    });
+  });
+
+  // === Doc image tools: insertImageIntoPage / uploadClickUpDocImage ===
+
+  describe('doc image tools', () => {
+    const prevBaseUrl = process.env.BASE_URL;
+
+    // Routes fetch() by host: the image URL streams bytes; api.clickup.com
+    // (the editPage call) returns an OK JSON body.
+    function mockImageAndClickUp(contentType = 'image/png') {
+      globalThis.fetch = (async (input: any) => {
+        const u = String(input);
+        if (u.includes('api.clickup.com')) {
+          return { ok: true, status: 200, text: async () => '{}', json: async () => ({}) } as any;
+        }
+        let read = false;
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (n: string) => (n.toLowerCase() === 'content-type' ? contentType : null) },
+          body: {
+            getReader: () => ({
+              read: async () => (read ? { done: true } : ((read = true), { done: false, value: new TextEncoder().encode('IMG') })),
+              cancel: async () => {},
+              releaseLock: () => {},
+            }),
+            cancel: async () => {},
+          },
+        } as any;
+      }) as any;
+    }
+
+    afterEach(() => {
+      __setDocImagePoolForTests(null);
+      if (prevBaseUrl === undefined) delete process.env.BASE_URL;
+      else process.env.BASE_URL = prevBaseUrl;
+    });
+
+    it('insertImageIntoPage requires a connected ClickUp session', async () => {
+      await assert.rejects(
+        () => callTool('insertImageIntoPage', { workspaceId: 'w', docId: 'd', pageId: 'p', imageUrl: 'https://example.com/x.png' }, sessionWith()),
+        (err: any) => { assert.ok(err instanceof UserError); assert.match(err.message, /ClickUp not connected/); return true; },
+      );
+    });
+
+    it('insertImageIntoPage fails fast when BASE_URL is unset', async () => {
+      delete process.env.BASE_URL;
+      await assert.rejects(
+        () => callTool('insertImageIntoPage', { workspaceId: 'w', docId: 'd', pageId: 'p', imageUrl: 'https://example.com/x.png' }),
+        (err: any) => { assert.match(err.message, /BASE_URL/); return true; },
+      );
+    });
+
+    it('insertImageIntoPage fails fast when Postgres is unavailable', async () => {
+      process.env.BASE_URL = 'https://host.example';
+      // no pool injected → DB unavailable
+      await assert.rejects(
+        () => callTool('insertImageIntoPage', { workspaceId: 'w', docId: 'd', pageId: 'p', imageUrl: 'https://example.com/x.png' }),
+        (err: any) => { assert.match(err.message, /require Postgres/); return true; },
+      );
+    });
+
+    it('insertImageIntoPage re-hosts and embeds the image into the page', async () => {
+      process.env.BASE_URL = 'https://host.example/';
+      const stored: any[] = [];
+      __setDocImagePoolForTests({
+        query: async (text: string, params?: any[]) => { stored.push({ text, params }); return { rows: [] }; },
+      });
+      mockImageAndClickUp();
+      const result = await callTool('insertImageIntoPage', {
+        workspaceId: 'w', docId: 'd', pageId: 'p', imageUrl: 'https://cdn.example.com/pic.png', altText: 'hello',
+      });
+      assert.match(result, /Image added to page p \(append\)/);
+      assert.match(result, /https:\/\/host\.example\/images\/clickup-doc\//);
+      // one INSERT happened; no DELETE (edit succeeded)
+      assert.equal(stored.filter((q) => /INSERT/.test(q.text)).length, 1);
+      assert.equal(stored.filter((q) => /DELETE/.test(q.text)).length, 0);
+    });
+
+    it('insertImageIntoPage deletes the orphan row when the page edit fails', async () => {
+      process.env.BASE_URL = 'https://host.example';
+      const stored: any[] = [];
+      __setDocImagePoolForTests({
+        query: async (text: string, params?: any[]) => { stored.push({ text, params }); return { rows: [] }; },
+      });
+      // Image fetch OK, but the ClickUp editPage call fails → orphan cleanup.
+      globalThis.fetch = (async (input: any) => {
+        const u = String(input);
+        if (u.includes('api.clickup.com')) return { ok: false, status: 500, text: async () => 'boom' } as any;
+        let read = false;
+        return {
+          ok: true, status: 200,
+          headers: { get: (n: string) => (n.toLowerCase() === 'content-type' ? 'image/png' : null) },
+          body: {
+            getReader: () => ({ read: async () => (read ? { done: true } : ((read = true), { done: false, value: new TextEncoder().encode('IMG') })), cancel: async () => {}, releaseLock: () => {} }),
+            cancel: async () => {},
+          },
+        } as any;
+      }) as any;
+
+      await assert.rejects(() => callTool('insertImageIntoPage', {
+        workspaceId: 'w', docId: 'd', pageId: 'p', imageUrl: 'https://cdn.example.com/pic.png',
+      }));
+      assert.equal(stored.filter((q) => /INSERT/.test(q.text)).length, 1);
+      assert.equal(stored.filter((q) => /DELETE/.test(q.text)).length, 1);
+    });
+
+    it('uploadClickUpDocImage re-hosts and returns a public URL', async () => {
+      process.env.BASE_URL = 'https://host.example';
+      __setDocImagePoolForTests({ query: async () => ({ rows: [] }) });
+      mockImageAndClickUp();
+      const result = await callTool('uploadClickUpDocImage', { imageUrl: 'https://cdn.example.com/pic.png' });
+      assert.match(result, /Public URL:/);
+      assert.match(result, /https:\/\/host\.example\/images\/clickup-doc\//);
+      assert.match(result, /!\[\]\(https:\/\/host\.example\/images\/clickup-doc\//);
+    });
+
+    it('uploadClickUpDocImage fails fast when BASE_URL is unset', async () => {
+      delete process.env.BASE_URL;
+      await assert.rejects(
+        () => callTool('uploadClickUpDocImage', { imageUrl: 'https://example.com/x.png' }),
+        (err: any) => { assert.match(err.message, /BASE_URL/); return true; },
+      );
     });
   });
 });
