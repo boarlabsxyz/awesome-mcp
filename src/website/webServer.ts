@@ -471,6 +471,35 @@ export function registerClickUpWebhookIngest(app: express.Express): void {
 }
 
 /**
+ * Serves re-hosted ClickUp Doc images. The insertImageIntoPage /
+ * uploadClickUpDocImage tools store image bytes in Postgres and embed a
+ * markdown link pointing here; ClickUp's renderer fetches this URL, so the
+ * route is intentionally public (unauthenticated). Ids are unguessable UUIDs.
+ * Registered on every pod that can receive public traffic, mirroring
+ * registerClickUpWebhookIngest.
+ */
+export function registerClickUpDocImageRoutes(app: express.Express): void {
+  app.get('/images/clickup-doc/:id', async (req, res) => {
+    try {
+      // Dynamic import to avoid a boot-time cycle with the db/clickup modules.
+      const { getDocImage } = await import('../clickup/docImageStore.js');
+      const img = await getDocImage(req.params.id);
+      if (!img) {
+        res.status(404).send('Not found');
+        return;
+      }
+      res
+        .type(img.mime)
+        .set('Cache-Control', 'public, max-age=31536000, immutable')
+        .send(img.bytes);
+    } catch (err: any) {
+      console.error(`[clickup-doc-image] serve error: ${err?.message || err}`);
+      res.status(500).send('Internal error');
+    }
+  });
+}
+
+/**
  * Registers all shared routes used by both single-service and multi-service modes.
  * Includes: auth, dashboard, connect/reconnect OAuth, API endpoints, admin, catalogs.
  */
@@ -690,6 +719,9 @@ function registerSharedRoutes(app: express.Express): void {
   // Mounted here (before the global express.json()) so we can consume the raw
   // body. See registerClickUpWebhookIngest for the full design note.
   registerClickUpWebhookIngest(app);
+
+  // Public serve route for re-hosted ClickUp Doc images (unauthenticated).
+  registerClickUpDocImageRoutes(app);
 
   // JSON body parser for API routes
   app.use(express.json());
@@ -4683,6 +4715,9 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
   // 404 and ClickUp fail_count climbed to 30 while nothing landed. Must be
   // registered BEFORE any express.json() on this app.
   registerClickUpWebhookIngest(app);
+
+  // Public serve route for re-hosted ClickUp Doc images (unauthenticated).
+  registerClickUpDocImageRoutes(app);
 
   // RFC 9728: OAuth Protected Resource Metadata (scoped to this MCP service)
   const mcpSlug = process.env.MCP_SLUG || 'google-docs';

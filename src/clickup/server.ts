@@ -12,6 +12,7 @@ import {
   parseTimestampInput,
 } from './apiHelpers.js';
 import { formatTask, formatTaskList } from './formatHelpers.js';
+import { fetchRemoteImage, storeDocImage } from './docImageStore.js';
 import {
   CAPTURED_EVENTS,
   debugTaskEventSubscriptionFlow,
@@ -35,6 +36,16 @@ function getClickUpClient(session?: UserSession): ClickUpClient {
     throw new UserError('ClickUp not connected. Visit the dashboard to connect your ClickUp account.');
   }
   return new ClickUpClient(session.clickUpAccessToken);
+}
+
+// Builds the public URL for a re-hosted doc image from its stored id, using the
+// same BASE_URL pattern as the webhook callback (see subscribeToTaskEvents).
+function buildDocImageUrl(id: string): string {
+  const baseUrl = (process.env.BASE_URL || '').replace(/\/+$/, '');
+  if (!baseUrl) {
+    throw new UserError('BASE_URL env var must be set to host images (needed to build a public image URL).');
+  }
+  return `${baseUrl}/images/clickup-doc/${id}`;
 }
 
 // formatTask / formatCustomFieldValue / formatTaskList moved to ./formatHelpers.js
@@ -1211,6 +1222,50 @@ clickUpServer.addTool({
     }
     await client.editPage(args.workspaceId, args.docId, args.pageId, data);
     return `Page ${args.pageId} updated (${args.editMode || 'replace'}).`;
+  },
+});
+
+clickUpServer.addTool({
+  name: 'insertImageIntoPage',
+  annotations: { readOnlyHint: false },
+  description: 'Add an image to a ClickUp Doc page. Fetches the image from a public URL, re-hosts it, and embeds it as markdown in the page (append by default). ClickUp has no image-upload API for docs, so the image is stored and served by this server — requires DATABASE_URL and BASE_URL to be configured.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+    docId: z.string().describe('The doc ID.'),
+    pageId: z.string().describe('The page ID to add the image to.'),
+    imageUrl: z.string().describe('Public http(s) URL of the image to embed (jpg, png, gif, bmp, webp, or svg; max 20 MB).'),
+    altText: z.string().optional().default('').describe('Alt text for the image.'),
+    editMode: z.enum(['append', 'prepend', 'replace']).optional().default('append').describe('How to place the image: append (default), prepend, or replace the page content.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    const { bytes, mime } = await fetchRemoteImage(args.imageUrl);
+    const createdBy = session?.userId != null ? String(session.userId) : undefined;
+    const { id } = await storeDocImage(bytes, mime, createdBy);
+    const url = buildDocImageUrl(id);
+    const editMode = args.editMode || 'append';
+    await client.editPage(args.workspaceId, args.docId, args.pageId, {
+      content: `![${args.altText || ''}](${url})`,
+      content_format: 'text/md',
+      content_edit_mode: editMode,
+    });
+    return `Image added to page ${args.pageId} (${editMode}).\nHosted at: ${url}`;
+  },
+});
+
+clickUpServer.addTool({
+  name: 'uploadClickUpDocImage',
+  annotations: { readOnlyHint: false },
+  description: 'Fetch an image from a public URL, re-host it on this server, and return a public URL you can embed in a ClickUp Doc page as markdown (![](url)). Use this when you want the URL without immediately writing to a page; otherwise use insertImageIntoPage. Requires DATABASE_URL and BASE_URL to be configured.',
+  parameters: z.object({
+    imageUrl: z.string().describe('Public http(s) URL of the image to re-host (jpg, png, gif, bmp, webp, or svg; max 20 MB).'),
+  }),
+  execute: async (args, { session }) => {
+    const { bytes, mime } = await fetchRemoteImage(args.imageUrl);
+    const createdBy = session?.userId != null ? String(session.userId) : undefined;
+    const { id } = await storeDocImage(bytes, mime, createdBy);
+    const url = buildDocImageUrl(id);
+    return `Image re-hosted. Public URL:\n${url}\n\nEmbed it in a page with markdown: ![](${url})`;
   },
 });
 
