@@ -96,6 +96,11 @@ describe('POST /images/upload', () => {
     const res = await upload(Buffer.alloc(21_000_000));
     assert.equal(res.status, 413);
   });
+
+  it('401s (not 413) an oversized body with no token — auth runs before buffering', async () => {
+    const res = await upload(Buffer.alloc(21_000_000), null);
+    assert.equal(res.status, 401);
+  });
 });
 
 describe('GET /images/:key', () => {

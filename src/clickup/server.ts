@@ -48,6 +48,23 @@ async function rehostImage(imageUrl: string): Promise<string> {
   return url;
 }
 
+// True only when imageUrl is an http(s) URL actually served by our image host:
+// same origin as the public base AND a /images/ path. A naive startsWith(base)
+// check would wrongly match https://host.example.evil.com/... (a different
+// origin that merely shares the base as a string prefix).
+function isImageUrlOnOurHost(imageUrl: string, publicBase: string): boolean {
+  let parsed: URL;
+  let base: URL;
+  try {
+    parsed = new URL(imageUrl);
+    base = new URL(publicBase);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  return parsed.origin === base.origin && parsed.pathname.startsWith('/images/');
+}
+
 // formatTask / formatCustomFieldValue / formatTaskList moved to ./formatHelpers.js
 // so the REST data plane (webServer.ts) can reuse the same rendering when
 // callers request `Accept: text/plain` on /api/v1/clickup/tasks/* endpoints.
@@ -1240,15 +1257,16 @@ clickUpServer.addTool({
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
-    // The image host's public base (validated) — used to detect URLs already
-    // hosted here. Only the storage module reads the env behind this.
-    const baseUrl = getImagePublicBaseUrl();
+    // Fail fast if the image host isn't configured (also the base for the
+    // already-hosted check below). Only the storage module reads the env.
+    const publicBase = getImagePublicBaseUrl();
 
-    // Skip the fetch-and-store round trip when the image is already hosted on
-    // this server (a URL under the image host never needs re-hosting), or when
-    // the caller explicitly opts out.
-    const alreadyHosted = args.imageUrl.startsWith(baseUrl);
-    const url = (args.skipRehost || alreadyHosted) ? args.imageUrl : await rehostImage(args.imageUrl);
+    // Skip the fetch-and-store round trip when the image is already served by
+    // our own image host (never needs re-hosting), or when the caller explicitly
+    // opts out. The host check is origin+path strict — not a string prefix.
+    const url = (args.skipRehost || isImageUrlOnOurHost(args.imageUrl, publicBase))
+      ? args.imageUrl
+      : await rehostImage(args.imageUrl);
 
     const editMode = args.editMode || 'append';
     // No orphan cleanup on failure: image_blobs is content-addressed and deduped,

@@ -511,6 +511,20 @@ function bearerMatches(provided: string, expected: string): boolean {
   return timingSafeEqual(a, b);
 }
 
+// Bearer auth for the upload endpoint. Runs BEFORE express.raw so an
+// unauthenticated request is rejected without buffering its (up to 20MB) body.
+// Fail closed: no configured token means no valid upload is possible.
+function authorizeImageUpload(req: Request, res: Response, next: NextFunction): void {
+  const expected = process.env.IMAGE_UPLOAD_TOKEN;
+  const header = String(req.headers['authorization'] || '');
+  const provided = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (!expected || !provided || !bearerMatches(provided, expected)) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  next();
+}
+
 /**
  * Content-addressed image blob host (see src/images/imageBlobStore.ts).
  *   POST /images/upload  — bearer-auth'd raw-binary upload → 201 { url, key, ... }
@@ -524,20 +538,13 @@ export function registerImageBlobRoutes(app: express.Express): void {
 
   router.post(
     '/upload',
+    // Auth first, so unauthorized requests are rejected before the body is read.
+    authorizeImageUpload,
     // Input-side DoS guard: reject oversized bodies BEFORE sharp decodes them.
     // This is the real memory protection (see imageBlobStore for why the 2 MB
     // output cap is storage hygiene, not security). Do not remove it.
     express.raw({ type: '*/*', limit: '20mb' }),
     async (req, res) => {
-      const expected = process.env.IMAGE_UPLOAD_TOKEN;
-      const header = String(req.headers['authorization'] || '');
-      const provided = header.startsWith('Bearer ') ? header.slice(7) : '';
-      // Fail closed: no configured token means no valid upload is possible.
-      if (!expected || !provided || !bearerMatches(provided, expected)) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
-
       const body = req.body;
       if (!Buffer.isBuffer(body) || body.length === 0) {
         res.status(415).json({ error: 'Empty or non-binary request body.' });

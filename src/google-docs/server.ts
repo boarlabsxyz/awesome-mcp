@@ -1831,8 +1831,14 @@ async function startServer() {
       // Multi-user HTTP mode
 
       // Fail fast if the image host isn't configured — a bad/missing value would
-      // otherwise get permanently embedded in ClickUp docs on first upload.
-      assertImagePublicBaseUrlConfigured();
+      // otherwise get permanently embedded in ClickUp docs on first upload. Only
+      // services that actually upload images need this: the all-in-one service
+      // and the ClickUp MCP. The website and non-image MCP services start without
+      // it (an errant upload there still fails safely via store()'s own check).
+      const hostsImages = (MCP_MODE !== "web" && MCP_MODE !== "mcp") || (MCP_MODE === "mcp" && MCP_SLUG === "clickup");
+      if (hostsImages) {
+        assertImagePublicBaseUrlConfigured();
+      }
 
       await initDatabase();
       await loadUsers();

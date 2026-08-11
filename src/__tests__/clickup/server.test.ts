@@ -1198,6 +1198,23 @@ describe('ClickUp server tools', () => {
       assert.ok(urls.every((u) => u.includes('api.clickup.com')));
     });
 
+    it('insertImageIntoPage re-hosts a look-alike host (prefix, not our origin)', async () => {
+      // https://host.example.evil.com starts with the base as a string but is a
+      // DIFFERENT origin — it must be fetched and re-hosted, not embedded as-is.
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      fakeImagePool();
+      const urls = mockFetch();
+      const evil = 'https://host.example.evil.com/x.png';
+      const result = await callTool('insertImageIntoPage', {
+        workspaceId: 'w', docId: 'd', pageId: 'p', imageUrl: evil,
+      });
+      // embedded URL is our re-hosted webp, NOT the attacker URL
+      assert.match(result, HOSTED_URL);
+      assert.doesNotMatch(result, /evil\.com/);
+      // the attacker URL was actually fetched (re-hosted)
+      assert.equal(urls.filter((u) => u === evil).length, 1);
+    });
+
     it('insertImageIntoPage skips re-hosting when skipRehost=true', async () => {
       process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
       fakeImagePool();
