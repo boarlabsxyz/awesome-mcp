@@ -242,6 +242,8 @@ End with a tight summary:
   - For a paste-token provider, redeploy the **web** service after step 5f so the updated `public/dashboard.html` ships (it's baked into the image at build).
   - `data/mcp-catalog.json` was edited locally but is gitignored — the PR contains the `seedDefaultCatalogs()` edit, which is what actually seeds dev/prod. Both are correct; just mention them so the user isn't surprised.
 
+**Sample prompts for the integrations page.** Once the catalog is seeded (step 5d), the new MCP renders a card on the public **Integrations** page (`/integrations`) automatically — the page is dynamic. But its "Sample Prompts" section stays blank ("Sample prompts coming soon.") until the slug has an entry in the `SAMPLE_PROMPTS` map in `src/website/webServer.ts`. Invoke `/update-integrations <slug>` (see `../update-integrations/SKILL.md`) to add three real, tool-grounded prompts so the card ships complete. It's cheap and mechanical, so just do it as part of the scaffold rather than leaving it for later — the diff is a few lines in `webServer.ts`.
+
 Then offer the soft chain:
 
 > The server is scaffolded with a `ping` tool. Want me to add real tools now? Tell me the tool names and I'll invoke `/add-mcp-tool <name>` for each, using the same patterns.
@@ -313,3 +315,4 @@ add-mcp-server/
 
 - **`add-mcp-tool`** owns the canonical tool shape (`references/tool-pattern.md` over there). This skill's `ping` example deliberately stays minimal — for real tools, the user follows up with `/add-mcp-tool <name>` (offered as a soft chain in step 8).
 - **`add-e2e-test`** scaffolds smoke tests. Not chained from here directly — the chain goes via `/add-mcp-tool`, which offers it for the tool the user just added.
+- **`update-integrations`** adds the new MCP's `SAMPLE_PROMPTS` entry so its card on the public `/integrations` page ships with real prompts instead of the "coming soon" placeholder. Invoked from step 8 once the catalog is seeded — the card renders automatically, but the prompts are the one hand-maintained piece.

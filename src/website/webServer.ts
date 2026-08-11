@@ -2235,6 +2235,21 @@ function registerSharedRoutes(app: express.Express): void {
       'List the last 20 messages from #incidents',
       'Pin the runbook link in #oncall',
     ],
+    'outline': [
+      'Find the onboarding doc in the Engineering collection',
+      'Create a doc summarizing today\'s incident in the Runbooks collection',
+      'Search the wiki for our deployment checklist',
+    ],
+    'peopleforce': [
+      'Who\'s out on leave next week?',
+      'List everyone in the Engineering department',
+      'Show me the skills on Jane Doe\'s profile',
+    ],
+    'hubspot': [
+      'Find the Acme Corp company and summarize its recent activity',
+      'Update the lifecycle stage for contact jane@acme.com',
+      'List open tickets modified this week',
+    ],
   };
 
   // GET /api/v1/catalogs - List all active MCPs
