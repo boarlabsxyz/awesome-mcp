@@ -36,6 +36,7 @@ import { UserSession } from '../userSession.js';
 import { loadUsers } from '../userStore.js';
 import { initDatabase, closeDatabase } from '../db.js';
 import { createWebApp } from '../website/webServer.js';
+import { assertImagePublicBaseUrlConfigured } from '../images/imageBlobStore.js';
 import { seedDefaultCatalogs } from '../mcpCatalogStore.js';
 import { calendarServer } from '../google-calendar/server.js';
 import { sheetsServer } from '../google-sheets/server.js';
@@ -1828,6 +1829,11 @@ async function startServer() {
 
     if (TRANSPORT === "httpStream" || TRANSPORT === "http" || TRANSPORT === "remote") {
       // Multi-user HTTP mode
+
+      // Fail fast if the image host isn't configured — a bad/missing value would
+      // otherwise get permanently embedded in ClickUp docs on first upload.
+      assertImagePublicBaseUrlConfigured();
+
       await initDatabase();
       await loadUsers();
 

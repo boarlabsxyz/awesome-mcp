@@ -1,5 +1,6 @@
 // src/webServer.ts
 import express, { Request, Response, NextFunction } from 'express';
+import { timingSafeEqual } from 'crypto';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
@@ -502,6 +503,100 @@ export function registerClickUpDocImageRoutes(app: express.Express): void {
   });
 }
 
+// Constant-time bearer comparison (avoids leaking the token via timing).
+function bearerMatches(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * Content-addressed image blob host (see src/images/imageBlobStore.ts).
+ *   POST /images/upload  — bearer-auth'd raw-binary upload → 201 { url, key, ... }
+ *   GET  /images/:key    — public, immutable, ETag/304 (keys are content hashes,
+ *                          so bytes at a URL never change; read must be anonymous
+ *                          because ClickUp's image proxy can't authenticate).
+ * Mounted on a sub-router so the raw-body-size 413 is handled in scope.
+ */
+export function registerImageBlobRoutes(app: express.Express): void {
+  const router = express.Router();
+
+  router.post(
+    '/upload',
+    // Input-side DoS guard: reject oversized bodies BEFORE sharp decodes them.
+    // This is the real memory protection (see imageBlobStore for why the 2 MB
+    // output cap is storage hygiene, not security). Do not remove it.
+    express.raw({ type: '*/*', limit: '20mb' }),
+    async (req, res) => {
+      const expected = process.env.IMAGE_UPLOAD_TOKEN;
+      const header = String(req.headers['authorization'] || '');
+      const provided = header.startsWith('Bearer ') ? header.slice(7) : '';
+      // Fail closed: no configured token means no valid upload is possible.
+      if (!expected || !provided || !bearerMatches(provided, expected)) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        res.status(415).json({ error: 'Empty or non-binary request body.' });
+        return;
+      }
+
+      try {
+        const { store, STORED_CONTENT_TYPE } = await import('../images/imageBlobStore.js');
+        const result = await store(body, String(req.headers['content-type'] || ''));
+        res.status(201).json({ ...result, contentType: STORED_CONTENT_TYPE });
+      } catch (err: any) {
+        if (err?.httpStatus === 415) { res.status(415).json({ error: err.message }); return; }
+        if (err?.httpStatus === 413) { res.status(413).json({ error: err.message }); return; }
+        console.error(`[image-upload] error: ${err?.message || err}`);
+        res.status(500).json({ error: 'Internal error' });
+      }
+    },
+  );
+
+  router.get('/:key', async (req, res) => {
+    try {
+      const { fetch: fetchBlob } = await import('../images/imageBlobStore.js');
+      const found = await fetchBlob(req.params.key);
+      if (!found) { res.status(404).send('Not found'); return; }
+
+      // Content-hash key ⇒ the bytes can never change, so it doubles as a strong
+      // ETag and the response is immutable-cacheable forever.
+      const etag = JSON.stringify(req.params.key); // quoted per RFC 7232
+      const inm = req.headers['if-none-match'];
+      if (inm && (inm === etag || inm === req.params.key)) {
+        res.status(304).set('ETag', etag).end();
+        return;
+      }
+
+      res
+        .status(200)
+        .type(found.contentType)
+        .set('X-Content-Type-Options', 'nosniff')
+        .set('Cache-Control', 'public, max-age=31536000, immutable')
+        .set('ETag', etag)
+        .send(found.buffer);
+    } catch (err: any) {
+      console.error(`[image-serve] error: ${err?.message || err}`);
+      res.status(500).send('Internal error');
+    }
+  });
+
+  // Map express.raw's oversize error to a clean 413 (the input DoS guard).
+  router.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+    if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+      res.status(413).json({ error: 'Request body too large (max 20MB).' });
+      return;
+    }
+    next(err);
+  });
+
+  app.use('/images', router);
+}
+
 /**
  * Registers all shared routes used by both single-service and multi-service modes.
  * Includes: auth, dashboard, connect/reconnect OAuth, API endpoints, admin, catalogs.
@@ -725,6 +820,11 @@ function registerSharedRoutes(app: express.Express): void {
 
   // Public serve route for re-hosted ClickUp Doc images (unauthenticated).
   registerClickUpDocImageRoutes(app);
+
+  // Content-addressed image blob host (upload + immutable serve). Registered
+  // before the global express.json() so the raw-binary upload body is consumed
+  // by its own express.raw() rather than a JSON parser.
+  registerImageBlobRoutes(app);
 
   // JSON body parser for API routes
   app.use(express.json());
@@ -4721,6 +4821,9 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
 
   // Public serve route for re-hosted ClickUp Doc images (unauthenticated).
   registerClickUpDocImageRoutes(app);
+
+  // Content-addressed image blob host (upload + immutable serve).
+  registerImageBlobRoutes(app);
 
   // RFC 9728: OAuth Protected Resource Metadata (scoped to this MCP service)
   const mcpSlug = process.env.MCP_SLUG || 'google-docs';

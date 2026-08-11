@@ -210,6 +210,24 @@ CREATE TABLE IF NOT EXISTS clickup_doc_images (
 );
 `;
 
+// Content-addressed image blob store (WebP, sha256-keyed). The DDL lives here
+// with the other migrations, but all DML is confined to src/images/imageBlobStore.ts
+// (the swap-to-R2 seam). STORAGE EXTERNAL disables TOAST compression: WebP is
+// already compressed, so column compression would just waste CPU on every write.
+const CREATE_IMAGE_BLOBS_TABLE = `
+CREATE TABLE IF NOT EXISTS image_blobs (
+  key          TEXT PRIMARY KEY,
+  data         BYTEA NOT NULL,
+  content_type TEXT NOT NULL,
+  bytes        INT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+`;
+
+const ALTER_IMAGE_BLOBS_STORAGE_EXTERNAL = `
+ALTER TABLE image_blobs ALTER COLUMN data SET STORAGE EXTERNAL;
+`;
+
 // Add unique constraint on instance_id (each instance must be unique)
 const ADD_INSTANCE_ID_UNIQUE_CONSTRAINT = `
 DO $$
@@ -326,6 +344,9 @@ export async function initDatabase(): Promise<void> {
     console.error('ClickUp task events indexes ensured.');
     await pool.query(CREATE_CLICKUP_DOC_IMAGES_TABLE);
     console.error('ClickUp doc images table ensured.');
+    await pool.query(CREATE_IMAGE_BLOBS_TABLE);
+    await pool.query(ALTER_IMAGE_BLOBS_STORAGE_EXTERNAL);
+    console.error('Image blobs table ensured.');
 
     dbAvailable = true;
 

@@ -12,7 +12,8 @@ import {
   parseTimestampInput,
 } from './apiHelpers.js';
 import { formatTask, formatTaskList } from './formatHelpers.js';
-import { assertDocImagesReady, deleteDocImage, fetchRemoteImage, storeDocImage } from './docImageStore.js';
+import { fetchImageBytes } from './docImageStore.js';
+import { store as storeImageBlob, getImagePublicBaseUrl } from '../images/imageBlobStore.js';
 import {
   CAPTURED_EVENTS,
   debugTaskEventSubscriptionFlow,
@@ -38,20 +39,13 @@ function getClickUpClient(session?: UserSession): ClickUpClient {
   return new ClickUpClient(session.clickUpAccessToken);
 }
 
-// Validates and returns the public base URL for serving re-hosted doc images,
-// using the same BASE_URL pattern as the webhook callback (see
-// subscribeToTaskEvents). Callers use this to fail fast before fetching/storing.
-function getImageServeBaseUrl(): string {
-  const baseUrl = (process.env.BASE_URL || '').replace(/\/+$/, '');
-  if (!baseUrl) {
-    throw new UserError('BASE_URL env var must be set to host images (needed to build a public image URL).');
-  }
-  return baseUrl;
-}
-
-// Builds the public URL for a re-hosted doc image from its stored id.
-function buildDocImageUrl(id: string): string {
-  return `${getImageServeBaseUrl()}/images/clickup-doc/${id}`;
+// Re-host a remote image via the shared content-addressed store: safe outbound
+// fetch → store() (magic-byte validation, WebP normalization, 2MB cap, dedup).
+// Returns the public URL to embed. This is the single write path for image bytes.
+async function rehostImage(imageUrl: string): Promise<string> {
+  const bytes = await fetchImageBytes(imageUrl);
+  const { url } = await storeImageBlob(bytes, '');
+  return url;
 }
 
 // formatTask / formatCustomFieldValue / formatTaskList moved to ./formatHelpers.js
@@ -1234,7 +1228,7 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'insertImageIntoPage',
   annotations: { readOnlyHint: false },
-  description: 'Add an image to a ClickUp Doc page. Fetches the image from a public URL, re-hosts it, and embeds it as markdown in the page (append by default). ClickUp has no image-upload API for docs, so the image is stored and served by this server — requires DATABASE_URL and BASE_URL to be configured.',
+  description: 'Add an image to a ClickUp Doc page. Fetches the image from a public URL, re-hosts it (recompressed to WebP), and embeds it as markdown in the page (append by default). ClickUp has no image-upload API for docs, so the image is stored and served by this server — requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL to be configured. If imageUrl is already hosted on this server (starts with IMAGE_PUBLIC_BASE_URL), re-hosting is skipped automatically; pass skipRehost:true to force embedding the given URL as-is.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
     docId: z.string().describe('The doc ID.'),
@@ -1242,28 +1236,29 @@ clickUpServer.addTool({
     imageUrl: z.string().describe('Public http(s) URL of the image to embed (jpg, png, gif, bmp, or webp; max 20 MB).'),
     altText: z.string().optional().default('').describe('Alt text for the image.'),
     editMode: z.enum(['append', 'prepend', 'replace']).optional().default('append').describe('How to place the image: append (default), prepend, or replace the page content.'),
+    skipRehost: z.boolean().optional().default(false).describe('Embed imageUrl as-is without fetching/re-hosting it. Auto-enabled when imageUrl is already on this server (starts with IMAGE_PUBLIC_BASE_URL).'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
-    // Validate hosting config up front, before spending a fetch or writing a row.
-    getImageServeBaseUrl();
-    assertDocImagesReady();
-    const { bytes, mime } = await fetchRemoteImage(args.imageUrl);
-    const createdBy = session?.userId != null ? String(session.userId) : undefined;
-    const { id } = await storeDocImage(bytes, mime, createdBy);
-    const url = buildDocImageUrl(id);
+    // The image host's public base (validated) — used to detect URLs already
+    // hosted here. Only the storage module reads the env behind this.
+    const baseUrl = getImagePublicBaseUrl();
+
+    // Skip the fetch-and-store round trip when the image is already hosted on
+    // this server (a URL under the image host never needs re-hosting), or when
+    // the caller explicitly opts out.
+    const alreadyHosted = args.imageUrl.startsWith(baseUrl);
+    const url = (args.skipRehost || alreadyHosted) ? args.imageUrl : await rehostImage(args.imageUrl);
+
     const editMode = args.editMode || 'append';
-    try {
-      await client.editPage(args.workspaceId, args.docId, args.pageId, {
-        content: `![${args.altText || ''}](${url})`,
-        content_format: 'text/md',
-        content_edit_mode: editMode,
-      });
-    } catch (err) {
-      // The page edit failed, so the stored bytes are now an orphan — drop them.
-      await deleteDocImage(id).catch(() => { /* best-effort */ });
-      throw err;
-    }
+    // No orphan cleanup on failure: image_blobs is content-addressed and deduped,
+    // so a blob may be shared by other docs — deleting it here could break them.
+    // A leftover, unreferenced blob is harmless (immutable, reclaimable by GC).
+    await client.editPage(args.workspaceId, args.docId, args.pageId, {
+      content: `![${args.altText || ''}](${url})`,
+      content_format: 'text/md',
+      content_edit_mode: editMode,
+    });
     return `Image added to page ${args.pageId} (${editMode}).\nHosted at: ${url}`;
   },
 });
@@ -1271,18 +1266,14 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'uploadClickUpDocImage',
   annotations: { readOnlyHint: false },
-  description: 'Fetch an image from a public URL, re-host it on this server, and return a public URL you can embed in a ClickUp Doc page as markdown (![](url)). Use this when you want the URL without immediately writing to a page; otherwise use insertImageIntoPage. Requires DATABASE_URL and BASE_URL to be configured.',
+  description: 'Fetch an image from a public URL, re-host it on this server (recompressed to WebP), and return a public URL you can embed in a ClickUp Doc page as markdown (![](url)). Use this when you want the URL without immediately writing to a page; otherwise use insertImageIntoPage. Requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL to be configured.',
   parameters: z.object({
     imageUrl: z.string().describe('Public http(s) URL of the image to re-host (jpg, png, gif, bmp, or webp; max 20 MB).'),
   }),
-  execute: async (args, { session }) => {
-    // Validate hosting config up front, before spending a fetch or writing a row.
-    getImageServeBaseUrl();
-    assertDocImagesReady();
-    const { bytes, mime } = await fetchRemoteImage(args.imageUrl);
-    const createdBy = session?.userId != null ? String(session.userId) : undefined;
-    const { id } = await storeDocImage(bytes, mime, createdBy);
-    const url = buildDocImageUrl(id);
+  execute: async (args) => {
+    // Fail fast if the image host isn't configured, before spending a fetch.
+    getImagePublicBaseUrl();
+    const url = await rehostImage(args.imageUrl);
     return `Image re-hosted. Public URL:\n${url}\n\nEmbed it in a page with markdown: ![](${url})`;
   },
 });
