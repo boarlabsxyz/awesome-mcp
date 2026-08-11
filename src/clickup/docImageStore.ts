@@ -1,48 +1,29 @@
 // src/clickup/docImageStore.ts
 //
-// Image-hosting store for ClickUp Docs. ClickUp's Doc pages render markdown, so
-// an image is placed by embedding `![alt](url)` — but that needs a publicly
-// reachable URL. ClickUp's own `/v1/attachment` upload route requires a browser
-// session JWT we don't have (this server authenticates ClickUp with a per-user
-// OAuth token), so instead we re-host the image ourselves: store the bytes in
-// Postgres and serve them from a public Express route under BASE_URL.
+// Two concerns live here now:
 //
-// Postgres-only — image blobs don't belong in the JSON file fallback. The tools
-// that call this surface a clear UserError when DATABASE_URL isn't set.
+//  1. fetchImageBytes(url) — a safe OUTBOUND fetch: SSRF guards (per-redirect-hop),
+//     a request timeout, and a max-response-size cap. It returns raw bytes only;
+//     format validation, WebP normalization, and the size cap are the storage
+//     module's job (src/images/imageBlobStore.ts store()). This is the single
+//     write path for image bytes.
 //
-// Public API:
-//   fetchRemoteImage(url)          — SSRF-guarded, size-capped fetch of a remote image
-//   storeDocImage(bytes, mime, by) — persist bytes, return an unguessable id
-//   getDocImage(id)                — read bytes + mime back (for the serve route)
+//  2. getDocImage(id) — the READ side of the legacy content-addressed-by-UUID
+//     store (clickup_doc_images), kept PERMANENTLY: /images/clickup-doc/:id URLs
+//     are already embedded in live ClickUp docs and must keep resolving. Nothing
+//     writes to clickup_doc_images anymore (new uploads go through image_blobs),
+//     but we never drop the table or this read path.
 
-import { randomUUID } from 'crypto';
 import { UserError } from 'fastmcp';
 import { isDatabaseAvailable, getPool } from '../db.js';
 import { validateFetchUrl, rejectPrivateAddress } from '../google-docs/apiHelpers.js';
 
-// The clickup_doc_images table schema lives in src/db.ts alongside the other
-// ClickUp tables (that's where this repo keeps its migrations), created during
-// initDatabase().
-
-const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
+const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB — matches the upload route's body cap
 const FETCH_TIMEOUT_MS = 30_000;
 const MAX_REDIRECTS = 5;
 
-// Extension → MIME, mirroring src/google-docs/apiHelpers.ts. Used as a fallback
-// when the response has no usable Content-Type. SVG is intentionally excluded:
-// we serve these bytes back from our own origin, and SVG can carry active
-// content (scripts), so re-hosting one would be stored XSS. Raster types only.
-const MIME_BY_EXT: { [key: string]: string } = {
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.png': 'image/png',
-  '.gif': 'image/gif',
-  '.bmp': 'image/bmp',
-  '.webp': 'image/webp',
-};
-
-// Test seam: unit tests inject a fake pool here so the DB-backed paths can be
-// exercised without a live Postgres (ESM has no module-mocking in this runner).
+// Test seam: unit tests inject a fake pool here so the (legacy read) DB path can
+// be exercised without a live Postgres (ESM has no module-mocking in this runner).
 // Null in production — only a test helper ever sets it.
 type PoolLike = { query: (text: string, params?: any[]) => Promise<{ rows: any[] }> };
 let testPool: PoolLike | null = null;
@@ -61,14 +42,6 @@ function requireDb(): void {
 }
 
 /**
- * Fail fast if the image store isn't usable, so callers can validate before
- * spending a network fetch / creating an orphan row.
- */
-export function assertDocImagesReady(): void {
-  requireDb();
-}
-
-/**
  * Races a promise against the shared abort deadline. The SSRF DNS lookup doesn't
  * observe the fetch AbortSignal, so without this a slow resolve could outlast
  * FETCH_TIMEOUT_MS. The abort listener is always removed once the race settles.
@@ -84,10 +57,11 @@ function raceAbort<T>(p: Promise<T>, signal: AbortSignal, url: string): Promise<
 }
 
 /**
- * Fetch a remote image with the same SSRF and size protections used by the
- * Google Docs image path. Returns the raw bytes and a best-effort MIME type.
+ * Fetch a remote URL into a Buffer with SSRF, timeout, and max-size protections.
+ * Returns raw bytes — the caller passes them to the storage module, which does
+ * magic-byte validation, WebP normalization, and the post-recompression cap.
  */
-export async function fetchRemoteImage(url: string): Promise<{ bytes: Buffer; mime: string }> {
+export async function fetchImageBytes(url: string): Promise<Buffer> {
   // One timeout covers the whole operation — DNS/connect AND body streaming —
   // so a slow drip on the body can't hang past FETCH_TIMEOUT_MS. Cleared once
   // in the finally, never right after the headers arrive.
@@ -99,7 +73,6 @@ export async function fetchRemoteImage(url: string): Promise<{ bytes: Buffer; mi
     // re-validated against the SSRF guards. With redirect:'follow', a 302 to
     // 169.254.169.254 or 127.0.0.1 would be fetched unchecked.
     let currentUrl = validateFetchUrl(url).toString();
-    let finalUrl = new URL(currentUrl);
     let response: Response;
     let redirects = 0;
 
@@ -107,7 +80,6 @@ export async function fetchRemoteImage(url: string): Promise<{ bytes: Buffer; mi
       const parsed = validateFetchUrl(currentUrl);
       // Race the SSRF DNS lookup against the same deadline as the fetch.
       await raceAbort(rejectPrivateAddress(parsed.hostname), controller.signal, url);
-      finalUrl = parsed;
 
       try {
         response = await fetch(currentUrl, { signal: controller.signal, redirect: 'manual' });
@@ -170,63 +142,16 @@ export async function fetchRemoteImage(url: string): Promise<{ bytes: Buffer; mi
       reader.releaseLock();
     }
 
-    const bytes = Buffer.concat(chunks.map((c) => Buffer.from(c)));
-
-    // Derive MIME: trust the server's declared Content-Type when it names an
-    // image type (it's more authoritative than a spoofable URL extension, and
-    // this is what catches an image/svg+xml body served from a ".png" URL). Fall
-    // back to the extension only when the header is absent or generic (many CDNs
-    // send application/octet-stream for images).
-    const path = await import('path');
-    const ext = path.extname(finalUrl.pathname).toLowerCase();
-    const headerMime = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    const mime = (headerMime.startsWith('image/') ? headerMime : (MIME_BY_EXT[ext] || headerMime)) || 'application/octet-stream';
-
-    // Block SVG explicitly: a .svg extension or an image/svg+xml Content-Type
-    // must not establish image validity, since we'd re-serve it from our own
-    // origin (stored XSS). Only the raster types in MIME_BY_EXT are allowed.
-    if (mime === 'image/svg+xml') {
-      throw new UserError(`SVG images are not supported (they can carry active content): ${url}`);
-    }
-    if (!mime.startsWith('image/')) {
-      throw new UserError(`URL did not return an image (resolved type: ${mime || 'unknown'}): ${url}`);
-    }
-
-    return { bytes, mime };
+    return Buffer.concat(chunks.map((c) => Buffer.from(c)));
   } finally {
     clearTimeout(timeout);
   }
 }
 
 /**
- * Persist image bytes and return an unguessable id used to build the public URL.
- */
-export async function storeDocImage(
-  bytes: Buffer,
-  mime: string,
-  createdBy?: string,
-): Promise<{ id: string }> {
-  requireDb();
-  const id = randomUUID();
-  await activePool().query(
-    `INSERT INTO clickup_doc_images (id, bytes, mime, byte_size, created_by)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [id, bytes, mime, bytes.length, createdBy ?? null],
-  );
-  return { id };
-}
-
-/**
- * Delete a stored image row. Used to clean up an orphan when the downstream
- * page edit fails after the bytes were already persisted. Best-effort.
- */
-export async function deleteDocImage(id: string): Promise<void> {
-  requireDb();
-  await activePool().query(`DELETE FROM clickup_doc_images WHERE id = $1`, [id]);
-}
-
-/**
- * Read stored image bytes + MIME back. Returns null when the id is unknown.
+ * Read a legacy image back by UUID for the permanent /images/clickup-doc/:id
+ * serve route. Returns null when the id is unknown. New images are NOT written
+ * here — this only serves rows created before the image_blobs migration.
  */
 export async function getDocImage(id: string): Promise<{ bytes: Buffer; mime: string } | null> {
   requireDb();

@@ -36,6 +36,7 @@ import { UserSession } from '../userSession.js';
 import { loadUsers } from '../userStore.js';
 import { initDatabase, closeDatabase } from '../db.js';
 import { createWebApp } from '../website/webServer.js';
+import { assertImagePublicBaseUrlConfigured } from '../images/imageBlobStore.js';
 import { seedDefaultCatalogs } from '../mcpCatalogStore.js';
 import { calendarServer } from '../google-calendar/server.js';
 import { sheetsServer } from '../google-sheets/server.js';
@@ -1828,6 +1829,17 @@ async function startServer() {
 
     if (TRANSPORT === "httpStream" || TRANSPORT === "http" || TRANSPORT === "remote") {
       // Multi-user HTTP mode
+
+      // Fail fast if the image host isn't configured — a bad/missing value would
+      // otherwise get permanently embedded in ClickUp docs on first upload. Only
+      // services that actually upload images need this: the all-in-one service
+      // and the ClickUp MCP. The website and non-image MCP services start without
+      // it (an errant upload there still fails safely via store()'s own check).
+      const hostsImages = (MCP_MODE !== "web" && MCP_MODE !== "mcp") || (MCP_MODE === "mcp" && MCP_SLUG === "clickup");
+      if (hostsImages) {
+        assertImagePublicBaseUrlConfigured();
+      }
+
       await initDatabase();
       await loadUsers();
 
