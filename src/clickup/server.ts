@@ -39,11 +39,82 @@ function getClickUpClient(session?: UserSession): ClickUpClient {
   return new ClickUpClient(session.clickUpAccessToken);
 }
 
-// Re-host a remote image via the shared content-addressed store: safe outbound
-// fetch → store() (magic-byte validation, WebP normalization, 2MB cap, dedup).
-// Returns the public URL to embed. This is the single write path for image bytes.
-async function rehostImage(imageUrl: string): Promise<string> {
-  const bytes = await fetchImageBytes(imageUrl);
+// Base64 ingest is a fallback for clients that can't reach POST /images/upload.
+// Caps are much tighter than the URL path's 20MB because the payload rides in the
+// calling model's context window. The 2MB post-recompression cap in store() still
+// applies afterward.
+const MAX_BASE64_STRING_BYTES = 2 * 1024 * 1024;    // reject the string before decode
+const MAX_BASE64_DECODED_BYTES = 1.5 * 1024 * 1024; // reject decoded bytes
+
+// Exactly one of imageUrl / imageBase64 must be present. Never echoes values.
+function assertOneImageSource(args: { imageUrl?: string; imageBase64?: string }): void {
+  const hasUrl = typeof args.imageUrl === 'string' && args.imageUrl.length > 0;
+  const hasB64 = typeof args.imageBase64 === 'string' && args.imageBase64.length > 0;
+  if (hasUrl && hasB64) {
+    throw new UserError('Provide only one of imageUrl or imageBase64, not both.');
+  }
+  if (!hasUrl && !hasB64) {
+    throw new UserError('Provide exactly one of imageUrl or imageBase64.');
+  }
+}
+
+// Decode a base64 image payload to raw bytes. Does NOT validate the image format
+// or normalize it — that stays store()'s single responsibility. CRITICAL: never
+// put the payload (or any slice of it) into an error; it can be ~2MB and would
+// blow up the caller's context and flood logs. Only fileName + sizes appear.
+function decodeBase64Image(raw: string, fileName?: string): Buffer {
+  const where = fileName ? ` (${fileName})` : '';
+
+  // Strip a data-URL prefix (data:image/png;base64,....) if present.
+  let s = raw;
+  if (s.startsWith('data:')) {
+    const comma = s.indexOf(',');
+    if (comma !== -1) s = s.slice(comma + 1);
+  }
+  // Strip all whitespace / newlines.
+  s = s.replace(/\s+/g, '');
+
+  if (s.length === 0) {
+    throw new UserError(`imageBase64${where} is empty.`);
+  }
+  // Reject the STRING before decoding.
+  if (s.length > MAX_BASE64_STRING_BYTES) {
+    throw new UserError(`imageBase64${where} is too large (${s.length} chars). base64 is for small images (~100KB); use imageUrl for anything larger.`);
+  }
+  // Validate it is actually base64 BEFORE decoding — Buffer.from silently drops
+  // invalid characters and returns garbage otherwise, which would reach sharp as
+  // nonsense bytes.
+  if (s.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(s)) {
+    throw new UserError(`imageBase64${where} is not valid base64.`);
+  }
+
+  const buf = Buffer.from(s, 'base64');
+  if (buf.length === 0) {
+    throw new UserError(`imageBase64${where} decoded to zero bytes.`);
+  }
+  if (buf.length > MAX_BASE64_DECODED_BYTES) {
+    throw new UserError(`Decoded image${where} is too large (${buf.length} bytes, max ${MAX_BASE64_DECODED_BYTES}). base64 is for small images; use imageUrl for anything larger.`);
+  }
+  return buf;
+}
+
+// Produce raw image bytes from whichever source the caller supplied. Assumes
+// assertOneImageSource() already ran. Both branches converge on store().
+async function imageBytesFromArgs(
+  args: { imageUrl?: string; imageBase64?: string; fileName?: string },
+): Promise<Buffer> {
+  if (typeof args.imageBase64 === 'string' && args.imageBase64.length > 0) {
+    return decodeBase64Image(args.imageBase64, args.fileName);
+  }
+  return fetchImageBytes(args.imageUrl as string);
+}
+
+// The single write path for image bytes: source → store() (magic-byte validation,
+// WebP normalization, 2MB cap, dedup) → public URL to embed.
+async function storeImageFromArgs(
+  args: { imageUrl?: string; imageBase64?: string; fileName?: string },
+): Promise<string> {
+  const bytes = await imageBytesFromArgs(args);
   const { url } = await storeImageBlob(bytes, '');
   return url;
 }
@@ -1245,28 +1316,32 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'insertImageIntoPage',
   annotations: { readOnlyHint: false },
-  description: 'Add an image to a ClickUp Doc page. Fetches the image from a public URL, re-hosts it (recompressed to WebP), and embeds it as markdown in the page (append by default). ClickUp has no image-upload API for docs, so the image is stored and served by this server — requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL to be configured. If imageUrl is already hosted on this server (starts with IMAGE_PUBLIC_BASE_URL), re-hosting is skipped automatically; pass skipRehost:true to force embedding the given URL as-is.',
+  description: 'Add an image to a ClickUp Doc page. Provide the image as EXACTLY ONE of imageUrl (a public http(s) URL — strongly preferred) or imageBase64 (base64 bytes, for SMALL images only — the payload consumes the calling model context, so use imageUrl whenever a public URL exists). The image is re-hosted (recompressed to WebP) and embedded as markdown (append by default). ClickUp has no image-upload API for docs, so the image is stored and served by this server — requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL. If imageUrl is already on this server, re-hosting is skipped automatically; pass skipRehost:true to force embedding the given URL as-is.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
     docId: z.string().describe('The doc ID.'),
     pageId: z.string().describe('The page ID to add the image to.'),
-    imageUrl: z.string().describe('Public http(s) URL of the image to embed (jpg, png, gif, bmp, or webp; max 20 MB).'),
+    imageUrl: z.string().optional().describe('Public http(s) URL of the image (jpg, png, gif, bmp, or webp; max 20 MB). Provide exactly one of imageUrl or imageBase64; prefer imageUrl when a public URL exists.'),
+    imageBase64: z.string().optional().describe('Base64-encoded image bytes (a data:...;base64, prefix is accepted and stripped). For SMALL images only — ~100KB ideal, hard limit ~1.5 MB decoded — because the payload consumes the calling model context. Provide exactly one of imageUrl or imageBase64.'),
+    fileName: z.string().optional().describe('Optional filename, used only for error messages/logging. NOT used to determine the image format (magic bytes decide).'),
     altText: z.string().optional().default('').describe('Alt text for the image.'),
     editMode: z.enum(['append', 'prepend', 'replace']).optional().default('append').describe('How to place the image: append (default), prepend, or replace the page content.'),
-    skipRehost: z.boolean().optional().default(false).describe('Embed imageUrl as-is without fetching/re-hosting it. Auto-enabled when imageUrl is already on this server (starts with IMAGE_PUBLIC_BASE_URL).'),
+    skipRehost: z.boolean().optional().default(false).describe('Embed imageUrl as-is without fetching/re-hosting it (applies to imageUrl only). Auto-enabled when imageUrl is already on this server.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
     // Fail fast if the image host isn't configured (also the base for the
     // already-hosted check below). Only the storage module reads the env.
     const publicBase = getImagePublicBaseUrl();
+    assertOneImageSource(args);
 
     // Skip the fetch-and-store round trip when the image is already served by
     // our own image host (never needs re-hosting), or when the caller explicitly
-    // opts out. The host check is origin+path strict — not a string prefix.
-    const url = (args.skipRehost || isImageUrlOnOurHost(args.imageUrl, publicBase))
+    // opts out (imageUrl only). The host check is origin+path strict. Otherwise
+    // both URL and base64 sources converge on the single store path.
+    const url = (args.imageUrl && (args.skipRehost || isImageUrlOnOurHost(args.imageUrl, publicBase)))
       ? args.imageUrl
-      : await rehostImage(args.imageUrl);
+      : await storeImageFromArgs(args);
 
     const editMode = args.editMode || 'append';
     // No orphan cleanup on failure: image_blobs is content-addressed and deduped,
@@ -1284,14 +1359,17 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'uploadClickUpDocImage',
   annotations: { readOnlyHint: false },
-  description: 'Fetch an image from a public URL, re-host it on this server (recompressed to WebP), and return a public URL you can embed in a ClickUp Doc page as markdown (![](url)). Use this when you want the URL without immediately writing to a page; otherwise use insertImageIntoPage. Requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL to be configured.',
+  description: 'Re-host an image on this server (recompressed to WebP) and return a public URL you can embed in a ClickUp Doc page as markdown (![](url)). Provide the image as EXACTLY ONE of imageUrl (a public http(s) URL — strongly preferred) or imageBase64 (base64 bytes, for SMALL images only — the payload consumes the calling model context, so use imageUrl whenever a public URL exists). Use this when you want the URL without immediately writing to a page; otherwise use insertImageIntoPage. Requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL to be configured.',
   parameters: z.object({
-    imageUrl: z.string().describe('Public http(s) URL of the image to re-host (jpg, png, gif, bmp, or webp; max 20 MB).'),
+    imageUrl: z.string().optional().describe('Public http(s) URL of the image to re-host (jpg, png, gif, bmp, or webp; max 20 MB). Provide exactly one of imageUrl or imageBase64; prefer imageUrl when a public URL exists.'),
+    imageBase64: z.string().optional().describe('Base64-encoded image bytes (a data:...;base64, prefix is accepted and stripped). For SMALL images only — ~100KB ideal, hard limit ~1.5 MB decoded — because the payload consumes the calling model context. Provide exactly one of imageUrl or imageBase64.'),
+    fileName: z.string().optional().describe('Optional filename, used only for error messages/logging. NOT used to determine the image format (magic bytes decide).'),
   }),
   execute: async (args) => {
-    // Fail fast if the image host isn't configured, before spending a fetch.
+    // Fail fast if the image host isn't configured, before spending a fetch/decode.
     getImagePublicBaseUrl();
-    const url = await rehostImage(args.imageUrl);
+    assertOneImageSource(args);
+    const url = await storeImageFromArgs(args);
     return `Image re-hosted. Public URL:\n${url}\n\nEmbed it in a page with markdown: ![](${url})`;
   },
 });
