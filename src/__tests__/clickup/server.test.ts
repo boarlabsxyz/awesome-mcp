@@ -1243,5 +1243,97 @@ describe('ClickUp server tools', () => {
         (err: any) => { assert.match(err.message, /IMAGE_PUBLIC_BASE_URL/); return true; },
       );
     });
+
+    // === base64 ingest ===
+
+    // Fake pool that records the inserted content-hash key (params[0]).
+    function keyCapturingPool() {
+      const keys: string[] = [];
+      __setImageBlobPoolForTests({
+        query: async (text: string, params: any[] = []) => {
+          if (/INSERT INTO image_blobs/.test(text)) { keys.push(params[0]); return { rows: [], rowCount: 1 }; }
+          return { rows: [] };
+        },
+      });
+      return keys;
+    }
+
+    it('base64 round-trip produces the SAME key as the identical bytes via URL', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      const keys = keyCapturingPool();
+      mockFetch(); // the URL path streams the same `png` bytes
+      await callTool('uploadClickUpDocImage', { imageUrl: 'https://cdn.example.com/pic.png' });
+      await callTool('uploadClickUpDocImage', { imageBase64: png.toString('base64') });
+      assert.equal(keys.length, 2);
+      assert.equal(keys[0], keys[1]);
+    });
+
+    it('accepts a data-URL prefixed base64 payload', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      fakeImagePool();
+      const result = await callTool('uploadClickUpDocImage', {
+        imageBase64: `data:image/png;base64,${png.toString('base64')}`,
+      });
+      assert.match(result, HOSTED_URL);
+    });
+
+    it('accepts whitespace/newline-padded base64', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      fakeImagePool();
+      mockFetch(); // insertImageIntoPage still calls editPage (api.clickup.com)
+      const padded = png.toString('base64').replace(/(.{8})/g, '$1\n  ');
+      const result = await callTool('insertImageIntoPage', {
+        workspaceId: 'w', docId: 'd', pageId: 'p', imageBase64: padded,
+      });
+      assert.match(result, /Image added to page p/);
+      assert.match(result, HOSTED_URL);
+    });
+
+    it('rejects a non-base64 string without echoing it (small error)', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      fakeImagePool();
+      const bad = '@@@not base64@@@ ###';
+      await assert.rejects(
+        () => callTool('uploadClickUpDocImage', { imageBase64: bad }),
+        (err: any) => {
+          assert.match(err.message, /not valid base64/);
+          assert.ok(err.message.length < 1024);
+          assert.ok(!err.message.includes(bad));
+          return true;
+        },
+      );
+    });
+
+    it('rejects when BOTH imageUrl and imageBase64 are provided', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      await assert.rejects(
+        () => callTool('uploadClickUpDocImage', { imageUrl: 'https://x/y.png', imageBase64: png.toString('base64') }),
+        (err: any) => { assert.match(err.message, /only one of imageUrl or imageBase64/); return true; },
+      );
+    });
+
+    it('rejects when NEITHER imageUrl nor imageBase64 is provided', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      await assert.rejects(
+        () => callTool('insertImageIntoPage', { workspaceId: 'w', docId: 'd', pageId: 'p' }),
+        (err: any) => { assert.match(err.message, /exactly one of imageUrl or imageBase64/); return true; },
+      );
+    });
+
+    it('rejects an oversized base64 string BEFORE decoding, with a small error and no store', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      const calls = fakeImagePool();
+      const huge = 'A'.repeat(2 * 1024 * 1024 + 4); // > 2MB, valid chars, len % 4 === 0
+      await assert.rejects(
+        () => callTool('uploadClickUpDocImage', { imageBase64: huge }),
+        (err: any) => {
+          assert.match(err.message, /too large/);
+          assert.ok(err.message.length < 1024);
+          assert.ok(!err.message.includes(huge));
+          return true;
+        },
+      );
+      assert.equal(calls.filter((q) => /INSERT/.test(q)).length, 0);
+    });
   });
 });
