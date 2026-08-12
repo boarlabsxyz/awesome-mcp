@@ -4169,6 +4169,47 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // POST /api/v1/images - Re-host an image and get a public URL to embed in a
+  // ClickUp Doc (the REST/API-key sibling of the uploadClickUpDocImage MCP tool).
+  // Two body shapes, both converging on the shared image store():
+  //   - raw binary bytes (Content-Type: image/png, image/jpeg, image/gif,
+  //     image/bmp, image/webp) — the bytes are stored directly; OR
+  //   - JSON { "imageUrl": "https://..." } — the URL is fetched and re-hosted.
+  // express.raw parses everything EXCEPT application/json (which the global JSON
+  // parser already handled), so a raw upload isn't blocked by the 100kb JSON cap.
+  app.post(
+    '/api/v1/images',
+    requireClickUpApiKey,
+    express.raw({ type: (req) => !(req.headers['content-type'] || '').includes('application/json'), limit: '20mb' }),
+    async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const { store, STORED_CONTENT_TYPE, getImagePublicBaseUrl } = await import('../images/imageBlobStore.js');
+        getImagePublicBaseUrl(); // fail fast if the image host isn't configured
+
+        let result;
+        const body = req.body;
+        const imageUrl = (body && typeof body === 'object' && !Buffer.isBuffer(body)) ? body.imageUrl : undefined;
+        if (Buffer.isBuffer(body) && body.length > 0) {
+          result = await store(body, String(req.headers['content-type'] || ''));
+        } else if (typeof imageUrl === 'string' && imageUrl.length > 0) {
+          const { fetchImageBytes } = await import('../clickup/docImageStore.js');
+          result = await store(await fetchImageBytes(imageUrl), '');
+        } else {
+          res.status(400).json({ error: 'Provide the image as a raw binary body (Content-Type: image/png, image/jpeg, image/gif, image/bmp, or image/webp) or JSON { "imageUrl": "https://..." }.' });
+          return;
+        }
+        res.status(201).json({ ...result, contentType: STORED_CONTENT_TYPE });
+      } catch (err: any) {
+        if (err?.httpStatus === 415) { res.status(415).json({ error: err.message }); return; }
+        if (err?.httpStatus === 413) { res.status(413).json({ error: err.message }); return; }
+        // fetchImageBytes throws UserError for bad/blocked/oversized URLs → 400.
+        if (err?.name === 'UserError') { res.status(400).json({ error: err.message }); return; }
+        console.error(`[api-images] ${err?.message || err}`);
+        res.status(500).json({ error: err?.message || 'Failed to store image' });
+      }
+    },
+  );
+
   // === REST Data Plane: extended GET endpoints ===
   // These are passthrough siblings of read-only MCP tools that return bulk
   // data. Catalogued in src/restCatalog.ts and discoverable via the
