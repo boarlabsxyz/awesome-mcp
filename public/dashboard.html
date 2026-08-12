@@ -535,6 +535,54 @@
       font-size: 0.8rem;
       color: #888;
     }
+    /* "?" help affordance (image-upload instructions on the ClickUp card) */
+    .help-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      margin-left: 0.4rem;
+      border-radius: 50%;
+      border: 1px solid rgba(148,163,184,0.55);
+      color: #94a3b8;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1;
+      cursor: help;
+      position: relative;
+      vertical-align: middle;
+      user-select: none;
+      flex: none;
+    }
+    .help-badge:hover, .help-badge:focus, .help-badge:focus-within {
+      color: #e2e8f0;
+      border-color: #94a3b8;
+      outline: none;
+    }
+    .help-tip {
+      display: none;
+      position: absolute;
+      top: 135%;
+      left: 0;
+      z-index: 50;
+      width: min(260px, 72vw);
+      padding: 0.6rem 0.7rem;
+      border-radius: 8px;
+      background: #1e293b;
+      color: #f1f5f9;
+      border: 1px solid rgba(148,163,184,0.4);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.28);
+      font-size: 0.72rem;
+      font-weight: 400;
+      line-height: 1.5;
+      text-align: left;
+      white-space: normal;
+    }
+    .help-badge:hover .help-tip, .help-badge:focus .help-tip, .help-badge:focus-within .help-tip {
+      display: block;
+    }
+    .help-tip b { color: #7dd3fc; font-weight: 600; }
 
     /* Name Input Step */
     .name-input-section {
@@ -1214,6 +1262,13 @@
 
       // Render MCP type list as buttons (was <div onclick> before)
       const list = document.getElementById('mcpTypeList');
+      // Image-upload help, shown as a "?" beside the ClickUp card title. Draft copy.
+      // stopPropagation so clicking the "?" doesn't select the tool (card is a button).
+      const CLICKUP_IMAGE_HELP =
+        '<span class="help-badge" tabindex="0" role="button" aria-label="How to upload images to ClickUp docs" onclick="event.stopPropagation()">?' +
+        '<span class="help-tip">To let Claude add local image files to your ClickUp Docs, add ' +
+        '<b>clickup.awesome-mcp.xyz</b> to Claude&#39;s allowed domains, then ask Claude to upload an image ' +
+        'to a doc — it uploads the file to this server and embeds the hosted link.</span></span>';
       const htmlItems = [];
       for (const mcp of catalogs) {
         console.log('Rendering MCP:', mcp.slug, mcp.name);
@@ -1225,7 +1280,7 @@
           <button type="button" class="mcp-type-item" onclick="selectMcpType('${escapeAttr(mcp.slug)}')">
             <span class="mcp-type-icon" aria-hidden="true">${icon}</span>
             <span class="mcp-type-info">
-              <h4 translate="no">${escapeHtml(mcp.name || 'Unknown')}</h4>
+              <h4 translate="no">${escapeHtml(mcp.name || 'Unknown')}${mcp.slug === 'clickup' ? CLICKUP_IMAGE_HELP : ''}</h4>
               <p>${escapeHtml(mcp.description || '')}</p>
             </span>
           </button>
