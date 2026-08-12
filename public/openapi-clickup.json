@@ -1985,6 +1985,56 @@
           }
         }
       }
+    },
+    "/api/v1/images": {
+      "post": {
+        "operationId": "uploadImage",
+        "summary": "Re-host an image and get a public URL",
+        "description": "Re-hosts an image on this server (recompressed to WebP) and returns a public URL you can embed in a ClickUp Doc as markdown. Send EITHER raw image bytes as the body (Content-Type image/png, image/jpeg, image/gif, image/bmp, or image/webp) OR application/json with an imageUrl to fetch and re-host. Requires a connected ClickUp account.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "image/png": { "schema": { "type": "string", "format": "binary" } },
+            "image/jpeg": { "schema": { "type": "string", "format": "binary" } },
+            "image/gif": { "schema": { "type": "string", "format": "binary" } },
+            "image/bmp": { "schema": { "type": "string", "format": "binary" } },
+            "image/webp": { "schema": { "type": "string", "format": "binary" } },
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["imageUrl"],
+                "properties": {
+                  "imageUrl": { "type": "string", "description": "Public http(s) URL of an image to fetch and re-host (jpg, png, gif, bmp, or webp)." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Image stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "url": { "type": "string", "description": "Public URL to embed as image markdown." },
+                    "key": { "type": "string", "description": "Content-hash storage key (sha256.webp)." },
+                    "bytes": { "type": "integer", "description": "Stored (WebP) byte size." },
+                    "contentType": { "type": "string", "example": "image/webp" },
+                    "deduped": { "type": "boolean", "description": "True if identical bytes were already stored." }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Missing/invalid body, or the imageUrl could not be fetched", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "413": { "description": "Recompressed image exceeds the storage size cap", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "415": { "description": "Unsupported image format", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "500": { "description": "Server error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
     }
   },
   "components": {
