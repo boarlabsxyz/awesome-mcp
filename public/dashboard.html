@@ -400,6 +400,24 @@
     .sidebar-steps li:last-child {
       margin-bottom: 0;
     }
+    /* ClickUp image-upload note in the How-to-Connect sidebar (draft copy) */
+    .sidebar-note {
+      margin-top: 1.1rem;
+      padding-top: 1rem;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      font-size: 0.8rem;
+      color: #888;
+      line-height: 1.55;
+    }
+    .sidebar-note strong { color: #ccc; font-weight: 600; }
+    .sidebar-note code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.76rem;
+      padding: 0.05rem 0.3rem;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.06);
+      color: #7dd3fc;
+    }
 
     /* Empty state */
     .empty-state {
@@ -925,6 +943,12 @@
                 <li>On first use, you'll be asked to log in with <span translate="no">Google</span> via <span translate="no">Auth0</span></li>
                 <li>After login, your tools are ready to use</li>
               </ol>
+              <p class="sidebar-note">
+                <strong>Uploading images to ClickUp Docs:</strong> add
+                <code translate="no">clickup.awesome-mcp.xyz</code> to Claude's allowed
+                domains, then ask Claude to upload an image to a doc — it re-hosts the
+                file and embeds the link.
+              </p>
             </div>
           </div>
         </div>
