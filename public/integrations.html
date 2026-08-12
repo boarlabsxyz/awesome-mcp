@@ -242,6 +242,38 @@
       display: block;
     }
     .help-tip b { color: #7dd3fc; font-weight: 600; }
+    /* invisible hover bridge so moving from the "?" into the tooltip doesn't close it */
+    .help-tip::before {
+      content: '';
+      position: absolute;
+      top: -10px;
+      left: 0;
+      right: 0;
+      height: 12px;
+    }
+    /* Clickable "click to copy" domain chip inside the tooltip */
+    .copy-domain {
+      cursor: pointer;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #7dd3fc;
+      background: rgba(125,211,252,0.12);
+      padding: 0.05rem 0.3rem;
+      border-radius: 4px;
+      border: 1px solid rgba(125,211,252,0.28);
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+      white-space: nowrap;
+    }
+    .copy-domain:hover, .copy-domain:focus {
+      background: rgba(125,211,252,0.22);
+      border-color: rgba(125,211,252,0.7);
+      color: #bae6fd;
+      outline: none;
+    }
+    .copy-domain.copied {
+      background: rgba(74,222,128,0.2);
+      border-color: rgba(74,222,128,0.65);
+      color: #86efac;
+    }
     .integration-tagline {
       font-size: 0.9rem;
       color: #aaa;
@@ -393,9 +425,25 @@
     // Image-upload help, shown as a "?" beside the ClickUp card title. Draft copy.
     const CLICKUP_IMAGE_HELP =
       '<span class="help-badge" tabindex="0" role="button" aria-label="How to upload images to ClickUp docs">?' +
-      '<span class="help-tip">To let Claude add local image files to your ClickUp Docs, add ' +
-      '<b>clickup.awesome-mcp.xyz</b> to Claude&#39;s allowed domains, then ask Claude to upload an image ' +
-      'to a doc — it uploads the file to this server and embeds the hosted link.</span></span>';
+      '<span class="help-tip">To let Claude add local image files to your ClickUp Docs, open ' +
+      '<b>Settings → Capabilities</b> in Claude, scroll down to <b>Domain allowlist</b>, and add ' +
+      '<code class="copy-domain" tabindex="0" role="button" title="Click to copy" ' +
+      'onclick="copyClickUpDomain(event,this)" ' +
+      'onkeydown="if(event.key===&#39;Enter&#39;||event.key===&#39; &#39;)copyClickUpDomain(event,this)">clickup.awesome-mcp.xyz</code> ' +
+      '(click to copy). Then ask Claude to upload an image to a doc.</span></span>';
+
+    // Copy the image-upload domain to the clipboard, with brief "Copied!" feedback.
+    function copyClickUpDomain(ev, el) {
+      ev.stopPropagation();
+      ev.preventDefault();
+      const domain = 'clickup.awesome-mcp.xyz';
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(domain).catch(function () {});
+      }
+      el.classList.add('copied');
+      el.textContent = 'Copied!';
+      setTimeout(function () { el.textContent = domain; el.classList.remove('copied'); }, 1200);
+    }
 
     function renderCard(mcp) {
       const providerLabel = PROVIDER_LABELS[mcp.provider] || mcp.provider || 'Custom';
