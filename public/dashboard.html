@@ -1201,6 +1201,15 @@
       return ts && (ts.isExpired || !ts.hasRefreshToken);
     }
 
+    // Image-upload help, shown as a "?" beside the ClickUp name (connected-instance
+    // header and the "Add tool" picker). Draft copy. stopPropagation so a click on
+    // the "?" inside a clickable card doesn't trigger the card's action.
+    const CLICKUP_IMAGE_HELP =
+      '<span class="help-badge" tabindex="0" role="button" aria-label="How to upload images to ClickUp docs" onclick="event.stopPropagation()">?' +
+      '<span class="help-tip">To let Claude add local image files to your ClickUp Docs, add ' +
+      '<b>clickup.awesome-mcp.xyz</b> to Claude&#39;s allowed domains, then ask Claude to upload an image ' +
+      'to a doc — it uploads the file to this server and embeds the hosted link.</span></span>';
+
     function renderInstanceRow(instance) {
       const mcp = catalogs.find(c => c.slug === instance.mcpSlug);
       const mcpName = mcp?.name || instance.mcpSlug;
@@ -1222,7 +1231,7 @@
           <div class="instance-info">
             <div class="instance-name-group">
               <div class="instance-name">
-                <span id="name-${eid}">${escapeHtml(instance.instanceName)}</span>
+                <span id="name-${eid}">${escapeHtml(instance.instanceName)}</span>${instance.mcpSlug === 'clickup' ? CLICKUP_IMAGE_HELP : ''}
                 ${tokenHtml}
               </div>
             </div>
@@ -1262,13 +1271,6 @@
 
       // Render MCP type list as buttons (was <div onclick> before)
       const list = document.getElementById('mcpTypeList');
-      // Image-upload help, shown as a "?" beside the ClickUp card title. Draft copy.
-      // stopPropagation so clicking the "?" doesn't select the tool (card is a button).
-      const CLICKUP_IMAGE_HELP =
-        '<span class="help-badge" tabindex="0" role="button" aria-label="How to upload images to ClickUp docs" onclick="event.stopPropagation()">?' +
-        '<span class="help-tip">To let Claude add local image files to your ClickUp Docs, add ' +
-        '<b>clickup.awesome-mcp.xyz</b> to Claude&#39;s allowed domains, then ask Claude to upload an image ' +
-        'to a doc — it uploads the file to this server and embeds the hosted link.</span></span>';
       const htmlItems = [];
       for (const mcp of catalogs) {
         console.log('Rendering MCP:', mcp.slug, mcp.name);
