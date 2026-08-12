@@ -794,16 +794,18 @@ describe('ClickUp server tools', () => {
       assert.ok(result.includes('Status: unknown'));
     });
 
-    it('truncates long descriptions', async () => {
+    it('returns the full, untruncated description', async () => {
       const longDesc = 'x'.repeat(300);
       mockFetch([{
         status: 200,
         body: { id: 't1', name: 'Verbose', status: { status: 'open' }, description: longDesc },
       }]);
       const result = await callTool('getTask', { taskId: 't1' });
-      assert.ok(result.includes('...'));
-      // Should only include first 200 chars
-      assert.ok(result.includes('x'.repeat(200)));
+      // getTask is the single-record tool: it must return everything so
+      // template/summarization workflows read the whole ticket, not a fragment.
+      assert.ok(result.includes(`Description: ${longDesc}`));
+      assert.ok(!result.includes('truncated'));
+      assert.ok(!result.includes('…'));
     });
 
     it('does not add ellipsis for short descriptions', async () => {
