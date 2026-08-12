@@ -192,6 +192,56 @@
       letter-spacing: 0.04em;
       align-self: flex-start;
     }
+    /* "?" help affordance (image-upload instructions on the ClickUp card) */
+    .help-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      margin-left: 0.4rem;
+      border-radius: 50%;
+      border: 1px solid rgba(148,163,184,0.55);
+      color: #94a3b8;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1;
+      cursor: help;
+      position: relative;
+      vertical-align: middle;
+      user-select: none;
+      flex: none;
+    }
+    .help-badge:hover, .help-badge:focus, .help-badge:focus-within {
+      color: #e2e8f0;
+      border-color: #94a3b8;
+      outline: none;
+    }
+    .help-tip {
+      display: none;
+      position: absolute;
+      top: 135%;
+      left: 0;
+      z-index: 50;
+      width: min(260px, 72vw);
+      padding: 0.6rem 0.7rem;
+      border-radius: 8px;
+      background: #1e293b;
+      color: #f1f5f9;
+      border: 1px solid rgba(148,163,184,0.4);
+      box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+      font-size: 0.72rem;
+      font-weight: 400;
+      line-height: 1.5;
+      text-align: left;
+      white-space: normal;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    .help-badge:hover .help-tip, .help-badge:focus .help-tip, .help-badge:focus-within .help-tip {
+      display: block;
+    }
+    .help-tip b { color: #7dd3fc; font-weight: 600; }
     .integration-tagline {
       font-size: 0.9rem;
       color: #aaa;
@@ -340,6 +390,13 @@
       return '<div class="integration-icon"><span class="integration-icon-fallback" aria-hidden="true">🔌</span></div>';
     }
 
+    // Image-upload help, shown as a "?" beside the ClickUp card title. Draft copy.
+    const CLICKUP_IMAGE_HELP =
+      '<span class="help-badge" tabindex="0" role="button" aria-label="How to upload images to ClickUp docs">?' +
+      '<span class="help-tip">To let Claude add local image files to your ClickUp Docs, add ' +
+      '<b>clickup.awesome-mcp.xyz</b> to Claude&#39;s allowed domains, then ask Claude to upload an image ' +
+      'to a doc — it uploads the file to this server and embeds the hosted link.</span></span>';
+
     function renderCard(mcp) {
       const providerLabel = PROVIDER_LABELS[mcp.provider] || mcp.provider || 'Custom';
       const scopes = Array.isArray(mcp.scopes) ? mcp.scopes : [];
@@ -362,7 +419,7 @@
           <div class="integration-head">
             ${iconHtml(mcp)}
             <div class="integration-title">
-              <h3 translate="no">${escapeHtml(mcp.name)}</h3>
+              <h3 translate="no">${escapeHtml(mcp.name)}${mcp.slug === 'clickup' ? CLICKUP_IMAGE_HELP : ''}</h3>
               <span class="provider-badge" translate="no">${escapeHtml(providerLabel)}</span>
             </div>
           </div>
