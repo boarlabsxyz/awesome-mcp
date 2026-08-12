@@ -25,7 +25,12 @@ export function formatCustomFieldValue(cf: any): string {
   return String(cf.value);
 }
 
-export function formatTask(task: any): string {
+// Preview cap for list-style renderings, where brevity is the point. The
+// single-record tool (getTask) renders the full description instead — pass
+// { fullDescription: true }.
+const DESCRIPTION_PREVIEW_LIMIT = 200;
+
+export function formatTask(task: any, opts: { fullDescription?: boolean } = {}): string {
   const parts = [
     `Task: ${task.name}`,
     `  ID: ${task.id}`,
@@ -37,7 +42,19 @@ export function formatTask(task: any): string {
   if (task.date_closed) parts.push(`  Closed: ${new Date(parseInt(task.date_closed)).toISOString()}`);
   if (task.date_created) parts.push(`  Created: ${new Date(parseInt(task.date_created)).toISOString()}`);
   if (task.date_updated) parts.push(`  Updated: ${new Date(parseInt(task.date_updated)).toISOString()}`);
-  if (task.description) parts.push(`  Description: ${task.description.substring(0, 200)}${task.description.length > 200 ? '...' : ''}`);
+  if (task.description) {
+    if (opts.fullDescription || task.description.length <= DESCRIPTION_PREVIEW_LIMIT) {
+      parts.push(`  Description: ${task.description}`);
+    } else {
+      // List rendering: keep the preview bounded, but state the true length so
+      // the model knows text was dropped and can call getTask for the rest,
+      // instead of treating the fragment as the complete description.
+      const preview = task.description.substring(0, DESCRIPTION_PREVIEW_LIMIT);
+      parts.push(
+        `  Description: ${preview}… [truncated — showing ${DESCRIPTION_PREVIEW_LIMIT} of ${task.description.length} chars; call getTask for the full description]`,
+      );
+    }
+  }
   if (task.url) parts.push(`  URL: ${task.url}`);
   if (task.list) parts.push(`  List: ${task.list.name} (${task.list.id})`);
   if (task.tags?.length) parts.push(`  Tags: ${task.tags.map((t: any) => t.name).join(', ')}`);
@@ -52,5 +69,5 @@ export function formatTask(task: any): string {
 
 export function formatTaskList(tasks: any[]): string {
   if (!tasks || tasks.length === 0) return 'No tasks found.';
-  return tasks.map(formatTask).join('\n\n');
+  return tasks.map((t) => formatTask(t)).join('\n\n');
 }

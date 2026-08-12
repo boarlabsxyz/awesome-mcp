@@ -237,7 +237,7 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'getTask',
   annotations: { readOnlyHint: true },
-  description: 'Get detailed information about a specific ClickUp task by its ID.',
+  description: 'Get detailed information about a specific ClickUp task by its ID. Returns the FULL, untruncated description — use this (not the list tools, which show a bounded preview) when you need to read a ticket in full to summarize it, reuse it as a template, or check acceptance criteria.',
   parameters: z.object({
     taskId: z.string().describe('The task ID (e.g., "abc123" or custom task ID).'),
     includeSubtasks: z.boolean().optional().default(false).describe('Include subtasks in response.'),
@@ -245,7 +245,9 @@ clickUpServer.addTool({
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
     const task = await client.getTask(args.taskId, args.includeSubtasks);
-    let output = formatTask(task);
+    // Single-record tool: return the description untruncated so template/
+    // summarization workflows read the whole ticket, not a 200-char fragment.
+    let output = formatTask(task, { fullDescription: true });
     if (args.includeSubtasks && task.subtasks?.length) {
       output += '\n\n  Subtasks:\n' + task.subtasks.map((st: any) =>
         `    - ${st.name} (${st.id}) [${st.status?.status || 'unknown'}]`
@@ -529,7 +531,7 @@ clickUpServer.addTool({
     });
     const tasks = result.tasks || [];
     if (tasks.length === 0) return 'No tasks found matching filters.';
-    return `Found ${tasks.length} task(s):\n\n` + tasks.map(formatTask).join('\n\n');
+    return `Found ${tasks.length} task(s):\n\n` + tasks.map((t: any) => formatTask(t)).join('\n\n');
   },
 });
 
@@ -571,13 +573,13 @@ clickUpServer.addTool({
       const q = args.query.toLowerCase();
       const filtered = args.query ? tasks.filter((t: any) => t.name?.toLowerCase().includes(q)) : tasks;
       if (filtered.length === 0) return `No tasks found${args.query ? ` matching "${args.query}"` : ''} closed in window.`;
-      return `Found ${filtered.length} task(s) closed in window:\n\n` + filtered.map(formatTask).join('\n\n');
+      return `Found ${filtered.length} task(s) closed in window:\n\n` + filtered.map((t) => formatTask(t)).join('\n\n');
     }
 
     const result = await client.searchTasks(args.workspaceId, args.query, args.page, args.custom_fields, args.includeClosed);
     const tasks = result.tasks || [];
     if (tasks.length === 0) return `No tasks found${args.query ? ` matching "${args.query}"` : ''}.`;
-    return `Found ${tasks.length} task(s):\n\n` + tasks.map(formatTask).join('\n\n');
+    return `Found ${tasks.length} task(s):\n\n` + tasks.map((t: any) => formatTask(t)).join('\n\n');
   },
 });
 

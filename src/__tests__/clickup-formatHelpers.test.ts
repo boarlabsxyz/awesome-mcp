@@ -77,13 +77,34 @@ describe('clickup formatHelpers', () => {
       assert.ok(out.includes('Priority: urgent'));
       assert.ok(out.includes('Assignees: alice, b@c'));
       assert.ok(out.includes('Due: 20'));
-      assert.ok(out.includes('...'));
+      // List preview (default): bounded to 200 chars, but discloses the true
+      // length so the caller knows text was dropped and can fetch the rest.
+      assert.ok(out.includes('showing 200 of 250 chars'));
+      assert.ok(out.includes('call getTask for the full description'));
+      assert.ok(!out.includes('a'.repeat(201)));
       assert.ok(out.includes('URL: https://example/t2'));
       assert.ok(out.includes('List: Main (l1)'));
       assert.ok(out.includes('Tags: frontend, bug'));
       assert.ok(out.includes('Custom Fields:'));
       assert.ok(out.includes('estimate: 4'));
       assert.ok(!out.includes('skipped'));
+    });
+
+    it('returns the full, untruncated description with { fullDescription: true }', () => {
+      const desc = 'a'.repeat(250);
+      const out = formatTask(
+        { id: 't3', name: 'Full', status: { status: 'open' }, description: desc },
+        { fullDescription: true },
+      );
+      assert.ok(out.includes(`Description: ${desc}`));
+      assert.ok(!out.includes('truncated'));
+      assert.ok(!out.includes('showing 200'));
+    });
+
+    it('does not truncate a short description in preview mode', () => {
+      const out = formatTask({ id: 't4', name: 'Short', status: { status: 'open' }, description: 'hello' });
+      assert.ok(out.includes('Description: hello'));
+      assert.ok(!out.includes('truncated'));
     });
 
     it('omits "Custom Fields:" header when all values are null', () => {
