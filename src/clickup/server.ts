@@ -465,7 +465,11 @@ clickUpServer.addTool({
       const text = c.comment_text
         || (Array.isArray(c.comment) ? c.comment.map((p: any) => p.text || '').join('') : '')
         || '[empty]';
-      return `Comment by ${author} (${date}):\n  ${text.substring(0, 300)}`;
+      // Return the full comment text. This is the only comments tool, so
+      // truncating silently (previously at 300 chars, with no ellipsis or
+      // length signal) dropped thread content with no way for the caller to
+      // tell — the same silent-truncation failure fixed for getTask.
+      return `Comment by ${author} (${date}):\n  ${text}`;
     }).join('\n\n');
   },
 });
