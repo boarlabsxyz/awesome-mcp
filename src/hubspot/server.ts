@@ -20,6 +20,8 @@ import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import {
   HubSpotClient,
+  COMPANY_SEARCH_PROPERTIES,
+  CONTACT_SEARCH_PROPERTIES,
   eqFilterGroup,
   formatCompany,
   formatCompanyActivity,
@@ -32,9 +34,11 @@ import {
   missingPropertiesNote,
   recentCompaniesSearch,
   recentContactsSearch,
+  textSearch,
   withHubSpotClient,
   type HubSpotMessage,
   type HubSpotObjectType,
+  type HubSpotSearchFilter,
   type RenderedThread,
 } from './apiHelpers.js';
 
@@ -53,6 +57,18 @@ const propertyOption = z.object({
   value: z.string().describe('Internal value for the option.'),
   description: z.string().optional().describe('Optional description for the option.'),
   displayOrder: z.number().int().optional().describe('Optional sort order for the option.'),
+});
+
+// One filter for the CRM search API. Operators mirror HubSpot's search
+// operators; `value` is omitted for the existence operators.
+const searchFilter = z.object({
+  propertyName: z.string().describe('Property to filter on (e.g. domain, email, industry).'),
+  operator: z
+    .enum(['EQ', 'NEQ', 'LT', 'LTE', 'GT', 'GTE', 'CONTAINS_TOKEN', 'NOT_CONTAINS_TOKEN', 'HAS_PROPERTY', 'NOT_HAS_PROPERTY'])
+    .optional()
+    .default('EQ')
+    .describe('Comparison operator (default EQ).'),
+  value: z.string().optional().describe('Value to compare against. Omit for HAS_PROPERTY / NOT_HAS_PROPERTY.'),
 });
 
 // Cap on how many engagement detail records getCompanyActivity fetches.
@@ -105,6 +121,17 @@ export async function opCreateCompany(
 export async function opGetActiveCompanies(client: HubSpotClient, args: { limit: number }): Promise<string> {
   const res = await client.searchCompanies(recentCompaniesSearch(args.limit));
   return formatObjectList(res.results ?? [], 'companies');
+}
+
+// Search companies by free-text query and/or property filters. The primary way
+// to resolve a name/domain to a company ID before calling the by-ID tools.
+export async function opSearchCompanies(
+  client: HubSpotClient,
+  args: { query?: string; filters?: HubSpotSearchFilter[]; properties?: string[]; limit: number },
+): Promise<string> {
+  const properties = args.properties ?? COMPANY_SEARCH_PROPERTIES;
+  const res = await client.searchCompanies(textSearch({ query: args.query, filters: args.filters, properties, limit: args.limit }));
+  return formatObjectList(res.results ?? [], 'companies', properties);
 }
 
 // company_handler.py:219
@@ -170,6 +197,17 @@ export async function opCreateContact(
 export async function opGetActiveContacts(client: HubSpotClient, args: { limit: number }): Promise<string> {
   const res = await client.searchContacts(recentContactsSearch(args.limit));
   return formatObjectList(res.results ?? [], 'contacts');
+}
+
+// Search contacts by free-text query and/or property filters. The primary way
+// to resolve a name/email to a contact ID before calling the by-ID tools.
+export async function opSearchContacts(
+  client: HubSpotClient,
+  args: { query?: string; filters?: HubSpotSearchFilter[]; properties?: string[]; limit: number },
+): Promise<string> {
+  const properties = args.properties ?? CONTACT_SEARCH_PROPERTIES;
+  const res = await client.searchContacts(textSearch({ query: args.query, filters: args.filters, properties, limit: args.limit }));
+  return formatObjectList(res.results ?? [], 'contacts', properties);
 }
 
 // contact_handler.py:205
@@ -314,6 +352,28 @@ hubspotServer.addTool({
 });
 
 hubspotServer.addTool({
+  name: 'searchCompanies',
+  annotations: { readOnlyHint: true },
+  description:
+    'Search HubSpot companies by free-text query and/or property filters. Returns each match\'s ID, name, and requested properties. Use this to resolve a company by name, domain, or any property to its ID before calling the by-ID company tools.',
+  parameters: z
+    .object({
+      query: z.string().optional().describe('Free-text search across the default searchable properties (e.g. name, domain, phone).'),
+      filters: z.array(searchFilter).optional().describe('Optional property filters, ANDed together.'),
+      properties: z.array(z.string()).optional().describe('Properties to return per match (defaults to name, domain, website, phone, industry).'),
+      limit: z.number().int().min(1).max(100).optional().default(10).describe('Maximum matches to return (default 10, max 100).'),
+    })
+    .refine(a => Boolean(a.query) || (a.filters?.length ?? 0) > 0, {
+      message: 'Provide a query and/or at least one filter.',
+    }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to search companies', session, log, (client) => {
+      log.info(`searchCompanies query=${args.query ?? ''} filters=${args.filters?.length ?? 0}`);
+      return opSearchCompanies(client, args);
+    }),
+});
+
+hubspotServer.addTool({
   name: 'getCompany',
   annotations: { readOnlyHint: true },
   description: 'Get a specific company by ID from HubSpot.',
@@ -389,6 +449,28 @@ hubspotServer.addTool({
     withHubSpotClient('Failed to get active contacts', session, log, (client) => {
       log.info(`getActiveContacts limit=${args.limit}`);
       return opGetActiveContacts(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'searchContacts',
+  annotations: { readOnlyHint: true },
+  description:
+    'Search HubSpot contacts by free-text query and/or property filters. Returns each match\'s ID, name, and requested properties. Use this to resolve a contact by name, email, or any property to its ID before calling the by-ID contact tools.',
+  parameters: z
+    .object({
+      query: z.string().optional().describe('Free-text search across the default searchable properties (e.g. name, email, phone).'),
+      filters: z.array(searchFilter).optional().describe('Optional property filters, ANDed together.'),
+      properties: z.array(z.string()).optional().describe('Properties to return per match (defaults to firstname, lastname, email, company, phone).'),
+      limit: z.number().int().min(1).max(100).optional().default(10).describe('Maximum matches to return (default 10, max 100).'),
+    })
+    .refine(a => Boolean(a.query) || (a.filters?.length ?? 0) > 0, {
+      message: 'Provide a query and/or at least one filter.',
+    }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to search contacts', session, log, (client) => {
+      log.info(`searchContacts query=${args.query ?? ''} filters=${args.filters?.length ?? 0}`);
+      return opSearchContacts(client, args);
     }),
 });
 

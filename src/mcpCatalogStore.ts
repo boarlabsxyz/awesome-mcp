@@ -558,7 +558,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
   await createMcpCatalog({
     slug: 'hubspot',
     name: 'HubSpot MCP',
-    description: 'Read and manage HubSpot CRM data (contacts, companies, properties) via the CRM API',
+    description: 'Read, search, and manage HubSpot CRM data (contacts, companies, properties) via the CRM API',
     iconUrl: 'https://www.hubspot.com/hubfs/HubSpot_Logos/HubSpot-Inversed-Favicon.png',
     mcpUrl: hubspotMcpUrl,
     provider: 'hubspot',

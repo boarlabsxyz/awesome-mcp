@@ -18,6 +18,7 @@ import {
   recentCompaniesSearch,
   recentContactsSearch,
   eqFilterGroup,
+  textSearch,
   getHubSpotClient,
   mapHubSpotError,
   withHubSpotClient,
@@ -272,6 +273,26 @@ test('recentCompaniesSearch / recentContactsSearch sort by last-modified', () =>
 test('eqFilterGroup builds an EQ filter group', () => {
   const fg = eqFilterGroup([{ propertyName: 'name', value: 'Acme' }]) as any;
   assert.deepEqual(fg, { filterGroups: [{ filters: [{ propertyName: 'name', value: 'Acme', operator: 'EQ' }] }] });
+});
+
+test('textSearch maps query + filters into a search body, omitting empty parts', () => {
+  const full = textSearch({
+    query: 'Acme',
+    filters: [{ propertyName: 'domain', operator: 'EQ', value: 'acme.com' }],
+    properties: ['name', 'domain'],
+    limit: 25,
+  }) as any;
+  assert.equal(full.query, 'Acme');
+  assert.equal(full.limit, 25);
+  assert.deepEqual(full.properties, ['name', 'domain']);
+  assert.deepEqual(full.filterGroups, [{ filters: [{ propertyName: 'domain', operator: 'EQ', value: 'acme.com' }] }]);
+
+  // Query omitted when empty; filterGroups omitted when there are no filters.
+  const queryOnly = textSearch({ query: 'Acme', properties: ['name'], limit: 10 }) as any;
+  assert.equal('filterGroups' in queryOnly, false);
+  const filtersEmpty = textSearch({ properties: ['name'], limit: 10 }) as any;
+  assert.equal('query' in filtersEmpty, false);
+  assert.equal('filterGroups' in filtersEmpty, false);
 });
 
 // --- CRUD formatters ---
