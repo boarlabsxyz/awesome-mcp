@@ -558,7 +558,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
   await createMcpCatalog({
     slug: 'hubspot',
     name: 'HubSpot MCP',
-    description: 'Read, search, and manage HubSpot CRM data (contacts, companies, deals, properties) via the CRM API',
+    description: 'Read, search, and manage HubSpot CRM data (contacts, companies, deals, properties, activities) via the CRM API',
     iconUrl: 'https://www.hubspot.com/hubfs/HubSpot_Logos/HubSpot-Inversed-Favicon.png',
     mcpUrl: hubspotMcpUrl,
     provider: 'hubspot',
@@ -580,6 +580,14 @@ export async function seedDefaultCatalogs(): Promise<void> {
       // Without sales-email-read, getCompanyActivity gets EMAIL engagement
       // bodies redacted (meetings/calls come through fine).
       'sales-email-read',
+      // Engagement WRITES (createNote / createTask / logCall / logMeeting):
+      // company/contact scopes do NOT cover creating activities. The exact
+      // granular scope string varies by HubSpot app config and an UNKNOWN
+      // scope makes the whole consent flow fail — so enable the activity-write
+      // scope on the registered HubSpot app first, then add its exact string
+      // here (candidate: 'crm.objects.notes.write'). Until then engagement
+      // writes 401/403 and the tools surface that verbatim. Requires a
+      // reconnect/re-consent once added (see the deals note above).
     ],
     isLocal: !process.env.HUBSPOT_MCP_URL,
     isActive: true,

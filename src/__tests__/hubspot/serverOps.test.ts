@@ -21,6 +21,10 @@ import {
   opCreateDeal,
   opUpdateDeal,
   opListPipelines,
+  opCreateNote,
+  opCreateTask,
+  opLogCall,
+  opLogMeeting,
   opGetRecentConversations,
   opGetTickets,
   opGetTicketConversationThreads,
@@ -208,6 +212,66 @@ test('opListPipelines renders pipelines with stages ordered by displayOrder', as
   // Stage with displayOrder 0 must precede displayOrder 1 in the output.
   assert.ok(out.indexOf('Appointment') < out.indexOf('Closed Won'), 'stages sorted by displayOrder');
   assert.equal(calls[0].url.endsWith('/crm/v3/pipelines/deals'), true);
+});
+
+test('opCreateNote defaults hs_timestamp, sends body, and fires a v4 default association', async () => {
+  const calls = router((method, url) =>
+    url.includes('/associations/default/') ? { body: {} } : { body: { id: 'n1', properties: { hs_note_body: 'test' } } },
+  );
+  const out = await opCreateNote(
+    client(),
+    { body: 'test', associateToObjectType: 'companies', associateToObjectId: '7488047372' },
+    1786000000000,
+  );
+  assert.match(out, /Created note/);
+  assert.match(out, /Attached to companies 7488047372/);
+  const create = calls.find(c => c.method === 'POST')!;
+  assert.match(create.url, /\/crm\/v3\/objects\/notes$/);
+  assert.equal(create.body.properties.hs_note_body, 'test');
+  assert.equal(create.body.properties.hs_timestamp, 1786000000000, 'hs_timestamp defaults to now when omitted');
+  const assoc = calls.find(c => c.method === 'PUT')!;
+  assert.match(assoc.url, /\/crm\/v4\/objects\/notes\/n1\/associations\/default\/companies\/7488047372$/);
+});
+
+test('opCreateNote without a target creates the note and skips association', async () => {
+  const calls = router(() => ({ body: { id: 'n1', properties: { hs_note_body: 'x' } } }));
+  const out = await opCreateNote(client(), { body: 'x' });
+  assert.match(out, /Created note/);
+  assert.doesNotMatch(out, /Attached to/);
+  assert.equal(calls.filter(c => c.method === 'PUT').length, 0, 'no association call when no target');
+});
+
+test('opCreateNote reports an orphaned note (not success) when association fails', async () => {
+  const calls = router((method, url) =>
+    url.includes('/associations/default/') ? { status: 403, body: { message: 'forbidden' } } : { body: { id: 'n1', properties: {} } },
+  );
+  const out = await opCreateNote(client(), { body: 'test', associateToObjectType: 'companies', associateToObjectId: 'c1' });
+  assert.match(out, /created \(id n1\) but attaching/i, 'association failure is surfaced, not swallowed');
+  assert.doesNotMatch(out, /visible on its timeline/);
+  assert.equal(calls.filter(c => c.method === 'PUT').length, 1);
+});
+
+test('opCreateTask / opLogCall / opLogMeeting map their type-specific properties', async () => {
+  let calls = router(() => ({ body: { id: 't1', properties: {} } }));
+  await opCreateTask(client(), { subject: 'Follow up', status: 'NOT_STARTED' });
+  let create = calls.find(c => c.method === 'POST')!;
+  assert.match(create.url, /\/objects\/tasks$/);
+  assert.equal(create.body.properties.hs_task_subject, 'Follow up');
+  assert.equal(create.body.properties.hs_task_status, 'NOT_STARTED');
+
+  calls = router(() => ({ body: { id: 'c1', properties: {} } }));
+  await opLogCall(client(), { title: 'Intro call', durationMs: 600000, direction: 'OUTBOUND' });
+  create = calls.find(c => c.method === 'POST')!;
+  assert.match(create.url, /\/objects\/calls$/);
+  assert.equal(create.body.properties.hs_call_duration, 600000);
+  assert.equal(create.body.properties.hs_call_direction, 'OUTBOUND');
+
+  calls = router(() => ({ body: { id: 'm1', properties: {} } }));
+  await opLogMeeting(client(), { title: 'Kickoff', startTime: '2026-08-13T10:00:00Z' });
+  create = calls.find(c => c.method === 'POST')!;
+  assert.match(create.url, /\/objects\/meetings$/);
+  assert.equal(create.body.properties.hs_meeting_title, 'Kickoff');
+  assert.equal(create.body.properties.hs_meeting_start_time, '2026-08-13T10:00:00Z');
 });
 
 test('opGetRecentConversations renders threads with their MESSAGE entries', async () => {
