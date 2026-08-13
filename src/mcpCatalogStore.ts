@@ -558,7 +558,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
   await createMcpCatalog({
     slug: 'hubspot',
     name: 'HubSpot MCP',
-    description: 'Read, search, and manage HubSpot CRM data (contacts, companies, properties) via the CRM API',
+    description: 'Read, search, and manage HubSpot CRM data (contacts, companies, deals, properties) via the CRM API',
     iconUrl: 'https://www.hubspot.com/hubfs/HubSpot_Logos/HubSpot-Inversed-Favicon.png',
     mcpUrl: hubspotMcpUrl,
     provider: 'hubspot',
@@ -572,8 +572,10 @@ export async function seedDefaultCatalogs(): Promise<void> {
     oauthScopes: [
       'crm.objects.contacts.read', 'crm.objects.contacts.write',
       'crm.objects.companies.read', 'crm.objects.companies.write',
+      'crm.objects.deals.read', 'crm.objects.deals.write',
       'crm.schemas.contacts.read', 'crm.schemas.contacts.write',
       'crm.schemas.companies.read', 'crm.schemas.companies.write',
+      'crm.schemas.deals.read', 'crm.schemas.deals.write',
       'tickets', 'conversations.read',
       // Without sales-email-read, getCompanyActivity gets EMAIL engagement
       // bodies redacted (meetings/calls come through fine).

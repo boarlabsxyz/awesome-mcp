@@ -16,6 +16,11 @@ import {
   opSearchContacts,
   opGetContact,
   opUpdateContact,
+  opGetActiveDeals,
+  opGetDeal,
+  opCreateDeal,
+  opUpdateDeal,
+  opListPipelines,
   opGetRecentConversations,
   opGetTickets,
   opGetTicketConversationThreads,
@@ -157,6 +162,52 @@ test('opGetContact; opUpdateContact re-reads (PATCH then GET)', async () => {
   assert.match(out, /firstname: Ada/, 're-read surfaces populated fields the PATCH echo omits');
   assert.equal(calls[0].method, 'PATCH');
   assert.equal(calls[1].method, 'GET');
+});
+
+test('opGetActiveDeals lists deals by dealname and surfaces amount/stage', async () => {
+  router(() => ({ body: { results: [{ id: 'd1', properties: { dealname: 'Big Deal', amount: '5000', dealstage: 'contractsent' } }] } }));
+  const out = await opGetActiveDeals(client(), { limit: 10 });
+  assert.match(out, /Found 1 deals:/);
+  assert.match(out, /Big Deal/, 'deal name resolves from dealname');
+  assert.match(out, /amount: 5000/);
+});
+
+test('opGetDeal renders a deal and flags unknown requested properties', async () => {
+  router(() => ({ body: { id: 'd1', properties: { dealname: 'Big Deal' } } }));
+  const out = await opGetDeal(client(), { dealId: 'd1', properties: ['dealname', 'nope_xyz'] });
+  assert.match(out, /Deal:/);
+  assert.match(out, /not returned.*nope_xyz/i);
+});
+
+test('opCreateDeal creates without dedupe; canonical dealname wins', async () => {
+  const calls = router(() => ({ body: { id: 'd1', properties: { dealname: 'Big Deal' } } }));
+  await opCreateDeal(client(), { dealname: 'Big Deal', properties: { dealname: 'WRONG', amount: '10' } });
+  // No search/dedupe call — first request is the POST create.
+  assert.equal(calls[0].method, 'POST');
+  assert.equal(calls[0].url.endsWith('/deals'), true);
+  assert.equal(calls[0].body.properties.dealname, 'Big Deal');
+  assert.equal(calls[0].body.properties.amount, '10');
+});
+
+test('opUpdateDeal re-reads for a consistent read shape (PATCH then GET)', async () => {
+  const calls = router(() => ({ body: { id: 'd1', properties: { dealname: 'Renamed' } } }));
+  assert.match(await opUpdateDeal(client(), { dealId: 'd1', properties: { dealname: 'Renamed' } }), /Updated deal/);
+  assert.equal(calls[0].method, 'PATCH');
+  assert.equal(calls[1].method, 'GET', 'update must re-read the record');
+});
+
+test('opListPipelines renders pipelines with stages ordered by displayOrder', async () => {
+  const calls = router(() => ({ body: { results: [
+    { id: 'default', label: 'Sales Pipeline', stages: [
+      { id: 's2', label: 'Closed Won', displayOrder: 1 },
+      { id: 's1', label: 'Appointment', displayOrder: 0 },
+    ] },
+  ] } }));
+  const out = await opListPipelines(client(), {});
+  assert.match(out, /Sales Pipeline \(id default\)/);
+  // Stage with displayOrder 0 must precede displayOrder 1 in the output.
+  assert.ok(out.indexOf('Appointment') < out.indexOf('Closed Won'), 'stages sorted by displayOrder');
+  assert.equal(calls[0].url.endsWith('/crm/v3/pipelines/deals'), true);
 });
 
 test('opGetRecentConversations renders threads with their MESSAGE entries', async () => {

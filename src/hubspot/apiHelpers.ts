@@ -45,7 +45,15 @@ export type HubSpotProperty = {
 };
 
 /** Object types the property + search tools operate on. */
-export type HubSpotObjectType = 'companies' | 'contacts';
+export type HubSpotObjectType = 'companies' | 'contacts' | 'deals';
+
+/** A deal pipeline stage (from /crm/v3/pipelines/deals). */
+export type HubSpotPipelineStage = { id?: string; label?: string; displayOrder?: number };
+
+/** A deal pipeline with its ordered stages. */
+export type HubSpotPipeline = { id?: string; label?: string; displayOrder?: number; stages?: HubSpotPipelineStage[] };
+
+export type HubSpotPipelinePage = { results?: HubSpotPipeline[] };
 
 /** A dropdown option, as accepted by the property create/update tools. */
 export type HubSpotPropertyOption = {
@@ -180,6 +188,30 @@ export class HubSpotClient {
     return this.request('PATCH', `/crm/v3/objects/contacts/${encodeURIComponent(contactId)}`, { properties });
   }
 
+  // === Deals ===
+
+  searchDeals(body: unknown): Promise<HubSpotSearchResponse> {
+    return this.request('POST', '/crm/v3/objects/deals/search', body);
+  }
+
+  createDeal(properties: Record<string, unknown>): Promise<HubSpotObject> {
+    return this.request('POST', '/crm/v3/objects/deals', { properties });
+  }
+
+  getDeal(dealId: string, properties?: string[]): Promise<HubSpotObject> {
+    const qs = properties?.length ? `&properties=${properties.map(encodeURIComponent).join(',')}` : '';
+    return this.request('GET', `/crm/v3/objects/deals/${encodeURIComponent(dealId)}?archived=false${qs}`);
+  }
+
+  updateDeal(dealId: string, properties: Record<string, unknown>): Promise<HubSpotObject> {
+    return this.request('PATCH', `/crm/v3/objects/deals/${encodeURIComponent(dealId)}`, { properties });
+  }
+
+  /** All deal pipelines, each with its ordered stages. */
+  listDealPipelines(): Promise<HubSpotPipelinePage> {
+    return this.request('GET', '/crm/v3/pipelines/deals');
+  }
+
   // === Properties ===
 
   getProperty(objectType: HubSpotObjectType, propertyName: string): Promise<HubSpotProperty> {
@@ -274,6 +306,8 @@ export class HubSpotClient {
 export const COMPANY_SEARCH_PROPERTIES = ['name', 'domain', 'website', 'phone', 'industry', 'hs_lastmodifieddate'];
 /** Default contact properties returned by the list/search contact tools. */
 export const CONTACT_SEARCH_PROPERTIES = ['firstname', 'lastname', 'email', 'company', 'phone', 'lastmodifieddate'];
+/** Default deal properties returned by the list/search deal tools. */
+export const DEAL_SEARCH_PROPERTIES = ['dealname', 'amount', 'dealstage', 'pipeline', 'closedate', 'hs_lastmodifieddate'];
 
 // Adapted from baryhuang/mcp-hubspot@4a8345f clients/company_client.py:105
 export function recentCompaniesSearch(limit: number): Record<string, unknown> {
@@ -290,6 +324,15 @@ export function recentContactsSearch(limit: number): Record<string, unknown> {
     sorts: [{ propertyName: 'lastmodifieddate', direction: 'DESCENDING' }],
     limit,
     properties: CONTACT_SEARCH_PROPERTIES,
+  };
+}
+
+// Deals sort on hs_lastmodifieddate, like companies.
+export function recentDealsSearch(limit: number): Record<string, unknown> {
+  return {
+    sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }],
+    limit,
+    properties: DEAL_SEARCH_PROPERTIES,
   };
 }
 
@@ -341,6 +384,23 @@ export function formatContact(obj: HubSpotObject | undefined): string {
   return fmtObject(obj, 'Contact');
 }
 
+export function formatDeal(obj: HubSpotObject | undefined): string {
+  return fmtObject(obj, 'Deal');
+}
+
+/** Render deal pipelines with their stages (ordered by displayOrder). */
+export function formatPipelines(pipelines: HubSpotPipeline[]): string {
+  if (pipelines.length === 0) return 'No deal pipelines found.';
+  const parts = [`Found ${pipelines.length} deal pipeline${pipelines.length === 1 ? '' : 's'}:`, ''];
+  for (const p of pipelines) {
+    parts.push(`${p.label ?? '(unnamed)'} (id ${p.id ?? ''})`);
+    const stages = [...(p.stages ?? [])].sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0));
+    for (const s of stages) parts.push(`   - ${s.label ?? ''} (id ${s.id ?? ''})`);
+    parts.push('');
+  }
+  return parts.join('\n').trimEnd();
+}
+
 export function formatObjectList(results: HubSpotObject[], label: string, extraProps?: string[]): string {
   if (results.length === 0) return `No ${label} found.`;
   const parts = [`Found ${results.length} ${label}:`, ''];
@@ -348,6 +408,7 @@ export function formatObjectList(results: HubSpotObject[], label: string, extraP
     const props = obj.properties ?? {};
     const name =
       (props.name as string) ||
+      (props.dealname as string) ||
       [props.firstname, props.lastname].filter(Boolean).join(' ') ||
       (props.email as string) ||
       '(unnamed)';

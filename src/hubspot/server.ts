@@ -22,11 +22,14 @@ import {
   HubSpotClient,
   COMPANY_SEARCH_PROPERTIES,
   CONTACT_SEARCH_PROPERTIES,
+  DEAL_SEARCH_PROPERTIES,
   eqFilterGroup,
   formatCompany,
   formatCompanyActivity,
   formatContact,
+  formatDeal,
   formatObjectList,
+  formatPipelines,
   formatProperty,
   formatThreads,
   formatTickets,
@@ -34,6 +37,7 @@ import {
   missingPropertiesNote,
   recentCompaniesSearch,
   recentContactsSearch,
+  recentDealsSearch,
   textSearch,
   withHubSpotClient,
   type HubSpotMessage,
@@ -49,7 +53,7 @@ export const hubspotServer = new FastMCP<UserSession>({
 });
 
 const objectTypeParam = z
-  .enum(['companies', 'contacts'])
+  .enum(['companies', 'contacts', 'deals'])
   .describe('Type of CRM object.');
 
 const propertyOption = z.object({
@@ -269,6 +273,47 @@ export async function opUpdateContact(
   // Re-read for a consistent read shape (see opUpdateCompany).
   const obj = await client.getContact(args.contactId);
   return `Updated contact.\n\n${formatContact(obj)}`;
+}
+
+// --- Deal ops ---
+
+export async function opGetActiveDeals(client: HubSpotClient, args: { limit: number }): Promise<string> {
+  const res = await client.searchDeals(recentDealsSearch(args.limit));
+  // Surface amount / dealstage / closedate so pipeline questions are answerable from the list.
+  return formatObjectList(res.results ?? [], 'deals', DEAL_SEARCH_PROPERTIES);
+}
+
+export async function opGetDeal(client: HubSpotClient, args: { dealId: string; properties?: string[] }): Promise<string> {
+  const obj = await client.getDeal(args.dealId, args.properties);
+  return formatDeal(obj) + missingPropertiesNote(args.properties, obj);
+}
+
+// Deals aren't uniquely named, so — unlike companies/contacts — there's no
+// dedupe-before-create step; every call creates a new deal.
+export async function opCreateDeal(
+  client: HubSpotClient,
+  args: { dealname: string; properties?: Record<string, unknown> },
+): Promise<string> {
+  // Spread caller properties first so the canonical dealname always wins.
+  const created = await client.createDeal({ ...(args.properties ?? {}), dealname: args.dealname });
+  return `Created deal.\n\n${formatDeal(created)}`;
+}
+
+export async function opUpdateDeal(
+  client: HubSpotClient,
+  args: { dealId: string; properties: Record<string, unknown> },
+): Promise<string> {
+  await client.updateDeal(args.dealId, args.properties);
+  // Re-read for a consistent read shape (see opUpdateCompany).
+  const fresh = await client.getDeal(args.dealId);
+  return `Updated deal.\n\n${formatDeal(fresh)}`;
+}
+
+// Resolve stage IDs to human-readable names: one GET returns every pipeline
+// with its ordered stages, covering both "list pipelines" and "list stages".
+export async function opListPipelines(client: HubSpotClient, _args: Record<string, never>): Promise<string> {
+  const page = await client.listDealPipelines();
+  return formatPipelines(page.results ?? []);
 }
 
 // conversation_handler.py:39 — list threads then fetch each thread's messages.
@@ -521,6 +566,81 @@ hubspotServer.addTool({
     withHubSpotClient('Failed to update contact', session, log, (client) => {
       log.info(`updateContact id=${args.contactId}`);
       return opUpdateContact(client, args);
+    }),
+});
+
+// --- Deal tools ---
+
+hubspotServer.addTool({
+  name: 'getActiveDeals',
+  annotations: { readOnlyHint: true },
+  description: 'Get most recently active deals from HubSpot (sorted by last-modified date), including amount, stage, pipeline, and close date.',
+  parameters: z.object({
+    limit: z.number().int().min(1).optional().default(10).describe('Maximum number of deals to return (default: 10).'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to get active deals', session, log, (client) => {
+      log.info(`getActiveDeals limit=${args.limit}`);
+      return opGetActiveDeals(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'getDeal',
+  annotations: { readOnlyHint: true },
+  description: 'Get a specific deal by ID from HubSpot.',
+  parameters: z.object({
+    dealId: z.string().describe('HubSpot deal ID.'),
+    properties: z.array(z.string()).optional().describe('Optional list of properties to retrieve. If omitted, returns the default set.'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to get deal', session, log, (client) => {
+      log.info(`getDeal id=${args.dealId}`);
+      return opGetDeal(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'createDeal',
+  annotations: { readOnlyHint: false },
+  description: 'Create a new deal in HubSpot. Set dealstage/pipeline via properties (use listPipelines to resolve stage IDs).',
+  parameters: z.object({
+    dealname: z.string().describe('Deal name.'),
+    properties: z.record(z.string(), z.any()).optional().describe('Additional deal properties (e.g. amount, dealstage, pipeline, closedate).'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to create deal', session, log, (client) => {
+      log.info(`createDeal name=${args.dealname}`);
+      return opCreateDeal(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'updateDeal',
+  annotations: { readOnlyHint: false },
+  description: 'Update an existing deal record in HubSpot (e.g. move stage, change amount).',
+  parameters: z.object({
+    dealId: z.string().describe('HubSpot deal ID to update.'),
+    properties: z.record(z.string(), z.any())
+      .refine(o => Object.keys(o).length > 0, { message: 'Provide at least one property to update.' })
+      .describe('Object containing the properties to update (at least one).'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to update deal', session, log, (client) => {
+      log.info(`updateDeal id=${args.dealId}`);
+      return opUpdateDeal(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'listPipelines',
+  annotations: { readOnlyHint: true },
+  description: 'List HubSpot deal pipelines and their stages (with stage IDs), so deal stage IDs can be resolved to human-readable names.',
+  parameters: z.object({}),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to list pipelines', session, log, (client) => {
+      log.info('listPipelines');
+      return opListPipelines(client, args);
     }),
 });
 
