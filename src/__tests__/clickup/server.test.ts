@@ -441,6 +441,20 @@ describe('ClickUp server tools', () => {
       assert.equal(result, 'No comments on this task.');
     });
 
+    it('returns the full comment text without truncation', async () => {
+      const longComment = 'y'.repeat(500);
+      mockFetch([{
+        status: 200,
+        body: {
+          comments: [
+            { user: { username: 'alice' }, date: '1700000000000', comment_text: longComment },
+          ],
+        },
+      }]);
+      const result = await callTool('getTaskComments', { taskId: 't1' });
+      assert.ok(result.includes(longComment));
+    });
+
     it('handles comment with no user or empty text', async () => {
       mockFetch([{
         status: 200,
