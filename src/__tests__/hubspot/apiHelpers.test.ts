@@ -327,6 +327,25 @@ test('formatObjectList counts and labels entries by name/email/fallback', () => 
   assert.equal(formatObjectList([], 'records'), 'No records found.');
 });
 
+test('formatObjectList distinguishes empty properties from ones HubSpot never returned', () => {
+  const out = formatObjectList(
+    // HubSpot echoes requested properties with null when unset, and simply
+    // omits keys it does not recognise.
+    [{ id: 'c1', properties: { name: 'Stagen', domain: 'stagen.com', city: null, country: '' } }],
+    'companies',
+    ['name', 'domain', 'city', 'country', 'totally_fake_property_xyz'],
+  );
+  assert.match(out, /domain: stagen\.com/);
+  assert.match(out, /city: \(empty\)/, 'a property that is unset on the record is rendered, not dropped');
+  assert.match(out, /country: \(empty\)/, 'empty string counts as unset');
+  assert.doesNotMatch(out, /totally_fake_property_xyz: /, 'an unreturned property gets no value line');
+  assert.match(
+    out,
+    /⚠ Requested properties not returned by HubSpot \(unknown or unavailable\): totally_fake_property_xyz/,
+    'unknown properties are called out instead of looking like empty ones',
+  );
+});
+
 test('epochToIso normalizes epoch millis (number or numeric string) to ISO, passes others through', () => {
   assert.equal(epochToIso(1786187594925), new Date(1786187594925).toISOString());
   assert.equal(epochToIso('1786187594925'), new Date(1786187594925).toISOString());

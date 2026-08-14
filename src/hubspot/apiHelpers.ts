@@ -341,9 +341,12 @@ export function formatContact(obj: HubSpotObject | undefined): string {
   return fmtObject(obj, 'Contact');
 }
 
-export function formatObjectList(results: HubSpotObject[], label: string, extraProps?: string[]): string {
+export function formatObjectList(results: HubSpotObject[], label: string, requestedProps?: string[]): string {
   if (results.length === 0) return `No ${label} found.`;
   const parts = [`Found ${results.length} ${label}:`, ''];
+  // Requested keys HubSpot never returned on any record — reported once at the
+  // end so "unknown property" stays distinguishable from "unset on this record".
+  const neverReturned = new Set(requestedProps ?? []);
   results.forEach((obj, i) => {
     const props = obj.properties ?? {};
     const name =
@@ -353,16 +356,23 @@ export function formatObjectList(results: HubSpotObject[], label: string, extraP
       '(unnamed)';
     parts.push(`${i + 1}. ${name}`);
     parts.push(`   ID: ${obj.id ?? ''}`);
-    // When the caller requested specific properties (search tools), surface
-    // each non-empty one so the result carries more than just name + ID.
-    for (const key of extraProps ?? []) {
+    // When the caller requested specific properties (search tools), render every
+    // one of them — including the empty ones, explicitly marked. Silently
+    // dropping empties makes "no value on this record" look identical to "this
+    // tool doesn't return that property".
+    for (const key of requestedProps ?? []) {
+      if (!(key in props)) continue;
+      neverReturned.delete(key);
       const v = props[key];
-      if (v !== null && v !== undefined && v !== '') parts.push(`   ${key}: ${String(v)}`);
+      const empty = v === null || v === undefined || v === '';
+      parts.push(`   ${key}: ${empty ? '(empty)' : String(v)}`);
     }
     if (obj.updatedAt) parts.push(`   Updated: ${obj.updatedAt}`);
     parts.push('');
   });
-  return parts.join('\n').trimEnd();
+  const out = parts.join('\n').trimEnd();
+  if (neverReturned.size === 0) return out;
+  return `${out}\n\n⚠ Requested properties not returned by HubSpot (unknown or unavailable): ${[...neverReturned].join(', ')}`;
 }
 
 export function formatProperty(prop: HubSpotProperty | undefined): string {
