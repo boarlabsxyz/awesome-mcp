@@ -104,7 +104,12 @@ function addSearchTool(opts: {
       .object({
         query: z.string().optional().describe(`Free-text search across the default searchable properties (e.g. ${opts.queryExamples}).`),
         filters: z.array(searchFilter).optional().describe('Optional property filters, ANDed together.'),
-        properties: z.array(z.string()).optional().describe(`Properties to return per match (defaults to ${opts.defaultProperties}).`),
+        properties: z
+          .array(z.string())
+          .optional()
+          .describe(
+            `Properties to return per match (defaults to ${opts.defaultProperties}). Every requested property is rendered — unset ones as "(empty)" — and any HubSpot does not return is listed in a note.`,
+          ),
         limit: z.number().int().min(1).max(100).optional().default(10).describe('Maximum matches to return (default 10, max 100).'),
       })
       .refine(a => Boolean(a.query) || (a.filters?.length ?? 0) > 0, {
