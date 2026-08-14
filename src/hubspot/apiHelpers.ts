@@ -270,12 +270,17 @@ export class HubSpotClient {
 
 // ==== Search-request builders (ported from the reference clients) ====
 
+/** Default company properties returned by the list/search company tools. */
+export const COMPANY_SEARCH_PROPERTIES = ['name', 'domain', 'website', 'phone', 'industry', 'hs_lastmodifieddate'];
+/** Default contact properties returned by the list/search contact tools. */
+export const CONTACT_SEARCH_PROPERTIES = ['firstname', 'lastname', 'email', 'company', 'phone', 'lastmodifieddate'];
+
 // Adapted from baryhuang/mcp-hubspot@4a8345f clients/company_client.py:105
 export function recentCompaniesSearch(limit: number): Record<string, unknown> {
   return {
     sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }],
     limit,
-    properties: ['name', 'domain', 'website', 'phone', 'industry', 'hs_lastmodifieddate'],
+    properties: COMPANY_SEARCH_PROPERTIES,
   };
 }
 
@@ -284,13 +289,35 @@ export function recentContactsSearch(limit: number): Record<string, unknown> {
   return {
     sorts: [{ propertyName: 'lastmodifieddate', direction: 'DESCENDING' }],
     limit,
-    properties: ['firstname', 'lastname', 'email', 'company', 'phone', 'lastmodifieddate'],
+    properties: CONTACT_SEARCH_PROPERTIES,
   };
 }
 
 /** An `EQ` filter group for the search API. */
 export function eqFilterGroup(filters: Array<{ propertyName: string; value: string }>): Record<string, unknown> {
   return { filterGroups: [{ filters: filters.map(f => ({ ...f, operator: 'EQ' })) }] };
+}
+
+/** A single filter for the CRM search API. `value` is omitted for existence operators. */
+export type HubSpotSearchFilter = { propertyName: string; operator: string; value?: string };
+
+/**
+ * Build a CRM search request from a free-text query and/or explicit filters.
+ * `query` maps to HubSpot's top-level free-text `query` (which searches the
+ * object's default searchable properties); `filters` become a single AND
+ * filterGroup. At least one of the two should be present — the tool layer
+ * enforces that so the API isn't hit with an unbounded match-all.
+ */
+export function textSearch(input: {
+  query?: string;
+  filters?: HubSpotSearchFilter[];
+  properties: string[];
+  limit: number;
+}): Record<string, unknown> {
+  const body: Record<string, unknown> = { limit: input.limit, properties: input.properties };
+  if (input.query) body.query = input.query;
+  if (input.filters?.length) body.filterGroups = [{ filters: input.filters }];
+  return body;
 }
 
 // ==== Formatting helpers ====
@@ -314,7 +341,7 @@ export function formatContact(obj: HubSpotObject | undefined): string {
   return fmtObject(obj, 'Contact');
 }
 
-export function formatObjectList(results: HubSpotObject[], label: string): string {
+export function formatObjectList(results: HubSpotObject[], label: string, extraProps?: string[]): string {
   if (results.length === 0) return `No ${label} found.`;
   const parts = [`Found ${results.length} ${label}:`, ''];
   results.forEach((obj, i) => {
@@ -326,6 +353,12 @@ export function formatObjectList(results: HubSpotObject[], label: string): strin
       '(unnamed)';
     parts.push(`${i + 1}. ${name}`);
     parts.push(`   ID: ${obj.id ?? ''}`);
+    // When the caller requested specific properties (search tools), surface
+    // each non-empty one so the result carries more than just name + ID.
+    for (const key of extraProps ?? []) {
+      const v = props[key];
+      if (v !== null && v !== undefined && v !== '') parts.push(`   ${key}: ${String(v)}`);
+    }
     if (obj.updatedAt) parts.push(`   Updated: ${obj.updatedAt}`);
     parts.push('');
   });

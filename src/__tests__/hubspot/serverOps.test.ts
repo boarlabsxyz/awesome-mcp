@@ -7,11 +7,13 @@ import { HubSpotClient } from '../../hubspot/apiHelpers.js';
 import {
   opCreateCompany,
   opGetActiveCompanies,
+  opSearchCompanies,
   opGetCompany,
   opUpdateCompany,
   opGetCompanyActivity,
   opCreateContact,
   opGetActiveContacts,
+  opSearchContacts,
   opGetContact,
   opUpdateContact,
   opGetRecentConversations,
@@ -67,6 +69,36 @@ test('opGetActiveCompanies / opGetActiveContacts format the search results', asy
   assert.match(await opGetActiveCompanies(client(), { limit: 10 }), /Found 1 companies:/);
   router(() => ({ body: { results: [{ id: 'p1', properties: { email: 'a@b.com' } }] } }));
   assert.match(await opGetActiveContacts(client(), { limit: 10 }), /Found 1 contacts:/);
+});
+
+test('opSearchCompanies sends query + filters and surfaces requested properties', async () => {
+  const calls = router(() => ({ body: { results: [{ id: 'c1', properties: { name: 'Stagen', domain: 'stagen.com' } }] } }));
+  const out = await opSearchCompanies(client(), {
+    query: 'Stagen',
+    filters: [{ propertyName: 'industry', operator: 'EQ', value: 'Consulting' }],
+    limit: 10,
+  });
+  assert.match(out, /Found 1 companies:/);
+  assert.match(out, /ID: c1/);
+  assert.match(out, /domain: stagen\.com/, 'requested/default properties are surfaced in search results');
+  // Search hits the object search endpoint with the free-text query and an AND filter group.
+  const searchCall = calls.find(c => c.url.endsWith('/companies/search'))!;
+  assert.equal(searchCall.method, 'POST');
+  assert.equal(searchCall.body.query, 'Stagen');
+  assert.equal(searchCall.body.filterGroups[0].filters[0].propertyName, 'industry');
+  assert.equal(searchCall.body.limit, 10);
+});
+
+test('opSearchContacts sends a filters-only search (no free-text query)', async () => {
+  const calls = router(() => ({ body: { results: [{ id: 'p1', properties: { email: 'ada@x.com' } }] } }));
+  const out = await opSearchContacts(client(), {
+    filters: [{ propertyName: 'email', operator: 'EQ', value: 'ada@x.com' }],
+    limit: 5,
+  });
+  assert.match(out, /Found 1 contacts:/);
+  const searchCall = calls.find(c => c.url.endsWith('/contacts/search'))!;
+  assert.equal(searchCall.body.query, undefined, 'no query key when only filters are given');
+  assert.equal(searchCall.body.filterGroups[0].filters[0].value, 'ada@x.com');
 });
 
 test('opGetCompany flags unknown requested properties (reads are loud)', async () => {
