@@ -28,6 +28,7 @@ import {
   formatCompanyActivity,
   formatContact,
   formatDeal,
+  formatEngagement,
   formatObjectList,
   formatPipelines,
   formatProperty,
@@ -40,6 +41,7 @@ import {
   recentDealsSearch,
   textSearch,
   withHubSpotClient,
+  type HubSpotEngagementType,
   type HubSpotMessage,
   type HubSpotObjectType,
   type HubSpotSearchFilter,
@@ -142,6 +144,22 @@ function addRecentListTool(opts: {
       }),
   });
 }
+
+// Fields shared by every engagement-write tool: an optional timestamp (defaults
+// to now) and an optional record to attach the activity to (both-or-neither).
+const engagementAssociationShape = {
+  hs_timestamp: z
+    .union([z.string(), z.number()])
+    .optional()
+    .describe('Activity time as ISO-8601 or epoch milliseconds. Defaults to now.'),
+  associateToObjectType: objectTypeParam
+    .optional()
+    .describe('Record type to attach this activity to (companies, contacts, or deals), so it shows on that timeline.'),
+  associateToObjectId: z.string().optional().describe('ID of the record to attach this activity to.'),
+};
+const TARGET_MSG = 'Provide both associateToObjectType and associateToObjectId, or neither.';
+const bothOrNeitherTarget = (a: { associateToObjectType?: string; associateToObjectId?: string }) =>
+  Boolean(a.associateToObjectType) === Boolean(a.associateToObjectId);
 
 // Cap on how many engagement detail records getCompanyActivity fetches.
 const MAX_ACTIVITY_FETCH = 100;
@@ -341,6 +359,96 @@ export async function opUpdateDeal(
 export async function opListPipelines(client: HubSpotClient, _args: Record<string, never>): Promise<string> {
   const page = await client.listDealPipelines();
   return formatPipelines(page.results ?? []);
+}
+
+// --- Engagement (activity) write ops ---
+
+type EngagementArgs = {
+  hs_timestamp?: string | number;
+  associateToObjectType?: HubSpotObjectType;
+  associateToObjectId?: string;
+};
+
+/**
+ * Create an engagement, then (if a target is given) attach it via a default
+ * v4 association so it lands on that record's timeline. hs_timestamp defaults
+ * to now — omitting it is the most common HubSpot engagement-create failure.
+ * Reports honestly: success only claims a timeline attachment once the
+ * association call returns 2xx; otherwise it flags the note as orphaned.
+ */
+async function opCreateEngagement(
+  client: HubSpotClient,
+  engagementType: HubSpotEngagementType,
+  label: string,
+  properties: Record<string, unknown>,
+  args: EngagementArgs,
+  nowMs: number = Date.now(),
+): Promise<string> {
+  const created = await client.createEngagement(engagementType, {
+    ...properties,
+    hs_timestamp: args.hs_timestamp ?? nowMs,
+  });
+  let note = '';
+  if (args.associateToObjectType && args.associateToObjectId) {
+    if (!created.id) {
+      note = `\n\n⚠ ${label} created but no ID was returned, so it could not be attached to ${args.associateToObjectType} ${args.associateToObjectId}.`;
+    } else {
+      try {
+        await client.associateDefault(engagementType, created.id, args.associateToObjectType, args.associateToObjectId);
+        note = `\n\nAttached to ${args.associateToObjectType} ${args.associateToObjectId} (visible on its timeline).`;
+      } catch (err: any) {
+        note = `\n\n⚠ ${label} created (id ${created.id}) but attaching it to ${args.associateToObjectType} ${args.associateToObjectId} failed: ${err?.message ?? err}. It will not appear on that record's timeline until associated.`;
+      }
+    }
+  }
+  return `Created ${label}.\n\n${formatEngagement(created, label)}${note}`;
+}
+
+export async function opCreateNote(
+  client: HubSpotClient,
+  args: EngagementArgs & { body: string },
+  nowMs: number = Date.now(),
+): Promise<string> {
+  return opCreateEngagement(client, 'notes', 'note', { hs_note_body: args.body }, args, nowMs);
+}
+
+export async function opCreateTask(
+  client: HubSpotClient,
+  args: EngagementArgs & { subject?: string; body?: string; status?: string; priority?: string },
+  nowMs: number = Date.now(),
+): Promise<string> {
+  const props: Record<string, unknown> = {};
+  if (args.subject !== undefined) props.hs_task_subject = args.subject;
+  if (args.body !== undefined) props.hs_task_body = args.body;
+  if (args.status !== undefined) props.hs_task_status = args.status;
+  if (args.priority !== undefined) props.hs_task_priority = args.priority;
+  return opCreateEngagement(client, 'tasks', 'task', props, args, nowMs);
+}
+
+export async function opLogCall(
+  client: HubSpotClient,
+  args: EngagementArgs & { title?: string; body?: string; durationMs?: number; direction?: string },
+  nowMs: number = Date.now(),
+): Promise<string> {
+  const props: Record<string, unknown> = {};
+  if (args.title !== undefined) props.hs_call_title = args.title;
+  if (args.body !== undefined) props.hs_call_body = args.body;
+  if (args.durationMs !== undefined) props.hs_call_duration = args.durationMs;
+  if (args.direction !== undefined) props.hs_call_direction = args.direction;
+  return opCreateEngagement(client, 'calls', 'call', props, args, nowMs);
+}
+
+export async function opLogMeeting(
+  client: HubSpotClient,
+  args: EngagementArgs & { title?: string; body?: string; startTime?: string | number; endTime?: string | number },
+  nowMs: number = Date.now(),
+): Promise<string> {
+  const props: Record<string, unknown> = {};
+  if (args.title !== undefined) props.hs_meeting_title = args.title;
+  if (args.body !== undefined) props.hs_meeting_body = args.body;
+  if (args.startTime !== undefined) props.hs_meeting_start_time = args.startTime;
+  if (args.endTime !== undefined) props.hs_meeting_end_time = args.endTime;
+  return opCreateEngagement(client, 'meetings', 'meeting', props, args, nowMs);
 }
 
 // conversation_handler.py:39 — list threads then fetch each thread's messages.
@@ -747,5 +855,87 @@ hubspotServer.addTool({
     withHubSpotClient('Failed to create property', session, log, (client) => {
       log.info(`createProperty ${args.objectType}.${args.name}`);
       return opCreateProperty(client, args);
+    }),
+});
+
+// --- Engagement (activity) write tools ---
+// Create notes/tasks/calls/meetings and optionally attach them to a record's
+// timeline. These need an activity-write scope on the HubSpot app — see the
+// note by the deals scopes in mcpCatalogStore.ts.
+
+hubspotServer.addTool({
+  name: 'createNote',
+  annotations: { readOnlyHint: false },
+  description: 'Create a note and optionally attach it to a company, contact, or deal so it appears on that record\'s timeline.',
+  parameters: z
+    .object({
+      body: z.string().describe('Note text (hs_note_body).'),
+      ...engagementAssociationShape,
+    })
+    .refine(bothOrNeitherTarget, { message: TARGET_MSG }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to create note', session, log, (client) => {
+      log.info(`createNote associate=${args.associateToObjectType ?? 'none'}`);
+      return opCreateNote(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'createTask',
+  annotations: { readOnlyHint: false },
+  description: 'Create a task and optionally attach it to a company, contact, or deal.',
+  parameters: z
+    .object({
+      subject: z.string().optional().describe('Task title (hs_task_subject).'),
+      body: z.string().optional().describe('Task notes/body (hs_task_body).'),
+      status: z.string().optional().describe('Task status, e.g. NOT_STARTED, IN_PROGRESS, WAITING, COMPLETED, DEFERRED (hs_task_status).'),
+      priority: z.string().optional().describe('Task priority, e.g. LOW, MEDIUM, HIGH (hs_task_priority).'),
+      ...engagementAssociationShape,
+    })
+    .refine(bothOrNeitherTarget, { message: TARGET_MSG }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to create task', session, log, (client) => {
+      log.info(`createTask associate=${args.associateToObjectType ?? 'none'}`);
+      return opCreateTask(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'logCall',
+  annotations: { readOnlyHint: false },
+  description: 'Log a call activity and optionally attach it to a company, contact, or deal.',
+  parameters: z
+    .object({
+      title: z.string().optional().describe('Call title (hs_call_title).'),
+      body: z.string().optional().describe('Call notes/summary (hs_call_body).'),
+      durationMs: z.number().int().optional().describe('Call duration in milliseconds (hs_call_duration).'),
+      direction: z.enum(['INBOUND', 'OUTBOUND']).optional().describe('Call direction (hs_call_direction).'),
+      ...engagementAssociationShape,
+    })
+    .refine(bothOrNeitherTarget, { message: TARGET_MSG }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to log call', session, log, (client) => {
+      log.info(`logCall associate=${args.associateToObjectType ?? 'none'}`);
+      return opLogCall(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'logMeeting',
+  annotations: { readOnlyHint: false },
+  description: 'Log a meeting activity and optionally attach it to a company, contact, or deal.',
+  parameters: z
+    .object({
+      title: z.string().optional().describe('Meeting title (hs_meeting_title).'),
+      body: z.string().optional().describe('Meeting notes/agenda (hs_meeting_body).'),
+      startTime: z.union([z.string(), z.number()]).optional().describe('Meeting start (ISO-8601 or epoch ms; hs_meeting_start_time).'),
+      endTime: z.union([z.string(), z.number()]).optional().describe('Meeting end (ISO-8601 or epoch ms; hs_meeting_end_time).'),
+      ...engagementAssociationShape,
+    })
+    .refine(bothOrNeitherTarget, { message: TARGET_MSG }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to log meeting', session, log, (client) => {
+      log.info(`logMeeting associate=${args.associateToObjectType ?? 'none'}`);
+      return opLogMeeting(client, args);
     }),
 });

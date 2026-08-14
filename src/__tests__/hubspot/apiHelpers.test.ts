@@ -14,6 +14,7 @@ import {
   formatCompany,
   formatContact,
   formatDeal,
+  formatEngagement,
   formatObjectList,
   formatPipelines,
   formatProperty,
@@ -272,6 +273,25 @@ test('recentDealsSearch sorts by last-modified; getProperty accepts deals', asyn
   const calls = stubFetch(() => jsonResponse({ name: 'dealstage', label: 'Deal Stage' }));
   await new HubSpotClient('tok').getProperty('deals', 'dealstage');
   assert.match(calls[0][0], /\/crm\/v3\/properties\/deals\/dealstage$/);
+});
+
+test('engagement methods hit the right endpoints (create + v4 default association)', async () => {
+  const calls = stubFetch(() => jsonResponse({ id: 'n1', properties: {} }));
+  const client = new HubSpotClient('tok');
+
+  await client.createEngagement('notes', { hs_note_body: 'hi', hs_timestamp: 1 });
+  assert.match(calls[0][0], /\/crm\/v3\/objects\/notes$/);
+  assert.equal(calls[0][1].method, 'POST');
+  assert.deepEqual(JSON.parse(calls[0][1].body), { properties: { hs_note_body: 'hi', hs_timestamp: 1 } });
+
+  await client.associateDefault('notes', 'n1', 'companies', '7488047372');
+  assert.match(calls[1][0], /\/crm\/v4\/objects\/notes\/n1\/associations\/default\/companies\/7488047372$/);
+  assert.equal(calls[1][1].method, 'PUT');
+  assert.equal(calls[1][1].body, undefined, 'default association PUT sends no body');
+});
+
+test('formatEngagement labels the object per activity type', () => {
+  assert.match(formatEngagement({ id: 'n1', properties: { hs_note_body: 'hi' } }, 'note'), /note:/);
 });
 
 test('formatDeal + formatPipelines render deal object and pipeline stages', () => {

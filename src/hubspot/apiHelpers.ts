@@ -55,6 +55,9 @@ export type HubSpotPipeline = { id?: string; label?: string; displayOrder?: numb
 
 export type HubSpotPipelinePage = { results?: HubSpotPipeline[] };
 
+/** Engagement (activity) object types that support create + timeline association. */
+export type HubSpotEngagementType = 'notes' | 'tasks' | 'calls' | 'meetings';
+
 /** A dropdown option, as accepted by the property create/update tools. */
 export type HubSpotPropertyOption = {
   label: string;
@@ -210,6 +213,26 @@ export class HubSpotClient {
   /** All deal pipelines, each with its ordered stages. */
   listDealPipelines(): Promise<HubSpotPipelinePage> {
     return this.request('GET', '/crm/v3/pipelines/deals');
+  }
+
+  // === Engagements (activity writes: notes, tasks, calls, meetings) ===
+
+  /** Create an engagement object (standalone; associate separately). */
+  createEngagement(objectType: HubSpotEngagementType, properties: Record<string, unknown>): Promise<HubSpotObject> {
+    return this.request('POST', `/crm/v3/objects/${objectType}`, { properties });
+  }
+
+  /**
+   * Create a *default* (unlabeled, HUBSPOT_DEFINED) association between two
+   * records via associations v4. The default endpoint picks the correct,
+   * direction-sensitive association type itself, so callers avoid the
+   * error-prone association-type-ID table entirely.
+   */
+  associateDefault(fromType: string, fromId: string, toType: string, toId: string): Promise<unknown> {
+    return this.request(
+      'PUT',
+      `/crm/v4/objects/${fromType}/${encodeURIComponent(fromId)}/associations/default/${toType}/${encodeURIComponent(toId)}`,
+    );
   }
 
   // === Properties ===
@@ -386,6 +409,11 @@ export function formatContact(obj: HubSpotObject | undefined): string {
 
 export function formatDeal(obj: HubSpotObject | undefined): string {
   return fmtObject(obj, 'Deal');
+}
+
+/** Render a created engagement (note/task/call/meeting) with a per-type label. */
+export function formatEngagement(obj: HubSpotObject | undefined, label: string): string {
+  return fmtObject(obj, label);
 }
 
 /** Render deal pipelines with their stages (ordered by displayOrder). */
