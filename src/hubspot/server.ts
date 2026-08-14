@@ -116,6 +116,33 @@ function addSearchTool(opts: {
   });
 }
 
+/**
+ * Register a "most recently active <object>" tool. companies, contacts, and
+ * deals all take a single `limit`, sort by last-modified date server-side, and
+ * differ only in the op they call and a clause of copy.
+ */
+function addRecentListTool(opts: {
+  name: string;
+  label: 'companies' | 'contacts' | 'deals';
+  /** Extra clause appended to the description, e.g. ", including amount and stage". */
+  extra?: string;
+  op: (client: HubSpotClient, args: { limit: number }) => Promise<string>;
+}): void {
+  hubspotServer.addTool({
+    name: opts.name,
+    annotations: { readOnlyHint: true },
+    description: `Get most recently active ${opts.label} from HubSpot (sorted by last-modified date)${opts.extra ?? ''}.`,
+    parameters: z.object({
+      limit: z.number().int().min(1).optional().default(10).describe(`Maximum number of ${opts.label} to return (default: 10).`),
+    }),
+    execute: (args, { log, session }) =>
+      withHubSpotClient(`Failed to get active ${opts.label}`, session, log, (client) => {
+        log.info(`${opts.name} limit=${args.limit}`);
+        return opts.op(client, args);
+      }),
+  });
+}
+
 // Cap on how many engagement detail records getCompanyActivity fetches.
 const MAX_ACTIVITY_FETCH = 100;
 
@@ -426,19 +453,7 @@ hubspotServer.addTool({
     }),
 });
 
-hubspotServer.addTool({
-  name: 'getActiveCompanies',
-  annotations: { readOnlyHint: true },
-  description: 'Get most recently active companies from HubSpot (sorted by last-modified date).',
-  parameters: z.object({
-    limit: z.number().int().min(1).optional().default(10).describe('Maximum number of companies to return (default: 10).'),
-  }),
-  execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to get active companies', session, log, (client) => {
-      log.info(`getActiveCompanies limit=${args.limit}`);
-      return opGetActiveCompanies(client, args);
-    }),
-});
+addRecentListTool({ name: 'getActiveCompanies', label: 'companies', op: opGetActiveCompanies });
 
 addSearchTool({
   name: 'searchCompanies',
@@ -514,19 +529,7 @@ hubspotServer.addTool({
     }),
 });
 
-hubspotServer.addTool({
-  name: 'getActiveContacts',
-  annotations: { readOnlyHint: true },
-  description: 'Get most recently active contacts from HubSpot (sorted by last-modified date).',
-  parameters: z.object({
-    limit: z.number().int().min(1).optional().default(10).describe('Maximum number of contacts to return (default: 10).'),
-  }),
-  execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to get active contacts', session, log, (client) => {
-      log.info(`getActiveContacts limit=${args.limit}`);
-      return opGetActiveContacts(client, args);
-    }),
-});
+addRecentListTool({ name: 'getActiveContacts', label: 'contacts', op: opGetActiveContacts });
 
 addSearchTool({
   name: 'searchContacts',
@@ -571,18 +574,11 @@ hubspotServer.addTool({
 
 // --- Deal tools ---
 
-hubspotServer.addTool({
+addRecentListTool({
   name: 'getActiveDeals',
-  annotations: { readOnlyHint: true },
-  description: 'Get most recently active deals from HubSpot (sorted by last-modified date), including amount, stage, pipeline, and close date.',
-  parameters: z.object({
-    limit: z.number().int().min(1).optional().default(10).describe('Maximum number of deals to return (default: 10).'),
-  }),
-  execute: (args, { log, session }) =>
-    withHubSpotClient('Failed to get active deals', session, log, (client) => {
-      log.info(`getActiveDeals limit=${args.limit}`);
-      return opGetActiveDeals(client, args);
-    }),
+  label: 'deals',
+  extra: ', including amount, stage, pipeline, and close date',
+  op: opGetActiveDeals,
 });
 
 hubspotServer.addTool({
