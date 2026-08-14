@@ -456,6 +456,21 @@ export async function opLogMeeting(
   return opCreateEngagement(client, 'meetings', 'meeting', props, args, nowMs);
 }
 
+/**
+ * Delete an engagement. The counterpart to the four create tools: without it,
+ * anything written while testing the timeline-association behaviour has to be
+ * cleaned up by hand in the HubSpot UI.
+ */
+export async function opDeleteEngagement(
+  client: HubSpotClient,
+  args: { engagementType: HubSpotEngagementType; engagementId: string },
+): Promise<string> {
+  await client.deleteEngagement(args.engagementType, args.engagementId);
+  // Every engagement type is the plural of its label ('notes' -> 'note').
+  const label = args.engagementType.slice(0, -1);
+  return `Deleted ${label} ${args.engagementId}. It no longer appears on any record's timeline (recoverable from HubSpot's recycling bin).`;
+}
+
 // conversation_handler.py:39 — list threads then fetch each thread's messages.
 export async function opGetRecentConversations(
   client: HubSpotClient,
@@ -942,5 +957,23 @@ hubspotServer.addTool({
     withHubSpotClient('Failed to log meeting', session, log, (client) => {
       log.info(`logMeeting associate=${args.associateToObjectType ?? 'none'}`);
       return opLogMeeting(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'deleteEngagement',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description:
+    'Delete a note, task, call, or meeting by ID — the cleanup counterpart to createNote/createTask/logCall/logMeeting.',
+  parameters: z.object({
+    engagementType: z
+      .enum(['notes', 'tasks', 'calls', 'meetings'])
+      .describe('Type of engagement to delete (plural, matching the tool that created it).'),
+    engagementId: z.string().describe('HubSpot ID of the engagement (returned when it was created).'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to delete engagement', session, log, (client) => {
+      log.info(`deleteEngagement type=${args.engagementType} id=${args.engagementId}`);
+      return opDeleteEngagement(client, args);
     }),
 });

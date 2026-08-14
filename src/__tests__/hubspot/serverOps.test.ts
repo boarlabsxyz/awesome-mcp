@@ -25,6 +25,7 @@ import {
   opCreateTask,
   opLogCall,
   opLogMeeting,
+  opDeleteEngagement,
   opGetRecentConversations,
   opGetTickets,
   opGetTicketConversationThreads,
@@ -249,6 +250,19 @@ test('opCreateNote reports an orphaned note (not success) when association fails
   assert.match(out, /created \(id n1\) but attaching/i, 'association failure is surfaced, not swallowed');
   assert.doesNotMatch(out, /visible on its timeline/);
   assert.equal(calls.filter(c => c.method === 'PUT').length, 1);
+});
+
+test('opDeleteEngagement deletes the typed engagement and confirms with its singular label', async () => {
+  const calls = router(() => ({ status: 204, body: {} }));
+  const out = await opDeleteEngagement(client(), { engagementType: 'notes', engagementId: 'n1' });
+  const del = calls.find(c => c.method === 'DELETE')!;
+  assert.match(del.url, /\/crm\/v3\/objects\/notes\/n1$/);
+  assert.match(out, /Deleted note n1/);
+  // Round-trip the other three types so the plural -> singular label holds.
+  for (const [type, label] of [['tasks', 'task'], ['calls', 'call'], ['meetings', 'meeting']] as const) {
+    router(() => ({ status: 204, body: {} }));
+    assert.match(await opDeleteEngagement(client(), { engagementType: type, engagementId: 'x' }), new RegExp(`Deleted ${label} x`));
+  }
 });
 
 test('opCreateTask / opLogCall / opLogMeeting map their type-specific properties', async () => {

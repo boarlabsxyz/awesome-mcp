@@ -290,6 +290,21 @@ test('engagement methods hit the right endpoints (create + v4 default associatio
   assert.equal(calls[1][1].body, undefined, 'default association PUT sends no body');
 });
 
+test('deleteEngagement issues a DELETE against the typed object endpoint', async () => {
+  const calls = stubFetch(() => ({
+    ok: true,
+    status: 204,
+    headers: { get: () => null },
+    json: async () => undefined,
+    text: async () => '',
+  }));
+  const client = new HubSpotClient('tok');
+  await client.deleteEngagement('meetings', 'm 1/2');
+  assert.equal(calls[0][1].method, 'DELETE');
+  assert.match(calls[0][0], /\/crm\/v3\/objects\/meetings\/m%201%2F2$/, 'the id is URL-encoded');
+  assert.equal(calls[0][1].body, undefined);
+});
+
 test('formatEngagement labels the object per activity type', () => {
   assert.match(formatEngagement({ id: 'n1', properties: { hs_note_body: 'hi' } }, 'note'), /note:/);
 });

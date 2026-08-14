@@ -223,6 +223,15 @@ export class HubSpotClient {
   }
 
   /**
+   * Delete an engagement. HubSpot's DELETE archives the record: it drops off
+   * every timeline immediately and sits in the recycling bin rather than being
+   * purged, so an accidental delete is recoverable from the HubSpot UI.
+   */
+  deleteEngagement(objectType: HubSpotEngagementType, engagementId: string): Promise<void> {
+    return this.request('DELETE', `/crm/v3/objects/${objectType}/${encodeURIComponent(engagementId)}`);
+  }
+
+  /**
    * Create a *default* (unlabeled, HUBSPOT_DEFINED) association between two
    * records via associations v4. The default endpoint picks the correct,
    * direction-sensitive association type itself, so callers avoid the
