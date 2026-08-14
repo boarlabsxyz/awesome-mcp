@@ -13,10 +13,13 @@ import {
   formatTickets,
   formatCompany,
   formatContact,
+  formatDeal,
   formatObjectList,
+  formatPipelines,
   formatProperty,
   recentCompaniesSearch,
   recentContactsSearch,
+  recentDealsSearch,
   eqFilterGroup,
   textSearch,
   getHubSpotClient,
@@ -234,6 +237,51 @@ test('contact CRUD methods hit the right endpoints', async () => {
   await client.updateContact('p1', { email: 'x@y.com' });
   assert.match(calls[3][0], /\/crm\/v3\/objects\/contacts\/p1$/);
   assert.equal(calls[3][1].method, 'PATCH');
+});
+
+test('deal CRUD + pipeline methods hit the right endpoints', async () => {
+  const calls = stubFetch(() => jsonResponse({ id: 'd1', properties: { dealname: 'Big' } }));
+  const client = new HubSpotClient('tok');
+
+  await client.searchDeals({ q: 1 });
+  assert.match(calls[0][0], /\/crm\/v3\/objects\/deals\/search$/);
+  assert.equal(calls[0][1].method, 'POST');
+
+  await client.createDeal({ dealname: 'Big' });
+  assert.match(calls[1][0], /\/crm\/v3\/objects\/deals$/);
+  assert.deepEqual(JSON.parse(calls[1][1].body), { properties: { dealname: 'Big' } });
+
+  await client.getDeal('d1', ['dealname', 'amount']);
+  assert.match(calls[2][0], /\/crm\/v3\/objects\/deals\/d1\?archived=false&properties=dealname,amount$/);
+
+  await client.updateDeal('d1', { amount: '99' });
+  assert.match(calls[3][0], /\/crm\/v3\/objects\/deals\/d1$/);
+  assert.equal(calls[3][1].method, 'PATCH');
+
+  await client.listDealPipelines();
+  assert.match(calls[4][0], /\/crm\/v3\/pipelines\/deals$/);
+  assert.equal(calls[4][1].method, 'GET');
+});
+
+test('recentDealsSearch sorts by last-modified; getProperty accepts deals', async () => {
+  const de = recentDealsSearch(7) as any;
+  assert.equal(de.limit, 7);
+  assert.equal(de.sorts[0].propertyName, 'hs_lastmodifieddate');
+  assert.ok(de.properties.includes('dealname'));
+
+  const calls = stubFetch(() => jsonResponse({ name: 'dealstage', label: 'Deal Stage' }));
+  await new HubSpotClient('tok').getProperty('deals', 'dealstage');
+  assert.match(calls[0][0], /\/crm\/v3\/properties\/deals\/dealstage$/);
+});
+
+test('formatDeal + formatPipelines render deal object and pipeline stages', () => {
+  assert.match(formatDeal({ id: 'd1', properties: { dealname: 'Big' } }), /Deal:/);
+  assert.equal(formatPipelines([]), 'No deal pipelines found.');
+  const out = formatPipelines([
+    { id: 'default', label: 'Sales', stages: [{ id: 's1', label: 'New', displayOrder: 0 }] },
+  ]);
+  assert.match(out, /Sales \(id default\)/);
+  assert.match(out, /- New \(id s1\)/);
 });
 
 test('property methods hit the right endpoints', async () => {
