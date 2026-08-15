@@ -290,6 +290,21 @@ test('engagement methods hit the right endpoints (create + v4 default associatio
   assert.equal(calls[1][1].body, undefined, 'default association PUT sends no body');
 });
 
+test('deleteEngagement issues a DELETE against the typed object endpoint', async () => {
+  const calls = stubFetch(() => ({
+    ok: true,
+    status: 204,
+    headers: { get: () => null },
+    json: async () => undefined,
+    text: async () => '',
+  }));
+  const client = new HubSpotClient('tok');
+  await client.deleteEngagement('meetings', 'm 1/2');
+  assert.equal(calls[0][1].method, 'DELETE');
+  assert.match(calls[0][0], /\/crm\/v3\/objects\/meetings\/m%201%2F2$/, 'the id is URL-encoded');
+  assert.equal(calls[0][1].body, undefined);
+});
+
 test('formatEngagement labels the object per activity type', () => {
   assert.match(formatEngagement({ id: 'n1', properties: { hs_note_body: 'hi' } }, 'note'), /note:/);
 });
@@ -393,6 +408,25 @@ test('formatObjectList counts and labels entries by name/email/fallback', () => 
   assert.match(out, /x@y.com/);
   assert.match(out, /\(unnamed\)/);
   assert.equal(formatObjectList([], 'records'), 'No records found.');
+});
+
+test('formatObjectList distinguishes empty properties from ones HubSpot never returned', () => {
+  const out = formatObjectList(
+    // HubSpot echoes requested properties with null when unset, and simply
+    // omits keys it does not recognise.
+    [{ id: 'c1', properties: { name: 'Stagen', domain: 'stagen.com', city: null, country: '' } }],
+    'companies',
+    ['name', 'domain', 'city', 'country', 'totally_fake_property_xyz'],
+  );
+  assert.match(out, /domain: stagen\.com/);
+  assert.match(out, /city: \(empty\)/, 'a property that is unset on the record is rendered, not dropped');
+  assert.match(out, /country: \(empty\)/, 'empty string counts as unset');
+  assert.doesNotMatch(out, /totally_fake_property_xyz: /, 'an unreturned property gets no value line');
+  assert.match(
+    out,
+    /⚠ Requested properties not returned by HubSpot \(unknown or unavailable\): totally_fake_property_xyz/,
+    'unknown properties are called out instead of looking like empty ones',
+  );
 });
 
 test('epochToIso normalizes epoch millis (number or numeric string) to ISO, passes others through', () => {
