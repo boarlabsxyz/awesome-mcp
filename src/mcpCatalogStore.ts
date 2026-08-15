@@ -580,14 +580,16 @@ export async function seedDefaultCatalogs(): Promise<void> {
       // Without sales-email-read, getCompanyActivity gets EMAIL engagement
       // bodies redacted (meetings/calls come through fine).
       'sales-email-read',
-      // Engagement WRITES (createNote / createTask / logCall / logMeeting):
-      // company/contact scopes do NOT cover creating activities. The exact
-      // granular scope string varies by HubSpot app config and an UNKNOWN
-      // scope makes the whole consent flow fail — so enable the activity-write
-      // scope on the registered HubSpot app first, then add its exact string
-      // here (candidate: 'crm.objects.notes.write'). Until then engagement
-      // writes 401/403 and the tools surface that verbatim. Requires a
-      // reconnect/re-consent once added (see the deals note above).
+      // Engagement writes/deletes (createNote / createTask / logCall /
+      // logMeeting / deleteEngagement) need NO extra scope: HubSpot's notes,
+      // tasks, calls, and meetings APIs all document their requirement as
+      // crm.objects.contacts.read + .write, already granted above.
+      // Do NOT add crm.objects.{notes,tasks,calls,meetings}.* — no such scope
+      // exists in HubSpot's public list, and an unknown scope makes the whole
+      // consent flow fail, taking every HubSpot connection down with it.
+      // If an engagement write 401/403s, check the scopes actually granted on
+      // the token (GET /oauth/v1/access-tokens/{token}) rather than guessing
+      // at a new scope string.
     ],
     isLocal: !process.env.HUBSPOT_MCP_URL,
     isActive: true,

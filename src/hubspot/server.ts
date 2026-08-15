@@ -880,8 +880,8 @@ hubspotServer.addTool({
 
 // --- Engagement (activity) write tools ---
 // Create notes/tasks/calls/meetings and optionally attach them to a record's
-// timeline. These need an activity-write scope on the HubSpot app — see the
-// note by the deals scopes in mcpCatalogStore.ts.
+// timeline. HubSpot covers all four under the contacts read/write scopes the
+// catalog already requests — see the scope note in mcpCatalogStore.ts.
 
 hubspotServer.addTool({
   name: 'createNote',
