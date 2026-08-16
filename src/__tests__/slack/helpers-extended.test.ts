@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { resolveUsers, getWorkspaceUrl, handleReadChannelHistory, handleReadThreadReplies, handlePostMessage, handleReplyInThread } from '../../slack/helpers.js';
+import sharp from 'sharp';
+import { resolveUsers, getWorkspaceUrl, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread } from '../../slack/helpers.js';
+import { __setImageBlobPoolForTests } from '../../images/imageBlobStore.js';
 
 function mockSlackClient(overrides: Record<string, any> = {}): any {
   return {
@@ -218,5 +220,139 @@ describe('handleReplyInThread', () => {
       if (origEnv === undefined) delete process.env.SLACK_WRITES_ENABLED;
       else process.env.SLACK_WRITES_ENABLED = origEnv;
     }
+  });
+});
+
+describe('handleDownloadFile', () => {
+  // A real PNG so sharp (store) and file-type (imageContent) both work.
+  const pngPromise = sharp({
+    create: { width: 4, height: 4, channels: 3, background: { r: 200, g: 30, b: 30 } },
+  }).png().toBuffer();
+
+  function fileClient(file: any, bytes?: Buffer): any {
+    return {
+      filesInfo: async () => ({ file }),
+      downloadFileBytes: async () => ({
+        buffer: bytes ?? Buffer.from('hello'),
+        contentType: file.mimetype || 'application/octet-stream',
+      }),
+    };
+  }
+
+  const IMAGE = {
+    id: 'F1', name: 'shot.png', mimetype: 'image/png', size: 1024,
+    channels: ['C1'], permalink: 'https://x.slack.com/files/F1',
+    url_private_download: 'https://files.slack.com/files-pri/T1-F1/download/shot.png',
+  };
+
+  it('refuses a file that is not shared in the given channel', async () => {
+    const client = fileClient(IMAGE);
+    await assert.rejects(
+      () => handleDownloadFile(client, { fileId: 'F1', channelId: 'C_OTHER', format: 'url' }),
+      { message: /not shared in channel C_OTHER/ },
+    );
+  });
+
+  it('accepts a share recorded under ims', async () => {
+    const png = await pngPromise;
+    const client = fileClient({ ...IMAGE, channels: undefined, ims: ['D9'] }, png);
+    const result = await handleDownloadFile(client, { fileId: 'F1', channelId: 'D9', format: 'inline' });
+    assert.equal((result as any).type, 'image');
+  });
+
+  it('accepts a share recorded under the newer shares map', async () => {
+    const png = await pngPromise;
+    const client = fileClient({ ...IMAGE, channels: undefined, shares: { private: { D9: [{}] } } }, png);
+    const result = await handleDownloadFile(client, { fileId: 'F1', channelId: 'D9', format: 'inline' });
+    assert.equal((result as any).type, 'image');
+  });
+
+  it('returns an image content block for format inline', async () => {
+    const png = await pngPromise;
+    const client = fileClient(IMAGE, png);
+    const result: any = await handleDownloadFile(client, { fileId: 'F1', channelId: 'C1', format: 'inline' });
+    assert.equal(result.type, 'image');
+    assert.equal(result.mimeType, 'image/png');
+    assert.ok(result.data.length > 0);
+  });
+
+  it('refuses an oversized inline request and points at format url', async () => {
+    const client = fileClient({ ...IMAGE, size: 5 * 1024 * 1024 });
+    await assert.rejects(
+      () => handleDownloadFile(client, { fileId: 'F1', channelId: 'C1', format: 'inline' }),
+      { message: /Use format: "url"/ },
+    );
+  });
+
+  it('hosts the image and returns a public URL for format url', async () => {
+    const origBase = process.env.IMAGE_PUBLIC_BASE_URL;
+    process.env.IMAGE_PUBLIC_BASE_URL = 'https://img.test';
+    __setImageBlobPoolForTests({ query: async () => ({ rows: [], rowCount: 1 }) });
+    try {
+      const png = await pngPromise;
+      const client = fileClient(IMAGE, png);
+      const result = await handleDownloadFile(client, { fileId: 'F1', channelId: 'C1', format: 'url' });
+      assert.ok(typeof result === 'string');
+      assert.ok((result as string).includes('https://img.test/images/'));
+      assert.ok((result as string).includes('shot.png'));
+    } finally {
+      __setImageBlobPoolForTests(null);
+      if (origBase === undefined) delete process.env.IMAGE_PUBLIC_BASE_URL;
+      else process.env.IMAGE_PUBLIC_BASE_URL = origBase;
+    }
+  });
+
+  it('suggests format inline when the image host is not configured', async () => {
+    const origBase = process.env.IMAGE_PUBLIC_BASE_URL;
+    delete process.env.IMAGE_PUBLIC_BASE_URL;
+    __setImageBlobPoolForTests({ query: async () => ({ rows: [], rowCount: 1 }) });
+    try {
+      const png = await pngPromise;
+      const client = fileClient(IMAGE, png);
+      await assert.rejects(
+        () => handleDownloadFile(client, { fileId: 'F1', channelId: 'C1', format: 'url' }),
+        { message: /format: "inline"/ },
+      );
+    } finally {
+      __setImageBlobPoolForTests(null);
+      if (origBase !== undefined) process.env.IMAGE_PUBLIC_BASE_URL = origBase;
+    }
+  });
+
+  it('returns text files inline as text', async () => {
+    const client = fileClient(
+      { ...IMAGE, name: 'log.txt', mimetype: 'text/plain' },
+      Buffer.from('line one\nline two'),
+    );
+    const result = await handleDownloadFile(client, { fileId: 'F1', channelId: 'C1', format: 'url' });
+    assert.ok((result as string).includes('line one'));
+    assert.ok((result as string).includes('log.txt'));
+  });
+
+  it('returns metadata rather than throwing for an unsupported type', async () => {
+    const client = fileClient({ ...IMAGE, name: 'report.pdf', mimetype: 'application/pdf' });
+    const result = await handleDownloadFile(client, { fileId: 'F1', channelId: 'C1', format: 'url' });
+    assert.ok((result as string).includes('not downloadable'));
+    assert.ok((result as string).includes('report.pdf'));
+    assert.ok((result as string).includes('https://x.slack.com/files/F1'));
+  });
+
+  it('explains that external files cannot be downloaded', async () => {
+    const client = fileClient({
+      ...IMAGE, mode: 'external', is_external: true, url_private: 'https://drive.google.com/x',
+    });
+    const result = await handleDownloadFile(client, { fileId: 'F1', channelId: 'C1', format: 'url' });
+    assert.ok((result as string).includes('hosted outside Slack'));
+    assert.ok((result as string).includes('https://drive.google.com/x'));
+  });
+
+  it('translates missing_scope into reconnect guidance', async () => {
+    const client = {
+      filesInfo: async () => { throw new Error('Slack API error (files.info): missing_scope'); },
+    } as any;
+    await assert.rejects(
+      () => handleDownloadFile(client, { fileId: 'F1', channelId: 'C1', format: 'url' }),
+      { message: /files:read.*[Rr]econnect/s },
+    );
   });
 });

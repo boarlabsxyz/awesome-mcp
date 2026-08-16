@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { SlackClient } from '../slack/apiHelpers.js';
-import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handlePostMessage, handleReplyInThread } from '../slack/helpers.js';
+import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread } from '../slack/helpers.js';
 import { assertAccess, fetchChannelMeta, filterChannelList, filterDmsByOrg, filterGroupDmsByRules } from './accessControl.js';
 import type { SlackAccessRules } from '../mcpConnectionStore.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
@@ -214,6 +214,26 @@ slackUserServer.addTool({
     const client = getSlackUserClient(session);
     await enforceAccess(client, session!, args.channelId);
     return handleReadThreadReplies(client, getTokenKey(session!), args.channelId, args.threadTs, args);
+  },
+});
+
+slackUserServer.addTool({
+  name: 'downloadFile',
+  // readOnlyHint describes Slack, which this never modifies. The "url" format
+  // does write the bytes into our own image blob store.
+  annotations: { readOnlyHint: true },
+  description: 'Download a file attached to a Slack message. Get the fileId from the 📎 lines in readChannelHistory or readThreadReplies output, and pass the channel you read it from. Images: format "url" (default) re-hosts the image at a public URL suitable for tools that take an image URL (e.g. insertImageFromUrl), format "inline" returns the image itself so you can look at it. Text files are returned as text; other file types return metadata only. Access rules are enforced.',
+  parameters: z.object({
+    fileId: z.string().describe('The Slack file ID (e.g., F01234ABCDE).'),
+    channelId: z.string().describe('The channel or DM the file was shared in — the one you read the message from.'),
+    format: z.enum(['url', 'inline']).optional().default('url').describe('"url" re-hosts an image and returns a public link; "inline" returns the image directly (max 1.5 MB). Ignored for text files.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getSlackUserClient(session);
+    // Must run before the download: handleDownloadFile then verifies the file
+    // is really shared in this (now-authorised) channel.
+    await enforceAccess(client, session!, args.channelId);
+    return handleDownloadFile(client, args);
   },
 });
 

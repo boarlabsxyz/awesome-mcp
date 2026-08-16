@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import { SlackClient } from '../../slack/apiHelpers.js';
-import { filterChannelList } from '../../slack-user/accessControl.js';
+import { filterChannelList, assertAccess } from '../../slack-user/accessControl.js';
+import { handleDownloadFile } from '../../slack/helpers.js';
 import type { SlackAccessRules } from '../../mcpConnectionStore.js';
 
 // Test the search/filter logic that the slack-user listChannels tool uses.
@@ -122,6 +123,40 @@ describe('Slack User Server - search logic', () => {
       assert.ok(lines[0].includes('@alice'));
       assert.ok(lines[1].includes('Bobby'));
       assert.ok(lines[1].includes('@bob'));
+    });
+  });
+
+  // downloadFile takes a fileId, which on its own says nothing about which
+  // channel the bytes came from. Two layers keep it from becoming a hole in the
+  // allowlist: the tool runs enforceAccess on the supplied channelId, and the
+  // handler then refuses a file that was never shared in that channel.
+  describe('downloadFile access layering', () => {
+    const meta = {
+      id: 'C4', name: 'engineering', is_private: false,
+      is_shared: false, is_im: false, is_mpim: false,
+    };
+
+    it('layer 1: a channel outside the whitelist is denied before any file lookup', () => {
+      assert.throws(
+        () => assertAccess({ ...rules, whitelistChannels: ['ops_*'] }, meta),
+        /does not match any whitelist/,
+      );
+    });
+
+    it('layer 2: an allowed channel cannot be used to reach a file shared elsewhere', async () => {
+      const client = {
+        // File lives in a channel the rules would deny...
+        filesInfo: async () => ({
+          file: { id: 'F1', name: 'secret.png', mimetype: 'image/png', channels: ['C_DENIED'] },
+        }),
+        downloadFileBytes: async () => { throw new Error('must not download'); },
+      } as any;
+
+      // ...so naming an allowed channel must not launder it through.
+      await assert.rejects(
+        () => handleDownloadFile(client, { fileId: 'F1', channelId: 'C1', format: 'url' }),
+        /not shared in channel C1/,
+      );
     });
   });
 
