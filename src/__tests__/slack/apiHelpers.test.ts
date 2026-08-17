@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
-import { SlackClient } from '../../slack/apiHelpers.js';
+import { SlackClient, fileShareTargets } from '../../slack/apiHelpers.js';
 
 // We test SlackClient by mocking global fetch
 
@@ -306,5 +306,57 @@ describe('SlackClient', () => {
       await client.conversationsListAll();
       assert.ok(capturedUrl.includes('conversations.list'));
     });
+  });
+});
+
+describe('fileShareTargets', () => {
+  it('unions the flat channels/groups/ims arrays', () => {
+    const targets = fileShareTargets({ id: 'F1', channels: ['C1'], groups: ['G1'], ims: ['D1'] });
+    assert.deepEqual([...targets].sort(), ['C1', 'D1', 'G1']);
+  });
+
+  it('also reads the newer shares map', () => {
+    // Slack has been moving to shares.public/shares.private; missing this shape
+    // would make every share check come up empty and deny valid downloads.
+    const targets = fileShareTargets({
+      id: 'F1',
+      shares: { public: { C9: [{ ts: '1.0' }] }, private: { D7: [{ ts: '2.0' }] } },
+    });
+    assert.deepEqual([...targets].sort(), ['C9', 'D7']);
+  });
+
+  it('is empty when a file is shared nowhere the token can see', () => {
+    assert.equal(fileShareTargets({ id: 'F1' }).size, 0);
+  });
+});
+
+describe('SlackClient.filesInfo', () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => { originalFetch = globalThis.fetch; });
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  it('returns the file object', async () => {
+    globalThis.fetch = (async () => ({
+      ok: true, status: 200,
+      headers: { get: () => null },
+      json: async () => ({ ok: true, file: { id: 'F1', name: 'shot.png', channels: ['C1'] } }),
+      text: async () => '',
+    })) as any;
+    const client = new SlackClient('xoxb-test-token');
+    const { file } = await client.filesInfo('F1');
+    assert.equal(file.id, 'F1');
+    assert.equal(file.name, 'shot.png');
+  });
+
+  it('throws a UserError naming the Slack error code', async () => {
+    globalThis.fetch = (async () => ({
+      ok: true, status: 200,
+      headers: { get: () => null },
+      json: async () => ({ ok: false, error: 'file_not_found' }),
+      text: async () => '',
+    })) as any;
+    const client = new SlackClient('xoxb-test-token');
+    await assert.rejects(() => client.filesInfo('F_BAD'), { message: /file_not_found/ });
   });
 });

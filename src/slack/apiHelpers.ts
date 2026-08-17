@@ -1,7 +1,65 @@
 // src/slack/apiHelpers.ts
 import { UserError } from 'fastmcp';
+import { fetchSlackFileBytes, type SlackFileBytes } from './fileDownload.js';
 
 const SLACK_API_BASE = 'https://slack.com/api';
+
+/**
+ * A file as it appears on a message (`files[]`) or from files.info.
+ *
+ * Every field is optional on purpose. Slack returns heavily reduced objects for
+ * files the token can't see (`file_access`) and for deleted ones
+ * (`mode: 'tombstone'`), so anything that renders these must degrade rather
+ * than assume `name`/`mimetype`/`size` are present.
+ */
+export interface SlackFileRef {
+  id: string;
+  name?: string;
+  title?: string;
+  mimetype?: string;
+  filetype?: string;
+  size?: number;
+  /** 'hosted' | 'snippet' | 'post' | 'external' | 'tombstone' | … */
+  mode?: string;
+  permalink?: string;
+  url_private?: string;
+  url_private_download?: string;
+  is_external?: boolean;
+  /** 'check_file_info' | 'access_denied' when Slack withholds the file. */
+  file_access?: string;
+}
+
+/** files.info adds share targets and the uploader to the base file shape. */
+export interface SlackFileInfo extends SlackFileRef {
+  user?: string;
+  created?: number;
+  preview?: string;
+  channels?: string[];
+  groups?: string[];
+  ims?: string[];
+  shares?: {
+    public?: Record<string, unknown>;
+    private?: Record<string, unknown>;
+  };
+}
+
+/**
+ * Every channel/DM a file is shared into.
+ *
+ * Slack exposes this two ways — the flat `channels`/`groups`/`ims` arrays and
+ * the newer `shares.public`/`shares.private` maps keyed by channel ID. Union
+ * both so share verification doesn't silently come up empty on either shape.
+ */
+export function fileShareTargets(file: SlackFileInfo): Set<string> {
+  const targets = new Set<string>();
+  for (const id of [...(file.channels || []), ...(file.groups || []), ...(file.ims || [])]) {
+    if (id) targets.add(id);
+  }
+  for (const bucket of [file.shares?.public, file.shares?.private]) {
+    for (const id of Object.keys(bucket || {})) targets.add(id);
+  }
+  return targets;
+}
 
 export class SlackClient {
   constructor(private botToken: string) {}
@@ -130,7 +188,11 @@ export class SlackClient {
   async conversationsHistory(channel: string, options?: {
     limit?: number; oldest?: string; latest?: string; cursor?: string;
   }): Promise<{
-    messages: Array<{ type: string; user?: string; text: string; ts: string; thread_ts?: string; reply_count?: number }>;
+    messages: Array<{
+      type: string; user?: string; text: string; ts: string;
+      thread_ts?: string; reply_count?: number; subtype?: string;
+      files?: SlackFileRef[];
+    }>;
     has_more: boolean;
     response_metadata?: { next_cursor?: string };
   }> {
@@ -146,7 +208,11 @@ export class SlackClient {
   async conversationsReplies(channel: string, ts: string, options?: {
     limit?: number; cursor?: string;
   }): Promise<{
-    messages: Array<{ type: string; user?: string; text: string; ts: string; thread_ts?: string }>;
+    messages: Array<{
+      type: string; user?: string; text: string; ts: string;
+      thread_ts?: string; reply_count?: number; subtype?: string;
+      files?: SlackFileRef[];
+    }>;
     has_more: boolean;
     response_metadata?: { next_cursor?: string };
   }> {
@@ -219,6 +285,21 @@ export class SlackClient {
     channel: { id: string };
   }> {
     return this.request('conversations.open', { users: userId });
+  }
+
+  // === Files ===
+
+  /** Metadata for one file, including every channel/DM it was shared into. */
+  async filesInfo(fileId: string): Promise<{ file: SlackFileInfo }> {
+    return this.request('files.info', { file: fileId });
+  }
+
+  /**
+   * Download a Slack-hosted file's bytes. Kept as a thin delegate so the token
+   * stays private to this class and never has to be threaded through callers.
+   */
+  async downloadFileBytes(url: string, opts?: { maxBytes?: number }): Promise<SlackFileBytes> {
+    return fetchSlackFileBytes(url, this.botToken, opts);
   }
 
   // === Users (list) ===

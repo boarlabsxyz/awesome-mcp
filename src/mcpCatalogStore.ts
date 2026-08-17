@@ -519,7 +519,10 @@ export async function seedDefaultCatalogs(): Promise<void> {
     googleClientSecret: slackClientSecret,
     oauthAuthorizationUrl: 'https://slack.com/oauth/v2/authorize',
     oauthTokenUrl: 'https://slack.com/api/oauth.v2.access',
-    oauthScopes: ['channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'im:write', 'mpim:history', 'mpim:read', 'mpim:write', 'chat:write', 'users:read', 'team:read'],
+    // files:read powers downloadFile AND the file metadata shown in message
+    // reads — without it Slack returns file stubs with file_access:
+    // 'check_file_info'. Already-connected users must reconnect to re-consent.
+    oauthScopes: ['channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'im:write', 'mpim:history', 'mpim:read', 'mpim:write', 'chat:write', 'users:read', 'team:read', 'files:read'],
     isLocal: !process.env.SLACK_USER_MCP_URL,
     isActive: true,
   });
