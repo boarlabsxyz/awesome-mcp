@@ -5321,6 +5321,54 @@
         }
       }
     },
+    "/api/v1/docs/{documentId}/comments/{commentId}": {
+      "get": {
+        "operationId": "getDocsComment",
+        "summary": "Get a single comment with its replies",
+        "description": "Get a single comment with its replies. Mirrors the MCP tool `getComment`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "docs"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/structure": {
+      "get": {
+        "operationId": "inspectDocStructure",
+        "summary": "Inspect the structure of a Google Doc",
+        "description": "Inspect the structure of a Google Doc. Mirrors the MCP tool `inspectDocStructure`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "docs"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
     "/api/v1/sheets/{spreadsheetId}/ranges": {
       "get": {
         "operationId": "readSpreadsheet",
