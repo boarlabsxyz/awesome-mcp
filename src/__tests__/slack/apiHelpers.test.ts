@@ -201,6 +201,88 @@ describe('SlackClient', () => {
     });
   });
 
+  describe('searchMessages / searchFiles', () => {
+    function captureBody(response: any) {
+      const captured = { url: '', body: '' };
+      globalThis.fetch = (async (url: any, opts: any) => {
+        captured.url = url;
+        captured.body = opts.body;
+        return {
+          ok: true, status: 200,
+          headers: { get: () => null },
+          json: async () => response,
+        };
+      }) as any;
+      return captured;
+    }
+
+    it('should send the query and paging params form-encoded', async () => {
+      const captured = captureBody({ ok: true, query: 'grafana', messages: { total: 0, matches: [] } });
+      const client = new SlackClient('xoxp-test');
+      await client.searchMessages('grafana in:#general', { count: 5, page: 3, sort: 'timestamp', sortDir: 'asc' });
+
+      assert.ok(captured.url.endsWith('/search.messages'));
+      assert.ok(captured.body.includes(`query=${encodeURIComponent('grafana in:#general')}`));
+      assert.ok(captured.body.includes('count=5'));
+      assert.ok(captured.body.includes('page=3'));
+      assert.ok(captured.body.includes('sort=timestamp'));
+      assert.ok(captured.body.includes('sort_dir=asc'));
+    });
+
+    it('should default count and page, and omit unset sort params', async () => {
+      const captured = captureBody({ ok: true, query: 'x', messages: { total: 0, matches: [] } });
+      const client = new SlackClient('xoxp-test');
+      await client.searchMessages('x');
+
+      assert.ok(captured.body.includes('count=20'));
+      assert.ok(captured.body.includes('page=1'));
+      assert.ok(!captured.body.includes('sort='));
+      assert.ok(!captured.body.includes('sort_dir='));
+    });
+
+    it('should clamp count and page to Slack limits', async () => {
+      const captured = captureBody({ ok: true, query: 'x', messages: { total: 0, matches: [] } });
+      const client = new SlackClient('xoxp-test');
+      await client.searchMessages('x', { count: 5000, page: 0 });
+
+      assert.ok(captured.body.includes('count=100'));
+      assert.ok(captured.body.includes('page=1'));
+    });
+
+    it('should return message matches', async () => {
+      mockFetch({
+        ok: true, query: 'grafana',
+        messages: {
+          total: 1,
+          paging: { count: 20, total: 1, page: 1, pages: 1 },
+          matches: [{ channel: { id: 'C1', name: 'general' }, user: 'U1', ts: '1.0', text: 'dashboard is live', permalink: 'https://x/p1' }],
+        },
+      });
+      const client = new SlackClient('xoxp-test');
+      const result = await client.searchMessages('grafana');
+      assert.equal(result.messages.matches.length, 1);
+      assert.equal(result.messages.matches[0].channel.name, 'general');
+    });
+
+    it('should hit search.files and return file matches', async () => {
+      const captured = captureBody({
+        ok: true, query: 'png',
+        files: { total: 1, matches: [{ id: 'F1', name: 'chart.png', mimetype: 'image/png', channels: ['C1'] }] },
+      });
+      const client = new SlackClient('xoxp-test');
+      const result = await client.searchFiles('png');
+
+      assert.ok(captured.url.endsWith('/search.files'));
+      assert.equal(result.files.matches[0].id, 'F1');
+    });
+
+    it('should surface Slack ok:false errors like every other method', async () => {
+      mockFetch({ ok: false, error: 'missing_scope' });
+      const client = new SlackClient('xoxb-bot-token');
+      await assert.rejects(() => client.searchMessages('x'), { message: /missing_scope/ });
+    });
+  });
+
   describe('conversationsReplies', () => {
     it('should return messages', async () => {
       mockFetch({ ok: true, messages: [{ text: 'reply', ts: '1.0' }], has_more: false });

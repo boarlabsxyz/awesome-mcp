@@ -196,6 +196,74 @@ CREATE INDEX IF NOT EXISTS idx_clickup_events_sub_time
   ON clickup_task_events(subscription_id, occurred_at DESC);
 `;
 
+// Slack channel-event subscriptions.
+//
+// Unlike ClickUp there is no remote object to mirror: Slack event subscriptions
+// are declared once on the app, and every workspace event arrives at one
+// Request URL. A row here is purely a local interest filter — "this user wants
+// these event types from this channel" — which is why there is no
+// slack_webhook_id and no per-row shared_secret (verification uses the
+// app-level SLACK_SIGNING_SECRET). N users can watch the same channel, so
+// ingestion looks rows up by (team, channel) and fans out.
+const CREATE_SLACK_EVENT_SUBSCRIPTIONS_TABLE = `
+CREATE TABLE IF NOT EXISTS slack_event_subscriptions (
+  id             SERIAL PRIMARY KEY,
+  user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  team_id        VARCHAR(100) NOT NULL,
+  channel_id     VARCHAR(100) NOT NULL,
+  events         JSONB NOT NULL,
+  match_pattern  TEXT,
+  status         VARCHAR(20) NOT NULL DEFAULT 'active',
+  fail_count     INTEGER NOT NULL DEFAULT 0,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, team_id, channel_id)
+);
+`;
+
+// Captured Slack events, one row per (subscription, event).
+//
+// UNIQUE(subscription_id, event_id) is load-bearing in a way the ClickUp
+// equivalent isn't: Slack retries any delivery it doesn't get a prompt 2xx for
+// (flagging the retry in X-Slack-Retry-Num), so without a dedup key a single
+// slow response duplicates every event in the window. Slack's own `event_id`
+// is the natural key — ClickUp never provided one.
+const CREATE_SLACK_CHANNEL_EVENTS_TABLE = `
+CREATE TABLE IF NOT EXISTS slack_channel_events (
+  id               BIGSERIAL PRIMARY KEY,
+  subscription_id  INTEGER NOT NULL REFERENCES slack_event_subscriptions(id) ON DELETE CASCADE,
+  team_id          VARCHAR(100) NOT NULL,
+  channel_id       VARCHAR(100) NOT NULL,
+  event_id         VARCHAR(100) NOT NULL,
+  event_type       VARCHAR(50) NOT NULL,
+  message_ts       VARCHAR(50),
+  thread_ts        VARCHAR(50),
+  actor_id         VARCHAR(100),
+  text             TEXT,
+  occurred_at      BIGINT NOT NULL,
+  received_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  raw_payload      JSONB NOT NULL,
+  UNIQUE(subscription_id, event_id)
+);
+`;
+
+const CREATE_SLACK_EVENTS_CHANNEL_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_slack_events_team_channel_time
+  ON slack_channel_events(team_id, channel_id, occurred_at DESC);
+`;
+
+const CREATE_SLACK_EVENTS_SUBSCRIPTION_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_slack_events_sub_time
+  ON slack_channel_events(subscription_id, occurred_at DESC);
+`;
+
+// Lookup path for ingestion: one POST arrives per event and must find every
+// subscription interested in that (team, channel).
+const CREATE_SLACK_SUBSCRIPTIONS_CHANNEL_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_slack_subs_team_channel
+  ON slack_event_subscriptions(team_id, channel_id);
+`;
+
 // Re-hosted images for ClickUp Docs. ClickUp Doc pages render markdown, so an
 // image is embedded as ![alt](url) pointing at our own public serve route
 // (/images/clickup-doc/:id). Bytes live here; see src/clickup/docImageStore.ts.
@@ -342,6 +410,15 @@ export async function initDatabase(): Promise<void> {
     await pool.query(CREATE_CLICKUP_EVENTS_WORKSPACE_TASK_INDEX);
     await pool.query(CREATE_CLICKUP_EVENTS_SUBSCRIPTION_INDEX);
     console.error('ClickUp task events indexes ensured.');
+    // Slack channel-event subscriptions + event store
+    await pool.query(CREATE_SLACK_EVENT_SUBSCRIPTIONS_TABLE);
+    console.error('Slack event subscriptions table ensured.');
+    await pool.query(CREATE_SLACK_CHANNEL_EVENTS_TABLE);
+    console.error('Slack channel events table ensured.');
+    await pool.query(CREATE_SLACK_EVENTS_CHANNEL_INDEX);
+    await pool.query(CREATE_SLACK_EVENTS_SUBSCRIPTION_INDEX);
+    await pool.query(CREATE_SLACK_SUBSCRIPTIONS_CHANNEL_INDEX);
+    console.error('Slack channel events indexes ensured.');
     await pool.query(CREATE_CLICKUP_DOC_IMAGES_TABLE);
     console.error('ClickUp doc images table ensured.');
     await pool.query(CREATE_IMAGE_BLOBS_TABLE);
@@ -357,6 +434,12 @@ export async function initDatabase(): Promise<void> {
       startTaskEventRetentionScheduler();
     } catch (err: any) {
       console.error('[db] failed to start ClickUp event retention scheduler:', err?.message || err);
+    }
+    try {
+      const { startSlackEventRetentionScheduler } = await import('./slack/eventStore.js');
+      startSlackEventRetentionScheduler();
+    } catch (err: any) {
+      console.error('[db] failed to start Slack event retention scheduler:', err?.message || err);
     }
   } catch (err) {
     console.error('Failed to connect to database(s), falling back to file storage:', err);

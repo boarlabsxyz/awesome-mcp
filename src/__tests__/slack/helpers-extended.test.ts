@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import sharp from 'sharp';
-import { resolveUsers, getWorkspaceUrl, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread } from '../../slack/helpers.js';
+import { resolveUsers, getWorkspaceUrl, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleSearchMessages, handleSearchFiles } from '../../slack/helpers.js';
 import { __setImageBlobPoolForTests } from '../../images/imageBlobStore.js';
 
 function mockSlackClient(overrides: Record<string, any> = {}): any {
@@ -353,6 +353,189 @@ describe('handleDownloadFile', () => {
     await assert.rejects(
       () => handleDownloadFile(client, { fileId: 'F1', channelId: 'C1', format: 'url' }),
       { message: /files:read.*[Rr]econnect/s },
+    );
+  });
+});
+
+describe('handleSearchMessages', () => {
+  const MATCHES = [
+    { channel: { id: 'C1', name: 'general' }, user: 'U1', ts: '1609459200.000000', text: 'dashboard is live', permalink: 'https://t/p1' },
+    { channel: { id: 'C2', name: 'secret' }, user: 'U2', ts: '1609459201.000000', text: 'do not leak me', permalink: 'https://t/p2' },
+  ];
+
+  function searchClient(page: any = { total: 2, paging: { count: 20, total: 2, page: 1, pages: 1 }, matches: MATCHES }): any {
+    return mockSlackClient({ searchMessages: async () => ({ query: 'q', messages: page }) });
+  }
+
+  it('renders channel, author, text and permalink for each match', async () => {
+    const result = await handleSearchMessages(searchClient(), 'tok-search-' + Date.now(), { query: 'dashboard', count: 20 });
+    assert.ok(result.includes('Found 2 message(s)'));
+    assert.ok(result.includes('#general'));
+    assert.ok(result.includes('dashboard is live'));
+    assert.ok(result.includes('https://t/p1'));
+    assert.ok(result.includes('Display U1'));
+  });
+
+  it('reports no results without a tail when Slack returns nothing', async () => {
+    const client = searchClient({ total: 0, matches: [] });
+    const result = await handleSearchMessages(client, 'tok-empty-' + Date.now(), { query: 'nope', count: 20 });
+    assert.ok(result.includes('No messages found for "nope"'));
+  });
+
+  it('drops matches the access filter denies and says how many were hidden', async () => {
+    const allow = async (ch: { id: string }) => ch.id === 'C1';
+    const result = await handleSearchMessages(searchClient(), 'tok-filter-' + Date.now(), { query: 'x', count: 20 }, allow);
+
+    assert.ok(result.includes('Found 1 message(s)'));
+    assert.ok(result.includes('dashboard is live'));
+    // The denied channel must not leak by name, text or permalink.
+    assert.ok(!result.includes('do not leak me'));
+    assert.ok(!result.includes('#secret'));
+    assert.ok(!result.includes('https://t/p2'));
+    assert.ok(result.includes('1 result(s) on this page hidden by your access rules'));
+  });
+
+  it('fails closed on a match with no channel', async () => {
+    const client = searchClient({ total: 1, matches: [{ channel: undefined as any, user: 'U1', ts: '1609459200.000000', text: 'orphan' }] });
+    const result = await handleSearchMessages(client, 'tok-orphan-' + Date.now(), { query: 'x', count: 20 }, async () => true);
+    assert.ok(!result.includes('orphan'));
+    assert.ok(result.includes('No messages you can access'));
+  });
+
+  it('keeps every match when no filter is supplied', async () => {
+    const result = await handleSearchMessages(searchClient(), 'tok-nofilter-' + Date.now(), { query: 'x', count: 20 });
+    assert.ok(result.includes('do not leak me'));
+    assert.ok(!result.includes('hidden by your access rules'));
+  });
+
+  it('reports Slack page numbers and points at the next page', async () => {
+    const client = searchClient({ total: 73, paging: { count: 20, total: 73, page: 2, pages: 4 }, matches: MATCHES });
+    const result = await handleSearchMessages(client, 'tok-page-' + Date.now(), { query: 'x', count: 20, page: 2 });
+    assert.ok(result.includes('Page 2 of 4'));
+    assert.ok(result.includes('2 shown of 73 total match(es)'));
+    assert.ok(result.includes('Use page: 3'));
+  });
+
+  it('warns that page numbers precede filtering only when results were hidden', async () => {
+    const client = searchClient({ total: 73, paging: { count: 20, total: 73, page: 2, pages: 4 }, matches: MATCHES });
+    const filtered = await handleSearchMessages(client, 'tok-warn-' + Date.now(), { query: 'x', count: 20 }, async ({ id }) => id === 'C1');
+    assert.ok(filtered.includes("Page numbers are Slack's"));
+
+    const unfiltered = await handleSearchMessages(client, 'tok-warn2-' + Date.now(), { query: 'x', count: 20 });
+    assert.ok(!unfiltered.includes("Page numbers are Slack's"));
+  });
+
+  it('reads the newer pagination block when paging is absent', async () => {
+    const client = searchClient({ total: 5, pagination: { total_count: 5, page: 1, per_page: 20, page_count: 1 }, matches: MATCHES });
+    const result = await handleSearchMessages(client, 'tok-pagination-' + Date.now(), { query: 'x', count: 20 });
+    assert.ok(result.includes('Page 1 of 1'));
+  });
+
+  it('translates missing_scope into reconnect guidance', async () => {
+    const client = mockSlackClient({
+      searchMessages: async () => { throw new Error('Slack API error (search.messages): missing_scope'); },
+    });
+    await assert.rejects(
+      () => handleSearchMessages(client, 'tok-scope-' + Date.now(), { query: 'x', count: 20 }),
+      { message: /search:read.*[Rr]econnect/s },
+    );
+  });
+
+  it('explains that a bot token cannot search', async () => {
+    const client = mockSlackClient({
+      searchMessages: async () => { throw new Error('Slack API error (search.messages): not_allowed_token_type'); },
+    });
+    await assert.rejects(
+      () => handleSearchMessages(client, 'tok-bot-' + Date.now(), { query: 'x', count: 20 }),
+      { message: /user token/ },
+    );
+  });
+});
+
+describe('handleSearchFiles', () => {
+  const FILES = [
+    { id: 'F1', name: 'chart.png', mimetype: 'image/png', size: 1024, channels: ['C1'], permalink: 'https://t/f1' },
+    { id: 'F2', name: 'secret.png', mimetype: 'image/png', size: 2048, channels: ['C2'], permalink: 'https://t/f2' },
+  ];
+
+  function filesClient(page: any = { total: 2, paging: { count: 20, total: 2, page: 1, pages: 1 }, matches: FILES }): any {
+    return mockSlackClient({ searchFiles: async () => ({ query: 'q', files: page }) });
+  }
+
+  it('lists each file with its share targets so downloadFile has a channelId', async () => {
+    const result = await handleSearchFiles(filesClient(), { query: 'png', count: 20 });
+    assert.ok(result.includes('Found 2 file(s)'));
+    assert.ok(result.includes('chart.png'));
+    assert.ok(result.includes('file ID: F1'));
+    assert.ok(result.includes('Shared in: C1'));
+    assert.ok(result.includes('Permalink: https://t/f1'));
+  });
+
+  it('hides files shared only into denied channels', async () => {
+    const result = await handleSearchFiles(filesClient(), { query: 'png', count: 20 }, async ({ id }) => id === 'C1');
+    assert.ok(result.includes('Found 1 file(s)'));
+    assert.ok(result.includes('chart.png'));
+    assert.ok(!result.includes('secret.png'));
+    assert.ok(!result.includes('https://t/f2'));
+    assert.ok(result.includes('1 result(s) on this page hidden'));
+  });
+
+  it('keeps a file shared into both an allowed and a denied channel', async () => {
+    const client = filesClient({
+      total: 1, matches: [{ id: 'F3', name: 'both.png', mimetype: 'image/png', channels: ['C2', 'C1'] }],
+    });
+    const result = await handleSearchFiles(client, { query: 'png', count: 20 }, async ({ id }) => id === 'C1');
+    assert.ok(result.includes('both.png'));
+  });
+
+  it('fails closed on a file with no share targets', async () => {
+    const client = filesClient({ total: 1, matches: [{ id: 'F4', name: 'orphan.png', mimetype: 'image/png' }] });
+    const result = await handleSearchFiles(client, { query: 'png', count: 20 }, async () => true);
+    assert.ok(!result.includes('orphan.png'));
+    assert.ok(result.includes('No files you can access'));
+  });
+
+  it('explains an unverifiable file separately from a rules denial', async () => {
+    // Otherwise "Slack told us nothing about where this lives" and "you may not
+    // read where this lives" produce an identical, inexplicable empty result.
+    const client = filesClient({
+      total: 2,
+      matches: [
+        { id: 'F4', name: 'orphan.png', mimetype: 'image/png' },
+        { id: 'F2', name: 'secret.png', mimetype: 'image/png', channels: ['C2'] },
+      ],
+    });
+    const result = await handleSearchFiles(client, { query: 'png', count: 20 }, async ({ id }) => id === 'C1');
+
+    assert.ok(result.includes('1 result(s) on this page hidden by your access rules'));
+    assert.ok(result.includes('1 result(s) withheld because Slack returned no channel'));
+  });
+
+  it('does not mention withheld results when every match had share targets', async () => {
+    const result = await handleSearchFiles(filesClient(), { query: 'png', count: 20 }, async () => true);
+    assert.ok(!result.includes('withheld because Slack returned no channel'));
+  });
+
+  it('unions the shares maps when picking share targets', async () => {
+    const client = filesClient({
+      total: 1, matches: [{ id: 'F5', name: 'shared.png', mimetype: 'image/png', shares: { private: { C1: {} } } }],
+    });
+    const result = await handleSearchFiles(client, { query: 'png', count: 20 }, async ({ id }) => id === 'C1');
+    assert.ok(result.includes('shared.png'));
+  });
+
+  it('reports no results when Slack returns none', async () => {
+    const result = await handleSearchFiles(filesClient({ total: 0, matches: [] }), { query: 'nope', count: 20 });
+    assert.ok(result.includes('No files found for "nope"'));
+  });
+
+  it('translates missing_scope into reconnect guidance', async () => {
+    const client = mockSlackClient({
+      searchFiles: async () => { throw new Error('Slack API error (search.files): missing_scope'); },
+    });
+    await assert.rejects(
+      () => handleSearchFiles(client, { query: 'x', count: 20 }),
+      { message: /search:read.*[Rr]econnect/s },
     );
   });
 });
