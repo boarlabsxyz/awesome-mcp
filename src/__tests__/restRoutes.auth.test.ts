@@ -25,6 +25,8 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/docs/recent',
   '/api/v1/docs/doc-123',
   '/api/v1/docs/doc-123/tabs',
+  '/api/v1/docs/doc-123/comments/comment-123',
+  '/api/v1/docs/doc-123/structure',
   '/api/v1/drive/shared-drives',
   '/api/v1/drive/folders/folder-123',
   '/api/v1/drive/files/file-123/permissions',

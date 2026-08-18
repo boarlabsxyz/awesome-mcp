@@ -2840,6 +2840,68 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // GET /api/v1/docs/:documentId/comments/:commentId - Get one comment + replies
+  // Same field mask and response shape as the list sibling above, so a caller
+  // can jq a single comment without special-casing the payload.
+  app.get('/api/v1/docs/:documentId/comments/:commentId', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const documentId = req.params.documentId as string;
+      const drive = google.drive({ version: 'v3', auth: req.userSession!.oauthClient });
+
+      const response = await drive.comments.get({
+        fileId: documentId,
+        commentId: req.params.commentId as string,
+        fields: 'id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime)',
+      });
+
+      const comment = response.data as any;
+      res.json({
+        documentId,
+        id: comment.id,
+        content: comment.content,
+        quotedText: comment.quotedFileContent?.value || null,
+        author: comment.author?.displayName || 'Unknown',
+        createdTime: comment.createdTime,
+        resolved: comment.resolved || false,
+        replies: (comment.replies || []).map((reply: any) => ({
+          id: reply.id,
+          content: reply.content,
+          author: reply.author?.displayName || 'Unknown',
+          createdTime: reply.createdTime,
+        })),
+      });
+    } catch (err) {
+      console.error('Error getting comment:', err);
+      sendUpstreamError(res, err, { notFound: 'Comment not found', fallback: 'Failed to get comment' });
+    }
+  });
+
+  // GET /api/v1/docs/:documentId/structure - Structure summary of a Google Doc.
+  // Optional query: ?detailed=true (element-by-element listing), ?tabId=.
+  // Reuses GDocsHelpers.parseDocStructure so this matches the inspectDocStructure
+  // MCP tool exactly rather than reimplementing the traversal.
+  app.get('/api/v1/docs/:documentId/structure', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const documentId = req.params.documentId as string;
+      const detailed = req.query.detailed === 'true';
+      const tabId = qstr(req.query.tabId) || undefined;
+
+      const docs = req.userSession!.googleDocs;
+      const docResponse = await docs.documents.get({ documentId, includeTabsContent: true });
+      if (!docResponse.data) {
+        res.status(404).json({ error: 'Document not found' });
+        return;
+      }
+
+      const { parseDocStructure } = await import('../google-docs/apiHelpers.js');
+      res.json(parseDocStructure(docResponse.data, detailed, tabId));
+    } catch (err) {
+      console.error('Error inspecting doc structure:', err);
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to inspect document structure' });
+    }
+  });
+
+
   // POST /api/v1/docs/:documentId/comments - Add a comment
   app.post('/api/v1/docs/:documentId/comments', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {

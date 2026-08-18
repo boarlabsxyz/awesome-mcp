@@ -1,0 +1,54 @@
+  // GET {{catalogPath}} - {{summary}}
+  // Mirrors the MCP tool `{{mcpToolName}}`. Returns raw upstream JSON.
+  app.get('{{expressPath}}', {{authMiddleware}}, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      // Connection-shape guard the auth middleware cannot make (drop if the
+      // service has exactly one connection kind).
+      if (!req.userSession?.{{tokenField}}) {
+        res.status(403).json({ error: '{{ProviderName}} connection required for REST. Connect via the dashboard.' });
+        return;
+      }
+
+      // Required query params are validated before any upstream call.
+      const {{requiredQueryParam}} = qstr(req.query.{{requiredQueryParam}});
+      if (!{{requiredQueryParam}}) {
+        res.status(400).json({ error: '{{requiredQueryParam}} query parameter is required' });
+        return;
+      }
+
+      const {{paramName}} = req.params.{{paramName}} as string;
+      const limit = qint(req.query.limit, {{defaultLimit}}, { max: {{maxLimit}} });
+
+      const { {{ClientClass}} } = await import('../{{provider}}/apiHelpers.js');
+      const client = new {{ClientClass}}(req.userSession.{{tokenField}});
+      const result = await client.{{clientMethod}}({{clientArgs}});
+
+      res.json(result);
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: '{{ResourceName}} not found', fallback: 'Failed to {{verbPhrase}}' });
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// Placeholders
+//   {{authMiddleware}}   requireClickUpApiKey | requireSlackApiKey | require<X>ApiKey
+//                        (add via createServiceAuth('<mcpSlug>', '<fallbackSubstring>')
+//                         next to the others around line 2602)
+//   {{tokenField}}       clickUpAccessToken | slackBotToken | outlineAccessToken |
+//                        hubSpotAccessToken | peopleForceApiKey
+//   {{ClientClass}}      ClickUpClient | SlackClient | OutlineClient | HubSpotClient | ...
+//
+// The dynamic import is deliberate — it keeps the web server's startup import
+// graph small. Match the surrounding routes.
+//
+// Error mapping: sendUpstreamError reads err.code / err.response.status /
+// err.status. A client that throws STRING error codes instead (Slack) needs
+// its own mapper:
+//   res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || '{{fallback}}' });
+//   ...and the catch must be `catch (err: any)`.
+//
+// BEFORE the first route for hubspot or peopleforce: add the matching
+// `else if (connection.provider === '{{provider}}')` branch inside
+// createServiceAuth. Without it the connection falls through to the Google
+// createUserSessionFromConnection path and the token field above is undefined.
+// ---------------------------------------------------------------------------
