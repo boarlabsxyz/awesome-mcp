@@ -38,6 +38,8 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'docs', method: 'GET', path: '/api/v1/docs/{documentId}', summary: 'Read a Google Doc (JSON or text via Accept)', mcpToolName: 'readGoogleDoc', openapiOperationId: 'readGoogleDoc', status: 'live', notes: 'GET sibling of the existing POST /api/v1/docs/read. Default returns raw upstream Docs JSON; Accept: text/plain returns extracted body text.' },
   { service: 'docs', method: 'GET', path: '/api/v1/docs/{documentId}/tabs', summary: 'List tabs in a Google Doc', mcpToolName: 'listDocumentTabs', openapiOperationId: 'listDocumentTabs', status: 'live' },
   { service: 'docs', method: 'GET', path: '/api/v1/docs/{documentId}/comments', summary: 'List comments on a Google Doc', mcpToolName: 'listComments', openapiOperationId: 'listComments', status: 'live' },
+  { service: 'docs', method: 'GET', path: '/api/v1/docs/{documentId}/comments/{commentId}', summary: 'Get a single comment with its replies', mcpToolName: 'getComment', openapiOperationId: 'getDocsComment', status: 'live' },
+  { service: 'docs', method: 'GET', path: '/api/v1/docs/{documentId}/structure', summary: 'Inspect the structure of a Google Doc', mcpToolName: 'inspectDocStructure', openapiOperationId: 'inspectDocStructure', status: 'live', notes: 'Paragraph/table/section counts, headers and footers presence, tab hierarchy. Pass ?detailed=true for an element-by-element listing, ?tabId= to scope to one tab.' },
 
   // -------- Google Sheets --------
   { service: 'sheets', method: 'GET', path: '/api/v1/sheets', summary: 'List spreadsheets', mcpToolName: 'listGoogleSheets', openapiOperationId: 'listSpreadsheets', status: 'live' },

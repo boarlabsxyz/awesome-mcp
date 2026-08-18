@@ -472,6 +472,60 @@ export function registerClickUpWebhookIngest(app: express.Express): void {
 }
 
 /**
+ * Mount the Slack Events API ingestion endpoint on any Express app.
+ *
+ * Same transport shape as registerClickUpWebhookIngest, and mounted at the same
+ * places for the same reason — an MCP-only pod without this route 404s every
+ * delivery, and Slack disables a Request URL that keeps failing. Slack's blast
+ * radius is worse than ClickUp's: one Request URL serves the whole workspace,
+ * so a disabled URL takes out every subscriber in every channel, not one user's
+ * digest.
+ *
+ * Design notes:
+ * - express.raw() so we see the exact bytes Slack signed. MUST be registered
+ *   before any global express.json() on the same app.
+ * - Auth is signature-only; the URL is public because Slack POSTs to it. Trust
+ *   comes from the v0 HMAC against SLACK_SIGNING_SECRET, plus the ±5-minute
+ *   replay window enforced in verifySlackSignature.
+ * - The url_verification handshake is answered by the same handler, after the
+ *   signature check, so saving the Request URL in Slack works with no special
+ *   casing here.
+ * - One structured JSON log line per delivery, greppable via [slack-ingest].
+ *   Never includes message text — see the eventHelpers module header.
+ */
+export function registerSlackEventsIngest(app: express.Express): void {
+  app.post(
+    '/webhooks/slack/inbound',
+    express.raw({ type: '*/*', limit: '1mb' }),
+    async (req, res) => {
+      try {
+        const store = await import('../slack/eventStore.js');
+        const { handleSlackEventIngest } = await import('../slack/eventHelpers.js');
+        const rawBody: Buffer = req.body instanceof Buffer ? req.body : Buffer.from(req.body as any);
+        const result = await handleSlackEventIngest(
+          rawBody,
+          {
+            signature: req.headers['x-slack-signature'] as string | undefined,
+            timestamp: req.headers['x-slack-request-timestamp'] as string | undefined,
+            retryNum: req.headers['x-slack-retry-num'] as string | undefined,
+          },
+          store,
+          process.env.SLACK_SIGNING_SECRET,
+        );
+        console.error(`[slack-ingest] ${JSON.stringify({
+          status: result.status,
+          ...result.logContext,
+        })}`);
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        console.error(`[slack-ingest] handler crash: ${err?.message || err}`);
+        res.status(500).json({ error: 'Internal error' });
+      }
+    },
+  );
+}
+
+/**
  * Serves re-hosted ClickUp Doc images. The insertImageIntoPage /
  * uploadClickUpDocImage tools store image bytes in Postgres and embed a
  * markdown link pointing here; ClickUp's renderer fetches this URL, so the
@@ -824,6 +878,10 @@ function registerSharedRoutes(app: express.Express): void {
   // Mounted here (before the global express.json()) so we can consume the raw
   // body. See registerClickUpWebhookIngest for the full design note.
   registerClickUpWebhookIngest(app);
+
+  // === Slack Events API ingestion (public, signature-verified) ===
+  // Same raw-body ordering requirement as the ClickUp route above.
+  registerSlackEventsIngest(app);
 
   // Public serve route for re-hosted ClickUp Doc images (unauthenticated).
   registerClickUpDocImageRoutes(app);
@@ -2837,6 +2895,67 @@ function registerRestApiRoutes(app: express.Express): void {
       } else {
         res.status(500).json({ error: err.message || 'Failed to list comments' });
       }
+    }
+  });
+
+  // GET /api/v1/docs/:documentId/comments/:commentId - Get one comment + replies
+  // Same field mask and response shape as the list sibling above, so a caller
+  // can jq a single comment without special-casing the payload.
+  app.get('/api/v1/docs/:documentId/comments/:commentId', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const documentId = req.params.documentId as string;
+      const drive = google.drive({ version: 'v3', auth: req.userSession!.oauthClient });
+
+      const response = await drive.comments.get({
+        fileId: documentId,
+        commentId: req.params.commentId as string,
+        fields: 'id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime)',
+      });
+
+      const comment = response.data as any;
+      res.json({
+        documentId,
+        id: comment.id,
+        content: comment.content,
+        quotedText: comment.quotedFileContent?.value || null,
+        author: comment.author?.displayName || 'Unknown',
+        createdTime: comment.createdTime,
+        resolved: comment.resolved || false,
+        replies: (comment.replies || []).map((reply: any) => ({
+          id: reply.id,
+          content: reply.content,
+          author: reply.author?.displayName || 'Unknown',
+          createdTime: reply.createdTime,
+        })),
+      });
+    } catch (err) {
+      console.error('Error getting comment:', err);
+      sendUpstreamError(res, err, { notFound: 'Comment not found', fallback: 'Failed to get comment' });
+    }
+  });
+
+  // GET /api/v1/docs/:documentId/structure - Structure summary of a Google Doc.
+  // Optional query: ?detailed=true (element-by-element listing), ?tabId=.
+  // Reuses GDocsHelpers.parseDocStructure so this matches the inspectDocStructure
+  // MCP tool exactly rather than reimplementing the traversal.
+  app.get('/api/v1/docs/:documentId/structure', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const documentId = req.params.documentId as string;
+      const detailed = req.query.detailed === 'true';
+      const tabId = qstr(req.query.tabId) || undefined;
+
+      const docs = req.userSession!.googleDocs;
+      const docResponse = await docs.documents.get({ documentId, includeTabsContent: true });
+      if (!docResponse.data) {
+        res.status(404).json({ error: 'Document not found' });
+        return;
+      }
+
+      const { parseDocStructure } = await import('../google-docs/apiHelpers.js');
+      res.json(parseDocStructure(docResponse.data, detailed, tabId));
+    } catch (err) {
+      console.error('Error inspecting doc structure:', err);
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to inspect document structure' });
     }
   });
 
@@ -4881,6 +5000,10 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
   // 404 and ClickUp fail_count climbed to 30 while nothing landed. Must be
   // registered BEFORE any express.json() on this app.
   registerClickUpWebhookIngest(app);
+
+  // Slack Events API ingestion. Mounted here for the same reason as the ClickUp
+  // route above: the Slack app's Request URL may point at this pod's domain.
+  registerSlackEventsIngest(app);
 
   // Public serve route for re-hosted ClickUp Doc images (unauthenticated).
   registerClickUpDocImageRoutes(app);
