@@ -192,9 +192,9 @@ Source: `src/clickup/server.ts` — 45 tools.
 | `createSpace` | Create a new space in a ClickUp workspace. | — |
 | `updateList` | Update properties of an existing ClickUp list. | — |
 | `deleteList` | Delete a ClickUp list permanently. | — |
-| `listDocs` | List ClickUp Docs in a workspace. | `GET /api/v1/clickup/workspaces/{workspaceId}/docs` |
+| `listDocs` | List one page of ClickUp Docs in a workspace, in ClickUp's own order (oldest first). Returns a cursor when more pages exist. To find a doc by name, or to get every doc newest-first, use searchDocs instead — it pages through the whole workspace for you. | `GET /api/v1/clickup/workspaces/{workspaceId}/docs` |
 | `getDoc` | Get a ClickUp Doc by ID, including its pages and their content (markdown). | `GET /api/v1/clickup/docs/{docId}?workspaceId={workspaceId}` |
-| `searchDocs` | Search ClickUp Docs in a workspace by name. Optionally filter by creator, parent, or status. | `GET /api/v1/clickup/workspaces/{workspaceId}/docs/search` |
+| `searchDocs` | Find ClickUp Docs by name, newest first. Pages through the entire workspace, so a recently-created doc is found regardless of how many docs exist. Matching is case-insensitive and token-based: every word in the query must appear in the title, in any order, so "AWESOME Sync" matches "[AWESOME] Sync - 08/15/2026". Omit query to list every doc newest-first. Always reports how many docs were scanned, so an empty result means "not there" rather than "did not look". | `GET /api/v1/clickup/workspaces/{workspaceId}/docs/search` |
 | `createDoc` | Create a new ClickUp Doc in a workspace. Optionally place it inside a Space, Folder, or List by providing parent ID and type. | — |
 | `getPage` | Get a specific page from a ClickUp Doc, including its full content in markdown. | `GET /api/v1/clickup/docs/{docId}/pages/{pageId}?workspaceId={workspaceId}` |
 | `createPage` | Create a new page in a ClickUp Doc. | — |

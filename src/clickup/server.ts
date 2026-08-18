@@ -6,6 +6,9 @@ import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import {
   ClickUpClient,
   collectTasksInCloseWindow,
+  cursorFromEnvelope,
+  DOCS_MAX_PAGES,
+  docsFromEnvelope,
   formatCloseWindowCapMessage,
   markdownToCommentBlocks,
   parseCloseWindow,
@@ -1101,18 +1104,23 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'listDocs',
   annotations: { readOnlyHint: true },
-  description: 'List ClickUp Docs in a workspace.',
+  description: 'List one page of ClickUp Docs in a workspace, in ClickUp\'s own order (oldest first). Returns a cursor when more pages exist. To find a doc by name, or to get every doc newest-first, use searchDocs instead — it pages through the whole workspace for you.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
+    limit: z.number().optional().default(100).describe('Docs per page (10-100, default 100).'),
+    cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
-    const result = await client.listDocs(args.workspaceId);
-    const docs = result.data || result.docs || [];
+    const result = await client.listDocs(args.workspaceId, { limit: args.limit, cursor: args.cursor });
+    const docs = docsFromEnvelope(result);
     if (docs.length === 0) return 'No docs found in this workspace.';
-    return docs.map((d: any) =>
+    let output = docs.map((d: any) =>
       `Doc: ${d.name || d.title || 'Untitled'}\n  ID: ${d.id}\n  Created: ${d.date_created ? new Date(parseInt(d.date_created)).toISOString() : 'unknown'}`
     ).join('\n\n');
+    const nextCursor = cursorFromEnvelope(result);
+    if (nextCursor) output += `\n\n---\nMore docs available. Use cursor: "${nextCursor}"`;
+    return output;
   },
 });
 
@@ -1166,34 +1174,45 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'searchDocs',
   annotations: { readOnlyHint: true },
-  description: 'Search ClickUp Docs in a workspace by name. Optionally filter by creator, parent, or status.',
+  description: 'Find ClickUp Docs by name, newest first. Pages through the entire workspace, so a recently-created doc is found regardless of how many docs exist. Matching is case-insensitive and token-based: every word in the query must appear in the title, in any order, so "AWESOME Sync" matches "[AWESOME] Sync - 08/15/2026". Omit query to list every doc newest-first. Always reports how many docs were scanned, so an empty result means "not there" rather than "did not look".',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
-    query: z.string().optional().describe('Text to match against doc names (case-insensitive). Omit to list all docs.'),
+    query: z.string().optional().describe('Words to match against doc names (case-insensitive, order-independent, all words must appear). Omit to list all docs.'),
     creator: z.number().optional().describe('Filter by creator user ID.'),
-    parentId: z.string().optional().describe('Filter by parent ID (Space, Folder, or List).'),
-    parentType: z.enum(['SPACE', 'FOLDER', 'LIST', 'EVERYTHING', 'WORKSPACE']).optional().describe('Type of parent to filter by.'),
-  }),
+    parentId: z.string().optional().describe('Filter by parent ID (Space, Folder, or List). Required when parentType is SPACE, FOLDER, or LIST.'),
+    parentType: z.enum(['SPACE', 'FOLDER', 'LIST', 'EVERYTHING', 'WORKSPACE']).optional().describe('Restrict to docs living in this kind of container. EVERYTHING means no restriction (the default behaviour). SPACE/FOLDER/LIST require parentId.'),
+  }).refine(
+    (a) => !(a.parentType && ['SPACE', 'FOLDER', 'LIST'].includes(a.parentType)) || !!a.parentId,
+    { message: 'parentType SPACE, FOLDER, or LIST requires parentId.', path: ['parentId'] },
+  ),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
-    const result = await client.searchDocs(args.workspaceId, {
+    const scan = await client.searchAllDocs(args.workspaceId, {
+      query: args.query,
       creator: args.creator,
       parentId: args.parentId,
       parentType: args.parentType,
     });
-    let docs = result.data || result.docs || [];
-    // Client-side text filtering (ClickUp v3 API doesn't support text search)
-    if (args.query) {
-      const q = args.query.toLowerCase();
-      docs = docs.filter((d: any) => {
-        const name = (d.name || d.title || '').toLowerCase();
-        return name.includes(q);
-      });
+
+    // The scan extent goes on every response, hit or miss. The bug this fixes
+    // was not "search missed a doc" so much as "search said the doc did not
+    // exist", so a bare no-match line is never acceptable here.
+    const scope = `Scanned ${scan.totalScanned} doc(s) across ${scan.pagesScanned} page(s).`;
+    const warnings: string[] = [];
+    if (scan.hitCap) warnings.push(`⚠ Stopped at the ${DOCS_MAX_PAGES}-page scan cap — results may be incomplete. Narrow with parentId/creator, or page manually with listDocs.`);
+    if (scan.rateLimited) warnings.push('⚠ ClickUp rate-limited the scan partway through — results may be incomplete. Retry in a moment.');
+
+    if (scan.docs.length === 0) {
+      const head = args.query
+        ? `No docs found matching "${args.query}".`
+        : 'No docs found in this workspace.';
+      return [head, scope, ...warnings].join('\n');
     }
-    if (docs.length === 0) return args.query ? `No docs found matching "${args.query}".` : 'No docs found in this workspace.';
-    return docs.map((d: any) =>
-      `Doc: ${d.name || d.title || 'Untitled'}\n  ID: ${d.id}`
+
+    const body = scan.docs.map((d: any) =>
+      `Doc: ${d.name || d.title || 'Untitled'}\n  ID: ${d.id}${d.date_created ? `\n  Created: ${new Date(parseInt(d.date_created)).toISOString()}` : ''}`
     ).join('\n\n');
+    return [body, '---', scope, ...warnings].join('\n');
   },
 });
 
@@ -1206,6 +1225,9 @@ clickUpServer.addTool({
     name: z.string().min(1).describe('Title of the new doc.'),
     content: z.string().optional().describe('Initial content of the doc (markdown supported).'),
     parentId: z.string().optional().describe('ID of the parent (Space, Folder, or List) to place the doc in.'),
+    // NOT the same parameter as searchDocs.parentType, despite the name: this
+    // one is a numeric code in the POST body, that one is a string filter in
+    // the query string. Do not "unify" them.
     parentType: z.number().optional().describe('Type of parent: 4 = Space, 5 = Folder, 6 = List. Required if parentId is provided.'),
   }),
   execute: async (args, { session }) => {
