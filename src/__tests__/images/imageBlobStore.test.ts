@@ -10,12 +10,16 @@ import {
   getImagePublicBaseUrl,
   assertImagePublicBaseUrlConfigured,
   __setImageBlobPoolForTests,
+  pruneExpiredImageBlobs,
 } from '../../images/imageBlobStore.js';
 
-// In-memory stand-in for the pg pool, emulating the two queries the store runs:
-// INSERT ... ON CONFLICT (key) DO NOTHING (rowCount 1 new / 0 dup) and SELECT.
+// In-memory stand-in for the pg pool, emulating the queries the store runs:
+// INSERT ... ON CONFLICT (key) DO NOTHING (rowCount 1 new / 0 dup), SELECT, the
+// two expiry-reconciliation UPDATEs, and the retention DELETE.
+type FakeRow = { data: Buffer; content_type: string; bytes: number; expires_at: Date | null };
+
 function makeFakePool() {
-  const rows = new Map<string, { data: Buffer; content_type: string; bytes: number }>();
+  const rows = new Map<string, FakeRow>();
   const calls: string[] = [];
   return {
     rows,
@@ -23,10 +27,33 @@ function makeFakePool() {
     query: async (text: string, params: any[] = []) => {
       calls.push(text.trim().split('\n')[0]);
       if (/INSERT INTO image_blobs/.test(text)) {
-        const [key, data, content_type, bytes] = params;
+        const [key, data, content_type, bytes, expires_at] = params;
         if (rows.has(key)) return { rows: [], rowCount: 0 };
-        rows.set(key, { data, content_type, bytes });
+        rows.set(key, { data, content_type, bytes, expires_at: expires_at ?? null });
         return { rows: [], rowCount: 1 };
+      }
+      if (/UPDATE image_blobs SET expires_at = NULL/.test(text)) {
+        const [key] = params;
+        const r = rows.get(key);
+        if (!r) return { rows: [], rowCount: 0 };
+        r.expires_at = null;
+        return { rows: [], rowCount: 1 };
+      }
+      if (/UPDATE image_blobs SET expires_at = \$2/.test(text)) {
+        const [key, next] = params;
+        const r = rows.get(key);
+        // Mirrors the WHERE clause: only extends, never touches a permanent row.
+        if (!r || r.expires_at === null || !(r.expires_at < next)) return { rows: [], rowCount: 0 };
+        r.expires_at = next;
+        return { rows: [], rowCount: 1 };
+      }
+      if (/DELETE FROM image_blobs WHERE expires_at IS NOT NULL/.test(text)) {
+        const now = new Date();
+        let deleted = 0;
+        for (const [key, r] of [...rows.entries()]) {
+          if (r.expires_at !== null && r.expires_at < now) { rows.delete(key); deleted++; }
+        }
+        return { rows: [], rowCount: deleted };
       }
       if (/SELECT data, content_type FROM image_blobs/.test(text)) {
         const [key] = params;
@@ -191,5 +218,120 @@ describe('imageBlobStore.fetch', () => {
     assert.equal(got!.contentType, 'image/webp');
     assert.ok(Buffer.isBuffer(got!.buffer));
     assert.equal(got!.buffer.length, r.bytes);
+  });
+});
+
+// Retention. The invariant that matters: expiry is opt-in per call site,
+// because ClickUp Doc images are re-fetched by ClickUp's renderer on every page
+// view and must never be pruned, while a Slack image handed to
+// insertImageFromUrl is fetched once and shouldn't linger publicly forever.
+describe('image blob retention', () => {
+  let pool: ReturnType<typeof makeFakePool>;
+  const savedDays = process.env.IMAGE_RETENTION_DAYS;
+
+  beforeEach(() => {
+    pool = makeFakePool();
+    __setImageBlobPoolForTests(pool);
+    process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+    delete process.env.IMAGE_RETENTION_DAYS;
+  });
+
+  afterEach(() => {
+    __setImageBlobPoolForTests(null);
+    if (savedDays === undefined) delete process.env.IMAGE_RETENTION_DAYS;
+    else process.env.IMAGE_RETENTION_DAYS = savedDays;
+  });
+
+  const only = () => [...pool.rows.values()][0];
+
+  it('stores permanently by default, so existing callers are unaffected', async () => {
+    const { key } = await store(pngSmall, 'image/png');
+    assert.equal(pool.rows.get(key)!.expires_at, null);
+  });
+
+  it('sets an expiry when the caller opts in', async () => {
+    const before = Date.now();
+    await store(pngSmall, 'image/png', { ephemeral: true });
+    const expiry = only().expires_at!;
+    assert.ok(expiry instanceof Date);
+    const days = (expiry.getTime() - before) / 86_400_000;
+    assert.ok(days > 29.9 && days < 30.1, `expected ~30 days, got ${days}`);
+  });
+
+  it('honours IMAGE_RETENTION_DAYS', async () => {
+    process.env.IMAGE_RETENTION_DAYS = '7';
+    const before = Date.now();
+    await store(pngSmall, 'image/png', { ephemeral: true });
+    const days = (only().expires_at!.getTime() - before) / 86_400_000;
+    assert.ok(days > 6.9 && days < 7.1, `expected ~7 days, got ${days}`);
+  });
+
+  it('treats IMAGE_RETENTION_DAYS=0 as "never expire"', async () => {
+    process.env.IMAGE_RETENTION_DAYS = '0';
+    await store(pngSmall, 'image/png', { ephemeral: true });
+    assert.equal(only().expires_at, null);
+  });
+
+  it('a permanent use promotes an already-expiring blob to permanent', async () => {
+    // The ClickUp-breaks-silently case: same bytes stored first by Slack, then
+    // embedded in a ClickUp Doc. The doc must not 404 in 30 days.
+    const { key } = await store(pngSmall, 'image/png', { ephemeral: true });
+    assert.ok(pool.rows.get(key)!.expires_at instanceof Date);
+
+    const again = await store(pngSmall, 'image/png');
+    assert.equal(again.deduped, true);
+    assert.equal(pool.rows.get(key)!.expires_at, null, 'permanent use must win');
+  });
+
+  it('an ephemeral use never demotes a permanent blob', async () => {
+    const { key } = await store(pngSmall, 'image/png');
+    await store(pngSmall, 'image/png', { ephemeral: true });
+    assert.equal(pool.rows.get(key)!.expires_at, null, 'permanent must stay permanent');
+  });
+
+  it('extends an existing expiry rather than shortening it', async () => {
+    process.env.IMAGE_RETENTION_DAYS = '1';
+    const { key } = await store(pngSmall, 'image/png', { ephemeral: true });
+    const short = pool.rows.get(key)!.expires_at!;
+
+    process.env.IMAGE_RETENTION_DAYS = '30';
+    await store(pngSmall, 'image/png', { ephemeral: true });
+    const long = pool.rows.get(key)!.expires_at!;
+    assert.ok(long > short, 'a later expiry should extend the row');
+
+    process.env.IMAGE_RETENTION_DAYS = '1';
+    await store(pngSmall, 'image/png', { ephemeral: true });
+    assert.equal(pool.rows.get(key)!.expires_at!.getTime(), long.getTime(), 'must not shorten');
+  });
+
+  it('still reports dedup correctly with expiry reconciliation in play', async () => {
+    const first = await store(pngSmall, 'image/png', { ephemeral: true });
+    const second = await store(pngSmall, 'image/png', { ephemeral: true });
+    assert.equal(first.deduped, false);
+    assert.equal(second.deduped, true);
+    assert.equal(first.key, second.key);
+  });
+
+  it('prunes only lapsed rows, leaving permanent and future ones alone', async () => {
+    const permanent = { data: Buffer.from('a'), content_type: 'image/webp', bytes: 1, expires_at: null };
+    const lapsed = { data: Buffer.from('b'), content_type: 'image/webp', bytes: 1, expires_at: new Date(Date.now() - 1000) };
+    const future = { data: Buffer.from('c'), content_type: 'image/webp', bytes: 1, expires_at: new Date(Date.now() + 86_400_000) };
+    pool.rows.set('perm.webp', permanent);
+    pool.rows.set('lapsed.webp', lapsed);
+    pool.rows.set('future.webp', future);
+
+    const deleted = await pruneExpiredImageBlobs();
+    assert.equal(deleted, 1);
+    assert.ok(pool.rows.has('perm.webp'), 'permanent blobs must survive — ClickUp still renders them');
+    assert.ok(pool.rows.has('future.webp'));
+    assert.ok(!pool.rows.has('lapsed.webp'));
+  });
+
+  it('a pruned blob reads back as a miss, not a crash', async () => {
+    process.env.IMAGE_RETENTION_DAYS = '1';
+    const { key } = await store(pngSmall, 'image/png', { ephemeral: true });
+    pool.rows.get(key)!.expires_at = new Date(Date.now() - 1000);
+    await pruneExpiredImageBlobs();
+    assert.equal(await fetchBlob(key), null);
   });
 });

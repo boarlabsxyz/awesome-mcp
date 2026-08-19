@@ -475,7 +475,11 @@ export async function handleDownloadFile(
     const { store } = await import('../images/imageBlobStore.js');
     let hosted: { url: string; bytes: number };
     try {
-      hosted = await store(buffer, file.mimetype || '');
+      // Ephemeral: this link exists to be handed to a tool that fetches it once
+      // (insertImageFromUrl — Google copies the image into the document at
+      // insert time), not to back a page that re-renders it. Without this, a
+      // screenshot from a private DM would stay publicly fetchable forever.
+      hosted = await store(buffer, file.mimetype || '', { ephemeral: true });
     } catch (err: any) {
       if (err instanceof UserError) throw err;
       throw new UserError(
@@ -484,8 +488,14 @@ export async function handleDownloadFile(
         'retry with format: "inline" to get the image directly instead.',
       );
     }
+    const { imageRetentionDays } = await import('../images/imageBlobStore.js');
+    const days = imageRetentionDays();
+    const lifetime = days > 0
+      ? `It expires in ${days} day(s), so use it now rather than storing it.`
+      : 'It does not expire (IMAGE_RETENTION_DAYS=0 on this deployment).';
     return `${meta}\n  Hosted at: ${hosted.url}\n\n` +
-      'That URL is public and immutable — pass it to any tool that takes an image URL (e.g. insertImageFromUrl).';
+      'That URL is public and unauthenticated — pass it to any tool that takes an image URL ' +
+      `(e.g. insertImageFromUrl). ${lifetime}`;
   }
 
   if (isTextLike(file)) {
