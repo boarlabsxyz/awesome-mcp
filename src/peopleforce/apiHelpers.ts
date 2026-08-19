@@ -158,6 +158,57 @@ export type PeopleForceCustomField = {
   field_type?: string;
 };
 
+/**
+ * Values the /employees `status` filter actually honours, verified live
+ * 2026-08-18 against a 262-employee workspace:
+ *
+ *   (omitted)     110 rows, all active  — the default is ACTIVE-ONLY, not "all"
+ *   active        110 rows              — same as the default
+ *   probation         4 rows, all active — a real server-side segment. The 4 fit
+ *                     one page only because that tenant had 4 people on
+ *                     probation; the segment paginates like any other list.
+ *   inactive      152 rows, all inactive — the departed cohort
+ *
+ * Two values are deliberately excluded because they misbehave:
+ *   on_probation  silently IGNORED — returns the byte-identical default list,
+ *                 so a typo fails OPEN with a plausible full directory rather
+ *                 than a 400. This is why the tool validates against the
+ *                 allowlist instead of forwarding an arbitrary string.
+ *   terminated    156 rows spanning BOTH active and inactive (152 + the 4 on
+ *                 probation), i.e. some union segment, not a termination
+ *                 cohort. Use 'inactive' for departed employees.
+ *
+ * There is no value that returns all 262 — no "all" exists in the enum.
+ */
+export const EMPLOYEE_STATUS_VALUES = ['active', 'probation', 'inactive'] as const;
+export type EmployeeStatus = (typeof EMPLOYEE_STATUS_VALUES)[number];
+
+/**
+ * Probation lifecycle as this connector can honestly report it.
+ *
+ * PeopleForce exposes probation membership two ways — the first-class
+ * `probation_ends_on` date on the employee record, and the server-side
+ * `status=probation` filter — but there is NO probation_status field on the
+ * record itself. `active`/`inactive` is the only status the payload carries.
+ *
+ * 'probation_failed' is reserved and never emitted: the API surfaces no
+ * termination/dismissal date (verified 2026-08-18 on a record that ended
+ * probation and then went inactive — the probation date survives offboarding,
+ * but nothing records WHEN the person left). Without that date, "terminated
+ * during probation" cannot be distinguished from "terminated three years
+ * later". If a termination date ever appears, this becomes computable
+ * retroactively over existing rows, because probation_ends_on is retained.
+ */
+export const PROBATION_STATUS_VALUES = [
+  'on_probation',
+  'probation_passed',
+  'inactive',
+  'unknown',
+  /** Reserved — not emitted. Needs a termination date the API does not expose. */
+  'probation_failed',
+] as const;
+export type ProbationStatus = (typeof PROBATION_STATUS_VALUES)[number];
+
 export type PeopleForceEmployee = {
   id?: number | string;
   active?: boolean;
@@ -647,7 +698,9 @@ export class PeopleForceClient {
 
   listEmployees(input: {
     page?: number;
-    status?: string;
+    /** Verified allowlist — see EMPLOYEE_STATUS_VALUES. Omitting it returns
+     *  ACTIVE employees only, not everyone. */
+    status?: EmployeeStatus;
   } = {}): Promise<PeopleForceListResponse<PeopleForceEmployee>> {
     return this.request('GET', '/employees', undefined, {
       page: input.page,
@@ -1053,6 +1106,56 @@ function renderEmptyList(title: string, noun: string, pagination?: PeopleForcePa
   return [`# ${title}`, '', pag, '', `No ${noun} on this page.`].join('\n');
 }
 
+/**
+ * Derives the probation lifecycle state for one employee.
+ *
+ * Reported, not invented, wherever possible: `probation_ends_on` is a
+ * first-class PeopleForce field that HR sets per person and can extend (live
+ * data shows spans from 3 to 17 months), so it is never inferred from
+ * hired_on + 90 days.
+ *
+ * The two judgement calls, both deliberately conservative:
+ *   - An inactive employee reports 'inactive', never passed/failed. The API
+ *     exposes no termination date, so whether they left during probation or
+ *     years later is unknowable here (see PROBATION_STATUS_VALUES).
+ *   - A missing date reports 'unknown', never 'probation_passed'. A null is
+ *     ambiguous — no probation configured, cleared after passing, or simply
+ *     never filled in — and guessing would misreport contractors as having
+ *     cleared a probation they never had.
+ *
+ * @param today ISO date (YYYY-MM-DD). Injected so callers/tests are not at the
+ *   mercy of the host clock; string comparison is exact for this format and
+ *   sidesteps timezone drift entirely.
+ */
+export function probationStatus(
+  employee: PeopleForceEmployee,
+  today: string = new Date().toISOString().slice(0, 10),
+): ProbationStatus {
+  if (employee.active === false) return 'inactive';
+  const ends = employee.probation_ends_on;
+  if (!ends) return 'unknown';
+  return ends >= today ? 'on_probation' : 'probation_passed';
+}
+
+const PROBATION_LABELS: Record<ProbationStatus, string> = {
+  on_probation: 'on probation',
+  probation_passed: 'probation passed',
+  inactive: 'inactive (probation outcome not recorded by PeopleForce)',
+  unknown: 'not set',
+  probation_failed: 'probation failed',
+};
+
+/** Renders the probation lines shared by the single and list employee views. */
+function probationLines(employee: PeopleForceEmployee, today?: string): string[] {
+  const lines: string[] = [];
+  if (employee.probation_ends_on) lines.push(`Probation ends: ${employee.probation_ends_on}`);
+  const status = probationStatus(employee, today);
+  // 'unknown' with no date carries no information — stay quiet rather than
+  // printing "Probation: not set" against every contractor in the directory.
+  if (status !== 'unknown') lines.push(`Probation: ${PROBATION_LABELS[status]} (derived)`);
+  return lines;
+}
+
 export function formatEmployeeList(
   employees: PeopleForceEmployee[],
   pagination?: PeopleForcePagination,
@@ -1070,6 +1173,10 @@ export function formatEmployeeList(
     const dept = refName(e.department);
     if (dept) parts.push(`Department: ${dept}`);
     if (typeof e.active === 'boolean') parts.push(`Status: ${e.active ? 'active' : 'inactive'}`);
+    // Probation is scannable across the cohort here, not just on getEmployee —
+    // status=probation returns that cohort directly, and this is what makes
+    // the result readable without a per-employee round-trip.
+    for (const line of probationLines(e)) parts.push(line);
     // Surface tenant custom fields (Dev Sprint, Development, …) when the list
     // payload carries them, so they're scannable across the cohort without a
     // per-employee getEmployee round-trip.
@@ -1204,7 +1311,7 @@ export function formatEmployee(employee: PeopleForceEmployee): string {
   const reportingTo = refName(employee.reporting_to);
   if (reportingTo) parts.push(`Reports to: ${reportingTo}`);
   if (employee.hired_on) parts.push(`Hired: ${employee.hired_on}`);
-  if (employee.probation_ends_on) parts.push(`Probation ends: ${employee.probation_ends_on}`);
+  for (const line of probationLines(employee)) parts.push(line);
   if (employee.date_of_birth) parts.push(`Date of birth: ${employee.date_of_birth}`);
   // Tenant-defined People-directory custom fields (Dev Sprint, Development, …).
   const customFields = formatCustomFields(employee.custom_fields ?? employee.custom_field_values);

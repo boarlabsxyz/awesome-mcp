@@ -40,6 +40,8 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `readGoogleDoc` | `GET /api/v1/docs/{documentId}` | live | Read a Google Doc (JSON or text via Accept) — _GET sibling of the existing POST /api/v1/docs/read. Default returns raw upstream Docs JSON; Accept: text/plain returns extracted body text._ |
 | `listDocumentTabs` | `GET /api/v1/docs/{documentId}/tabs` | live | List tabs in a Google Doc |
 | `listComments` | `GET /api/v1/docs/{documentId}/comments` | live | List comments on a Google Doc |
+| `getComment` | `GET /api/v1/docs/{documentId}/comments/{commentId}` | live | Get a single comment with its replies |
+| `inspectDocStructure` | `GET /api/v1/docs/{documentId}/structure` | live | Inspect the structure of a Google Doc — _Paragraph/table/section counts, headers and footers presence, tab hierarchy. Pass ?detailed=true for an element-by-element listing, ?tabId= to scope to one tab._ |
 
 ### Google Sheets (`sheets`)
 
@@ -109,8 +111,8 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `getTaskEventHistory` | `GET /api/v1/clickup/workspaces/{workspaceId}/events` | live | Read task-event transitions (status/assignee/moves) from the webhook store |
 | `listTaskEventSubscriptions` | `GET /api/v1/clickup/subscriptions` | live | List task-event webhook subscriptions owned by the caller |
 | `debugTaskEventSubscription` | `GET /api/v1/clickup/workspaces/{workspaceId}/subscription/debug` | live | Diagnostic report cross-referencing local subscription vs the ClickUp-side webhook vs the event store |
-| `listDocs` | `GET /api/v1/clickup/workspaces/{workspaceId}/docs` | live | List docs in a workspace |
-| `searchDocs` | `GET /api/v1/clickup/workspaces/{workspaceId}/docs/search` | live | Search docs in a workspace |
+| `listDocs` | `GET /api/v1/clickup/workspaces/{workspaceId}/docs` | live | List docs in a workspace — _One page in ClickUp order. Optional limit (10-100, default 100) and cursor; response carries nextCursor._ |
+| `searchDocs` | `GET /api/v1/clickup/workspaces/{workspaceId}/docs/search` | live | Search docs in a workspace — _Pages the whole workspace, token-matches the title, returns newest-first. Response includes totalScanned/pagesScanned/hitCap/rateLimited._ |
 | `getDoc` | `GET /api/v1/clickup/docs/{docId}?workspaceId={workspaceId}` | live | Get a ClickUp doc with its pages — _Required query param: workspaceId._ |
 | `getPage` | `GET /api/v1/clickup/docs/{docId}/pages/{pageId}?workspaceId={workspaceId}` | live | Get a page within a ClickUp doc — _Required query param: workspaceId._ |
 | `listWorkspaceMembers` | `GET /api/v1/clickup/workspaces/{workspaceId}/members` | live | List members of a workspace — _No dedicated ClickUp endpoint; derived from getWorkspaces team.members[]._ |
@@ -171,4 +173,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 81 endpoints.
+Catalog size: 83 endpoints.

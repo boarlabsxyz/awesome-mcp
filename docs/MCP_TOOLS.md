@@ -53,7 +53,7 @@ Source: `src/google-docs/server.ts` — 30 tools.
 | `insertLocalImage` | Inserts an image into a Google Document. Provide one of: (1) imageUrl — a public HTTP(S) URL to fetch, (2) driveFileId — ID of an image already in Google Drive, (3) localImagePath — absolute path for local/stdio deployments, or (4) imageBase64 + fileName — base64-encoded content for small images. | — |
 | `fixListFormatting` | EXPERIMENTAL: Attempts to detect paragraphs that look like lists (e.g., starting with -, *, 1.) and convert them to proper Google Docs bulleted or numbered lists. Best used on specific sections. | — |
 | `listComments` | Lists all comments in a Google Document. | `GET /api/v1/docs/{documentId}/comments` |
-| `getComment` | Gets a specific comment with its full thread of replies. | — |
+| `getComment` | Gets a specific comment with its full thread of replies. | `GET /api/v1/docs/{documentId}/comments/{commentId}` |
 | `addComment` | Adds a comment to a Google Document with quoted text context. NOTE: Due to Google Drive API limitations, comments cannot be anchored to specific text positions in Google Docs. The comment will appear in the Comments panel with the quoted text displayed, but won't highlight text in the document body. | — |
 | `replyToComment` | Adds a reply to an existing comment. | — |
 | `resolveComment` | Marks a comment as resolved. NOTE: Due to Google API limitations, the Drive API does not support resolving comments on Google Docs files. This operation will attempt to update the comment but the resolved status may not persist in the UI. Comments can be resolved manually in the Google Docs interface. | — |
@@ -61,7 +61,7 @@ Source: `src/google-docs/server.ts` — 30 tools.
 | `findElement` | NOT IMPLEMENTED — always throws. For text search use findAndReplace or formatMatchingText; for structure exploration use inspectDocStructure. | — |
 | `formatMatchingText` | Finds specific text within a Google Document and applies character formatting (bold, italics, color, etc.) to the specified instance. | — |
 | `findAndReplace` | Finds all occurrences of a text string in a Google Doc and replaces them. Returns the number of replacements made. | — |
-| `inspectDocStructure` | Analyzes and returns the structure of a Google Doc: paragraph/table/section counts, headers/footers presence, tab hierarchy. Use detailed mode for element-by-element listing. | — |
+| `inspectDocStructure` | Analyzes and returns the structure of a Google Doc: paragraph/table/section counts, headers/footers presence, tab hierarchy. Use detailed mode for element-by-element listing. | `GET /api/v1/docs/{documentId}/structure` |
 | `importDocx` | Converts a .docx file already in Google Drive into a Google Doc. Drive auto-converts the format. Returns the new Google Doc ID and link. | — |
 | `batchUpdateDoc` | Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Index-based operations are automatically sorted in descending order to prevent index shifting. | — |
 | `importToGoogleDoc` | Import content (text, HTML, or markdown) into a new Google Doc. Google Drive auto-converts the content to Google Docs format. | — |
@@ -192,9 +192,9 @@ Source: `src/clickup/server.ts` — 45 tools.
 | `createSpace` | Create a new space in a ClickUp workspace. | — |
 | `updateList` | Update properties of an existing ClickUp list. | — |
 | `deleteList` | Delete a ClickUp list permanently. | — |
-| `listDocs` | List ClickUp Docs in a workspace. | `GET /api/v1/clickup/workspaces/{workspaceId}/docs` |
+| `listDocs` | List one page of ClickUp Docs in a workspace, in ClickUp's own order (oldest first). Returns a cursor when more pages exist. To find a doc by name, or to get every doc newest-first, use searchDocs instead — it pages through the whole workspace for you. | `GET /api/v1/clickup/workspaces/{workspaceId}/docs` |
 | `getDoc` | Get a ClickUp Doc by ID, including its pages and their content (markdown). | `GET /api/v1/clickup/docs/{docId}?workspaceId={workspaceId}` |
-| `searchDocs` | Search ClickUp Docs in a workspace by name. Optionally filter by creator, parent, or status. | `GET /api/v1/clickup/workspaces/{workspaceId}/docs/search` |
+| `searchDocs` | Find ClickUp Docs by name, newest first. Pages through the entire workspace, so a recently-created doc is found regardless of how many docs exist. Matching is case-insensitive and token-based: every word in the query must appear in the title, in any order, so "AWESOME Sync" matches "[AWESOME] Sync - 08/15/2026". Omit query to list every doc newest-first. Always reports how many docs were scanned, so an empty result means "not there" rather than "did not look". | `GET /api/v1/clickup/workspaces/{workspaceId}/docs/search` |
 | `createDoc` | Create a new ClickUp Doc in a workspace. Optionally place it inside a Space, Folder, or List by providing parent ID and type. | — |
 | `getPage` | Get a specific page from a ClickUp Doc, including its full content in markdown. | `GET /api/v1/clickup/docs/{docId}/pages/{pageId}?workspaceId={workspaceId}` |
 | `createPage` | Create a new page in a ClickUp Doc. | — |
@@ -283,7 +283,7 @@ Source: `src/peopleforce/server.ts` — 45 tools.
 
 | Tool | Description | REST |
 |---|---|---|
-| `listEmployees` | Lists PeopleForce employees, 50 per page (server-fixed). Use `page` to paginate; `status` narrows the cohort (e.g. "active", "terminated"). Any tenant-defined custom fields are included per employee when the list payload carries them (field names and availability vary by tenant). | — |
+| `listEmployees` | Lists PeopleForce employees, 50 per page (server-fixed). Use `page` to paginate. IMPORTANT: omitting `status` returns ACTIVE employees only, not everyone — there is no "all" option, so a full headcount means one pass with status=active plus one with status=inactive. Use status=probation to get just the employees currently on probation — a real server-side segment, so you get that cohort directly instead of filtering the whole directory. It is paginated like every other list: follow `metadata.pagination` and request further pages whenever more are reported. Each employee shows their probation end date and a derived probation state. Any tenant-defined custom fields are included per employee when the list payload carries them (field names and availability vary by tenant). | — |
 | `getEmployee` | Retrieves a single PeopleForce employee by ID. Returns full profile: contact, position, department, division, employment type, location, reporting line, and hiring dates. Any tenant-defined custom fields the profile carries are shown under a Custom Fields section (field names and availability vary by tenant; the section is omitted when the record has none). | — |
 | `listDepartments` | Lists all PeopleForce departments, 50 per page (server-fixed). Use `page` to paginate. | — |
 | `listLeaveRequests` | Lists PeopleForce leave requests, 100 per page (server-fixed). Use `page` to paginate; `state` filters by lifecycle state (e.g. "pending", "approved", "declined"). PeopleForce's public API does NOT support server-side filtering by employee or date range — fetch pages and filter client-side if needed. | — |

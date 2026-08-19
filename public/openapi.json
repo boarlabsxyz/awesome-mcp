@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "awesome-mcp REST Data Plane",
-    "description": "Combined catalog of REST passthrough endpoints across every service wired into this awesome-mcp instance. Use the mintRestBearerForCurl MCP tool to mint a 5-minute bearer token, then GET these URLs to fetch bulk responses directly to disk without burning LLM context.",
+    "description": "Combined catalog of REST passthrough endpoints across every service wired into this awesome-mcp instance. Use the getSecurityToken MCP tool to mint a 5-minute bearer token, then GET these URLs to fetch bulk responses directly to disk without burning LLM context.",
     "version": "1.0.0"
   },
   "servers": [
@@ -261,6 +261,11 @@
                     },
                     "description": "List of attendee email addresses"
                   },
+                  "addGoogleMeet": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true, generate a Google Meet video conference for this event. The Meet link is returned as hangoutLink and attached to the calendar invite."
+                  },
                   "sendUpdates": {
                     "type": "string",
                     "enum": [
@@ -464,6 +469,11 @@
                   "timeZone": {
                     "type": "string",
                     "description": "Time zone for the start/end times"
+                  },
+                  "addGoogleMeet": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true, generate a Google Meet video conference for this event. Ignored if the event already has a conference attached."
                   },
                   "sendUpdates": {
                     "type": "string",
@@ -1369,6 +1379,24 @@
               "type": "string"
             },
             "description": "Comma-separated list of statuses to filter by"
+          },
+          {
+            "name": "closedAfter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only return tasks closed at/after this time (ISO string or Unix ms). Forces include_closed=true and auto-paginates up to 2000 tasks, filtering locally on date_closed."
+          },
+          {
+            "name": "closedBefore",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only return tasks closed at/before this time (ISO string or Unix ms). Forces include_closed=true and auto-paginates up to 2000 tasks, filtering locally on date_closed."
           }
         ],
         "responses": {
@@ -1911,6 +1939,24 @@
               "type": "string"
             },
             "description": "JSON-encoded custom field filters"
+          },
+          {
+            "name": "closedAfter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only return tasks closed at/after this time (ISO string or Unix ms). Forces include_closed=true and auto-paginates up to 2000 tasks, filtering locally on date_closed."
+          },
+          {
+            "name": "closedBefore",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only return tasks closed at/before this time (ISO string or Unix ms). Forces include_closed=true and auto-paginates up to 2000 tasks, filtering locally on date_closed."
           }
         ],
         "responses": {
@@ -1925,6 +1971,557 @@
                       "type": "array",
                       "items": {
                         "$ref": "#/components/schemas/Task"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces/{workspaceId}/tasks/filter": {
+      "get": {
+        "operationId": "filterTeamTasks",
+        "summary": "Filter tasks across a workspace",
+        "description": "Thin wrapper over ClickUp's server-side Get Filtered Team Tasks endpoint (GET /api/v2/team/{team_id}/task). One paginated call replaces per-list enumeration for workspace-wide digests. Supports assignees, statuses, tags, scope narrowing (spaceIds/projectIds/listIds), and date ranges on date_created / date_updated / due_date. Does NOT support date_closed / date_done filters — for 'closed since T', query with dateUpdatedGt=T and partition on date_closed client-side.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace (team) ID"
+          },
+          {
+            "name": "assignees",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true,
+            "description": "Filter to tasks assigned to any of these user IDs. Repeat the param for multiple values."
+          },
+          {
+            "name": "statuses",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true,
+            "description": "Filter by status names. Repeat the param for multiple values."
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true,
+            "description": "Filter by tag names. Repeat the param for multiple values."
+          },
+          {
+            "name": "spaceIds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true,
+            "description": "Narrow to specific space IDs. Repeat the param for multiple values."
+          },
+          {
+            "name": "projectIds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true,
+            "description": "Narrow to specific folder (project) IDs. Repeat the param for multiple values."
+          },
+          {
+            "name": "listIds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true,
+            "description": "Narrow to specific list IDs. Repeat the param for multiple values."
+          },
+          {
+            "name": "dateCreatedGt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only tasks created at/after this time. ISO string or Unix ms."
+          },
+          {
+            "name": "dateCreatedLt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only tasks created at/before this time. ISO string or Unix ms."
+          },
+          {
+            "name": "dateUpdatedGt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only tasks updated at/after this time. ISO string or Unix ms. Use as a superset for 'closed since T' queries."
+          },
+          {
+            "name": "dateUpdatedLt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only tasks updated at/before this time. ISO string or Unix ms."
+          },
+          {
+            "name": "dueDateGt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only tasks with due_date at/after this time. ISO string or Unix ms."
+          },
+          {
+            "name": "dueDateLt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only tasks with due_date at/before this time. ISO string or Unix ms."
+          },
+          {
+            "name": "orderBy",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "id",
+                "created",
+                "updated",
+                "due_date"
+              ]
+            },
+            "description": "Sort field. No server-side close-date sort."
+          },
+          {
+            "name": "reverse",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Reverse the sort order."
+          },
+          {
+            "name": "subtasks",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Include subtasks in results."
+          },
+          {
+            "name": "includeClosed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Include closed/completed tasks."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0
+            },
+            "description": "Page number (0-based). 100 tasks per page."
+          },
+          {
+            "name": "custom_fields",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON-encoded custom field filters."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Filtered tasks retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tasks": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Task"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid date parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces/{workspaceId}/events": {
+      "get": {
+        "operationId": "getTaskEventHistory",
+        "summary": "Read task-event transitions from the webhook store",
+        "description": "Reads events populated by the ClickUp webhook receiver: status transitions, moves, assignee changes, task creations and deletions. Scoped to the caller's own subscription for the workspace. If no subscription exists, returns 200 with kind='no-subscription' + a warning — not 404 — so digests can gracefully fall back to filterTeamTasks with dateUpdatedGt.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace (team) ID"
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only return events at/after this time. ISO string or Unix ms."
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only return events at/before this time. ISO string or Unix ms."
+          },
+          {
+            "name": "eventTypes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "taskCreated",
+                  "taskStatusUpdated",
+                  "taskAssigneeUpdated",
+                  "taskMoved",
+                  "taskDeleted"
+                ]
+              }
+            },
+            "explode": true,
+            "description": "Filter to specific event types. Repeat the param for multiple values."
+          },
+          {
+            "name": "toStatus",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only return status-transition events whose destination status equals this label."
+          },
+          {
+            "name": "taskId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Narrow to a single task."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 500,
+              "maximum": 2000
+            },
+            "description": "Row cap. Narrow via since if you hit it."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task events retrieved (kind='ok') or subscription missing (kind='no-subscription')",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "no-subscription"
+                      ]
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "eventStoreStartedAt": {
+                      "type": "string"
+                    },
+                    "warning": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid date parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/subscriptions": {
+      "get": {
+        "operationId": "listTaskEventSubscriptions",
+        "summary": "List task-event webhook subscriptions owned by the caller",
+        "description": "Surfaces subscription health so operators can spot a dying webhook (ClickUp stops delivering after 5 consecutive failures). shared_secret is never returned.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional workspace ID to narrow to a single subscription."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Subscription list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "subscriptions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces/{workspaceId}/subscription/debug": {
+      "get": {
+        "operationId": "debugTaskEventSubscription",
+        "summary": "Task-event subscription diagnostic report",
+        "description": "Cross-references the local subscription record against ClickUp's own view of the webhook and the event store. Detects endpoint-URL drift (BASE_URL changed between subscribe and now), orphaned ClickUp webhook (local record points at a webhook ClickUp deleted), event-bundle mismatch, ClickUp fail_count exceeding our stored fail_count (ingestion route silently 200-ing on thrown errors), disabled-webhook status, and the 'zero events with zero delivery failures' pattern that means deliveries either are not reaching the ingestion route or are being silently swallowed. Returns 200 even for broken states.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace (team) ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Diagnostic report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "no-local-subscription",
+                        "no-clickup-webhook"
+                      ]
+                    },
+                    "workspaceId": {
+                      "type": "string"
+                    },
+                    "expectedEndpoint": {
+                      "type": "string"
+                    },
+                    "local": {
+                      "type": "object",
+                      "nullable": true
+                    },
+                    "clickup": {
+                      "type": "object",
+                      "nullable": true
+                    },
+                    "eventStore": {
+                      "type": "object",
+                      "nullable": true
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
                       }
                     }
                   }
@@ -2102,8 +2699,8 @@
     "/api/v1/clickup/workspaces/{workspaceId}/docs": {
       "get": {
         "operationId": "listDocs",
-        "summary": "List docs",
-        "description": "Lists all docs in a workspace.",
+        "summary": "List one page of docs",
+        "description": "Lists one page of docs in a workspace, in ClickUp's own order (oldest first). Returns nextCursor when more pages exist. To find a doc by name across the whole workspace, use the /docs/search sibling.",
         "parameters": [
           {
             "name": "workspaceId",
@@ -2113,6 +2710,27 @@
               "type": "string"
             },
             "description": "The workspace ID"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 100,
+              "default": 100
+            },
+            "description": "Docs per page (10-100, default 100)"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pagination cursor from a previous response"
           }
         ],
         "responses": {
@@ -2160,8 +2778,8 @@
     "/api/v1/clickup/workspaces/{workspaceId}/docs/search": {
       "get": {
         "operationId": "searchDocs",
-        "summary": "Search docs",
-        "description": "Searches for docs in a workspace.",
+        "summary": "Search docs by name",
+        "description": "Finds docs by name across the entire workspace, newest first, paging through all docs internally. Matching is case-insensitive and token-based: every word in the query must appear in the title, in any order. The response carries totalScanned, pagesScanned, hitCap and rateLimited so an empty result can be told apart from an incomplete scan.",
         "parameters": [
           {
             "name": "workspaceId",
@@ -2179,7 +2797,41 @@
             "schema": {
               "type": "string"
             },
-            "description": "Search query string"
+            "description": "Words to match against doc names (case-insensitive, order-independent, all must appear). Omit to list all docs newest-first."
+          },
+          {
+            "name": "creator",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Filter by creator user ID"
+          },
+          {
+            "name": "parentId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by parent ID. Required with parentType SPACE, FOLDER, or LIST."
+          },
+          {
+            "name": "parentType",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "SPACE",
+                "FOLDER",
+                "LIST",
+                "EVERYTHING",
+                "WORKSPACE"
+              ]
+            },
+            "description": "Restrict to docs in this container kind. EVERYTHING means no restriction."
           }
         ],
         "responses": {
@@ -2426,6 +3078,146 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/images": {
+      "post": {
+        "operationId": "uploadImage",
+        "summary": "Re-host an image and get a public URL",
+        "description": "Re-hosts an image on this server (recompressed to WebP) and returns a public URL you can embed in a ClickUp Doc as markdown. Send EITHER raw image bytes as the body (Content-Type image/png, image/jpeg, image/gif, image/bmp, or image/webp) OR application/json with an imageUrl to fetch and re-host. Requires a connected ClickUp account.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/gif": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/bmp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "imageUrl"
+                ],
+                "properties": {
+                  "imageUrl": {
+                    "type": "string",
+                    "description": "Public http(s) URL of an image to fetch and re-host (jpg, png, gif, bmp, or webp)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Image stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "description": "Public URL to embed as image markdown."
+                    },
+                    "key": {
+                      "type": "string",
+                      "description": "Content-hash storage key (sha256.webp)."
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "description": "Stored (WebP) byte size."
+                    },
+                    "contentType": {
+                      "type": "string",
+                      "example": "image/webp"
+                    },
+                    "deduped": {
+                      "type": "boolean",
+                      "description": "True if identical bytes were already stored."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing/invalid body, or the imageUrl could not be fetched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Recompressed image exceeds the storage size cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported image format",
             "content": {
               "application/json": {
                 "schema": {
@@ -4529,6 +5321,54 @@
         }
       }
     },
+    "/api/v1/docs/{documentId}/comments/{commentId}": {
+      "get": {
+        "operationId": "getDocsComment",
+        "summary": "Get a single comment with its replies",
+        "description": "Get a single comment with its replies. Mirrors the MCP tool `getComment`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "docs"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/structure": {
+      "get": {
+        "operationId": "inspectDocStructure",
+        "summary": "Inspect the structure of a Google Doc",
+        "description": "Inspect the structure of a Google Doc. Mirrors the MCP tool `inspectDocStructure`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "docs"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
     "/api/v1/sheets/{spreadsheetId}/ranges": {
       "get": {
         "operationId": "readSpreadsheet",
@@ -5015,7 +5855,7 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Bearer token from the mintRestBearerForCurl MCP tool (5-minute TTL) or a permanent dashboard API key."
+        "description": "Bearer token from the getSecurityToken MCP tool (5-minute TTL) or a permanent dashboard API key."
       }
     },
     "schemas": {
@@ -5082,6 +5922,16 @@
             "type": "string",
             "nullable": true,
             "description": "URL link to the event in Google Calendar"
+          },
+          "hangoutLink": {
+            "type": "string",
+            "nullable": true,
+            "description": "URL of the attached Google Meet conference, if any. Present on events created or updated with addGoogleMeet=true, or on events with a pre-existing Meet."
+          },
+          "conferenceData": {
+            "type": "object",
+            "nullable": true,
+            "description": "Full conference metadata. When a Meet was just requested, createRequest.status.statusCode may be 'pending' until Google finishes provisioning; re-fetch the event with GET to poll for the final entryPoints."
           },
           "creator": {
             "type": "string",

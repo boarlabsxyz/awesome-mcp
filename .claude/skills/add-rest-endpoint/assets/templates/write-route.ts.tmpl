@@ -1,0 +1,71 @@
+  // POST {{catalogPath}} - {{summary}}
+  // Mirrors the MCP tool `{{mcpToolName}}`. Body is validated with that tool's
+  // own Zod schema so the REST and MCP surfaces cannot drift.
+  // {{#largeBodyNote}}Body limit raised to {{bodyLimit}} — this endpoint exists to accept
+  // large payloads that would otherwise cross the LLM context window.{{/largeBodyNote}}
+  app.post(
+    '{{expressPath}}',
+    express.json({ limit: '{{bodyLimit}}' }),
+    {{authMiddleware}},
+    async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const {{paramName}} = req.params.{{paramName}} as string;
+
+        // Reuse the MCP tool's schema. If it is still inline in the addTool
+        // call, lift it to `export const {{SchemaName}} = z.object({...})` in
+        // src/{{provider}}/server.ts and reference it from both places.
+        const { {{SchemaName}} } = await import('../{{provider}}/server.js');
+        const parsed = {{SchemaName}}.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const args = parsed.data;
+
+        const {{client}} = req.userSession!.{{sessionClient}};
+        const response = await {{client}}.{{sdkCall}}({
+          {{sdkArgs}}
+        });
+
+        // 201 + the created resource (callers chaining curls need the new id).
+        // Use 200 for updates and appends.
+        res.status(201).json(response.data);
+      } catch (err) {
+        console.error('Error in {{mcpToolName}} REST handler:', err);
+        sendUpstreamError(res, err, { notFound: '{{ResourceName}} not found', fallback: 'Failed to {{verbPhrase}}' });
+      }
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// Before using this template
+//
+// 1. One-time prerequisites must be done (first POST endpoint only):
+//    - src/restCatalog.ts            method: 'GET' | 'POST'
+//    - restCatalog.test.ts           relax the GET-only assertion to a union
+//    - restRoutes.auth.test.ts       add NEW_REST_WRITE_ENDPOINTS + POST loop
+//    - listRestEndpoints.ts          update the read-only framing in the description
+//    See references/write-endpoints.md.
+//
+// 2. Justify the endpoint: large request body, or a shell pipeline that would
+//    otherwise round-trip through the LLM. A small update belongs in the MCP
+//    tool, where it keeps Zod validation and the destructiveHint annotation.
+//
+// 3. A destructiveHint: true tool needs explicit user sign-off, an action path
+//    (/{id}/archive, not DELETE /{id}), and a warning in the catalog `notes`.
+//
+// Placeholders
+//   {{bodyLimit}}        '1mb' | '5mb' — smallest that fits; record it in the
+//                        catalog `notes`. Omit the express.json() line entirely
+//                        to inherit the global parser (100 kb default).
+//   {{SchemaName}}       exported Zod schema, e.g. AppendRowsParams
+//   {{authMiddleware}}   requireSheetsApiKey | requireClickUpApiKey | ...
+//   {{sessionClient}}    googleSheets | googleDocs | ... (Google), or build a
+//                        third-party client: const { XClient } = await
+//                        import('../{{provider}}/apiHelpers.js');
+//
+// `express` and `sendUpstreamError` are already imported in webServer.ts.
+// Route-specific body parsers go BEFORE the auth middleware in the chain, and
+// must not disturb the express.raw() routes mounted ahead of the global
+// express.json() at line ~837.
+// ---------------------------------------------------------------------------
