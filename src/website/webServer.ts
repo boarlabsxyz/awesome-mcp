@@ -472,6 +472,60 @@ export function registerClickUpWebhookIngest(app: express.Express): void {
 }
 
 /**
+ * Mount the Slack Events API ingestion endpoint on any Express app.
+ *
+ * Same transport shape as registerClickUpWebhookIngest, and mounted at the same
+ * places for the same reason — an MCP-only pod without this route 404s every
+ * delivery, and Slack disables a Request URL that keeps failing. Slack's blast
+ * radius is worse than ClickUp's: one Request URL serves the whole workspace,
+ * so a disabled URL takes out every subscriber in every channel, not one user's
+ * digest.
+ *
+ * Design notes:
+ * - express.raw() so we see the exact bytes Slack signed. MUST be registered
+ *   before any global express.json() on the same app.
+ * - Auth is signature-only; the URL is public because Slack POSTs to it. Trust
+ *   comes from the v0 HMAC against SLACK_SIGNING_SECRET, plus the ±5-minute
+ *   replay window enforced in verifySlackSignature.
+ * - The url_verification handshake is answered by the same handler, after the
+ *   signature check, so saving the Request URL in Slack works with no special
+ *   casing here.
+ * - One structured JSON log line per delivery, greppable via [slack-ingest].
+ *   Never includes message text — see the eventHelpers module header.
+ */
+export function registerSlackEventsIngest(app: express.Express): void {
+  app.post(
+    '/webhooks/slack/inbound',
+    express.raw({ type: '*/*', limit: '1mb' }),
+    async (req, res) => {
+      try {
+        const store = await import('../slack/eventStore.js');
+        const { handleSlackEventIngest } = await import('../slack/eventHelpers.js');
+        const rawBody: Buffer = req.body instanceof Buffer ? req.body : Buffer.from(req.body as any);
+        const result = await handleSlackEventIngest(
+          rawBody,
+          {
+            signature: req.headers['x-slack-signature'] as string | undefined,
+            timestamp: req.headers['x-slack-request-timestamp'] as string | undefined,
+            retryNum: req.headers['x-slack-retry-num'] as string | undefined,
+          },
+          store,
+          process.env.SLACK_SIGNING_SECRET,
+        );
+        console.error(`[slack-ingest] ${JSON.stringify({
+          status: result.status,
+          ...result.logContext,
+        })}`);
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        console.error(`[slack-ingest] handler crash: ${err?.message || err}`);
+        res.status(500).json({ error: 'Internal error' });
+      }
+    },
+  );
+}
+
+/**
  * Serves re-hosted ClickUp Doc images. The insertImageIntoPage /
  * uploadClickUpDocImage tools store image bytes in Postgres and embed a
  * markdown link pointing here; ClickUp's renderer fetches this URL, so the
@@ -824,6 +878,10 @@ function registerSharedRoutes(app: express.Express): void {
   // Mounted here (before the global express.json()) so we can consume the raw
   // body. See registerClickUpWebhookIngest for the full design note.
   registerClickUpWebhookIngest(app);
+
+  // === Slack Events API ingestion (public, signature-verified) ===
+  // Same raw-body ordering requirement as the ClickUp route above.
+  registerSlackEventsIngest(app);
 
   // Public serve route for re-hosted ClickUp Doc images (unauthenticated).
   registerClickUpDocImageRoutes(app);
@@ -2901,7 +2959,6 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
-
   // POST /api/v1/docs/:documentId/comments - Add a comment
   app.post('/api/v1/docs/:documentId/comments', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
@@ -4952,6 +5009,10 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
   // 404 and ClickUp fail_count climbed to 30 while nothing landed. Must be
   // registered BEFORE any express.json() on this app.
   registerClickUpWebhookIngest(app);
+
+  // Slack Events API ingestion. Mounted here for the same reason as the ClickUp
+  // route above: the Slack app's Request URL may point at this pod's domain.
+  registerSlackEventsIngest(app);
 
   // Public serve route for re-hosted ClickUp Doc images (unauthenticated).
   registerClickUpDocImageRoutes(app);

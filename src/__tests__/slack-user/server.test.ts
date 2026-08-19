@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import { SlackClient } from '../../slack/apiHelpers.js';
 import { filterChannelList, assertAccess } from '../../slack-user/accessControl.js';
-import { handleDownloadFile } from '../../slack/helpers.js';
+import { handleDownloadFile, handleSearchMessages } from '../../slack/helpers.js';
 import type { SlackAccessRules } from '../../mcpConnectionStore.js';
 
 // Test the search/filter logic that the slack-user listChannels tool uses.
@@ -157,6 +157,92 @@ describe('Slack User Server - search logic', () => {
         () => handleDownloadFile(client, { fileId: 'F1', channelId: 'C1', format: 'url' }),
         /not shared in channel C1/,
       );
+    });
+  });
+
+  // search.* is the one call whose reach exceeds the access rules: it returns
+  // hits from every channel the human belongs to, and Slack's query DSL has no
+  // channel deny-list to push the filter server-side. enforceAccess can't run
+  // (there is no single channelId), so the tool builds a per-channel predicate
+  // from the same assertAccess engine and the handler drops denied matches.
+  // This mirrors the tool's buildChannelFilter without the DB/session it needs.
+  describe('search access filtering', () => {
+    const META: Record<string, any> = {
+      C1: { id: 'C1', name: 'general', is_private: false, is_shared: false, is_im: false, is_mpim: false },
+      C6: { id: 'C6', name: 'ops_anthropic_alerts', is_private: true, is_shared: false, is_im: false, is_mpim: false },
+    };
+
+    /** Same shape as buildChannelFilter: memoised assertAccess, fails closed. */
+    function channelFilter(activeRules: SlackAccessRules, lookups?: string[]) {
+      const decided = new Map<string, boolean>();
+      return async ({ id }: { id: string }) => {
+        const cached = decided.get(id);
+        if (cached !== undefined) return cached;
+        lookups?.push(id);
+        let allowed: boolean;
+        try {
+          assertAccess(activeRules, META[id]);
+          allowed = true;
+        } catch {
+          allowed = false;
+        }
+        decided.set(id, allowed);
+        return allowed;
+      };
+    }
+
+    const searchClient = (matches: any[]) => ({
+      searchMessages: async () => ({ query: 'q', messages: { total: matches.length, matches } }),
+      usersInfo: async (uid: string) => ({ user: { id: uid, name: uid, real_name: uid, profile: { display_name: uid } } }),
+      authTest: async () => ({ ok: true, url: 'https://test.slack.com' }),
+    }) as any;
+
+    const MATCHES = [
+      { channel: { id: 'C1', name: 'general' }, user: 'U1', ts: '1609459200.000000', text: 'public info', permalink: 'https://t/p1' },
+      { channel: { id: 'C6', name: 'ops_anthropic_alerts' }, user: 'U2', ts: '1609459201.000000', text: 'confidential alert', permalink: 'https://t/p6' },
+    ];
+
+    it('never renders a match from a channel outside the whitelist', async () => {
+      const restricted: SlackAccessRules = { ...rules, whitelistChannels: ['general'] };
+      const result = await handleSearchMessages(
+        searchClient(MATCHES), 'tok-leak-' + Date.now(), { query: 'x', count: 20 }, channelFilter(restricted),
+      );
+
+      assert.ok(result.includes('public info'));
+      assert.ok(!result.includes('confidential alert'));
+      assert.ok(!result.includes('ops_anthropic_alerts'));
+      assert.ok(!result.includes('https://t/p6'));
+      assert.ok(result.includes('1 result(s) on this page hidden by your access rules'));
+    });
+
+    it('honours allowPublicOnly, which readChannelHistory would also enforce', async () => {
+      const publicOnly: SlackAccessRules = { ...rules, allowPublicOnly: true };
+      const result = await handleSearchMessages(
+        searchClient(MATCHES), 'tok-public-' + Date.now(), { query: 'x', count: 20 }, channelFilter(publicOnly),
+      );
+      assert.ok(result.includes('public info'));
+      assert.ok(!result.includes('confidential alert'));
+    });
+
+    it('hides everything when no whitelist is configured (deny-all)', async () => {
+      const noWhitelist: SlackAccessRules = { ...rules, whitelistChannels: [] };
+      const result = await handleSearchMessages(
+        searchClient(MATCHES), 'tok-deny-' + Date.now(), { query: 'x', count: 20 }, channelFilter(noWhitelist),
+      );
+      assert.ok(!result.includes('public info'));
+      assert.ok(!result.includes('confidential alert'));
+      assert.ok(result.includes('No messages you can access'));
+    });
+
+    it('decides each distinct channel once, however many matches it has', async () => {
+      const lookups: string[] = [];
+      const repeated = [...MATCHES, { ...MATCHES[0], ts: '1609459202.000000', text: 'more public info' }];
+      await handleSearchMessages(
+        searchClient(repeated), 'tok-memo-' + Date.now(), { query: 'x', count: 20 }, channelFilter(rules, lookups),
+      );
+      // Three matches over two channels cost two conversations.info lookups,
+      // not three — the repeat of C1 is served from the per-call memo.
+      assert.deepEqual(lookups, ['C1', 'C6']);
     });
   });
 

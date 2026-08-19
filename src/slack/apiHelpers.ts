@@ -61,6 +61,66 @@ export function fileShareTargets(file: SlackFileInfo): Set<string> {
   return targets;
 }
 
+// === Search ===
+
+export interface SlackSearchOptions {
+  /** Results per page (1-100). */
+  count?: number;
+  /** 1-based page number. search.* pages by number, not by cursor. */
+  page?: number;
+  sort?: 'score' | 'timestamp';
+  sortDir?: 'asc' | 'desc';
+}
+
+/**
+ * search.* pages by number, unlike every other Slack method in this file
+ * (which uses `response_metadata.next_cursor`). `paging` is the legacy block
+ * and `pagination` the newer one; Slack still sends both, so read either.
+ */
+export interface SlackSearchPage<T> {
+  total: number;
+  matches: T[];
+  paging?: { count: number; total: number; page: number; pages: number };
+  pagination?: { total_count: number; page: number; per_page: number; page_count: number };
+}
+
+/** The reduced channel object search.* attaches to each match. */
+export interface SlackSearchChannelRef {
+  id: string;
+  name?: string;
+  is_private?: boolean;
+  is_im?: boolean;
+  is_mpim?: boolean;
+}
+
+export interface SlackMessageMatch {
+  type?: string;
+  channel: SlackSearchChannelRef;
+  user?: string;
+  username?: string;
+  ts: string;
+  text: string;
+  /** search.* returns this directly, so callers needn't build it. */
+  permalink?: string;
+  files?: SlackFileRef[];
+}
+
+/** A file match carries the same share targets files.info does. */
+export interface SlackFileMatch extends SlackFileInfo {
+  channels?: string[];
+}
+
+/** Slack caps `count` at 100 and `page` at 100. */
+function buildSearchBody(query: string, options?: SlackSearchOptions): Record<string, unknown> {
+  return {
+    query,
+    count: Math.min(Math.max(options?.count ?? 20, 1), 100),
+    page: Math.min(Math.max(options?.page ?? 1, 1), 100),
+    ...(options?.sort ? { sort: options.sort } : {}),
+    ...(options?.sortDir ? { sort_dir: options.sortDir } : {}),
+  };
+}
+
 export class SlackClient {
   constructor(private botToken: string) {}
 
@@ -259,6 +319,12 @@ export class SlackClient {
       id: string; name: string; is_private: boolean;
       is_shared: boolean; is_ext_shared: boolean; is_org_shared: boolean;
       is_im: boolean; is_mpim: boolean;
+      /**
+       * Whether this installation is in the channel. Slack does not deliver
+       * message events for channels it isn't in, so debugChannelEventSubscription
+       * reads this to explain an event store that stays empty.
+       */
+      is_member?: boolean;
       user?: string;
       shared_team_ids?: string[];
       topic?: { value: string }; purpose?: { value: string };
@@ -300,6 +366,31 @@ export class SlackClient {
    */
   async downloadFileBytes(url: string, opts?: { maxBytes?: number }): Promise<SlackFileBytes> {
     return fetchSlackFileBytes(url, this.botToken, opts);
+  }
+
+  // === Search ===
+
+  /**
+   * Full-text message search. USER TOKEN ONLY — bot tokens cannot call
+   * search.*, so this is reachable from the slack-user server alone.
+   *
+   * Slack documents search.* as GET, but the endpoint accepts the same
+   * form-urlencoded POST every other method here uses, so `request()` needs
+   * no special casing.
+   */
+  async searchMessages(query: string, options?: SlackSearchOptions): Promise<{
+    query: string;
+    messages: SlackSearchPage<SlackMessageMatch>;
+  }> {
+    return this.request('search.messages', buildSearchBody(query, options));
+  }
+
+  /** Same call shape as searchMessages, over files instead of messages. */
+  async searchFiles(query: string, options?: SlackSearchOptions): Promise<{
+    query: string;
+    files: SlackSearchPage<SlackFileMatch>;
+  }> {
+    return this.request('search.files', buildSearchBody(query, options));
   }
 
   // === Users (list) ===

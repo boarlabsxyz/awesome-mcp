@@ -15,7 +15,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Slides](#google-slides) (6)
 - [ClickUp](#clickup) (45)
 - [Slack (bot)](#slack-bot-) (8)
-- [Slack (user)](#slack-user-) (8)
+- [Slack (user)](#slack-user-) (15)
 - [Outline](#outline) (27)
 - [PeopleForce](#peopleforce) (45)
 - [HubSpot](#hubspot) (22)
@@ -223,7 +223,7 @@ Source: `src/slack/server.ts` — 8 tools.
 
 ## Slack (user)
 
-Source: `src/slack-user/server.ts` — 8 tools.
+Source: `src/slack-user/server.ts` — 15 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -231,10 +231,17 @@ Source: `src/slack-user/server.ts` — 8 tools.
 | `readChannelHistory` | Read recent messages from a Slack channel. Access rules are enforced. | — |
 | `readThreadReplies` | Read replies in a Slack thread. Access rules are enforced. | — |
 | `downloadFile` | Download a file attached to a Slack message. Get the fileId from the 📎 lines in readChannelHistory or readThreadReplies output, and pass the channel you read it from. Images: format "url" (default) re-hosts the image at a public URL suitable for tools that take an image URL (e.g. insertImageFromUrl), format "inline" returns the image itself so you can look at it. Text files are returned as text; other file types return metadata only. Access rules are enforced. | — |
+| `searchMessages` | Search Slack messages across the workspace by keyword. Use this instead of paging readChannelHistory when looking for a specific message. Supports Slack search operators in the query: in:#channel, from:@user, before:YYYY-MM-DD, after:YYYY-MM-DD, has:link. Access rules are enforced — matches in channels you are not allowed to read are removed from the results. | — |
+| `searchFiles` | Search files shared in Slack by name or content. Returns each file with its ID and the channels it is shared in — pass one of those channel IDs to downloadFile to fetch the content. Access rules are enforced: a file is shown only if at least one channel it is shared in is one you are allowed to read, and a file Slack reports no channel for is withheld (the response says how many, separately from rules denials). | — |
 | `postMessage` | Post a message to a Slack channel. | — |
 | `replyInThread` | Reply to a thread in a Slack channel. | — |
 | `listUsers` | List workspace members. Use this to find a user by name and get their user ID for opening a DM. | — |
 | `openDm` | Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage. | — |
+| `subscribeToChannelEvents` | Record interest in a Slack channel's events so they accrue in a durable store you can query later with getChannelEventHistory, instead of re-reading the channel and tracking your own watermark. IDEMPOTENT: re-calling for the same channel returns the existing subscription. Events are "message" (new messages and thread replies in channels and private channels; join/leave noise is excluded) and "reaction_added". Optionally set matchPattern to record only messages whose text contains it (case-insensitive substring). History accrues from this moment forward — for anything earlier use readChannelHistory. Requires the operator to have configured the Slack app's Event Subscriptions Request URL and SLACK_SIGNING_SECRET; run debugChannelEventSubscription if events do not arrive. Access rules are enforced. | — |
+| `listChannelEventSubscriptions` | List the Slack channel-event subscriptions you own, with their event types, match patterns and fail counts. Optionally narrow to one channel. | — |
+| `getChannelEventHistory` | Read the Slack events captured for a channel since you subscribed to it — the exact record of what happened, instead of re-reading the channel and filtering client-side. IMPORTANT: history only accrues from the moment subscribeToChannelEvents was called; the response reports that boundary, and for earlier windows you should fall back to readChannelHistory. If no subscription exists this reports that as a warning rather than an error, so a routine can fall back cleanly. Access rules are enforced on every call, so a channel that has since been denied stops returning history. | — |
+| `debugChannelEventSubscription` | Diagnose a channel-event subscription that reports success but is not accruing events. Reports the local record, whether SLACK_SIGNING_SECRET is configured, the Request URL the Slack app must be pointed at, whether you are actually a member of the channel (Slack does not deliver events for channels the installation is not in), and event-store counts — then lists the anomalies it found. Use when getChannelEventHistory stays empty. | — |
+| `unsubscribeFromChannelEvents` | Delete your channel-event subscription for a Slack channel. This also deletes the events captured for it, so history cannot be recovered by re-subscribing — a fresh subscription starts accruing from that moment. Nothing changes on Slack's side: event delivery is configured on the app, so other subscribers keep receiving events. | — |
 
 ## Outline
 
@@ -353,4 +360,4 @@ Source: `src/hubspot/server.ts` — 22 tools.
 
 ---
 
-**Grand total: 240 tools across 13 sections.**
+**Grand total: 247 tools across 13 sections.**
