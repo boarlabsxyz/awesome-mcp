@@ -490,8 +490,14 @@ export async function handleDownloadFile(
     }
     const { imageRetentionDays } = await import('../images/imageBlobStore.js');
     const days = imageRetentionDays();
+    // Deliberately "eligible for removal", not "expires": blobs are
+    // content-addressed, so if these exact bytes are also hosted for a
+    // longer-lived use (a ClickUp Doc image), the shared row stays and this URL
+    // keeps working past the window. Promising expiry would be a guarantee the
+    // store cannot make.
     const lifetime = days > 0
-      ? `It expires in ${days} day(s), so use it now rather than storing it.`
+      ? `It becomes eligible for removal after ${days} day(s) — treat it as short-lived and use it now. ` +
+        'If this same image is also hosted for a longer-lived use, the URL may remain reachable beyond that.'
       : 'It does not expire (IMAGE_RETENTION_DAYS=0 on this deployment).';
     return `${meta}\n  Hosted at: ${hosted.url}\n\n` +
       'That URL is public and unauthenticated — pass it to any tool that takes an image URL ' +

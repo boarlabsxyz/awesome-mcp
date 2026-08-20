@@ -30,7 +30,8 @@ function makeFakePool() {
       }
       if (/SELECT data, content_type FROM image_blobs/.test(text)) {
         const r = rows.get(params[0]);
-        return { rows: r ? [{ data: r.data, content_type: r.content_type }] : [] };
+        const live = r && (r.expires_at === null || r.expires_at > new Date());
+        return { rows: live ? [{ data: r.data, content_type: r.content_type }] : [] };
       }
       throw new Error(`unexpected query: ${text}`);
     },

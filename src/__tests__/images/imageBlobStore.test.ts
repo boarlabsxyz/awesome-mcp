@@ -11,6 +11,7 @@ import {
   assertImagePublicBaseUrlConfigured,
   __setImageBlobPoolForTests,
   pruneExpiredImageBlobs,
+  imageRetentionDays,
 } from '../../images/imageBlobStore.js';
 
 // In-memory stand-in for the pg pool, emulating the queries the store runs:
@@ -58,7 +59,9 @@ function makeFakePool() {
       if (/SELECT data, content_type FROM image_blobs/.test(text)) {
         const [key] = params;
         const r = rows.get(key);
-        return { rows: r ? [{ data: r.data, content_type: r.content_type }] : [] };
+        // Mirrors the query's expiry guard: a lapsed row is not served.
+        const live = r && (r.expires_at === null || r.expires_at > new Date());
+        return { rows: live ? [{ data: r.data, content_type: r.content_type }] : [] };
       }
       throw new Error(`unexpected query: ${text}`);
     },
@@ -333,5 +336,74 @@ describe('image blob retention', () => {
     pool.rows.get(key)!.expires_at = new Date(Date.now() - 1000);
     await pruneExpiredImageBlobs();
     assert.equal(await fetchBlob(key), null);
+  });
+});
+
+// Regressions from review of the retention PR. Each of these was a way the
+// stated policy and the enforced behaviour could drift apart.
+describe('image blob retention — config and enforcement edges', () => {
+  let pool: ReturnType<typeof makeFakePool>;
+  const savedDays = process.env.IMAGE_RETENTION_DAYS;
+
+  beforeEach(() => {
+    pool = makeFakePool();
+    __setImageBlobPoolForTests(pool);
+    process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+    delete process.env.IMAGE_RETENTION_DAYS;
+  });
+
+  afterEach(() => {
+    __setImageBlobPoolForTests(null);
+    if (savedDays === undefined) delete process.env.IMAGE_RETENTION_DAYS;
+    else process.env.IMAGE_RETENTION_DAYS = savedDays;
+  });
+
+  it('treats a blank IMAGE_RETENTION_DAYS as unset, not as 0', () => {
+    // Number('') === 0, which would pass a naive finite/non-negative check and
+    // silently disable retention. A declared-but-empty var is common in
+    // container configs, so this must fall back to the default.
+    for (const blank of ['', '   ', '\t\n']) {
+      process.env.IMAGE_RETENTION_DAYS = blank;
+      assert.equal(imageRetentionDays(), 30, `blank ${JSON.stringify(blank)} should mean "unset"`);
+    }
+  });
+
+  it('still honours an explicit 0 as "disable expiry"', () => {
+    process.env.IMAGE_RETENTION_DAYS = '0';
+    assert.equal(imageRetentionDays(), 0);
+    process.env.IMAGE_RETENTION_DAYS = ' 0 ';
+    assert.equal(imageRetentionDays(), 0, 'surrounding whitespace should not change the meaning');
+  });
+
+  it('falls back to the default for junk and negatives', () => {
+    for (const bad of ['abc', '-1', 'NaN']) {
+      process.env.IMAGE_RETENTION_DAYS = bad;
+      assert.equal(imageRetentionDays(), 30, `${bad} should fall back`);
+    }
+  });
+
+  it('accepts a whitespace-padded number', () => {
+    process.env.IMAGE_RETENTION_DAYS = '  7  ';
+    assert.equal(imageRetentionDays(), 7);
+  });
+
+  it('does not serve a lapsed blob even before the pruner runs', async () => {
+    // The sweep is hours apart, so read-time enforcement is what actually
+    // bounds exposure; without it a URL keeps working most of a day past expiry.
+    process.env.IMAGE_RETENTION_DAYS = '1';
+    const { key } = await store(pngSmall, 'image/png', { ephemeral: true });
+    assert.ok(await fetchBlob(key), 'still live before expiry');
+
+    pool.rows.get(key)!.expires_at = new Date(Date.now() - 1000);
+    assert.equal(await fetchBlob(key), null, 'a lapsed row must not be served');
+    assert.ok(pool.rows.has(key), 'and it is still physically present — pruning is separate');
+  });
+
+  it('keeps serving a permanent blob and one whose expiry is in the future', async () => {
+    const permanent = await store(pngSmall, 'image/png');
+    assert.ok(await fetchBlob(permanent.key));
+
+    pool.rows.get(permanent.key)!.expires_at = new Date(Date.now() + 86_400_000);
+    assert.ok(await fetchBlob(permanent.key), 'a future expiry is not yet an expiry');
   });
 });

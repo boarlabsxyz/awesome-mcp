@@ -160,15 +160,23 @@ export interface StoreOptions {
   ephemeral?: boolean;
 }
 
+const DEFAULT_RETENTION_DAYS = 30;
+
 /**
  * How long an ephemeral blob lives. `IMAGE_RETENTION_DAYS` (default 30);
  * set it to 0 to disable expiry entirely and restore the previous
  * keep-everything-forever behaviour.
  */
 export function imageRetentionDays(): number {
-  const raw = Number(process.env.IMAGE_RETENTION_DAYS);
+  // Trim and reject blank BEFORE Number(): Number('') and Number('   ') are both
+  // 0, which passes the finite/non-negative check and silently disables expiry.
+  // A declared-but-empty env var is common in container configs, and failing
+  // that way would turn retention off exactly where it's most wanted.
+  const configured = (process.env.IMAGE_RETENTION_DAYS ?? '').trim();
+  if (configured === '') return DEFAULT_RETENTION_DAYS;
+  const raw = Number(configured);
   if (Number.isFinite(raw) && raw >= 0) return raw;
-  return 30;
+  return DEFAULT_RETENTION_DAYS;
 }
 
 /**
@@ -263,8 +271,13 @@ export interface FetchResult {
 
 /** Read stored bytes back by key. Returns null when the key is unknown. */
 export async function fetch(key: string): Promise<FetchResult | null> {
+  // Expiry is enforced here, not left to the pruner. The sweep runs every few
+  // hours, so a row can sit lapsed-but-present for most of a day; serving it in
+  // that window would quietly extend the exposure the retention policy exists
+  // to bound. pruneExpiredImageBlobs() then only reclaims storage.
   const result = await pool().query(
-    `SELECT data, content_type FROM image_blobs WHERE key = $1`,
+    `SELECT data, content_type FROM image_blobs
+     WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())`,
     [key],
   );
   if (result.rows.length === 0) return null;
@@ -293,9 +306,14 @@ let retentionTimer: NodeJS.Timeout | null = null;
 // IMAGE_PRUNE_INTERVAL_MS (default 6h, clamped up to a 1h minimum). Same shape
 // as the ClickUp and Slack event pruners — this is periodic hygiene, not a
 // real-time job, and a blob living a few extra hours is not a new risk.
+// setInterval overflows past a signed 32-bit delay: Node clamps anything larger
+// to 1ms and warns, turning a "prune monthly" config into a hot loop. Cap it.
+const MAX_TIMER_MS = 2_147_483_647; // ~24.8 days
+
 function readPruneIntervalMs(): number {
   const raw = parseInt(process.env.IMAGE_PRUNE_INTERVAL_MS || '', 10);
-  return Number.isFinite(raw) && raw >= 3_600_000 ? raw : 6 * 60 * 60 * 1000;
+  if (Number.isFinite(raw) && raw >= 3_600_000) return Math.min(raw, MAX_TIMER_MS);
+  return 6 * 60 * 60 * 1000;
 }
 
 /** Safe to call more than once; the second call is a no-op. */
