@@ -12,9 +12,14 @@
 // identical images dedup and a given URL's bytes can never change (safe to cache
 // immutably forever).
 //
+// Retention: blobs are permanent by default. A caller may pass
+// { ephemeral: true } to opt into expiry after IMAGE_RETENTION_DAYS, which the
+// scheduler here sweeps. Expiry is a property of the use case, not the bytes —
+// see StoreOptions.ephemeral for why a single global TTL would break ClickUp.
+//
 // Public interface (do not widen without good reason):
-//   store(buffer, declaredMime) -> { key, url, bytes, deduped }
-//   fetch(key)                  -> { buffer, contentType } | null
+//   store(buffer, declaredMime, opts?) -> { key, url, bytes, deduped }
+//   fetch(key)                         -> { buffer, contentType } | null
 
 import { createHash } from 'crypto';
 import sharp from 'sharp';
@@ -141,12 +146,54 @@ export interface StoreResult {
   deduped: boolean;
 }
 
+export interface StoreOptions {
+  /**
+   * Mark this blob as short-lived, so the pruner can delete it after
+   * IMAGE_RETENTION_DAYS.
+   *
+   * Opt-in, never the default: a caller whose URL is re-fetched for the life of
+   * the document it's embedded in (ClickUp Docs) must NOT set this, or the
+   * image 404s the day it expires. Set it only where the URL is consumed once —
+   * Slack's downloadFile, whose link is handed to insertImageFromUrl and copied
+   * into the Google Doc at insert time.
+   */
+  ephemeral?: boolean;
+}
+
+const DEFAULT_RETENTION_DAYS = 30;
+
+// Date spans ±8.64e15 ms from the epoch — 1e8 days — so any retention at or
+// above that makes `new Date(now + days)` Invalid. It is finite and
+// non-negative, so it passes a naive range check, and store() then hands the
+// Invalid Date to the driver, where toISOString() throws
+// "RangeError: Invalid time value". The caller sees "Could not host this image"
+// with an opaque cause instead of a retention policy. 100,000 years is far past
+// any real intent and comfortably inside Date's range.
+const MAX_RETENTION_DAYS = 36_500_000;
+
+/**
+ * How long an ephemeral blob lives. `IMAGE_RETENTION_DAYS` (default 30);
+ * set it to 0 to disable expiry entirely and restore the previous
+ * keep-everything-forever behaviour.
+ */
+export function imageRetentionDays(): number {
+  // Trim and reject blank BEFORE Number(): Number('') and Number('   ') are both
+  // 0, which passes the finite/non-negative check and silently disables expiry.
+  // A declared-but-empty env var is common in container configs, and failing
+  // that way would turn retention off exactly where it's most wanted.
+  const configured = (process.env.IMAGE_RETENTION_DAYS ?? '').trim();
+  if (configured === '') return DEFAULT_RETENTION_DAYS;
+  const raw = Number(configured);
+  if (Number.isFinite(raw) && raw >= 0 && raw <= MAX_RETENTION_DAYS) return raw;
+  return DEFAULT_RETENTION_DAYS;
+}
+
 /**
  * Recompress `buffer` to WebP, persist it under a content-hash key, and return
  * the key/url. `declaredMime` is accepted for interface symmetry but is
  * intentionally ignored — the real format is detected from the bytes.
  */
-export async function store(buffer: Buffer, declaredMime: string): Promise<StoreResult> {
+export async function store(buffer: Buffer, declaredMime: string, opts?: StoreOptions): Promise<StoreResult> {
   void declaredMime; // never trusted; real format comes from magic bytes below
 
   const format = sniffFormat(buffer);
@@ -182,15 +229,46 @@ export async function store(buffer: Buffer, declaredMime: string): Promise<Store
 
   const key = `${createHash('sha256').update(webp).digest('hex')}.webp`;
 
+  // null = keep forever. Reached either because the caller didn't opt in, or
+  // because the operator set IMAGE_RETENTION_DAYS=0 to disable expiry.
+  const retentionDays = opts?.ephemeral ? imageRetentionDays() : 0;
+  const expiresAt = retentionDays > 0
+    ? new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000)
+    : null;
+
   // ON CONFLICT DO NOTHING dedups atomically: rowCount is 1 when we inserted a
   // new blob, 0 when the identical bytes were already stored.
   const result = await pool().query(
-    `INSERT INTO image_blobs (key, data, content_type, bytes)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO image_blobs (key, data, content_type, bytes, expires_at)
+     VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (key) DO NOTHING`,
-    [key, webp, STORED_CONTENT_TYPE, webp.length],
+    [key, webp, STORED_CONTENT_TYPE, webp.length, expiresAt],
   );
   const deduped = (result.rowCount ?? 0) === 0;
+
+  // Reconcile lifetimes when these bytes were already stored. Content-addressing
+  // means one row can back several uses with different lifetimes, so the longest
+  // one has to win — expiring a blob that a ClickUp Doc still renders would be a
+  // silent 404 on someone else's page.
+  if (deduped) {
+    if (expiresAt === null) {
+      // A permanent use promotes the row, dropping any expiry it carried. The
+      // IS NOT NULL guard makes the common case (already permanent) a no-op
+      // rather than rewriting the row — and these rows hold megabytes of BYTEA.
+      await pool().query(
+        'UPDATE image_blobs SET expires_at = NULL WHERE key = $1 AND expires_at IS NOT NULL',
+        [key],
+      );
+    } else {
+      // Extend only. Never shortens a row, and the IS NOT NULL guard means a
+      // permanent row is never demoted to an expiring one.
+      await pool().query(
+        `UPDATE image_blobs SET expires_at = $2
+         WHERE key = $1 AND expires_at IS NOT NULL AND expires_at < $2`,
+        [key, expiresAt],
+      );
+    }
+  }
 
   return { key, url: `${getImagePublicBaseUrl()}/images/${key}`, bytes: webp.length, deduped };
 }
@@ -202,11 +280,76 @@ export interface FetchResult {
 
 /** Read stored bytes back by key. Returns null when the key is unknown. */
 export async function fetch(key: string): Promise<FetchResult | null> {
+  // Expiry is enforced here, not left to the pruner. The sweep runs every few
+  // hours, so a row can sit lapsed-but-present for most of a day; serving it in
+  // that window would quietly extend the exposure the retention policy exists
+  // to bound. pruneExpiredImageBlobs() then only reclaims storage.
   const result = await pool().query(
-    `SELECT data, content_type FROM image_blobs WHERE key = $1`,
+    `SELECT data, content_type FROM image_blobs
+     WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())`,
     [key],
   );
   if (result.rows.length === 0) return null;
   const row = result.rows[0];
   return { buffer: row.data as Buffer, contentType: row.content_type as string };
+}
+
+// --- Retention ---------------------------------------------------------------
+
+/**
+ * Delete blobs whose expiry has passed. Permanent rows (expires_at IS NULL) are
+ * never touched, which is what keeps ClickUp Doc images alive.
+ *
+ * Bounded by the partial index on expires_at, so the scan only ever visits
+ * expiring rows.
+ */
+export async function pruneExpiredImageBlobs(): Promise<number> {
+  const result = await pool().query(
+    'DELETE FROM image_blobs WHERE expires_at IS NOT NULL AND expires_at < NOW()',
+  );
+  return result.rowCount ?? 0;
+}
+
+let retentionTimer: NodeJS.Timeout | null = null;
+
+// IMAGE_PRUNE_INTERVAL_MS (default 6h, clamped up to a 1h minimum). Same shape
+// as the ClickUp and Slack event pruners — this is periodic hygiene, not a
+// real-time job, and a blob living a few extra hours is not a new risk.
+// setInterval overflows past a signed 32-bit delay: Node clamps anything larger
+// to 1ms and warns, turning a "prune monthly" config into a hot loop. Cap it.
+const MAX_TIMER_MS = 2_147_483_647; // ~24.8 days
+
+function readPruneIntervalMs(): number {
+  const raw = parseInt(process.env.IMAGE_PRUNE_INTERVAL_MS || '', 10);
+  if (Number.isFinite(raw) && raw >= 3_600_000) return Math.min(raw, MAX_TIMER_MS);
+  return 6 * 60 * 60 * 1000;
+}
+
+/** Safe to call more than once; the second call is a no-op. */
+export function startImageBlobRetentionScheduler(): void {
+  if (retentionTimer) return;
+  if (!isDatabaseAvailable()) return;
+  const intervalMs = readPruneIntervalMs();
+
+  const runOnce = async () => {
+    try {
+      const deleted = await pruneExpiredImageBlobs();
+      if (deleted > 0) console.error(`[image-blobs] pruned ${deleted} expired blob(s)`);
+    } catch (err: any) {
+      console.error('[image-blobs] prune failure:', err?.message || err);
+    }
+  };
+
+  retentionTimer = setInterval(runOnce, intervalMs);
+  retentionTimer.unref();
+  // Initial sweep so a container booting after a long outage doesn't wait a
+  // full interval for the first cleanup.
+  void runOnce();
+}
+
+export function stopImageBlobRetentionScheduler(): void {
+  if (retentionTimer) {
+    clearInterval(retentionTimer);
+    retentionTimer = null;
+  }
 }
