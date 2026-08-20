@@ -13,7 +13,7 @@ import {
   querySlackEventsFlow,
   debugChannelEventSubscriptionFlow,
 } from '../slack/eventHelpers.js';
-import { assertAccess, fetchChannelMeta, filterChannelList, filterDmsByOrg, filterGroupDmsByRules } from './accessControl.js';
+import { assertAccess, assertDmMemberAccess, fetchChannelMeta, filterChannelList, filterDmsByOrg, filterGroupDmsByRules } from './accessControl.js';
 import type { SlackAccessRules } from '../mcpConnectionStore.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
@@ -64,40 +64,13 @@ async function enforceAccess(client: SlackClient, session: UserSession, channelI
   const meta = await fetchChannelMeta(client, channelId, getTokenKey(session));
   assertAccess(rules, meta);
 
-  // Additional checks for DMs (assertAccess can't do these without API lookups)
-  if (meta.is_im && meta.user && rules.allowedOrgs.length > 0) {
-    try {
-      const { user } = await client.usersInfo(meta.user);
-      if (user.team_id && !rules.allowedOrgs.includes(user.team_id)) {
-        throw new UserError('Access denied: this user belongs to an organisation not in your allowed list.');
-      }
-    } catch (err) {
-      if (err instanceof UserError) throw err;
-    }
-  }
-
-  // Group DM: check blacklist and org membership
-  if (meta.is_mpim && (rules.blacklistUsers.length > 0 || rules.allowedOrgs.length > 0)) {
-    try {
-      const { members } = await client.conversationsMembers(channelId);
-      if (rules.blacklistUsers.length > 0 && members.some(uid => rules.blacklistUsers.includes(uid))) {
-        throw new UserError('Access denied: this group DM contains a blacklisted user.');
-      }
-      if (rules.allowedOrgs.length > 0) {
-        for (const uid of members) {
-          try {
-            const { user } = await client.usersInfo(uid);
-            if (user.team_id && !rules.allowedOrgs.includes(user.team_id)) {
-              throw new UserError('Access denied: this group DM contains a user from a non-allowed organisation.');
-            }
-          } catch (e) {
-            if (e instanceof UserError) throw e;
-          }
-        }
-      }
-    } catch (err) {
-      if (err instanceof UserError) throw err;
-    }
+  try {
+    await assertDmMemberAccess(client, rules, meta, channelId);
+  } catch (err) {
+    // Denials always propagate. A failed *lookup* does not block a direct read —
+    // preserving this path's long-standing behaviour. buildChannelFilter
+    // deliberately takes the opposite posture; see there.
+    if (err instanceof UserError) throw err;
   }
 }
 
@@ -120,7 +93,14 @@ async function buildChannelFilter(client: SlackClient, session: UserSession): Pr
     if (cached !== undefined) return cached;
     let allowed: boolean;
     try {
-      assertAccess(rules, await fetchChannelMeta(client, id, tokenKey));
+      const meta = await fetchChannelMeta(client, id, tokenKey);
+      assertAccess(rules, meta);
+      // Same DM/group-DM rules a direct read gets. Without this, search results
+      // from a DM with a non-allowed org — or a group DM holding a blacklisted
+      // member — pass a filter that a direct read would reject. The extra
+      // lookups only fire when allowedOrgs/blacklistUsers are configured, and
+      // `decided` keeps it to once per channel per call.
+      await assertDmMemberAccess(client, rules, meta, id);
       allowed = true;
     } catch {
       // A UserError means denied; anything else (channel gone, API blip) also
