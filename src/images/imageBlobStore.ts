@@ -162,6 +162,15 @@ export interface StoreOptions {
 
 const DEFAULT_RETENTION_DAYS = 30;
 
+// Date spans ±8.64e15 ms from the epoch — 1e8 days — so any retention at or
+// above that makes `new Date(now + days)` Invalid. It is finite and
+// non-negative, so it passes a naive range check, and store() then hands the
+// Invalid Date to the driver, where toISOString() throws
+// "RangeError: Invalid time value". The caller sees "Could not host this image"
+// with an opaque cause instead of a retention policy. 100,000 years is far past
+// any real intent and comfortably inside Date's range.
+const MAX_RETENTION_DAYS = 36_500_000;
+
 /**
  * How long an ephemeral blob lives. `IMAGE_RETENTION_DAYS` (default 30);
  * set it to 0 to disable expiry entirely and restore the previous
@@ -175,7 +184,7 @@ export function imageRetentionDays(): number {
   const configured = (process.env.IMAGE_RETENTION_DAYS ?? '').trim();
   if (configured === '') return DEFAULT_RETENTION_DAYS;
   const raw = Number(configured);
-  if (Number.isFinite(raw) && raw >= 0) return raw;
+  if (Number.isFinite(raw) && raw >= 0 && raw <= MAX_RETENTION_DAYS) return raw;
   return DEFAULT_RETENTION_DAYS;
 }
 

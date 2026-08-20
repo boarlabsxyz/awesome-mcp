@@ -382,6 +382,33 @@ describe('image blob retention — config and enforcement edges', () => {
     }
   });
 
+  it('rejects finite values too large to express as a date', () => {
+    // 1e308 is finite and non-negative, so it passes a naive range check — but
+    // Date spans only 1e8 days, so new Date(now + days) is Invalid and the pg
+    // driver throws "Invalid time value" from inside store(). Must fall back
+    // before the value ever reaches store().
+    for (const absurd of ['1e308', '1e8', '100000000', '1e9']) {
+      process.env.IMAGE_RETENTION_DAYS = absurd;
+      assert.equal(imageRetentionDays(), 30, `${absurd} should fall back`);
+    }
+  });
+
+  it('still accepts a large but expressible retention', () => {
+    process.env.IMAGE_RETENTION_DAYS = '36500';  // 100 years
+    assert.equal(imageRetentionDays(), 36500);
+  });
+
+  it('every accepted value yields a valid expiry date in store()', async () => {
+    // The property the cap exists to guarantee: whatever imageRetentionDays()
+    // returns must survive new Date(...).toISOString() in the driver.
+    for (const value of ['1e308', '1e9', '36500', '30', '0.5']) {
+      process.env.IMAGE_RETENTION_DAYS = value;
+      const days = imageRetentionDays();
+      const expiry = new Date(Date.now() + days * 86_400_000);
+      assert.doesNotThrow(() => expiry.toISOString(), `days=${days} from ${value} must be expressible`);
+    }
+  });
+
   it('accepts a whitespace-padded number', () => {
     process.env.IMAGE_RETENTION_DAYS = '  7  ';
     assert.equal(imageRetentionDays(), 7);
