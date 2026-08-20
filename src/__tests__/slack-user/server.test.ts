@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import { SlackClient } from '../../slack/apiHelpers.js';
-import { filterChannelList, assertAccess } from '../../slack-user/accessControl.js';
+import { filterChannelList, assertAccess, assertDmMemberAccess } from '../../slack-user/accessControl.js';
 import { handleDownloadFile, handleSearchMessages } from '../../slack/helpers.js';
 import type { SlackAccessRules } from '../../mcpConnectionStore.js';
 
@@ -172,7 +172,15 @@ describe('Slack User Server - search logic', () => {
       C6: { id: 'C6', name: 'ops_anthropic_alerts', is_private: true, is_shared: false, is_im: false, is_mpim: false },
     };
 
-    /** Same shape as buildChannelFilter: memoised assertAccess, fails closed. */
+    /**
+     * The channel-pattern half of buildChannelFilter: memoised, fails closed.
+     *
+     * Deliberately NOT a full copy — the real filter also runs
+     * assertDmMemberAccess for DMs and group DMs, which needs a live client.
+     * That half is covered directly in the assertDmMemberAccess describe below.
+     * Do not grow this mirror into a second implementation: it passing proves
+     * nothing about the real one, which is how the DM gap went unnoticed.
+     */
     function channelFilter(activeRules: SlackAccessRules, lookups?: string[]) {
       const decided = new Map<string, boolean>();
       return async ({ id }: { id: string }) => {
@@ -272,5 +280,99 @@ describe('Slack User Server - search logic', () => {
       assert.ok(output.includes('D_OPENED'));
       assert.ok(output.includes('postMessage'));
     });
+  });
+});
+
+// assertDmMemberAccess is the half of the rules that needs API lookups, so
+// assertAccess cannot make these calls itself. Both a direct read
+// (enforceAccess) and a search result (buildChannelFilter) go through it; it
+// used to be inline in enforceAccess only, which let search return DMs a direct
+// read of the same conversation would have refused.
+describe('assertDmMemberAccess', () => {
+  const rules: SlackAccessRules = {
+    allowedOrgs: [], blacklistUsers: [], whitelistChannels: ['*'],
+    blacklistChannels: [], allowPublicOnly: false,
+  };
+
+  const client = (opts: { teams?: Record<string, string>; members?: string[] } = {}) => ({
+    usersInfo: async (uid: string) => ({ user: { id: uid, team_id: opts.teams?.[uid] } }),
+    conversationsMembers: async () => ({ members: opts.members ?? [] }),
+  }) as any;
+
+  const DM = { is_im: true, user: 'U_EXTERNAL' };
+  const MPIM = { is_mpim: true };
+
+  it('allows a DM whose counterpart is in an allowed org', async () => {
+    await assertDmMemberAccess(
+      client({ teams: { U_EXTERNAL: 'T_OK' } }),
+      { ...rules, allowedOrgs: ['T_OK'] }, DM, 'D1',
+    );
+  });
+
+  it('denies a DM whose counterpart is in a non-allowed org', async () => {
+    // assertAccess alone lets this through — it cannot resolve the user's org.
+    await assert.rejects(
+      () => assertDmMemberAccess(
+        client({ teams: { U_EXTERNAL: 'T_OTHER' } }),
+        { ...rules, allowedOrgs: ['T_OK'] }, DM, 'D1',
+      ),
+      /organisation not in your allowed list/,
+    );
+  });
+
+  it('skips the DM lookup entirely when no org allowlist is configured', async () => {
+    let called = false;
+    const spy = { usersInfo: async () => { called = true; return { user: {} }; } } as any;
+    await assertDmMemberAccess(spy, rules, DM, 'D1');
+    assert.equal(called, false, 'must not spend an API call when the rule is off');
+  });
+
+  it('denies a group DM containing a blacklisted member', async () => {
+    // meta.user is unset for an mpim, so assertAccess's blacklist check is a
+    // no-op there — this is the only thing enforcing it.
+    await assert.rejects(
+      () => assertDmMemberAccess(
+        client({ members: ['U1', 'U_BAD'] }),
+        { ...rules, blacklistUsers: ['U_BAD'] }, MPIM, 'G1',
+      ),
+      /blacklisted user/,
+    );
+  });
+
+  it('denies a group DM containing a member from a non-allowed org', async () => {
+    await assert.rejects(
+      () => assertDmMemberAccess(
+        client({ members: ['U1', 'U2'], teams: { U1: 'T_OK', U2: 'T_OTHER' } }),
+        { ...rules, allowedOrgs: ['T_OK'] }, MPIM, 'G1',
+      ),
+      /non-allowed organisation/,
+    );
+  });
+
+  it('allows a group DM where every member checks out', async () => {
+    await assertDmMemberAccess(
+      client({ members: ['U1', 'U2'], teams: { U1: 'T_OK', U2: 'T_OK' } }),
+      { ...rules, allowedOrgs: ['T_OK'], blacklistUsers: ['U_BAD'] }, MPIM, 'G1',
+    );
+  });
+
+  it('leaves regular channels untouched', async () => {
+    let called = false;
+    const spy = {
+      usersInfo: async () => { called = true; return { user: {} }; },
+      conversationsMembers: async () => { called = true; return { members: [] }; },
+    } as any;
+    await assertDmMemberAccess(spy, { ...rules, allowedOrgs: ['T_OK'], blacklistUsers: ['U_BAD'] },
+      { is_im: false, is_mpim: false }, 'C1');
+    assert.equal(called, false);
+  });
+
+  it('propagates lookup failures so each caller picks its own posture', async () => {
+    // buildChannelFilter turns this into a denial; enforceAccess lets it pass.
+    const broken = { usersInfo: async () => { throw new Error('slack down'); } } as any;
+    await assert.rejects(
+      () => assertDmMemberAccess(broken, { ...rules, allowedOrgs: ['T_OK'] }, DM, 'D1'),
+      /slack down/,
+    );
   });
 });
