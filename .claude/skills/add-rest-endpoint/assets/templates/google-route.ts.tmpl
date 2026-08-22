@@ -1,0 +1,44 @@
+  // GET {{catalogPath}} - {{summary}}
+  // Mirrors the MCP tool `{{mcpToolName}}`. Returns raw upstream JSON.
+  // {{#staticSiblingNote}}Registered BEFORE /api/v1/{{service}}/:{{paramName}} so Express
+  // matches this static path first.{{/staticSiblingNote}}
+  app.get('{{expressPath}}', {{authMiddleware}}, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const {{paramName}} = req.params.{{paramName}} as string;
+      {{queryParams}}
+
+      const {{client}} = req.userSession!.{{sessionClient}};
+      const response = await {{client}}.{{sdkCall}}({
+        {{sdkArgs}}
+        fields: '{{fieldMask}}',
+      });
+
+      res.json(response.data);
+    } catch (err) {
+      console.error('Error in {{mcpToolName}} REST handler:', err);
+      sendUpstreamError(res, err, { notFound: '{{ResourceName}} not found', fallback: 'Failed to {{verbPhrase}}' });
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// Placeholders
+//   {{catalogPath}}      /api/v1/docs/{documentId}      (brace style, matches src/restCatalog.ts)
+//   {{expressPath}}      /api/v1/docs/:documentId       (colon style, same param names)
+//   {{authMiddleware}}   requireApiKey | requireDriveApiKey | requireSheetsApiKey | ...
+//   {{sessionClient}}    googleDocs | googleDrive | googleSheets | googleCalendar | ...
+//                        (or drop the line and build one:
+//                         google.drive({ version: 'v3', auth: req.userSession!.oauthClient }))
+//   {{queryParams}}      const limit = qint(req.query.limit, 50, { max: 200 });
+//                        const pageToken = qstr(req.query.pageToken) || undefined;
+//   {{fieldMask}}        narrow the Google `fields` mask — the data plane is about bytes
+//
+// Optional text rendering — only when the MCP server module already exports a
+// formatter, so REST text output cannot drift from the tool's output:
+//   const { formatX } = await import('../<provider>/server.js');
+//   respondNegotiated(req, res, response.data, () => formatX(response.data));
+//
+// Already imported at the top of webServer.ts: qstr, qint, sendUpstreamError,
+// negotiateFormat, google. `respondNegotiated` is exported from
+// ./restContent.js but NOT yet imported — widen the line-305 import if you
+// use it.
+// ---------------------------------------------------------------------------

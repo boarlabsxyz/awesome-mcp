@@ -25,6 +25,8 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/docs/recent',
   '/api/v1/docs/doc-123',
   '/api/v1/docs/doc-123/tabs',
+  '/api/v1/docs/doc-123/comments/comment-123',
+  '/api/v1/docs/doc-123/structure',
   '/api/v1/drive/shared-drives',
   '/api/v1/drive/folders/folder-123',
   '/api/v1/drive/files/file-123/permissions',
@@ -44,6 +46,10 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/drive/files/file-123/download',
   '/api/v1/gmail/messages/m-1/attachments/a-1',
   '/api/v1/clickup/workspaces/w-1/members',
+  '/api/v1/peopleforce/employees',
+  '/api/v1/peopleforce/employees/emp-123',
+  '/api/v1/peopleforce/departments',
+  '/api/v1/peopleforce/leave-requests',
 ];
 
 describe('REST data-plane: auth gate', () => {

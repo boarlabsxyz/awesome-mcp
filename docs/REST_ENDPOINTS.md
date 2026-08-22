@@ -40,6 +40,8 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `readGoogleDoc` | `GET /api/v1/docs/{documentId}` | live | Read a Google Doc (JSON or text via Accept) — _GET sibling of the existing POST /api/v1/docs/read. Default returns raw upstream Docs JSON; Accept: text/plain returns extracted body text._ |
 | `listDocumentTabs` | `GET /api/v1/docs/{documentId}/tabs` | live | List tabs in a Google Doc |
 | `listComments` | `GET /api/v1/docs/{documentId}/comments` | live | List comments on a Google Doc |
+| `getComment` | `GET /api/v1/docs/{documentId}/comments/{commentId}` | live | Get a single comment with its replies |
+| `inspectDocStructure` | `GET /api/v1/docs/{documentId}/structure` | live | Inspect the structure of a Google Doc — _Paragraph/table/section counts, headers and footers presence, tab hierarchy. Pass ?detailed=true for an element-by-element listing, ?tabId= to scope to one tab._ |
 
 ### Google Sheets (`sheets`)
 
@@ -147,10 +149,10 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 
 | MCP tool | REST endpoint | Status | Summary |
 |---|---|---|---|
-| `listEmployees` | `GET /api/v1/peopleforce/employees` | planned | List PeopleForce employees |
-| `getEmployee` | `GET /api/v1/peopleforce/employees/{employeeId}` | planned | Get a single PeopleForce employee |
-| `listDepartments` | `GET /api/v1/peopleforce/departments` | planned | List PeopleForce departments |
-| `listLeaveRequests` | `GET /api/v1/peopleforce/leave-requests` | planned | List PeopleForce leave requests |
+| `listEmployees` | `GET /api/v1/peopleforce/employees` | live | List PeopleForce employees |
+| `getEmployee` | `GET /api/v1/peopleforce/employees/{employeeId}` | live | Get a single PeopleForce employee |
+| `listDepartments` | `GET /api/v1/peopleforce/departments` | live | List PeopleForce departments |
+| `listLeaveRequests` | `GET /api/v1/peopleforce/leave-requests` | live | List PeopleForce leave requests |
 
 ### HubSpot (`hubspot`)
 
@@ -171,4 +173,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 81 endpoints.
+Catalog size: 83 endpoints.

@@ -114,6 +114,54 @@ export function assertAccess(rules: SlackAccessRules, meta: ChannelMeta): void {
 }
 
 /**
+ * The DM and group-DM checks assertAccess cannot make on its own, because they
+ * need API lookups.
+ *
+ * assertAccess only compares a 1-on-1 DM's counterpart against blacklistUsers —
+ * it cannot resolve that user's org, and for a group DM `meta.user` is normally
+ * unset, so even that comparison is a no-op there. Both gaps are covered here.
+ *
+ * Shared by enforceAccess (direct reads) and buildChannelFilter (search
+ * results). It used to live inline in enforceAccess only, which meant search
+ * was filtered by a weaker rule than a direct read of the same conversation.
+ * Keep it shared so the two cannot drift apart again.
+ *
+ * Throws UserError when access is denied. Lookup failures propagate as-is, so
+ * each caller picks its own posture: enforceAccess lets a failed lookup through,
+ * buildChannelFilter treats it as a denial.
+ */
+export async function assertDmMemberAccess(
+  client: SlackClient,
+  rules: SlackAccessRules,
+  meta: { is_im?: boolean; is_mpim?: boolean; user?: string },
+  channelId: string,
+): Promise<void> {
+  // 1-on-1 DM: the counterpart's org must be allowed.
+  if (meta.is_im && meta.user && rules.allowedOrgs.length > 0) {
+    const { user } = await client.usersInfo(meta.user);
+    if (user.team_id && !rules.allowedOrgs.includes(user.team_id)) {
+      throw new UserError('Access denied: this user belongs to an organisation not in your allowed list.');
+    }
+  }
+
+  // Group DM: no member may be blacklisted or from a non-allowed org.
+  if (meta.is_mpim && (rules.blacklistUsers.length > 0 || rules.allowedOrgs.length > 0)) {
+    const { members } = await client.conversationsMembers(channelId);
+    if (rules.blacklistUsers.length > 0 && members.some(uid => rules.blacklistUsers.includes(uid))) {
+      throw new UserError('Access denied: this group DM contains a blacklisted user.');
+    }
+    if (rules.allowedOrgs.length > 0) {
+      for (const uid of members) {
+        const { user } = await client.usersInfo(uid);
+        if (user.team_id && !rules.allowedOrgs.includes(user.team_id)) {
+          throw new UserError('Access denied: this group DM contains a user from a non-allowed organisation.');
+        }
+      }
+    }
+  }
+}
+
+/**
  * Filter DMs by org membership. Requires async user lookups.
  * Call after filterChannelList to remove DMs with users from non-allowed orgs.
  */

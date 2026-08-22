@@ -13,12 +13,12 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Drive](#google-drive) (15)
 - [Gmail](#gmail) (14)
 - [Google Slides](#google-slides) (6)
-- [ClickUp](#clickup) (43)
-- [Slack (bot)](#slack-bot-) (7)
-- [Slack (user)](#slack-user-) (7)
+- [ClickUp](#clickup) (45)
+- [Slack (bot)](#slack-bot-) (8)
+- [Slack (user)](#slack-user-) (15)
 - [Outline](#outline) (27)
-- [PeopleForce](#peopleforce) (38)
-- [HubSpot](#hubspot) (15)
+- [PeopleForce](#peopleforce) (45)
+- [HubSpot](#hubspot) (22)
 
 ## Shared (every server)
 
@@ -53,7 +53,7 @@ Source: `src/google-docs/server.ts` — 30 tools.
 | `insertLocalImage` | Inserts an image into a Google Document. Provide one of: (1) imageUrl — a public HTTP(S) URL to fetch, (2) driveFileId — ID of an image already in Google Drive, (3) localImagePath — absolute path for local/stdio deployments, or (4) imageBase64 + fileName — base64-encoded content for small images. | — |
 | `fixListFormatting` | EXPERIMENTAL: Attempts to detect paragraphs that look like lists (e.g., starting with -, *, 1.) and convert them to proper Google Docs bulleted or numbered lists. Best used on specific sections. | — |
 | `listComments` | Lists all comments in a Google Document. | `GET /api/v1/docs/{documentId}/comments` |
-| `getComment` | Gets a specific comment with its full thread of replies. | — |
+| `getComment` | Gets a specific comment with its full thread of replies. | `GET /api/v1/docs/{documentId}/comments/{commentId}` |
 | `addComment` | Adds a comment to a Google Document with quoted text context. NOTE: Due to Google Drive API limitations, comments cannot be anchored to specific text positions in Google Docs. The comment will appear in the Comments panel with the quoted text displayed, but won't highlight text in the document body. | — |
 | `replyToComment` | Adds a reply to an existing comment. | — |
 | `resolveComment` | Marks a comment as resolved. NOTE: Due to Google API limitations, the Drive API does not support resolving comments on Google Docs files. This operation will attempt to update the comment but the resolved status may not persist in the UI. Comments can be resolved manually in the Google Docs interface. | — |
@@ -61,7 +61,7 @@ Source: `src/google-docs/server.ts` — 30 tools.
 | `findElement` | NOT IMPLEMENTED — always throws. For text search use findAndReplace or formatMatchingText; for structure exploration use inspectDocStructure. | — |
 | `formatMatchingText` | Finds specific text within a Google Document and applies character formatting (bold, italics, color, etc.) to the specified instance. | — |
 | `findAndReplace` | Finds all occurrences of a text string in a Google Doc and replaces them. Returns the number of replacements made. | — |
-| `inspectDocStructure` | Analyzes and returns the structure of a Google Doc: paragraph/table/section counts, headers/footers presence, tab hierarchy. Use detailed mode for element-by-element listing. | — |
+| `inspectDocStructure` | Analyzes and returns the structure of a Google Doc: paragraph/table/section counts, headers/footers presence, tab hierarchy. Use detailed mode for element-by-element listing. | `GET /api/v1/docs/{documentId}/structure` |
 | `importDocx` | Converts a .docx file already in Google Drive into a Google Doc. Drive auto-converts the format. Returns the new Google Doc ID and link. | — |
 | `batchUpdateDoc` | Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Index-based operations are automatically sorted in descending order to prevent index shifting. | — |
 | `importToGoogleDoc` | Import content (text, HTML, or markdown) into a new Google Doc. Google Drive auto-converts the content to Google Docs format. | — |
@@ -156,7 +156,7 @@ Source: `src/google-slides/server.ts` — 6 tools.
 
 ## ClickUp
 
-Source: `src/clickup/server.ts` — 43 tools.
+Source: `src/clickup/server.ts` — 45 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -165,7 +165,7 @@ Source: `src/clickup/server.ts` — 43 tools.
 | `listSpaces` | List all spaces in a ClickUp workspace. | `GET /api/v1/clickup/workspaces/{workspaceId}/spaces` |
 | `listFolders` | List all folders in a ClickUp space. | `GET /api/v1/clickup/spaces/{spaceId}/folders` |
 | `listLists` | List all lists in a ClickUp folder, or folderless lists in a space. Provide either folderId or spaceId. | — |
-| `getTask` | Get detailed information about a specific ClickUp task by its ID. | `GET /api/v1/clickup/tasks/{taskId}` |
+| `getTask` | Get detailed information about a specific ClickUp task by its ID. Returns the FULL, untruncated description — use this (not the list tools, which show a bounded preview) when you need to read a ticket in full to summarize it, reuse it as a template, or check acceptance criteria. | `GET /api/v1/clickup/tasks/{taskId}` |
 | `listTasks` | List tasks in a ClickUp list with optional filters. To query tasks closed within a window, set closedAfter and/or closedBefore — the tool then forces include_closed, auto-paginates up to 2000 tasks, and filters locally on date_closed (ClickUp's REST API has no server-side close-date filter). | `GET /api/v1/clickup/lists/{listId}/tasks` |
 | `createTask` | Create a new task in a ClickUp list. | — |
 | `updateTask` | Update an existing ClickUp task. Only provided fields will be changed. | — |
@@ -199,6 +199,8 @@ Source: `src/clickup/server.ts` — 43 tools.
 | `getPage` | Get a specific page from a ClickUp Doc, including its full content in markdown. | `GET /api/v1/clickup/docs/{docId}/pages/{pageId}?workspaceId={workspaceId}` |
 | `createPage` | Create a new page in a ClickUp Doc. | — |
 | `editPage` | Edit a page in a ClickUp Doc. Can replace, append, or prepend content. | — |
+| `insertImageIntoPage` | Add an image to a ClickUp Doc page. Provide the image as EXACTLY ONE of imageUrl (a public http(s) URL — strongly preferred) or imageBase64 (base64 bytes, for SMALL images only — the payload consumes the calling model context, so use imageUrl whenever a public URL exists). The image is re-hosted (recompressed to WebP) and embedded as markdown (append by default). ClickUp has no image-upload API for docs, so the image is stored and served by this server — requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL. If imageUrl is already on this server, re-hosting is skipped automatically; pass skipRehost:true to force embedding the given URL as-is. | — |
+| `uploadClickUpDocImage` | Re-host an image on this server (recompressed to WebP) and return a public URL you can embed in a ClickUp Doc page as markdown (![](url)). Provide the image as EXACTLY ONE of imageUrl (a public http(s) URL — strongly preferred) or imageBase64 (base64 bytes, for SMALL images only — the payload consumes the calling model context, so use imageUrl whenever a public URL exists). Use this when you want the URL without immediately writing to a page; otherwise use insertImageIntoPage. Requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL to be configured. | — |
 | `listWorkspaceMembers` | List all members of a ClickUp workspace. Useful for looking up user IDs by name when assigning tasks. | `GET /api/v1/clickup/workspaces/{workspaceId}/members` |
 | `startTimeEntry` | Start a time tracking entry for a task in ClickUp. | — |
 | `stopTimeEntry` | Stop the currently running time tracking entry. | — |
@@ -206,13 +208,14 @@ Source: `src/clickup/server.ts` — 43 tools.
 
 ## Slack (bot)
 
-Source: `src/slack/server.ts` — 7 tools.
+Source: `src/slack/server.ts` — 8 tools.
 
 | Tool | Description | REST |
 |---|---|---|
 | `listChannels` | List Slack channels and DMs the bot is a member of. Includes public/private channels and 1-on-1 DMs. The bot only sees channels where it has been /invited. | `GET /api/v1/slack/channels` |
 | `readChannelHistory` | Read recent messages from a Slack channel. Returns messages in chronological order. | `GET /api/v1/slack/channels/{channelId}/messages` |
 | `readThreadReplies` | Read replies in a Slack thread. The first message is the thread parent. | `GET /api/v1/slack/channels/{channelId}/threads/{threadTs}` |
+| `downloadFile` | Download a file attached to a Slack message. Get the fileId from the 📎 lines in readChannelHistory or readThreadReplies output, and pass the channel you read it from. Images: format "url" (default) re-hosts the image at a public URL suitable for tools that take an image URL (e.g. insertImageFromUrl), format "inline" returns the image itself so you can look at it. Text files are returned as text; other file types return metadata only. | — |
 | `postMessage` | Post a message to a Slack channel. | — |
 | `replyInThread` | Reply to a thread in a Slack channel. | — |
 | `listUsers` | List workspace members. Use this to find a user by name and get their user ID for opening a DM. | `GET /api/v1/slack/users` |
@@ -220,17 +223,25 @@ Source: `src/slack/server.ts` — 7 tools.
 
 ## Slack (user)
 
-Source: `src/slack-user/server.ts` — 7 tools.
+Source: `src/slack-user/server.ts` — 15 tools.
 
 | Tool | Description | REST |
 |---|---|---|
 | `listChannels` | List Slack channels and DMs you have access to, filtered by your access rules. Use the "search" parameter to find a specific channel by name without paginating. | — |
 | `readChannelHistory` | Read recent messages from a Slack channel. Access rules are enforced. | — |
 | `readThreadReplies` | Read replies in a Slack thread. Access rules are enforced. | — |
+| `downloadFile` | Download a file attached to a Slack message. Get the fileId from the 📎 lines in readChannelHistory or readThreadReplies output, and pass the channel you read it from. Images: format "url" (default) re-hosts the image at a public URL suitable for tools that take an image URL (e.g. insertImageFromUrl), format "inline" returns the image itself so you can look at it. Text files are returned as text; other file types return metadata only. Access rules are enforced. | — |
+| `searchMessages` | Search Slack messages across the workspace by keyword. Use this instead of paging readChannelHistory when looking for a specific message. Supports Slack search operators in the query: in:#channel, from:@user, before:YYYY-MM-DD, after:YYYY-MM-DD, has:link. Access rules are enforced — matches in channels you are not allowed to read are removed from the results. | — |
+| `searchFiles` | Search files shared in Slack by name or content. Returns each file with its ID and the channels it is shared in — pass one of those channel IDs to downloadFile to fetch the content. Access rules are enforced: a file is shown only if at least one channel it is shared in is one you are allowed to read, and a file Slack reports no channel for is withheld (the response says how many, separately from rules denials). | — |
 | `postMessage` | Post a message to a Slack channel. | — |
 | `replyInThread` | Reply to a thread in a Slack channel. | — |
 | `listUsers` | List workspace members. Use this to find a user by name and get their user ID for opening a DM. | — |
 | `openDm` | Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage. | — |
+| `subscribeToChannelEvents` | Record interest in a Slack channel's events so they accrue in a durable store you can query later with getChannelEventHistory, instead of re-reading the channel and tracking your own watermark. IDEMPOTENT: re-calling for the same channel returns the existing subscription. Events are "message" (new messages and thread replies in channels and private channels; join/leave noise is excluded) and "reaction_added". Optionally set matchPattern to record only messages whose text contains it (case-insensitive substring). History accrues from this moment forward — for anything earlier use readChannelHistory. Requires the operator to have configured the Slack app's Event Subscriptions Request URL and SLACK_SIGNING_SECRET; run debugChannelEventSubscription if events do not arrive. Access rules are enforced. | — |
+| `listChannelEventSubscriptions` | List the Slack channel-event subscriptions you own, with their event types, match patterns and fail counts. Optionally narrow to one channel. | — |
+| `getChannelEventHistory` | Read the Slack events captured for a channel since you subscribed to it — the exact record of what happened, instead of re-reading the channel and filtering client-side. IMPORTANT: history only accrues from the moment subscribeToChannelEvents was called; the response reports that boundary, and for earlier windows you should fall back to readChannelHistory. If no subscription exists this reports that as a warning rather than an error, so a routine can fall back cleanly. Access rules are enforced on every call, so a channel that has since been denied stops returning history. | — |
+| `debugChannelEventSubscription` | Diagnose a channel-event subscription that reports success but is not accruing events. Reports the local record, whether SLACK_SIGNING_SECRET is configured, the Request URL the Slack app must be pointed at, whether you are actually a member of the channel (Slack does not deliver events for channels the installation is not in), and event-store counts — then lists the anomalies it found. Use when getChannelEventHistory stays empty. | — |
+| `unsubscribeFromChannelEvents` | Delete your channel-event subscription for a Slack channel. This also deletes the events captured for it, so history cannot be recovered by re-subscribing — a fresh subscription starts accruing from that moment. Nothing changes on Slack's side: event delivery is configured on the app, so other subscribers keep receiving events. | — |
 
 ## Outline
 
@@ -268,14 +279,14 @@ Source: `src/outline/server.ts` — 27 tools.
 
 ## PeopleForce
 
-Source: `src/peopleforce/server.ts` — 38 tools.
+Source: `src/peopleforce/server.ts` — 45 tools.
 
 | Tool | Description | REST |
 |---|---|---|
-| `listEmployees` | Lists PeopleForce employees, 50 per page (server-fixed). Use `page` to paginate; `status` narrows the cohort (e.g. "active", "terminated"). | — |
-| `getEmployee` | Retrieves a single PeopleForce employee by ID. Returns full profile: contact, position, department, division, employment type, location, reporting line, and hiring dates. | — |
-| `listDepartments` | Lists all PeopleForce departments, 50 per page (server-fixed). Use `page` to paginate. | — |
-| `listLeaveRequests` | Lists PeopleForce leave requests, 100 per page (server-fixed). Use `page` to paginate; `state` filters by lifecycle state (e.g. "pending", "approved", "declined"). PeopleForce's public API does NOT support server-side filtering by employee or date range — fetch pages and filter client-side if needed. | — |
+| `listEmployees` | Lists PeopleForce employees, 50 per page (server-fixed). Use `page` to paginate. IMPORTANT: omitting `status` returns ACTIVE employees only, not everyone — there is no "all" option, so a full headcount means one pass with status=active plus one with status=inactive. Use status=probation to get everyone currently on probation in a single call (a real server-side segment, no pagination needed). Each employee shows their probation end date and a derived probation state. Any tenant-defined custom fields are included per employee when the list payload carries them (field names and availability vary by tenant). | `GET /api/v1/peopleforce/employees` |
+| `getEmployee` | Retrieves a single PeopleForce employee by ID. Returns full profile: contact, position, department, division, employment type, location, reporting line, and hiring dates. Any tenant-defined custom fields the profile carries are shown under a Custom Fields section (field names and availability vary by tenant; the section is omitted when the record has none). | `GET /api/v1/peopleforce/employees/{employeeId}` |
+| `listDepartments` | Lists all PeopleForce departments, 50 per page (server-fixed). Use `page` to paginate. | `GET /api/v1/peopleforce/departments` |
+| `listLeaveRequests` | Lists PeopleForce leave requests, 100 per page (server-fixed). Use `page` to paginate; `state` filters by lifecycle state (e.g. "pending", "approved", "declined"). PeopleForce's public API does NOT support server-side filtering by employee or date range — fetch pages and filter client-side if needed. | `GET /api/v1/peopleforce/leave-requests` |
 | `createLeaveRequest` | Creates a new PeopleForce leave request (time off) for an employee against a specific leave-type ID. Call `listLeaveTypes` first if you need the ID. | — |
 | `getLeaveRequest` | Retrieves a single PeopleForce leave request by ID (state, dates, amount, employee, comment). | — |
 | `listLeaveTypes` | Lists PeopleForce leave types (Vacation, Sick, Sabbatical, etc.) with their IDs and time-tracking unit (days/hours). Call this to find the `leaveTypeId` needed for `createLeaveRequest`. | — |
@@ -292,6 +303,13 @@ Source: `src/peopleforce/server.ts` — 38 tools.
 | `listEmployeeDocuments` | Lists documents attached to a specific employee's profile. Payload shape is dumped as JSON since the public API doesn't document a fixed schema for this endpoint. | — |
 | `listEmployeeNotes` | Lists HR notes on a specific employee's profile. Payload dumped as JSON (undocumented shape). | — |
 | `listEmployeeEmergencyContacts` | Lists emergency contacts on a specific employee's profile. Payload dumped as JSON (undocumented shape). | — |
+| `listObjectives` | Lists performance objectives (OKRs) with owner, progress %, status, period, and key results. Use for development-goal analytics. Paginated (server-fixed page size). | — |
+| `listKeyPerformanceIndicators` | Lists key performance indicators (KPIs) with owner/scope (individual, department, division, location, company), progress %, and status. Paginated (server-fixed page size). | — |
+| `listKnowledgeBaseCategories` | Lists Knowledge Base ("Learning") categories with IDs. Call this to get the `categoryId` needed for listKnowledgeBaseArticles. Paginated (server-fixed page size). | — |
+| `listKnowledgeBaseArticles` | Lists Knowledge Base ("Learning") articles within a category (title, category, author, timestamps). Needs a `categoryId` from listKnowledgeBaseCategories. Paginated. | — |
+| `listEmployeeTables` | Lists PeopleForce employee custom tables (repeating-row profile sections, e.g. "Dev Sprint participation") with their columns and — critically — each table's `internal_name`, which getEmployeeTable needs. Server-fixed page size. | — |
+| `getEmployeeTable` | Retrieves the row-level data of one custom table for a specific employee — e.g. an employee's "Dev Sprint participation" rows (each row's columns and values). Needs the employee ID and the table's `internalName` (from listEmployeeTables). | — |
+| `getKnowledgeBaseArticle` | Retrieves a single Knowledge Base ("Learning") article by ID, including its full body text. | — |
 | `listVacancies` | Lists recruitment vacancies (job openings). Filter by `status` (drafting, opened, closed, held, cancelled, archived) and/or `tagIds`. Paginated (server-fixed page size). Use this to find the vacancy a candidate pipeline belongs to. | — |
 | `getVacancy` | Retrieves a single recruitment vacancy by ID, including its internal job description and pipeline stages. Use the description to match a candidate against the role. | — |
 | `listRecruitmentPipelines` | Lists recruitment pipelines and their stage definitions (with stage IDs). Call this to find the `pipelineStageId` needed for listCandidates or moveVacancyApplication. | — |
@@ -313,26 +331,33 @@ Source: `src/peopleforce/server.ts` — 38 tools.
 
 ## HubSpot
 
-Source: `src/hubspot/server.ts` — 15 tools.
+Source: `src/hubspot/server.ts` — 22 tools.
 
 | Tool | Description | REST |
 |---|---|---|
 | `createCompany` | Create a new company in HubSpot (skips creation if a company with the same name already exists). | — |
-| `getActiveCompanies` | Get most recently active companies from HubSpot (sorted by last-modified date). | — |
 | `getCompany` | Get a specific company by ID from HubSpot. | — |
 | `updateCompany` | Update an existing company record in HubSpot. | — |
 | `getCompanyActivity` | Get activity/engagement history (notes, emails, calls, meetings, tasks) for a specific company. | — |
 | `createContact` | Create a new contact in HubSpot (skips creation if a matching contact already exists). | — |
-| `getActiveContacts` | Get most recently active contacts from HubSpot (sorted by last-modified date). | — |
 | `getContact` | Get a specific contact by ID from HubSpot. | — |
 | `updateContact` | Update an existing contact record in HubSpot. | — |
+| `getDeal` | Get a specific deal by ID from HubSpot. | — |
+| `createDeal` | Create a new deal in HubSpot. Set dealstage/pipeline via properties (use listPipelines to resolve stage IDs). | — |
+| `updateDeal` | Update an existing deal record in HubSpot (e.g. move stage, change amount). | — |
+| `listPipelines` | List HubSpot deal pipelines and their stages (with stage IDs), so deal stage IDs can be resolved to human-readable names. | — |
 | `getRecentConversations` | Get recent conversation threads from HubSpot with their messages. | — |
 | `getTickets` | Get tickets from HubSpot based on configurable selection criteria. | — |
 | `getTicketConversationThreads` | Get conversation threads (and their messages) associated with a specific ticket. | — |
 | `getProperty` | Get details of a specific HubSpot property definition. | — |
 | `updateProperty` | Update a HubSpot property definition (e.g., add dropdown options). | — |
 | `createProperty` | Create a new custom property in HubSpot. | — |
+| `createNote` | Create a note and optionally attach it to a company, contact, or deal so it appears on that record's timeline. | — |
+| `createTask` | Create a task and optionally attach it to a company, contact, or deal. | — |
+| `logCall` | Log a call activity and optionally attach it to a company, contact, or deal. | — |
+| `logMeeting` | Log a meeting activity and optionally attach it to a company, contact, or deal. | — |
+| `deleteEngagement` | Delete a note, task, call, or meeting by ID — the cleanup counterpart to createNote/createTask/logCall/logMeeting. | — |
 
 ---
 
-**Grand total: 223 tools across 13 sections.**
+**Grand total: 247 tools across 13 sections.**

@@ -302,7 +302,7 @@ import { getOAuthState, deleteOAuthState, storeAuthCode, storeClient, getClient,
 import { createSession, getSession, deleteSession, Session } from './sessionStore.js';
 import { lookupRestToken } from './restTokenStore.js';
 import { mapSlackErrorToHttpStatus } from './slackErrorMapper.js';
-import { negotiateFormat } from './restContent.js';
+import { negotiateFormat, respondNegotiated } from './restContent.js';
 import { sendUpstreamError } from './restUpstreamError.js';
 import { qstr, qint } from '../util/queryParams.js';
 import { stripTrailingSlashes } from '../util/url.js';
@@ -465,6 +465,60 @@ export function registerClickUpWebhookIngest(app: express.Express): void {
         res.status(result.status).json(result.body);
       } catch (err: any) {
         console.error(`[clickup-ingest] handler crash: ${err?.message || err}`);
+        res.status(500).json({ error: 'Internal error' });
+      }
+    },
+  );
+}
+
+/**
+ * Mount the Slack Events API ingestion endpoint on any Express app.
+ *
+ * Same transport shape as registerClickUpWebhookIngest, and mounted at the same
+ * places for the same reason — an MCP-only pod without this route 404s every
+ * delivery, and Slack disables a Request URL that keeps failing. Slack's blast
+ * radius is worse than ClickUp's: one Request URL serves the whole workspace,
+ * so a disabled URL takes out every subscriber in every channel, not one user's
+ * digest.
+ *
+ * Design notes:
+ * - express.raw() so we see the exact bytes Slack signed. MUST be registered
+ *   before any global express.json() on the same app.
+ * - Auth is signature-only; the URL is public because Slack POSTs to it. Trust
+ *   comes from the v0 HMAC against SLACK_SIGNING_SECRET, plus the ±5-minute
+ *   replay window enforced in verifySlackSignature.
+ * - The url_verification handshake is answered by the same handler, after the
+ *   signature check, so saving the Request URL in Slack works with no special
+ *   casing here.
+ * - One structured JSON log line per delivery, greppable via [slack-ingest].
+ *   Never includes message text — see the eventHelpers module header.
+ */
+export function registerSlackEventsIngest(app: express.Express): void {
+  app.post(
+    '/webhooks/slack/inbound',
+    express.raw({ type: '*/*', limit: '1mb' }),
+    async (req, res) => {
+      try {
+        const store = await import('../slack/eventStore.js');
+        const { handleSlackEventIngest } = await import('../slack/eventHelpers.js');
+        const rawBody: Buffer = req.body instanceof Buffer ? req.body : Buffer.from(req.body as any);
+        const result = await handleSlackEventIngest(
+          rawBody,
+          {
+            signature: req.headers['x-slack-signature'] as string | undefined,
+            timestamp: req.headers['x-slack-request-timestamp'] as string | undefined,
+            retryNum: req.headers['x-slack-retry-num'] as string | undefined,
+          },
+          store,
+          process.env.SLACK_SIGNING_SECRET,
+        );
+        console.error(`[slack-ingest] ${JSON.stringify({
+          status: result.status,
+          ...result.logContext,
+        })}`);
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        console.error(`[slack-ingest] handler crash: ${err?.message || err}`);
         res.status(500).json({ error: 'Internal error' });
       }
     },
@@ -824,6 +878,10 @@ function registerSharedRoutes(app: express.Express): void {
   // Mounted here (before the global express.json()) so we can consume the raw
   // body. See registerClickUpWebhookIngest for the full design note.
   registerClickUpWebhookIngest(app);
+
+  // === Slack Events API ingestion (public, signature-verified) ===
+  // Same raw-body ordering requirement as the ClickUp route above.
+  registerSlackEventsIngest(app);
 
   // Public serve route for re-hosted ClickUp Doc images (unauthenticated).
   registerClickUpDocImageRoutes(app);
@@ -2578,6 +2636,13 @@ function registerRestApiRoutes(app: express.Express): void {
             // Outline uses its own session with outlineAccessToken
             const { createOutlineSession } = await import('../userSession.js');
             req.userSession = createOutlineSession(user, connection);
+          } else if (connection.provider === 'peopleforce') {
+            // PeopleForce uses its own session with peopleForceAccessToken.
+            // Without this branch the connection falls through to the Google
+            // OAuth path below and yields a session with no provider token —
+            // auth would pass and the handler would throw at call time.
+            const { createPeopleForceSession } = await import('../userSession.js');
+            req.userSession = createPeopleForceSession(user, connection);
           } else {
             const mcp = await getMcpCatalog(connection.mcpSlug);
             const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
@@ -2607,6 +2672,7 @@ function registerRestApiRoutes(app: express.Express): void {
   const requireSlidesApiKey = createServiceAuth('google-slides', 'slides');
   const requireClickUpApiKey = createServiceAuth('clickup', 'clickup');
   const requireSlackApiKey = createServiceAuth('slack-bot', 'slack');
+  const requirePeopleForceApiKey = createServiceAuth('peopleforce', 'peopleforce');
 
   // JSON body parser already added above for auth routes
 
@@ -2837,6 +2903,67 @@ function registerRestApiRoutes(app: express.Express): void {
       } else {
         res.status(500).json({ error: err.message || 'Failed to list comments' });
       }
+    }
+  });
+
+  // GET /api/v1/docs/:documentId/comments/:commentId - Get one comment + replies
+  // Same field mask and response shape as the list sibling above, so a caller
+  // can jq a single comment without special-casing the payload.
+  app.get('/api/v1/docs/:documentId/comments/:commentId', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const documentId = req.params.documentId as string;
+      const drive = google.drive({ version: 'v3', auth: req.userSession!.oauthClient });
+
+      const response = await drive.comments.get({
+        fileId: documentId,
+        commentId: req.params.commentId as string,
+        fields: 'id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime)',
+      });
+
+      const comment = response.data as any;
+      res.json({
+        documentId,
+        id: comment.id,
+        content: comment.content,
+        quotedText: comment.quotedFileContent?.value || null,
+        author: comment.author?.displayName || 'Unknown',
+        createdTime: comment.createdTime,
+        resolved: comment.resolved || false,
+        replies: (comment.replies || []).map((reply: any) => ({
+          id: reply.id,
+          content: reply.content,
+          author: reply.author?.displayName || 'Unknown',
+          createdTime: reply.createdTime,
+        })),
+      });
+    } catch (err) {
+      console.error('Error getting comment:', err);
+      sendUpstreamError(res, err, { notFound: 'Comment not found', fallback: 'Failed to get comment' });
+    }
+  });
+
+  // GET /api/v1/docs/:documentId/structure - Structure summary of a Google Doc.
+  // Optional query: ?detailed=true (element-by-element listing), ?tabId=.
+  // Reuses GDocsHelpers.parseDocStructure so this matches the inspectDocStructure
+  // MCP tool exactly rather than reimplementing the traversal.
+  app.get('/api/v1/docs/:documentId/structure', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const documentId = req.params.documentId as string;
+      const detailed = req.query.detailed === 'true';
+      const tabId = qstr(req.query.tabId) || undefined;
+
+      const docs = req.userSession!.googleDocs;
+      const docResponse = await docs.documents.get({ documentId, includeTabsContent: true });
+      if (!docResponse.data) {
+        res.status(404).json({ error: 'Document not found' });
+        return;
+      }
+
+      const { parseDocStructure } = await import('../google-docs/apiHelpers.js');
+      res.json(parseDocStructure(docResponse.data, detailed, tabId));
+    } catch (err) {
+      console.error('Error inspecting doc structure:', err);
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to inspect document structure' });
     }
   });
 
@@ -4683,6 +4810,87 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+
+  // === PeopleForce ===
+  // Bulk HRIS reads: the employee directory is ~260 records at 50/page, so a
+  // full headcount pull through the LLM context is exactly what this plane
+  // avoids. All four support ?format=text to get the same markdown the MCP
+  // tools render (see respondNegotiated) so the two surfaces can't drift.
+
+  // GET /api/v1/peopleforce/employees - List employees
+  // NOTE: omitting ?status returns ACTIVE employees only, not everyone —
+  // PeopleForce has no "all". A full headcount is status=active + status=inactive.
+  app.get('/api/v1/peopleforce/employees', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatEmployeeList, EMPLOYEE_STATUS_VALUES } = await import('../peopleforce/apiHelpers.js');
+      const status = qstr(req.query.status) || undefined;
+      // Validate against the allowlist rather than passing through: PeopleForce
+      // silently ignores an unknown status and returns the byte-identical
+      // default directory, so a typo would fail open with plausible wrong data.
+      if (status && !(EMPLOYEE_STATUS_VALUES as readonly string[]).includes(status)) {
+        res.status(400).json({ error: `status must be one of: ${EMPLOYEE_STATUS_VALUES.join(', ')}` });
+        return;
+      }
+      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listEmployees({
+        page: qint(req.query.page, 1, { min: 1 }),
+        status: status as any,
+      });
+      respondNegotiated(req, res, result, () => formatEmployeeList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce employees:', err);
+      sendUpstreamError(res, err, { notFound: 'Employees not found', fallback: 'Failed to list employees' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/employees/:employeeId - Get a single employee
+  app.get('/api/v1/peopleforce/employees/:employeeId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatEmployee } = await import('../peopleforce/apiHelpers.js');
+      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getEmployee(req.params.employeeId as string);
+      if (!result?.data) {
+        res.status(404).json({ error: 'Employee not found' });
+        return;
+      }
+      respondNegotiated(req, res, result, () => formatEmployee(result.data));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce employee:', err);
+      sendUpstreamError(res, err, { notFound: 'Employee not found', fallback: 'Failed to fetch employee' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/departments - List departments
+  app.get('/api/v1/peopleforce/departments', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatDepartmentList } = await import('../peopleforce/apiHelpers.js');
+      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listDepartments({ page: qint(req.query.page, 1, { min: 1 }) });
+      respondNegotiated(req, res, result, () => formatDepartmentList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce departments:', err);
+      sendUpstreamError(res, err, { notFound: 'Departments not found', fallback: 'Failed to list departments' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/leave-requests - List leave requests
+  // ?state filters by lifecycle state. PeopleForce has no server-side filter by
+  // employee or date range — page through and filter with jq.
+  app.get('/api/v1/peopleforce/leave-requests', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatLeaveRequestList } = await import('../peopleforce/apiHelpers.js');
+      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listLeaveRequests({
+        page: qint(req.query.page, 1, { min: 1 }),
+        state: qstr(req.query.state) || undefined,
+      });
+      respondNegotiated(req, res, result, () => formatLeaveRequestList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce leave requests:', err);
+      sendUpstreamError(res, err, { notFound: 'Leave requests not found', fallback: 'Failed to list leave requests' });
+    }
+  });
+
   // GET /api/v1/drive/files/:fileId/download - Stream file content
   // Google native types are exported (?exportMime= to override the default).
   // Other types are downloaded as-is via alt=media. Content-Type and a
@@ -4881,6 +5089,10 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
   // 404 and ClickUp fail_count climbed to 30 while nothing landed. Must be
   // registered BEFORE any express.json() on this app.
   registerClickUpWebhookIngest(app);
+
+  // Slack Events API ingestion. Mounted here for the same reason as the ClickUp
+  // route above: the Slack app's Request URL may point at this pod's domain.
+  registerSlackEventsIngest(app);
 
   // Public serve route for re-hosted ClickUp Doc images (unauthenticated).
   registerClickUpDocImageRoutes(app);

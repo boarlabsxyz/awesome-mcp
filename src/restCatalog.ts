@@ -38,6 +38,8 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'docs', method: 'GET', path: '/api/v1/docs/{documentId}', summary: 'Read a Google Doc (JSON or text via Accept)', mcpToolName: 'readGoogleDoc', openapiOperationId: 'readGoogleDoc', status: 'live', notes: 'GET sibling of the existing POST /api/v1/docs/read. Default returns raw upstream Docs JSON; Accept: text/plain returns extracted body text.' },
   { service: 'docs', method: 'GET', path: '/api/v1/docs/{documentId}/tabs', summary: 'List tabs in a Google Doc', mcpToolName: 'listDocumentTabs', openapiOperationId: 'listDocumentTabs', status: 'live' },
   { service: 'docs', method: 'GET', path: '/api/v1/docs/{documentId}/comments', summary: 'List comments on a Google Doc', mcpToolName: 'listComments', openapiOperationId: 'listComments', status: 'live' },
+  { service: 'docs', method: 'GET', path: '/api/v1/docs/{documentId}/comments/{commentId}', summary: 'Get a single comment with its replies', mcpToolName: 'getComment', openapiOperationId: 'getDocsComment', status: 'live' },
+  { service: 'docs', method: 'GET', path: '/api/v1/docs/{documentId}/structure', summary: 'Inspect the structure of a Google Doc', mcpToolName: 'inspectDocStructure', openapiOperationId: 'inspectDocStructure', status: 'live', notes: 'Paragraph/table/section counts, headers and footers presence, tab hierarchy. Pass ?detailed=true for an element-by-element listing, ?tabId= to scope to one tab.' },
 
   // -------- Google Sheets --------
   { service: 'sheets', method: 'GET', path: '/api/v1/sheets', summary: 'List spreadsheets', mcpToolName: 'listGoogleSheets', openapiOperationId: 'listSpreadsheets', status: 'live' },
@@ -121,12 +123,13 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'outline', method: 'GET', path: '/api/v1/outline/attachments/{attachmentId}/url', summary: 'Resolve an Outline attachment ID to a signed download URL', mcpToolName: 'getAttachmentUrl', openapiOperationId: 'getOutlineAttachmentUrl', status: 'planned' },
 
   // -------- PeopleForce --------
-  // Catalog-only for now: MCP tools ship in src/peopleforce/server.ts, but the
-  // /api/v1/peopleforce/* REST siblings are not yet wired in webServer.ts.
-  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/employees', summary: 'List PeopleForce employees', mcpToolName: 'listEmployees', openapiOperationId: 'listPeopleForceEmployees', status: 'planned' },
-  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/employees/{employeeId}', summary: 'Get a single PeopleForce employee', mcpToolName: 'getEmployee', openapiOperationId: 'getPeopleForceEmployee', status: 'planned' },
-  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/departments', summary: 'List PeopleForce departments', mcpToolName: 'listDepartments', openapiOperationId: 'listPeopleForceDepartments', status: 'planned' },
-  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/leave-requests', summary: 'List PeopleForce leave requests', mcpToolName: 'listLeaveRequests', openapiOperationId: 'listPeopleForceLeaveRequests', status: 'planned' },
+  // Wired in webServer.ts against requirePeopleForceApiKey. All four support
+  // ?format=text for the same markdown the MCP tools render. Remaining
+  // PeopleForce tools stay MCP-only until a bulk-read case justifies them.
+  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/employees', summary: 'List PeopleForce employees', mcpToolName: 'listEmployees', openapiOperationId: 'listPeopleForceEmployees', status: 'live' },
+  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/employees/{employeeId}', summary: 'Get a single PeopleForce employee', mcpToolName: 'getEmployee', openapiOperationId: 'getPeopleForceEmployee', status: 'live' },
+  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/departments', summary: 'List PeopleForce departments', mcpToolName: 'listDepartments', openapiOperationId: 'listPeopleForceDepartments', status: 'live' },
+  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/leave-requests', summary: 'List PeopleForce leave requests', mcpToolName: 'listLeaveRequests', openapiOperationId: 'listPeopleForceLeaveRequests', status: 'live' },
 
   // HubSpot (read-only tools). All planned until the /api/v1/hubspot/* routes are wired in webServer.ts.
   { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/companies', summary: 'Get most recently active HubSpot companies', mcpToolName: 'getActiveCompanies', openapiOperationId: 'getHubSpotActiveCompanies', status: 'planned' },

@@ -1,6 +1,7 @@
 // src/__tests__/peopleforce.test.ts
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { z } from 'zod';
 import { UserError } from 'fastmcp';
 import { peopleForceServer, isoDate, createLeaveRequestSchema } from '../peopleforce/server.js';
 import {
@@ -43,6 +44,8 @@ import {
   formatKnowledgeArticle,
   formatEmployeeTableList,
   formatEmployeeTable,
+  probationStatus,
+  EMPLOYEE_STATUS_VALUES,
 } from '../peopleforce/apiHelpers.js';
 
 // -----------------------------------------------------------------------------
@@ -1761,5 +1764,132 @@ describe('PeopleForceClient.getEmployeeTable', () => {
     assert.equal(table.rows?.length, 1);
     assert.equal(table.rows?.[0].id, 9);
     assert.match(stub.calls[0].url, /\/employees\/125556\/tables\/timeline$/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Probation status. Every expectation below mirrors behaviour verified live on
+// 2026-08-18 — see EMPLOYEE_STATUS_VALUES / PROBATION_STATUS_VALUES for the
+// raw findings these encode.
+// ---------------------------------------------------------------------------
+
+describe('probationStatus', () => {
+  const TODAY = '2026-08-18';
+
+  test('reports on_probation while the end date is still ahead', () => {
+    // Vlad Shynkar shape: hired 2026-07-22, probation ends 2026-10-22.
+    assert.equal(
+      probationStatus({ active: true, probation_ends_on: '2026-10-22' }, TODAY),
+      'on_probation',
+    );
+  });
+
+  test('treats the final day of probation as still on probation', () => {
+    assert.equal(
+      probationStatus({ active: true, probation_ends_on: TODAY }, TODAY),
+      'on_probation',
+    );
+  });
+
+  test('reports probation_passed once the date is behind and the employee is active', () => {
+    assert.equal(
+      probationStatus({ active: true, probation_ends_on: '2026-08-06' }, TODAY),
+      'probation_passed',
+    );
+  });
+
+  test('honours an extended probation rather than assuming hired + 90 days', () => {
+    // Sergey Smaglyuk shape: hired 2025-05-01, probation ends 2026-10-01 (17mo).
+    // A hired+90d heuristic would wrongly call this passed.
+    assert.equal(
+      probationStatus({ active: true, hired_on: '2025-05-01', probation_ends_on: '2026-10-01' }, TODAY),
+      'on_probation',
+    );
+  });
+
+  test('reports inactive — never passed or failed — for a departed employee', () => {
+    // Dan Skor shape: probation ended 2026-08-06, then went inactive. The date
+    // survives offboarding, but with no termination date the outcome is
+    // genuinely unknowable, so we must not claim he passed.
+    assert.equal(
+      probationStatus({ active: false, probation_ends_on: '2026-08-06' }, TODAY),
+      'inactive',
+    );
+  });
+
+  test('reports unknown for a null probation date instead of guessing passed', () => {
+    assert.equal(probationStatus({ active: true, probation_ends_on: null }, TODAY), 'unknown');
+    assert.equal(probationStatus({ active: true }, TODAY), 'unknown');
+  });
+
+  test('never emits the reserved probation_failed state', () => {
+    const cases = [
+      { active: true, probation_ends_on: '2026-10-22' },
+      { active: true, probation_ends_on: '2026-08-06' },
+      { active: false, probation_ends_on: '2026-08-06' },
+      { active: false },
+      {},
+    ];
+    for (const c of cases) {
+      assert.notEqual(probationStatus(c, TODAY), 'probation_failed');
+    }
+  });
+});
+
+describe('probation rendering', () => {
+  test('formatEmployee shows the date and the derived state', () => {
+    const out = formatEmployee({
+      id: 1, full_name: 'A B', active: true, probation_ends_on: '2026-10-22',
+    });
+    assert.match(out, /Probation ends: 2026-10-22/);
+    assert.match(out, /Probation: on probation \(derived\)/);
+  });
+
+  test('formatEmployeeList surfaces probation across the cohort', () => {
+    // The list view previously showed no probation at all, so a
+    // status=probation query returned rows you could not read.
+    const out = formatEmployeeList([
+      { id: 1, full_name: 'A B', active: true, probation_ends_on: '2026-10-22' },
+    ]);
+    assert.match(out, /Probation ends: 2026-10-22/);
+    assert.match(out, /Probation: on probation \(derived\)/);
+  });
+
+  test('stays quiet about probation when no date is set', () => {
+    // Contractors and tenants that do not use probation should not sprout a
+    // "Probation: not set" line on every row.
+    const out = formatEmployeeList([{ id: 1, full_name: 'A B', active: true }]);
+    assert.doesNotMatch(out, /Probation/);
+  });
+
+  test('labels a departed employee without claiming an outcome', () => {
+    const out = formatEmployee({
+      id: 1, full_name: 'A B', active: false, probation_ends_on: '2026-08-06',
+    });
+    assert.match(out, /Probation: inactive \(probation outcome not recorded by PeopleForce\)/);
+    assert.doesNotMatch(out, /passed/);
+  });
+});
+
+describe('listEmployees status allowlist', () => {
+  test('accepts only the three values the API actually honours', () => {
+    assert.deepEqual([...EMPLOYEE_STATUS_VALUES], ['active', 'probation', 'inactive']);
+  });
+
+  test('rejects the two values that misbehave upstream', () => {
+    const schema = z.enum(EMPLOYEE_STATUS_VALUES);
+    // on_probation is silently IGNORED by PeopleForce and returns the default
+    // directory — a typo would fail open with plausible-looking data.
+    assert.equal(schema.safeParse('on_probation').success, false);
+    // terminated resolves to a mixed active+inactive union, not a termination
+    // cohort.
+    assert.equal(schema.safeParse('terminated').success, false);
+  });
+
+  test('accepts each allowlisted value', () => {
+    const schema = z.enum(EMPLOYEE_STATUS_VALUES);
+    for (const v of EMPLOYEE_STATUS_VALUES) {
+      assert.equal(schema.safeParse(v).success, true, `${v} should be accepted`);
+    }
   });
 });

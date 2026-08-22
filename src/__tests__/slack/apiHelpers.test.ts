@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
-import { SlackClient } from '../../slack/apiHelpers.js';
+import { SlackClient, fileShareTargets } from '../../slack/apiHelpers.js';
 
 // We test SlackClient by mocking global fetch
 
@@ -201,6 +201,88 @@ describe('SlackClient', () => {
     });
   });
 
+  describe('searchMessages / searchFiles', () => {
+    function captureBody(response: any) {
+      const captured = { url: '', body: '' };
+      globalThis.fetch = (async (url: any, opts: any) => {
+        captured.url = url;
+        captured.body = opts.body;
+        return {
+          ok: true, status: 200,
+          headers: { get: () => null },
+          json: async () => response,
+        };
+      }) as any;
+      return captured;
+    }
+
+    it('should send the query and paging params form-encoded', async () => {
+      const captured = captureBody({ ok: true, query: 'grafana', messages: { total: 0, matches: [] } });
+      const client = new SlackClient('xoxp-test');
+      await client.searchMessages('grafana in:#general', { count: 5, page: 3, sort: 'timestamp', sortDir: 'asc' });
+
+      assert.ok(captured.url.endsWith('/search.messages'));
+      assert.ok(captured.body.includes(`query=${encodeURIComponent('grafana in:#general')}`));
+      assert.ok(captured.body.includes('count=5'));
+      assert.ok(captured.body.includes('page=3'));
+      assert.ok(captured.body.includes('sort=timestamp'));
+      assert.ok(captured.body.includes('sort_dir=asc'));
+    });
+
+    it('should default count and page, and omit unset sort params', async () => {
+      const captured = captureBody({ ok: true, query: 'x', messages: { total: 0, matches: [] } });
+      const client = new SlackClient('xoxp-test');
+      await client.searchMessages('x');
+
+      assert.ok(captured.body.includes('count=20'));
+      assert.ok(captured.body.includes('page=1'));
+      assert.ok(!captured.body.includes('sort='));
+      assert.ok(!captured.body.includes('sort_dir='));
+    });
+
+    it('should clamp count and page to Slack limits', async () => {
+      const captured = captureBody({ ok: true, query: 'x', messages: { total: 0, matches: [] } });
+      const client = new SlackClient('xoxp-test');
+      await client.searchMessages('x', { count: 5000, page: 0 });
+
+      assert.ok(captured.body.includes('count=100'));
+      assert.ok(captured.body.includes('page=1'));
+    });
+
+    it('should return message matches', async () => {
+      mockFetch({
+        ok: true, query: 'grafana',
+        messages: {
+          total: 1,
+          paging: { count: 20, total: 1, page: 1, pages: 1 },
+          matches: [{ channel: { id: 'C1', name: 'general' }, user: 'U1', ts: '1.0', text: 'dashboard is live', permalink: 'https://x/p1' }],
+        },
+      });
+      const client = new SlackClient('xoxp-test');
+      const result = await client.searchMessages('grafana');
+      assert.equal(result.messages.matches.length, 1);
+      assert.equal(result.messages.matches[0].channel.name, 'general');
+    });
+
+    it('should hit search.files and return file matches', async () => {
+      const captured = captureBody({
+        ok: true, query: 'png',
+        files: { total: 1, matches: [{ id: 'F1', name: 'chart.png', mimetype: 'image/png', channels: ['C1'] }] },
+      });
+      const client = new SlackClient('xoxp-test');
+      const result = await client.searchFiles('png');
+
+      assert.ok(captured.url.endsWith('/search.files'));
+      assert.equal(result.files.matches[0].id, 'F1');
+    });
+
+    it('should surface Slack ok:false errors like every other method', async () => {
+      mockFetch({ ok: false, error: 'missing_scope' });
+      const client = new SlackClient('xoxb-bot-token');
+      await assert.rejects(() => client.searchMessages('x'), { message: /missing_scope/ });
+    });
+  });
+
   describe('conversationsReplies', () => {
     it('should return messages', async () => {
       mockFetch({ ok: true, messages: [{ text: 'reply', ts: '1.0' }], has_more: false });
@@ -306,5 +388,57 @@ describe('SlackClient', () => {
       await client.conversationsListAll();
       assert.ok(capturedUrl.includes('conversations.list'));
     });
+  });
+});
+
+describe('fileShareTargets', () => {
+  it('unions the flat channels/groups/ims arrays', () => {
+    const targets = fileShareTargets({ id: 'F1', channels: ['C1'], groups: ['G1'], ims: ['D1'] });
+    assert.deepEqual([...targets].sort(), ['C1', 'D1', 'G1']);
+  });
+
+  it('also reads the newer shares map', () => {
+    // Slack has been moving to shares.public/shares.private; missing this shape
+    // would make every share check come up empty and deny valid downloads.
+    const targets = fileShareTargets({
+      id: 'F1',
+      shares: { public: { C9: [{ ts: '1.0' }] }, private: { D7: [{ ts: '2.0' }] } },
+    });
+    assert.deepEqual([...targets].sort(), ['C9', 'D7']);
+  });
+
+  it('is empty when a file is shared nowhere the token can see', () => {
+    assert.equal(fileShareTargets({ id: 'F1' }).size, 0);
+  });
+});
+
+describe('SlackClient.filesInfo', () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => { originalFetch = globalThis.fetch; });
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  it('returns the file object', async () => {
+    globalThis.fetch = (async () => ({
+      ok: true, status: 200,
+      headers: { get: () => null },
+      json: async () => ({ ok: true, file: { id: 'F1', name: 'shot.png', channels: ['C1'] } }),
+      text: async () => '',
+    })) as any;
+    const client = new SlackClient('xoxb-test-token');
+    const { file } = await client.filesInfo('F1');
+    assert.equal(file.id, 'F1');
+    assert.equal(file.name, 'shot.png');
+  });
+
+  it('throws a UserError naming the Slack error code', async () => {
+    globalThis.fetch = (async () => ({
+      ok: true, status: 200,
+      headers: { get: () => null },
+      json: async () => ({ ok: false, error: 'file_not_found' }),
+      text: async () => '',
+    })) as any;
+    const client = new SlackClient('xoxb-test-token');
+    await assert.rejects(() => client.filesInfo('F_BAD'), { message: /file_not_found/ });
   });
 });
