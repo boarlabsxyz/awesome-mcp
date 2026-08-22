@@ -4812,6 +4812,22 @@ function registerRestApiRoutes(app: express.Express): void {
 
 
   // === PeopleForce ===
+  // Every PeopleForce route resolves its token through this guard first.
+  // createServiceAuth falls back to a plain Google session when the user has no
+  // PeopleForce connection, so auth can pass with no provider token at all —
+  // without the check we would build a client with an undefined bearer and
+  // surface a confusing upstream 401 instead of "connect PeopleForce".
+  // peopleForceBaseUrl is deliberately NOT required: it is optional, and
+  // PeopleForceClient falls back to the default tenant base when it is absent.
+  function peopleForceToken(req: ApiAuthenticatedRequest, res: Response): string | null {
+    const token = req.userSession?.peopleForceAccessToken;
+    if (!token) {
+      res.status(403).json({ error: 'PeopleForce connection required for REST. Connect via the dashboard.' });
+      return null;
+    }
+    return token;
+  }
+
   // Bulk HRIS reads: the employee directory is ~260 records at 50/page, so a
   // full headcount pull through the LLM context is exactly what this plane
   // avoids. All four support ?format=text to get the same markdown the MCP
@@ -4831,7 +4847,9 @@ function registerRestApiRoutes(app: express.Express): void {
         res.status(400).json({ error: `status must be one of: ${EMPLOYEE_STATUS_VALUES.join(', ')}` });
         return;
       }
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.listEmployees({
         page: qint(req.query.page, 1, { min: 1 }),
         status: status as any,
@@ -4847,7 +4865,9 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/peopleforce/employees/:employeeId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { PeopleForceClient, formatEmployee } = await import('../peopleforce/apiHelpers.js');
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.getEmployee(req.params.employeeId as string);
       if (!result?.data) {
         res.status(404).json({ error: 'Employee not found' });
@@ -4864,7 +4884,9 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/peopleforce/departments', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { PeopleForceClient, formatDepartmentList } = await import('../peopleforce/apiHelpers.js');
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.listDepartments({ page: qint(req.query.page, 1, { min: 1 }) });
       respondNegotiated(req, res, result, () => formatDepartmentList(result.data ?? [], result.metadata?.pagination));
     } catch (err: any) {
@@ -4879,7 +4901,9 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/peopleforce/leave-requests', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { PeopleForceClient, formatLeaveRequestList } = await import('../peopleforce/apiHelpers.js');
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.listLeaveRequests({
         page: qint(req.query.page, 1, { min: 1 }),
         state: qstr(req.query.state) || undefined,
@@ -4895,7 +4919,9 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/peopleforce/leave-requests/:leaveRequestId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { PeopleForceClient, formatLeaveRequestList } = await import('../peopleforce/apiHelpers.js');
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.getLeaveRequest(req.params.leaveRequestId as string);
       if (!result?.data) {
         res.status(404).json({ error: 'Leave request not found' });
@@ -5045,7 +5071,9 @@ function registerRestApiRoutes(app: express.Express): void {
     app.get(route.path, requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
       try {
         const helpers = await import('../peopleforce/apiHelpers.js');
-        const client = new helpers.PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+        const token = peopleForceToken(req, res);
+        if (!token) return;
+        const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
         const result = await route.fetch(client, qint(req.query.page, 1, { min: 1 }));
         respondNegotiated(req, res, result, () => route.format(helpers, result));
       } catch (err: any) {
@@ -5105,7 +5133,9 @@ function registerRestApiRoutes(app: express.Express): void {
     app.get(route.path, requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
       try {
         const helpers = await import('../peopleforce/apiHelpers.js');
-        const client = new helpers.PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+        const token = peopleForceToken(req, res);
+        if (!token) return;
+        const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
         const result = await route.fetch(client, req.params.employeeId as string);
         respondNegotiated(req, res, result, () => route.format(helpers, result));
       } catch (err: any) {
@@ -5122,7 +5152,9 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/peopleforce/employees/:employeeId/tables/:tableInternalName', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { PeopleForceClient, formatEmployeeTable } = await import('../peopleforce/apiHelpers.js');
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.getEmployeeTable(req.params.employeeId as string, req.params.tableInternalName as string);
       if (!result || typeof result !== 'object') {
         res.status(404).json({ error: 'Employee table not found' });
@@ -5149,7 +5181,9 @@ function registerRestApiRoutes(app: express.Express): void {
         res.status(400).json({ error: 'categoryId query parameter is required' });
         return;
       }
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.listKnowledgeBaseArticles({ categoryId, page: qint(req.query.page, 1, { min: 1 }) });
       respondNegotiated(req, res, result, () => formatKnowledgeArticleList(result.data ?? [], result.metadata?.pagination));
     } catch (err: any) {
@@ -5162,7 +5196,9 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/peopleforce/knowledge-base/articles/:articleId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { PeopleForceClient, formatKnowledgeArticle } = await import('../peopleforce/apiHelpers.js');
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.getKnowledgeBaseArticle(req.params.articleId as string);
       if (!result?.data) {
         res.status(404).json({ error: 'Knowledge base article not found' });
@@ -5181,7 +5217,9 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/peopleforce/recruitment/vacancies', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { PeopleForceClient, formatVacancyList } = await import('../peopleforce/apiHelpers.js');
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.listVacancies({
         page: qint(req.query.page, 1, { min: 1 }),
         status: qarr(req.query.status),
@@ -5198,7 +5236,9 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/peopleforce/recruitment/vacancies/:vacancyId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { PeopleForceClient, formatVacancy } = await import('../peopleforce/apiHelpers.js');
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.getVacancy(req.params.vacancyId as string);
       if (!result?.data) {
         res.status(404).json({ error: 'Vacancy not found' });
@@ -5215,7 +5255,9 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { PeopleForceClient, formatApplicationList } = await import('../peopleforce/apiHelpers.js');
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.listVacancyApplications({
         vacancyId: req.params.vacancyId as string,
         page: qint(req.query.page, 1, { min: 1 }),
@@ -5231,7 +5273,9 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications/:applicationId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { PeopleForceClient, formatApplicationList } = await import('../peopleforce/apiHelpers.js');
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.getVacancyApplication({
         vacancyId: req.params.vacancyId as string,
         applicationId: req.params.applicationId as string,
@@ -5253,7 +5297,9 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/peopleforce/recruitment/published-vacancies/:vacancyId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { PeopleForceClient, formatPublishedVacancy } = await import('../peopleforce/apiHelpers.js');
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.getPublishedVacancy(req.params.vacancyId as string);
       respondNegotiated(req, res, result, () => formatPublishedVacancy(result));
     } catch (err: any) {
@@ -5268,7 +5314,9 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/peopleforce/recruitment/candidates', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { PeopleForceClient, formatCandidateList } = await import('../peopleforce/apiHelpers.js');
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.listCandidates({
         page: qint(req.query.page, 1, { min: 1 }),
         vacancyIds: qarr(req.query.vacancyIds),
@@ -5291,7 +5339,9 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/peopleforce/recruitment/candidates/:candidateId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { PeopleForceClient, formatCandidate } = await import('../peopleforce/apiHelpers.js');
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.getCandidate(req.params.candidateId as string);
       if (!result?.data) {
         res.status(404).json({ error: 'Candidate not found' });
@@ -5311,7 +5361,9 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/peopleforce/recruitment/candidates/:candidateId/dossier', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { PeopleForceClient, formatCandidateDossier } = await import('../peopleforce/apiHelpers.js');
-      const client = new PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.getCandidateDossier({
         candidateId: req.params.candidateId as string,
         vacancyId: qstr(req.query.vacancyId) || undefined,
@@ -5358,7 +5410,9 @@ function registerRestApiRoutes(app: express.Express): void {
     app.get(route.path, requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
       try {
         const helpers = await import('../peopleforce/apiHelpers.js');
-        const client = new helpers.PeopleForceClient(req.userSession!.peopleForceAccessToken!, req.userSession!.peopleForceBaseUrl);
+        const token = peopleForceToken(req, res);
+        if (!token) return;
+        const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
         const result = await route.fetch(client, req.params.candidateId as string);
         respondNegotiated(req, res, result, () => route.format(helpers, result));
       } catch (err: any) {

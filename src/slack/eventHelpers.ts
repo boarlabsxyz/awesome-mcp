@@ -244,6 +244,7 @@ export type IngestBranch =
   | 'unparseable-event'
   | 'no-subscription'
   | 'no-match'
+  | 'lookup-failed'
   | 'insert-failed';
 
 /**
@@ -371,7 +372,22 @@ export async function handleSlackEventIngest(
   baseCtx.teamId = event.teamId;
   baseCtx.channelId = event.channelId;
 
-  const subs = await store.findSubscriptionsForChannel(event.teamId, event.channelId);
+  let subs: SlackEventSubscription[];
+  try {
+    subs = await store.findSubscriptionsForChannel(event.teamId, event.channelId);
+  } catch (err: any) {
+    console.error(`[slack-ingest] subscription lookup failure for event ${event.eventId}:`, err?.message || err);
+    // Same reasoning as the insert-failure branch below: a DB blip is ours, and
+    // letting this reach the route's 500 would risk Slack disabling the Request
+    // URL for every subscriber in the workspace. No fail-count bump — we never
+    // learned which subscriptions were involved.
+    return {
+      status: 200,
+      body: { ok: true },
+      insertedEventCount: 0,
+      logContext: { ...baseCtx, branch: 'lookup-failed', matchedSubscriptions: 0, insertedEventCount: 0 },
+    };
+  }
   if (subs.length === 0) {
     return { status: 200, body: { ok: true }, logContext: { ...baseCtx, branch: 'no-subscription', matchedSubscriptions: 0 } };
   }

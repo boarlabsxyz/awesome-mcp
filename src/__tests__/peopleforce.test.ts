@@ -1777,7 +1777,7 @@ describe('probationStatus', () => {
   const TODAY = '2026-08-18';
 
   test('reports on_probation while the end date is still ahead', () => {
-    // Vlad Shynkar shape: hired 2026-07-22, probation ends 2026-10-22.
+    // Recent hire: probation configured to end roughly three months out.
     assert.equal(
       probationStatus({ active: true, probation_ends_on: '2026-10-22' }, TODAY),
       'on_probation',
@@ -1799,8 +1799,8 @@ describe('probationStatus', () => {
   });
 
   test('honours an extended probation rather than assuming hired + 90 days', () => {
-    // Sergey Smaglyuk shape: hired 2025-05-01, probation ends 2026-10-01 (17mo).
-    // A hired+90d heuristic would wrongly call this passed.
+    // Extended probation: a ~17-month span, well beyond the default. A
+    // hired+90d heuristic would wrongly call this passed.
     assert.equal(
       probationStatus({ active: true, hired_on: '2025-05-01', probation_ends_on: '2026-10-01' }, TODAY),
       'on_probation',
@@ -1808,9 +1808,9 @@ describe('probationStatus', () => {
   });
 
   test('reports inactive — never passed or failed — for a departed employee', () => {
-    // Dan Skor shape: probation ended 2026-08-06, then went inactive. The date
+    // Departed employee whose probation date is already behind them. The date
     // survives offboarding, but with no termination date the outcome is
-    // genuinely unknowable, so we must not claim he passed.
+    // genuinely unknowable, so we must not claim they passed.
     assert.equal(
       probationStatus({ active: false, probation_ends_on: '2026-08-06' }, TODAY),
       'inactive',
@@ -1837,21 +1837,30 @@ describe('probationStatus', () => {
 });
 
 describe('probation rendering', () => {
+  // formatEmployee/formatEmployeeList take no `today` argument — they fall
+  // through to probationStatus's `new Date()` default. A hard-coded future date
+  // would therefore start rendering "probation passed" the day it went by, so
+  // derive one at run time instead.
+  const futureDate = (): string =>
+    new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
   test('formatEmployee shows the date and the derived state', () => {
+    const endsOn = futureDate();
     const out = formatEmployee({
-      id: 1, full_name: 'A B', active: true, probation_ends_on: '2026-10-22',
+      id: 1, full_name: 'A B', active: true, probation_ends_on: endsOn,
     });
-    assert.match(out, /Probation ends: 2026-10-22/);
+    assert.match(out, new RegExp(`Probation ends: ${endsOn}`));
     assert.match(out, /Probation: on probation \(derived\)/);
   });
 
   test('formatEmployeeList surfaces probation across the cohort', () => {
     // The list view previously showed no probation at all, so a
     // status=probation query returned rows you could not read.
+    const endsOn = futureDate();
     const out = formatEmployeeList([
-      { id: 1, full_name: 'A B', active: true, probation_ends_on: '2026-10-22' },
+      { id: 1, full_name: 'A B', active: true, probation_ends_on: endsOn },
     ]);
-    assert.match(out, /Probation ends: 2026-10-22/);
+    assert.match(out, new RegExp(`Probation ends: ${endsOn}`));
     assert.match(out, /Probation: on probation \(derived\)/);
   });
 
