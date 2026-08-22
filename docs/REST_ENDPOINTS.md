@@ -153,6 +153,43 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `getEmployee` | `GET /api/v1/peopleforce/employees/{employeeId}` | live | Get a single PeopleForce employee |
 | `listDepartments` | `GET /api/v1/peopleforce/departments` | live | List PeopleForce departments |
 | `listLeaveRequests` | `GET /api/v1/peopleforce/leave-requests` | live | List PeopleForce leave requests |
+| `getLeaveRequest` | `GET /api/v1/peopleforce/leave-requests/{leaveRequestId}` | live | Get a single PeopleForce leave request |
+| `listLeaveTypes` | `GET /api/v1/peopleforce/leave-types` | live | List PeopleForce leave types with their IDs |
+| `listPositions` | `GET /api/v1/peopleforce/positions` | live | List PeopleForce job positions |
+| `listDivisions` | `GET /api/v1/peopleforce/divisions` | live | List PeopleForce divisions |
+| `listLocations` | `GET /api/v1/peopleforce/locations` | live | List PeopleForce locations |
+| `listEmploymentTypes` | `GET /api/v1/peopleforce/employment-types` | live | List PeopleForce employment types |
+| `listJobLevels` | `GET /api/v1/peopleforce/job-levels` | live | List PeopleForce job levels |
+| `listSkills` | `GET /api/v1/peopleforce/skills` | live | List the PeopleForce workspace skills catalog |
+| `listCompetencies` | `GET /api/v1/peopleforce/competencies` | live | List PeopleForce competencies |
+| `listTasks` | `GET /api/v1/peopleforce/tasks` | live | List PeopleForce tasks |
+| `listEmployeeLeaveBalances` | `GET /api/v1/peopleforce/employees/{employeeId}/leave-balances` | live | List an employee current leave balances per leave type |
+| `listEmployeeSkills` | `GET /api/v1/peopleforce/employees/{employeeId}/skills` | live | List the skills recorded on an employee profile — _No bulk endpoint upstream - a company-wide skills portfolio is one call per employee._ |
+| `listEmployeeDocuments` | `GET /api/v1/peopleforce/employees/{employeeId}/documents` | live | List documents attached to an employee profile |
+| `listEmployeeNotes` | `GET /api/v1/peopleforce/employees/{employeeId}/notes` | live | List HR notes on an employee profile |
+| `listEmployeeEmergencyContacts` | `GET /api/v1/peopleforce/employees/{employeeId}/emergency-contacts` | live | List emergency contacts on an employee profile |
+| `listEmployeeTables` | `GET /api/v1/peopleforce/employee-tables` | live | List PeopleForce employee custom-table definitions — _Returns each table internal_name - the value the per-employee table read requires._ |
+| `getEmployeeTable` | `GET /api/v1/peopleforce/employees/{employeeId}/tables/{tableInternalName}` | live | Get one employee custom-table row data — _tableInternalName is a system slug from the employee-tables list - never guess it from the display name._ |
+| `listObjectives` | `GET /api/v1/peopleforce/objectives` | live | List PeopleForce performance objectives (OKRs) — _No server-side date filter upstream - filter by period client-side._ |
+| `listKeyPerformanceIndicators` | `GET /api/v1/peopleforce/kpis` | live | List PeopleForce key performance indicators |
+| `listKnowledgeBaseCategories` | `GET /api/v1/peopleforce/knowledge-base/categories` | live | List PeopleForce knowledge base categories |
+| `listKnowledgeBaseArticles` | `GET /api/v1/peopleforce/knowledge-base/articles?categoryId={categoryId}` | live | List knowledge base articles in a category — _categoryId is required - upstream only exposes articles nested under a category._ |
+| `getKnowledgeBaseArticle` | `GET /api/v1/peopleforce/knowledge-base/articles/{articleId}` | live | Get a single knowledge base article with its body |
+| `listVacancies` | `GET /api/v1/peopleforce/recruitment/vacancies` | live | List PeopleForce recruitment vacancies — _status and tagIds are repeatable or comma-separated query params._ |
+| `getVacancy` | `GET /api/v1/peopleforce/recruitment/vacancies/{vacancyId}` | live | Get a single recruitment vacancy with its pipeline stages |
+| `listVacancyApplications` | `GET /api/v1/peopleforce/recruitment/vacancies/{vacancyId}/applications` | live | List the applications on a recruitment vacancy |
+| `getVacancyApplication` | `GET /api/v1/peopleforce/recruitment/vacancies/{vacancyId}/applications/{applicationId}` | live | Get a single vacancy application |
+| `listRecruitmentPipelines` | `GET /api/v1/peopleforce/recruitment/pipelines` | live | List recruitment pipelines and their stage definitions |
+| `listCandidates` | `GET /api/v1/peopleforce/recruitment/candidates` | live | List recruitment candidates with filters — _vacancyIds and skills are repeatable or comma-separated query params._ |
+| `getCandidate` | `GET /api/v1/peopleforce/recruitment/candidates/{candidateId}` | live | Get a single recruitment candidate profile |
+| `listCandidateNotes` | `GET /api/v1/peopleforce/recruitment/candidates/{candidateId}/notes` | live | List recruiter notes on a candidate — _Notes are the only free-text feedback surface - upstream has no scorecard endpoint._ |
+| `listCandidateExperiences` | `GET /api/v1/peopleforce/recruitment/candidates/{candidateId}/experiences` | live | List a candidate work experience entries |
+| `listCandidateEducations` | `GET /api/v1/peopleforce/recruitment/candidates/{candidateId}/educations` | live | List a candidate education entries |
+| `getCandidateDossier` | `GET /api/v1/peopleforce/recruitment/candidates/{candidateId}/dossier` | live | Assemble a candidate dossier for assessment in one call — _Best-effort bundle - parts that fail to load are reported in the payload rather than failing the request._ |
+| `listCandidateMovements` | `GET /api/v1/peopleforce/recruitment/candidate-movements` | live | List candidate pipeline stage transitions |
+| `listDisqualifyReasons` | `GET /api/v1/peopleforce/recruitment/disqualify-reasons` | live | List recruitment disqualify reasons with their IDs |
+| `listRecruitmentSources` | `GET /api/v1/peopleforce/recruitment/sources` | live | List recruitment sources with their IDs |
+| `getPublishedJobDescription` | `GET /api/v1/peopleforce/recruitment/published-vacancies/{vacancyId}` | live | Get the public careers-site job description for a vacancy — _Some tenants gate the Careers API behind a separate token - fall back to the vacancy description on a not-authorized error._ |
 
 ### HubSpot (`hubspot`)
 
@@ -173,4 +210,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 83 endpoints.
+Catalog size: 120 endpoints.

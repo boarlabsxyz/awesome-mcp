@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { qstr, qint } from '../util/queryParams.js';
+import { qstr, qint, qarr } from '../util/queryParams.js';
 
 describe('qstr', () => {
   it('returns the value when it is a string', () => {
@@ -64,5 +64,36 @@ describe('qint', () => {
 
   it('falls back when value is empty string', () => {
     assert.equal(qint('', 5), 5);
+  });
+});
+
+describe('qarr', () => {
+  it('wraps a single string value', () => {
+    assert.deepEqual(qarr('opened'), ['opened']);
+  });
+
+  it('keeps a repeated param as an array', () => {
+    assert.deepEqual(qarr(['opened', 'closed']), ['opened', 'closed']);
+  });
+
+  it('splits a comma-separated string', () => {
+    assert.deepEqual(qarr('opened,closed'), ['opened', 'closed']);
+  });
+
+  it('trims whitespace and drops empty segments', () => {
+    assert.deepEqual(qarr('opened, closed ,,'), ['opened', 'closed']);
+  });
+
+  it('returns undefined when nothing usable is present', () => {
+    assert.equal(qarr(undefined), undefined);
+    assert.equal(qarr(''), undefined);
+    assert.equal(qarr([]), undefined);
+  });
+
+  // The ?foo[bar]=baz case qstr guards against: drop it rather than
+  // stringifying it to '[object Object]'.
+  it('drops non-string entries instead of stringifying them', () => {
+    assert.equal(qarr({ bar: 'baz' }), undefined);
+    assert.deepEqual(qarr(['opened', { bar: 'baz' }]), ['opened']);
   });
 });
