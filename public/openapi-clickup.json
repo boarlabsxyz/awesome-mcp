@@ -1643,8 +1643,8 @@
     "/api/v1/clickup/workspaces/{workspaceId}/docs": {
       "get": {
         "operationId": "listDocs",
-        "summary": "List docs",
-        "description": "Lists all docs in a workspace.",
+        "summary": "List one page of docs",
+        "description": "Lists one page of docs in a workspace, in ClickUp's own order (oldest first). Returns nextCursor when more pages exist. To find a doc by name across the whole workspace, use the /docs/search sibling.",
         "parameters": [
           {
             "name": "workspaceId",
@@ -1654,6 +1654,27 @@
               "type": "string"
             },
             "description": "The workspace ID"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 100,
+              "default": 100
+            },
+            "description": "Docs per page (10-100, default 100)"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pagination cursor from a previous response"
           }
         ],
         "responses": {
@@ -1701,8 +1722,8 @@
     "/api/v1/clickup/workspaces/{workspaceId}/docs/search": {
       "get": {
         "operationId": "searchDocs",
-        "summary": "Search docs",
-        "description": "Searches for docs in a workspace.",
+        "summary": "Search docs by name",
+        "description": "Finds docs by name across the entire workspace, newest first, paging through all docs internally. Matching is case-insensitive and token-based: every word in the query must appear in the title, in any order. The response carries totalScanned, pagesScanned, hitCap and rateLimited so an empty result can be told apart from an incomplete scan.",
         "parameters": [
           {
             "name": "workspaceId",
@@ -1720,7 +1741,35 @@
             "schema": {
               "type": "string"
             },
-            "description": "Search query string"
+            "description": "Words to match against doc names (case-insensitive, order-independent, all must appear). Omit to list all docs newest-first."
+          },
+          {
+            "name": "creator",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Filter by creator user ID"
+          },
+          {
+            "name": "parentId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by parent ID. Required with parentType SPACE, FOLDER, or LIST."
+          },
+          {
+            "name": "parentType",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["SPACE", "FOLDER", "LIST", "EVERYTHING", "WORKSPACE"]
+            },
+            "description": "Restrict to docs in this container kind. EVERYTHING means no restriction."
           }
         ],
         "responses": {

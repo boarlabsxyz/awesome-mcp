@@ -677,6 +677,28 @@ describe('ClickUp server tools', () => {
       assert.ok(result.includes('Untitled'));
       assert.ok(result.includes('unknown'));
     });
+
+    it('surfaces the pagination cursor when more pages exist', async () => {
+      mockFetch([{
+        status: 200,
+        body: { docs: [{ id: 'd1', name: 'A' }], next_cursor: 'cur-2' },
+      }]);
+      const result = await callTool('listDocs', { workspaceId: 'w1' });
+      assert.ok(result.includes('More docs available. Use cursor: "cur-2"'), result);
+    });
+
+    it('forwards limit and cursor upstream', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { docs: [{ id: 'd1', name: 'A' }] } }]);
+      await callTool('listDocs', { workspaceId: 'w1', limit: 25, cursor: 'abc' });
+      assert.ok(calls[0].url.includes('limit=25'), calls[0].url);
+      assert.ok(calls[0].url.includes('cursor=abc'), calls[0].url);
+    });
+
+    it('emits no cursor line on the last page', async () => {
+      mockFetch([{ status: 200, body: { docs: [{ id: 'd1', name: 'A' }] } }]);
+      const result = await callTool('listDocs', { workspaceId: 'w1' });
+      assert.ok(!result.includes('More docs available'));
+    });
   });
 
   describe('searchDocs', () => {
@@ -695,6 +717,67 @@ describe('ClickUp server tools', () => {
       const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'xyz' });
       assert.ok(result.includes('No docs found matching'));
       assert.ok(result.includes('xyz'));
+    });
+
+    // === Regressions for ClickUp ticket 86cb5r680 ===
+
+    it('matches a multi-word query across punctuation', async () => {
+      // The reported failure: this returned "No docs found" for a doc named
+      // "[AWESOME] Sync - 08/15/2026" because "] " breaks the substring.
+      mockFetch([{
+        status: 200,
+        body: { docs: [{ id: '2kyq568v-29615', name: '[AWESOME] Sync - 08/15/2026' }] },
+      }]);
+      const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'AWESOME Sync' });
+      assert.ok(result.includes('2kyq568v-29615'), result);
+    });
+
+    it('finds a doc that only appears on a later page', async () => {
+      mockFetch([
+        { status: 200, body: { docs: [{ id: 'd1', name: 'Onboarding' }], next_cursor: 'c2' } },
+        { status: 200, body: { docs: [{ id: 'd2', name: 'Sync notes' }] } },
+      ]);
+      const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'Sync' });
+      assert.ok(result.includes('d2'), result);
+    });
+
+    it('always reports the scan extent, so an empty result is not read as absent', async () => {
+      mockFetch([{ status: 200, body: { docs: [{ id: 'd1', name: 'Unrelated' }] } }]);
+      const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'nope' });
+      assert.ok(result.includes('No docs found matching'));
+      assert.ok(/Scanned 1 doc\(s\) across 1 page\(s\)/.test(result), result);
+    });
+
+    it('flags an incomplete scan when the page cap is hit', async () => {
+      mockFetch([{ status: 200, body: { docs: [{ id: 'x', name: 'x' }], next_cursor: 'more' } }]);
+      const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'nope' });
+      assert.ok(result.includes('⚠'), result);
+      assert.ok(/scan cap/i.test(result), result);
+    });
+
+    it('sorts results newest first', async () => {
+      mockFetch([{
+        status: 200,
+        body: { docs: [
+          { id: 'older', name: 'Sync A', date_created: '1000' },
+          { id: 'newer', name: 'Sync B', date_created: '9000' },
+        ] },
+      }]);
+      const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'Sync' });
+      assert.ok(result.indexOf('newer') < result.indexOf('older'), result);
+    });
+
+    it('omits parent_type from the request when EVERYTHING is passed', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { docs: [{ id: 'd1', name: 'Sync' }] } }]);
+      const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'Sync', parentType: 'EVERYTHING' });
+      assert.ok(!calls[0].url.includes('parent_type'), calls[0].url);
+      assert.ok(result.includes('d1'));
+    });
+
+    it('rejects SPACE/FOLDER/LIST without a parentId', async () => {
+      const tool = toolMap.get('searchDocs')!;
+      const parsed = tool.parameters.safeParse({ workspaceId: 'w1', parentType: 'SPACE' });
+      assert.equal(parsed.success, false);
     });
   });
 

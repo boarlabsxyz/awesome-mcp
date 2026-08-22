@@ -4227,32 +4227,41 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
-  // GET /api/v1/clickup/workspaces/:workspaceId/docs - List docs
+  // GET /api/v1/clickup/workspaces/:workspaceId/docs - List one page of docs
   app.get('/api/v1/clickup/workspaces/:workspaceId/docs', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const { ClickUpClient, docsFromEnvelope, cursorFromEnvelope } = await import('../clickup/apiHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
-      const result = await client.listDocs(req.params.workspaceId as string);
-      res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to list docs' });
+      const result = await client.listDocs(req.params.workspaceId as string, {
+        limit: qint(req.query.limit, 100, { min: 10, max: 100 }),
+        cursor: qstr(req.query.cursor) || undefined,
+      });
+      res.json({ docs: docsFromEnvelope(result), nextCursor: cursorFromEnvelope(result) || null });
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to list docs' });
     }
   });
 
-  // GET /api/v1/clickup/workspaces/:workspaceId/docs/search - Search docs
+  // GET /api/v1/clickup/workspaces/:workspaceId/docs/search - Search docs by
+  // name across the whole workspace. Matching, paging and sorting all live in
+  // ClickUpClient.searchAllDocs so this stays identical to the MCP tool — the
+  // two used to carry separate copies of a one-page substring filter.
   app.get('/api/v1/clickup/workspaces/:workspaceId/docs/search', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const query = (req.query.query as string || '').toLowerCase();
       const { ClickUpClient } = await import('../clickup/apiHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
-      const result = await client.searchDocs(req.params.workspaceId as string);
-      // Client-side name filtering (ClickUp v3 API has no text search param)
-      if (query && Array.isArray(result.data)) {
-        result.data = result.data.filter((d: any) => (d.name || d.title || '').toLowerCase().includes(query));
-      }
-      res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to search docs' });
+      const creatorRaw = qstr(req.query.creator);
+      const scan = await client.searchAllDocs(req.params.workspaceId as string, {
+        query: qstr(req.query.query) || undefined,
+        creator: creatorRaw ? Number(creatorRaw) : undefined,
+        parentId: qstr(req.query.parentId) || undefined,
+        parentType: qstr(req.query.parentType) || undefined,
+      });
+      // totalScanned/hitCap/rateLimited ride along so a caller can tell an
+      // empty result apart from an incomplete scan.
+      res.json(scan);
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to search docs' });
     }
   });
 

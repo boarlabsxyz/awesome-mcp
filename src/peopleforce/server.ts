@@ -191,14 +191,14 @@ peopleForceServer.addTool({
   name: 'listEmployees',
   annotations: { readOnlyHint: true },
   description:
-    'Lists PeopleForce employees, 50 per page (server-fixed). Use `page` to paginate. IMPORTANT: omitting `status` returns ACTIVE employees only, not everyone — there is no "all" option, so a full headcount means one pass with status=active plus one with status=inactive. Use status=probation to get everyone currently on probation in a single call (a real server-side segment, no pagination needed). Each employee shows their probation end date and a derived probation state. Any tenant-defined custom fields are included per employee when the list payload carries them (field names and availability vary by tenant).',
+    'Lists PeopleForce employees, 50 per page (server-fixed). Use `page` to paginate. IMPORTANT: omitting `status` returns ACTIVE employees only, not everyone — there is no "all" option, so a full headcount means one pass with status=active plus one with status=inactive. Use status=probation to get just the employees currently on probation — a real server-side segment, so you get that cohort directly instead of filtering the whole directory. It is paginated like every other list: follow `metadata.pagination` and request further pages whenever more are reported. Each employee shows their probation end date and a derived probation state. Any tenant-defined custom fields are included per employee when the list payload carries them (field names and availability vary by tenant).',
   parameters: z.object({
     page: z.number().int().min(1).optional().default(1).describe('Page number (1-based). 50 employees per page (server-fixed).'),
     status: z
       .enum(EMPLOYEE_STATUS_VALUES)
       .optional()
       .describe(
-        'Cohort filter. "active" (the default when omitted), "probation" (currently serving probation — one call, no pagination), or "inactive" (departed). Note "terminated" is NOT accepted: PeopleForce resolves it to a mixed active+inactive union, so use "inactive" instead.',
+        'Cohort filter. "active" (the default when omitted), "probation" (currently serving probation — a server-side segment, still paginated), or "inactive" (departed). Note "terminated" is NOT accepted: PeopleForce resolves it to a mixed active+inactive union, so use "inactive" instead.',
       ),
   }),
   execute: (args, { log, session }) =>

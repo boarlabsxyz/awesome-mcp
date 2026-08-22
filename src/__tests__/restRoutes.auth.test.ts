@@ -39,6 +39,8 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/sheets/sheet-123/search?col=A&val=x',
   '/api/v1/clickup/docs/doc-123?workspaceId=w-1',
   '/api/v1/clickup/docs/doc-123/pages/page-123?workspaceId=w-1',
+  '/api/v1/clickup/workspaces/w-1/docs',
+  '/api/v1/clickup/workspaces/w-1/docs/search?query=sync',
   '/api/v1/slack/channels',
   '/api/v1/slack/channels/C123/messages',
   '/api/v1/slack/channels/C123/threads/1234.5678',

@@ -8,21 +8,30 @@ import { __setImageBlobPoolForTests } from '../../images/imageBlobStore.js';
 
 const TOKEN = 'test-upload-token';
 
-// In-memory pg stand-in (INSERT ON CONFLICT + SELECT), shared by store()/fetch().
+// In-memory pg stand-in (INSERT ON CONFLICT + SELECT + the retention queries),
+// shared by store()/fetch(). Uploads through this route are permanent, so the
+// expiry reconciliation only ever runs its no-op branch here.
 function makeFakePool() {
-  const rows = new Map<string, { data: Buffer; content_type: string }>();
+  const rows = new Map<string, { data: Buffer; content_type: string; expires_at: Date | null }>();
   return {
     rows,
     query: async (text: string, params: any[] = []) => {
       if (/INSERT INTO image_blobs/.test(text)) {
-        const [key, data, content_type] = params;
+        const [key, data, content_type, , expires_at] = params;
         if (rows.has(key)) return { rows: [], rowCount: 0 };
-        rows.set(key, { data, content_type });
+        rows.set(key, { data, content_type, expires_at: expires_at ?? null });
         return { rows: [], rowCount: 1 };
+      }
+      if (/UPDATE image_blobs SET expires_at/.test(text)) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (/DELETE FROM image_blobs WHERE expires_at IS NOT NULL/.test(text)) {
+        return { rows: [], rowCount: 0 };
       }
       if (/SELECT data, content_type FROM image_blobs/.test(text)) {
         const r = rows.get(params[0]);
-        return { rows: r ? [{ data: r.data, content_type: r.content_type }] : [] };
+        const live = r && (r.expires_at === null || r.expires_at > new Date());
+        return { rows: live ? [{ data: r.data, content_type: r.content_type }] : [] };
       }
       throw new Error(`unexpected query: ${text}`);
     },

@@ -1777,7 +1777,7 @@ describe('probationStatus', () => {
   const TODAY = '2026-08-18';
 
   test('reports on_probation while the end date is still ahead', () => {
-    // Recent hire: probation configured to end roughly three months out.
+    // Fixture: mid-probation — end date still ahead of TODAY.
     assert.equal(
       probationStatus({ active: true, probation_ends_on: '2026-10-22' }, TODAY),
       'on_probation',
@@ -1799,8 +1799,8 @@ describe('probationStatus', () => {
   });
 
   test('honours an extended probation rather than assuming hired + 90 days', () => {
-    // Extended probation: a ~17-month span, well beyond the default. A
-    // hired+90d heuristic would wrongly call this passed.
+    // Fixture: extended probation — a ~17-month span, well beyond any default.
+    // A hired+90d heuristic would wrongly call this passed.
     assert.equal(
       probationStatus({ active: true, hired_on: '2025-05-01', probation_ends_on: '2026-10-01' }, TODAY),
       'on_probation',
@@ -1808,9 +1808,9 @@ describe('probationStatus', () => {
   });
 
   test('reports inactive — never passed or failed — for a departed employee', () => {
-    // Departed employee whose probation date is already behind them. The date
+    // Fixture: probation end date in the past, employee now inactive. The date
     // survives offboarding, but with no termination date the outcome is
-    // genuinely unknowable, so we must not claim they passed.
+    // genuinely unknowable, so we must not claim it was passed.
     assert.equal(
       probationStatus({ active: false, probation_ends_on: '2026-08-06' }, TODAY),
       'inactive',

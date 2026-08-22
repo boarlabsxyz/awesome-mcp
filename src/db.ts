@@ -288,12 +288,33 @@ CREATE TABLE IF NOT EXISTS image_blobs (
   data         BYTEA NOT NULL,
   content_type TEXT NOT NULL,
   bytes        INT NOT NULL,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at   TIMESTAMPTZ
 );
 `;
 
 const ALTER_IMAGE_BLOBS_STORAGE_EXTERNAL = `
 ALTER TABLE image_blobs ALTER COLUMN data SET STORAGE EXTERNAL;
+`;
+
+// Retention. NULL means "keep forever" and is the default for every existing
+// row and every caller that doesn't opt in, so adding this column changes no
+// current behaviour.
+//
+// Expiry is a property of the USE CASE, not of the bytes. A ClickUp Doc image
+// must live forever because ClickUp's renderer re-fetches it on every page
+// view; a Slack image re-hosted for insertImageFromUrl is consumed once, since
+// Google copies the image into the document at insert time. A single global
+// TTL would silently 404 every ClickUp doc image, so callers opt in instead.
+const ALTER_IMAGE_BLOBS_ADD_EXPIRES_AT = `
+ALTER TABLE image_blobs ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+`;
+
+// Partial index: only expiring rows are ever scanned by the pruner, so
+// permanent blobs (the majority) cost nothing to index.
+const CREATE_IMAGE_BLOBS_EXPIRES_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_image_blobs_expires_at
+  ON image_blobs(expires_at) WHERE expires_at IS NOT NULL;
 `;
 
 // Add unique constraint on instance_id (each instance must be unique)
@@ -423,6 +444,8 @@ export async function initDatabase(): Promise<void> {
     console.error('ClickUp doc images table ensured.');
     await pool.query(CREATE_IMAGE_BLOBS_TABLE);
     await pool.query(ALTER_IMAGE_BLOBS_STORAGE_EXTERNAL);
+    await pool.query(ALTER_IMAGE_BLOBS_ADD_EXPIRES_AT);
+    await pool.query(CREATE_IMAGE_BLOBS_EXPIRES_INDEX);
     console.error('Image blobs table ensured.');
 
     dbAvailable = true;
@@ -440,6 +463,12 @@ export async function initDatabase(): Promise<void> {
       startSlackEventRetentionScheduler();
     } catch (err: any) {
       console.error('[db] failed to start Slack event retention scheduler:', err?.message || err);
+    }
+    try {
+      const { startImageBlobRetentionScheduler } = await import('./images/imageBlobStore.js');
+      startImageBlobRetentionScheduler();
+    } catch (err: any) {
+      console.error('[db] failed to start image blob retention scheduler:', err?.message || err);
     }
   } catch (err) {
     console.error('Failed to connect to database(s), falling back to file storage:', err);

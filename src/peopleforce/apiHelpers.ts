@@ -164,7 +164,9 @@ export type PeopleForceCustomField = {
  *
  *   (omitted)     110 rows, all active  — the default is ACTIVE-ONLY, not "all"
  *   active        110 rows              — same as the default
- *   probation       4 rows, all active  — a real server-side segment, one page
+ *   probation         4 rows, all active — a real server-side segment. The 4 fit
+ *                     one page only because that tenant had 4 people on
+ *                     probation; the segment paginates like any other list.
  *   inactive      152 rows, all inactive — the departed cohort
  *
  * Two values are deliberately excluded because they misbehave:
@@ -1172,8 +1174,8 @@ export function formatEmployeeList(
     if (dept) parts.push(`Department: ${dept}`);
     if (typeof e.active === 'boolean') parts.push(`Status: ${e.active ? 'active' : 'inactive'}`);
     // Probation is scannable across the cohort here, not just on getEmployee —
-    // status=probation returns the segment in one call, and this is what makes
-    // that result readable without a per-employee round-trip.
+    // status=probation returns that cohort directly, and this is what makes
+    // the result readable without a per-employee round-trip.
     for (const line of probationLines(e)) parts.push(line);
     // Surface tenant custom fields (Dev Sprint, Development, …) when the list
     // payload carries them, so they're scannable across the cohort without a

@@ -123,6 +123,68 @@ export function formatCloseWindowCapMessage(pagesScanned: number): string {
   return `Exceeded 2000-task pagination cap while scanning ${pagesScanned} pages. Narrow closedAfter/closedBefore and retry.`;
 }
 
+// === Docs search helpers ===
+//
+// ClickUp's docs endpoint (GET /api/v3/workspaces/{id}/docs) has no text-search
+// parameter and no sort parameter, so both matching and ordering happen here.
+// It paginates with an opaque `cursor` and returns `next_cursor`; `limit`
+// defaults to 50 upstream and caps at 100. These helpers live in the client so
+// the MCP tools and the REST handlers share one implementation instead of the
+// two divergent copies that used to filter one un-paginated page each.
+
+/** Docs pages to scan before giving up. 20 x limit(100) = 2000 docs, matching
+ *  the close-window cap convention above. */
+export const DOCS_MAX_PAGES = 20;
+
+/**
+ * True when every whitespace-separated token in `query` appears in `name`,
+ * case-insensitively and in any order.
+ *
+ * Deliberately NOT a contiguous substring test: doc titles are full of
+ * punctuation ("[AWESOME] Sync - 08/15/2026"), so `"AWESOME Sync"` has to match
+ * even though the literal string doesn't occur. An empty/blank query matches
+ * everything, which is what makes searchDocs-with-no-query a plain listing.
+ */
+export function matchesDocQuery(name: string, query?: string): boolean {
+  const tokens = (query || '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return true;
+  const haystack = (name || '').toLowerCase();
+  return tokens.every((t) => haystack.includes(t));
+}
+
+/** Newest first by `date_created` (epoch-millis string). Undated docs sort last
+ *  rather than to the top, so a missing field never masquerades as "newest". */
+export function sortDocsNewestFirst<T extends { date_created?: string | number }>(docs: T[]): T[] {
+  const ts = (d: T): number => {
+    const raw = d.date_created;
+    if (raw === undefined || raw === null || raw === '') return Number.NEGATIVE_INFINITY;
+    const n = typeof raw === 'number' ? raw : parseInt(raw, 10);
+    return Number.isNaN(n) ? Number.NEGATIVE_INFINITY : n;
+  };
+  return [...docs].sort((a, b) => ts(b) - ts(a));
+}
+
+/** Pull the doc array out of whichever envelope ClickUp returns. */
+export function docsFromEnvelope(result: any): any[] {
+  return result?.docs || result?.data || [];
+}
+
+/** Pull the forward cursor out, tolerating the deprecated field name. */
+export function cursorFromEnvelope(result: any): string | undefined {
+  return result?.next_cursor || result?.cursor || undefined;
+}
+
+export interface DocsScanResult {
+  docs: any[];
+  /** Docs examined before filtering — the number that makes "no match" honest. */
+  totalScanned: number;
+  pagesScanned: number;
+  /** Stopped at DOCS_MAX_PAGES with more pages available. */
+  hitCap: boolean;
+  /** Stopped early because ClickUp rate-limited us mid-scan. */
+  rateLimited: boolean;
+}
+
 // Client-side pagination + filter for tasks closed within a window.
 //
 // ClickUp's Get Tasks / team-task-filter endpoints don't support
@@ -507,20 +569,90 @@ export class ClickUpClient {
 
   // === Docs (v3 API) ===
 
-  async listDocs(workspaceId: string): Promise<any> {
-    return this.request('GET', `/workspaces/${workspaceId}/docs`, undefined, CLICKUP_API_V3_BASE);
-  }
-
-  async searchDocs(workspaceId: string, opts?: { creator?: number; parentId?: string; parentType?: string; deleted?: boolean; archived?: boolean; limit?: number }): Promise<any> {
+  /**
+   * One page of docs. `listDocs` and `searchDocs` hit the SAME endpoint —
+   * listDocs is just this with no filters — so both go through here.
+   *
+   * `parentType: 'EVERYTHING'` is dropped rather than forwarded: ClickUp
+   * accepts the value but matches nothing with it, whereas omitting the filter
+   * is what actually returns the whole workspace. Sending it verbatim is why
+   * `parentType: "EVERYTHING"` used to return zero docs.
+   */
+  async searchDocs(workspaceId: string, opts?: { creator?: number; parentId?: string; parentType?: string; deleted?: boolean; archived?: boolean; limit?: number; cursor?: string }): Promise<any> {
     const params = new URLSearchParams();
     if (opts?.creator) params.set('creator', String(opts.creator));
     if (opts?.parentId) params.set('parent_id', opts.parentId);
-    if (opts?.parentType) params.set('parent_type', opts.parentType);
+    if (opts?.parentType && opts.parentType !== 'EVERYTHING') params.set('parent_type', opts.parentType);
     if (opts?.deleted !== undefined) params.set('deleted', String(opts.deleted));
     if (opts?.archived !== undefined) params.set('archived', String(opts.archived));
-    if (opts?.limit) params.set('limit', String(opts.limit));
+    // Upstream default is 50, max 100. Clamp so a caller can't silently get a
+    // 400 or a smaller page than they asked for.
+    if (opts?.limit !== undefined) params.set('limit', String(Math.min(Math.max(opts.limit, 10), 100)));
+    if (opts?.cursor) params.set('cursor', opts.cursor);
     const qs = params.toString();
     return this.request('GET', `/workspaces/${workspaceId}/docs${qs ? `?${qs}` : ''}`, undefined, CLICKUP_API_V3_BASE);
+  }
+
+  /** Alias kept for readability at call sites that only want a plain listing. */
+  async listDocs(workspaceId: string, opts?: { limit?: number; cursor?: string }): Promise<any> {
+    return this.searchDocs(workspaceId, opts);
+  }
+
+  /**
+   * Page through every doc in the workspace, filter by title, and sort newest
+   * first.
+   *
+   * A search that only looks at one page is worse than no search: it reports
+   * "no docs found", which reads as "that doc doesn't exist". So this always
+   * scans to exhaustion, and when it can't, it says so via hitCap/rateLimited
+   * instead of returning a silently-partial answer.
+   */
+  async searchAllDocs(
+    workspaceId: string,
+    opts?: { query?: string; creator?: number; parentId?: string; parentType?: string; maxPages?: number },
+  ): Promise<DocsScanResult> {
+    const maxPages = opts?.maxPages ?? DOCS_MAX_PAGES;
+    const matched: any[] = [];
+    let cursor: string | undefined;
+    let totalScanned = 0;
+    let pagesScanned = 0;
+    let hitCap = false;
+    let rateLimited = false;
+
+    for (let p = 0; p < maxPages; p++) {
+      let page: any;
+      try {
+        page = await this.searchDocs(workspaceId, {
+          creator: opts?.creator,
+          parentId: opts?.parentId,
+          parentType: opts?.parentType,
+          limit: 100,
+          cursor,
+        });
+      } catch (err: any) {
+        // A 429 partway through is not a reason to throw away the pages we
+        // already have — a labelled partial result beats an exception. Any
+        // other failure is a real error and propagates.
+        if (p > 0 && /rate limit/i.test(String(err?.message || ''))) {
+          rateLimited = true;
+          break;
+        }
+        throw err;
+      }
+
+      const docs = docsFromEnvelope(page);
+      totalScanned += docs.length;
+      pagesScanned = p + 1;
+      for (const d of docs) {
+        if (matchesDocQuery(d.name || d.title || '', opts?.query)) matched.push(d);
+      }
+
+      cursor = cursorFromEnvelope(page);
+      if (!cursor || docs.length === 0) break;
+      if (p === maxPages - 1) hitCap = true;
+    }
+
+    return { docs: sortDocsNewestFirst(matched), totalScanned, pagesScanned, hitCap, rateLimited };
   }
 
   async getDoc(workspaceId: string, docId: string): Promise<any> {
