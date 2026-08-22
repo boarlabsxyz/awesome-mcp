@@ -4471,6 +4471,4152 @@
         }
       }
     },
+    "/api/v1/peopleforce/employees": {
+      "get": {
+        "operationId": "listPeopleForceEmployees",
+        "summary": "List PeopleForce employees",
+        "description": "List PeopleForce employees",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Cohort filter. Omitting this returns ACTIVE employees only, not everyone — there is no \"all\". A full headcount is one pass with active plus one with inactive. Use probation for the current probation cohort in a single call.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "probation",
+                "inactive"
+              ]
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}": {
+      "get": {
+        "operationId": "getPeopleForceEmployee",
+        "summary": "Get a single PeopleForce employee",
+        "description": "Get a single PeopleForce employee",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "description": "The PeopleForce employee ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/departments": {
+      "get": {
+        "operationId": "listPeopleForceDepartments",
+        "summary": "List PeopleForce departments",
+        "description": "List PeopleForce departments",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/leave-requests": {
+      "get": {
+        "operationId": "listPeopleForceLeaveRequests",
+        "summary": "List PeopleForce leave requests",
+        "description": "List PeopleForce leave requests",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "description": "Filter by leave-request state (e.g. pending, approved, declined).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createPeopleForceLeaveRequest",
+        "summary": "Create a PeopleForce leave request",
+        "description": "Create a PeopleForce leave request. Returns 201 with the created request. leaveTypeId comes from the leave-types endpoint, not the type name.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "Write succeeded. Returns the affected resource re-read from PeopleForce.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query or request body. Body failures include Zod issues from flatten().",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "description": "Validated with the MCP tool's own Zod schema. Path parameters override same-named body keys.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "employeeId",
+                  "leaveTypeId",
+                  "startsOn",
+                  "endsOn"
+                ],
+                "properties": {
+                  "employeeId": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "description": "The employee the leave request is for."
+                  },
+                  "leaveTypeId": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "description": "The leave-type ID from the leave-types endpoint — NOT the type name."
+                  },
+                  "startsOn": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "First day of leave (YYYY-MM-DD). Must be a real calendar date."
+                  },
+                  "endsOn": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "Last day of leave (YYYY-MM-DD). Must be on or after startsOn."
+                  },
+                  "comment": {
+                    "type": "string",
+                    "description": "Optional comment on the request."
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/leave-requests/{leaveRequestId}": {
+      "get": {
+        "operationId": "getPeopleForceLeaveRequest",
+        "summary": "Get a single PeopleForce leave request",
+        "description": "Get a single PeopleForce leave request",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "leaveRequestId",
+            "in": "path",
+            "required": true,
+            "description": "The leave-request ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/leave-types": {
+      "get": {
+        "operationId": "listPeopleForceLeaveTypes",
+        "summary": "List PeopleForce leave types with their IDs",
+        "description": "List PeopleForce leave types with their IDs",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/positions": {
+      "get": {
+        "operationId": "listPeopleForcePositions",
+        "summary": "List PeopleForce job positions",
+        "description": "List PeopleForce job positions",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/divisions": {
+      "get": {
+        "operationId": "listPeopleForceDivisions",
+        "summary": "List PeopleForce divisions",
+        "description": "List PeopleForce divisions",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/locations": {
+      "get": {
+        "operationId": "listPeopleForceLocations",
+        "summary": "List PeopleForce locations",
+        "description": "List PeopleForce locations",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employment-types": {
+      "get": {
+        "operationId": "listPeopleForceEmploymentTypes",
+        "summary": "List PeopleForce employment types",
+        "description": "List PeopleForce employment types",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/job-levels": {
+      "get": {
+        "operationId": "listPeopleForceJobLevels",
+        "summary": "List PeopleForce job levels",
+        "description": "List PeopleForce job levels",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/skills": {
+      "get": {
+        "operationId": "listPeopleForceSkills",
+        "summary": "List the PeopleForce workspace skills catalog",
+        "description": "List the PeopleForce workspace skills catalog",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/competencies": {
+      "get": {
+        "operationId": "listPeopleForceCompetencies",
+        "summary": "List PeopleForce competencies",
+        "description": "List PeopleForce competencies",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/tasks": {
+      "get": {
+        "operationId": "listPeopleForceTasks",
+        "summary": "List PeopleForce tasks",
+        "description": "List PeopleForce tasks",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/leave-balances": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeLeaveBalances",
+        "summary": "List an employee current leave balances per leave type",
+        "description": "List an employee current leave balances per leave type",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "description": "The PeopleForce employee ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/skills": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeSkills",
+        "summary": "List the skills recorded on an employee profile",
+        "description": "List the skills recorded on an employee profile. No bulk endpoint upstream - a company-wide skills portfolio is one call per employee.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "description": "The PeopleForce employee ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/documents": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeDocuments",
+        "summary": "List documents attached to an employee profile",
+        "description": "List documents attached to an employee profile",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "description": "The PeopleForce employee ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/notes": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeNotes",
+        "summary": "List HR notes on an employee profile",
+        "description": "List HR notes on an employee profile",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "description": "The PeopleForce employee ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/emergency-contacts": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeEmergencyContacts",
+        "summary": "List emergency contacts on an employee profile",
+        "description": "List emergency contacts on an employee profile",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "description": "The PeopleForce employee ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employee-tables": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeTables",
+        "summary": "List PeopleForce employee custom-table definitions",
+        "description": "List PeopleForce employee custom-table definitions. Returns each table internal_name - the value the per-employee table read requires.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/tables/{tableInternalName}": {
+      "get": {
+        "operationId": "getPeopleForceEmployeeTable",
+        "summary": "Get one employee custom-table row data",
+        "description": "Get one employee custom-table row data. tableInternalName is a system slug from the employee-tables list - never guess it from the display name.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "description": "The PeopleForce employee ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tableInternalName",
+            "in": "path",
+            "required": true,
+            "description": "The custom table's internal_name from the employee-tables endpoint. A system slug, often unrelated to the display name — do not guess it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/objectives": {
+      "get": {
+        "operationId": "listPeopleForceObjectives",
+        "summary": "List PeopleForce performance objectives (OKRs)",
+        "description": "List PeopleForce performance objectives (OKRs). No server-side date filter upstream - filter by period client-side.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/kpis": {
+      "get": {
+        "operationId": "listPeopleForceKpis",
+        "summary": "List PeopleForce key performance indicators",
+        "description": "List PeopleForce key performance indicators",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/knowledge-base/categories": {
+      "get": {
+        "operationId": "listPeopleForceKnowledgeBaseCategories",
+        "summary": "List PeopleForce knowledge base categories",
+        "description": "List PeopleForce knowledge base categories",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/knowledge-base/articles": {
+      "get": {
+        "operationId": "listPeopleForceKnowledgeBaseArticles",
+        "summary": "List knowledge base articles in a category",
+        "description": "List knowledge base articles in a category. categoryId is required - upstream only exposes articles nested under a category.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "categoryId",
+            "in": "query",
+            "required": true,
+            "description": "The knowledge base category ID. Required — upstream only exposes articles nested under a category.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/knowledge-base/articles/{articleId}": {
+      "get": {
+        "operationId": "getPeopleForceKnowledgeBaseArticle",
+        "summary": "Get a single knowledge base article with its body",
+        "description": "Get a single knowledge base article with its body",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "articleId",
+            "in": "path",
+            "required": true,
+            "description": "The knowledge base article ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/vacancies": {
+      "get": {
+        "operationId": "listPeopleForceVacancies",
+        "summary": "List PeopleForce recruitment vacancies",
+        "description": "List PeopleForce recruitment vacancies. status and tagIds are repeatable or comma-separated query params.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Filter by vacancy status: drafting, opened, closed, held, cancelled, archived. Repeatable (?status=a&status=b) or comma-separated (?status=a,b).",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "tagIds",
+            "in": "query",
+            "required": false,
+            "description": "Filter by vacancy tag IDs. Repeatable (?tagIds=a&tagIds=b) or comma-separated (?tagIds=a,b).",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/vacancies/{vacancyId}": {
+      "get": {
+        "operationId": "getPeopleForceVacancy",
+        "summary": "Get a single recruitment vacancy with its pipeline stages",
+        "description": "Get a single recruitment vacancy with its pipeline stages",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "vacancyId",
+            "in": "path",
+            "required": true,
+            "description": "The vacancy ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/vacancies/{vacancyId}/applications": {
+      "get": {
+        "operationId": "listPeopleForceVacancyApplications",
+        "summary": "List the applications on a recruitment vacancy",
+        "description": "List the applications on a recruitment vacancy",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "vacancyId",
+            "in": "path",
+            "required": true,
+            "description": "The vacancy ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/vacancies/{vacancyId}/applications/{applicationId}": {
+      "get": {
+        "operationId": "getPeopleForceVacancyApplication",
+        "summary": "Get a single vacancy application",
+        "description": "Get a single vacancy application",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "vacancyId",
+            "in": "path",
+            "required": true,
+            "description": "The vacancy ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "applicationId",
+            "in": "path",
+            "required": true,
+            "description": "The application ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/pipelines": {
+      "get": {
+        "operationId": "listPeopleForceRecruitmentPipelines",
+        "summary": "List recruitment pipelines and their stage definitions",
+        "description": "List recruitment pipelines and their stage definitions",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/candidates": {
+      "get": {
+        "operationId": "listPeopleForceCandidates",
+        "summary": "List recruitment candidates with filters",
+        "description": "List recruitment candidates with filters. vacancyIds and skills are repeatable or comma-separated query params.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "vacancyIds",
+            "in": "query",
+            "required": false,
+            "description": "Filter to candidates on these vacancy IDs. Repeatable (?vacancyIds=a&vacancyIds=b) or comma-separated (?vacancyIds=a,b).",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "pipelineStageId",
+            "in": "query",
+            "required": false,
+            "description": "Filter to candidates at this pipeline stage ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "skills",
+            "in": "query",
+            "required": false,
+            "description": "Filter by skill names (stack). Repeatable (?skills=a&skills=b) or comma-separated (?skills=a,b).",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "email",
+            "in": "query",
+            "required": false,
+            "description": "Match a candidate by email address.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "createdAtGte",
+            "in": "query",
+            "required": false,
+            "description": "Only candidates created on/after this date (YYYY-MM-DD or ISO).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "createdAtLte",
+            "in": "query",
+            "required": false,
+            "description": "Only candidates created on/before this date.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "updatedAtGte",
+            "in": "query",
+            "required": false,
+            "description": "Only candidates updated on/after this date.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "updatedAtLte",
+            "in": "query",
+            "required": false,
+            "description": "Only candidates updated on/before this date.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/candidates/{candidateId}": {
+      "get": {
+        "operationId": "getPeopleForceCandidate",
+        "summary": "Get a single recruitment candidate profile",
+        "description": "Get a single recruitment candidate profile",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "candidateId",
+            "in": "path",
+            "required": true,
+            "description": "The recruitment candidate ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/candidates/{candidateId}/notes": {
+      "get": {
+        "operationId": "listPeopleForceCandidateNotes",
+        "summary": "List recruiter notes on a candidate",
+        "description": "List recruiter notes on a candidate. Notes are the only free-text feedback surface - upstream has no scorecard endpoint.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "candidateId",
+            "in": "path",
+            "required": true,
+            "description": "The recruitment candidate ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "addPeopleForceCandidateNote",
+        "summary": "Add a note to a recruitment candidate",
+        "description": "Add a note to a recruitment candidate. Returns 201. The note body is free text and can be long - this is the write the data plane most clearly earns.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "candidateId",
+            "in": "path",
+            "required": true,
+            "description": "The recruitment candidate ID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Write succeeded. Returns the affected resource re-read from PeopleForce.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query or request body. Body failures include Zod issues from flatten().",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "description": "Validated with the MCP tool's own Zod schema. Path parameters override same-named body keys.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "body"
+                ],
+                "properties": {
+                  "body": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The note text. Free text and may be long."
+                  },
+                  "candidateId": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "description": "Ignored — the path parameter wins."
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/candidates/{candidateId}/experiences": {
+      "get": {
+        "operationId": "listPeopleForceCandidateExperiences",
+        "summary": "List a candidate work experience entries",
+        "description": "List a candidate work experience entries",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "candidateId",
+            "in": "path",
+            "required": true,
+            "description": "The recruitment candidate ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/candidates/{candidateId}/educations": {
+      "get": {
+        "operationId": "listPeopleForceCandidateEducations",
+        "summary": "List a candidate education entries",
+        "description": "List a candidate education entries",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "candidateId",
+            "in": "path",
+            "required": true,
+            "description": "The recruitment candidate ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/candidates/{candidateId}/dossier": {
+      "get": {
+        "operationId": "getPeopleForceCandidateDossier",
+        "summary": "Assemble a candidate dossier for assessment in one call",
+        "description": "Assemble a candidate dossier for assessment in one call. Best-effort bundle - parts that fail to load are reported in the payload rather than failing the request.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "candidateId",
+            "in": "path",
+            "required": true,
+            "description": "The recruitment candidate ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vacancyId",
+            "in": "query",
+            "required": false,
+            "description": "Optional vacancy ID to also resolve the candidate application and current stage on that vacancy.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/candidate-movements": {
+      "get": {
+        "operationId": "listPeopleForceCandidateMovements",
+        "summary": "List candidate pipeline stage transitions",
+        "description": "List candidate pipeline stage transitions",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/disqualify-reasons": {
+      "get": {
+        "operationId": "listPeopleForceDisqualifyReasons",
+        "summary": "List recruitment disqualify reasons with their IDs",
+        "description": "List recruitment disqualify reasons with their IDs",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/sources": {
+      "get": {
+        "operationId": "listPeopleForceRecruitmentSources",
+        "summary": "List recruitment sources with their IDs",
+        "description": "List recruitment sources with their IDs",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/published-vacancies/{vacancyId}": {
+      "get": {
+        "operationId": "getPeopleForcePublishedJobDescription",
+        "summary": "Get the public careers-site job description for a vacancy",
+        "description": "Get the public careers-site job description for a vacancy. Some tenants gate the Careers API behind a separate token - fall back to the vacancy description on a not-authorized error.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "vacancyId",
+            "in": "path",
+            "required": true,
+            "description": "The vacancy ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/vacancies/{vacancyId}/applications/{applicationId}/move": {
+      "post": {
+        "operationId": "movePeopleForceVacancyApplication",
+        "summary": "Move a vacancy application to another pipeline stage",
+        "description": "Move a vacancy application to another pipeline stage. Returns 200 with the application re-read after the move. performAutomations defaults to PeopleForce behaviour (true) when omitted.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "vacancyId",
+            "in": "path",
+            "required": true,
+            "description": "The vacancy ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "applicationId",
+            "in": "path",
+            "required": true,
+            "description": "The application ID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Write succeeded. Returns the affected resource re-read from PeopleForce.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query or request body. Body failures include Zod issues from flatten().",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "description": "Validated with the MCP tool's own Zod schema. Path parameters override same-named body keys.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "pipelineStageId"
+                ],
+                "properties": {
+                  "pipelineStageId": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "description": "The target pipeline stage ID, from the pipelines endpoint."
+                  },
+                  "performAutomations": {
+                    "type": "boolean",
+                    "description": "Whether to run the stage's automations. PeopleForce defaults to true when omitted."
+                  },
+                  "vacancyId": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "description": "Ignored — the path parameter wins."
+                  },
+                  "applicationId": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "description": "Ignored — the path parameter wins."
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/vacancies/{vacancyId}/applications/{applicationId}/disqualify": {
+      "post": {
+        "operationId": "disqualifyPeopleForceVacancyApplication",
+        "summary": "Disqualify a vacancy application with a reason",
+        "description": "Disqualify a vacancy application with a reason. Returns 200 with the application re-read. Consequential and not idempotent - repeating it re-disqualifies. disqualifyReasonId comes from the disqualify-reasons endpoint.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "vacancyId",
+            "in": "path",
+            "required": true,
+            "description": "The vacancy ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "applicationId",
+            "in": "path",
+            "required": true,
+            "description": "The application ID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Write succeeded. Returns the affected resource re-read from PeopleForce.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query or request body. Body failures include Zod issues from flatten().",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "description": "Validated with the MCP tool's own Zod schema. Path parameters override same-named body keys.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "disqualifyReasonId"
+                ],
+                "properties": {
+                  "disqualifyReasonId": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "description": "The disqualify reason ID, from the disqualify-reasons endpoint."
+                  },
+                  "comment": {
+                    "type": "string",
+                    "description": "Optional comment explaining the disqualification."
+                  },
+                  "vacancyId": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "description": "Ignored — the path parameter wins."
+                  },
+                  "applicationId": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "description": "Ignored — the path parameter wins."
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sheets": {
       "get": {
         "operationId": "listSpreadsheets",
@@ -5848,990 +9994,6 @@
           }
         }
       }
-    },
-    "/api/v1/peopleforce/employees": {
-      "get": {
-        "operationId": "listPeopleForceEmployees",
-        "summary": "List PeopleForce employees",
-        "description": "List PeopleForce employees. Mirrors the MCP tool `listEmployees`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/employees/{employeeId}": {
-      "get": {
-        "operationId": "getPeopleForceEmployee",
-        "summary": "Get a single PeopleForce employee",
-        "description": "Get a single PeopleForce employee. Mirrors the MCP tool `getEmployee`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/departments": {
-      "get": {
-        "operationId": "listPeopleForceDepartments",
-        "summary": "List PeopleForce departments",
-        "description": "List PeopleForce departments. Mirrors the MCP tool `listDepartments`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/leave-requests": {
-      "get": {
-        "operationId": "listPeopleForceLeaveRequests",
-        "summary": "List PeopleForce leave requests",
-        "description": "List PeopleForce leave requests. Mirrors the MCP tool `listLeaveRequests`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/leave-requests/{leaveRequestId}": {
-      "get": {
-        "operationId": "getPeopleForceLeaveRequest",
-        "summary": "Get a single PeopleForce leave request",
-        "description": "Get a single PeopleForce leave request. Mirrors the MCP tool `getLeaveRequest`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/leave-types": {
-      "get": {
-        "operationId": "listPeopleForceLeaveTypes",
-        "summary": "List PeopleForce leave types with their IDs",
-        "description": "List PeopleForce leave types with their IDs. Mirrors the MCP tool `listLeaveTypes`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/positions": {
-      "get": {
-        "operationId": "listPeopleForcePositions",
-        "summary": "List PeopleForce job positions",
-        "description": "List PeopleForce job positions. Mirrors the MCP tool `listPositions`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/divisions": {
-      "get": {
-        "operationId": "listPeopleForceDivisions",
-        "summary": "List PeopleForce divisions",
-        "description": "List PeopleForce divisions. Mirrors the MCP tool `listDivisions`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/locations": {
-      "get": {
-        "operationId": "listPeopleForceLocations",
-        "summary": "List PeopleForce locations",
-        "description": "List PeopleForce locations. Mirrors the MCP tool `listLocations`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/employment-types": {
-      "get": {
-        "operationId": "listPeopleForceEmploymentTypes",
-        "summary": "List PeopleForce employment types",
-        "description": "List PeopleForce employment types. Mirrors the MCP tool `listEmploymentTypes`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/job-levels": {
-      "get": {
-        "operationId": "listPeopleForceJobLevels",
-        "summary": "List PeopleForce job levels",
-        "description": "List PeopleForce job levels. Mirrors the MCP tool `listJobLevels`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/skills": {
-      "get": {
-        "operationId": "listPeopleForceSkills",
-        "summary": "List the PeopleForce workspace skills catalog",
-        "description": "List the PeopleForce workspace skills catalog. Mirrors the MCP tool `listSkills`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/competencies": {
-      "get": {
-        "operationId": "listPeopleForceCompetencies",
-        "summary": "List PeopleForce competencies",
-        "description": "List PeopleForce competencies. Mirrors the MCP tool `listCompetencies`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/tasks": {
-      "get": {
-        "operationId": "listPeopleForceTasks",
-        "summary": "List PeopleForce tasks",
-        "description": "List PeopleForce tasks. Mirrors the MCP tool `listTasks`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/employees/{employeeId}/leave-balances": {
-      "get": {
-        "operationId": "listPeopleForceEmployeeLeaveBalances",
-        "summary": "List an employee current leave balances per leave type",
-        "description": "List an employee current leave balances per leave type. Mirrors the MCP tool `listEmployeeLeaveBalances`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/employees/{employeeId}/skills": {
-      "get": {
-        "operationId": "listPeopleForceEmployeeSkills",
-        "summary": "List the skills recorded on an employee profile",
-        "description": "List the skills recorded on an employee profile. Mirrors the MCP tool `listEmployeeSkills`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/employees/{employeeId}/documents": {
-      "get": {
-        "operationId": "listPeopleForceEmployeeDocuments",
-        "summary": "List documents attached to an employee profile",
-        "description": "List documents attached to an employee profile. Mirrors the MCP tool `listEmployeeDocuments`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/employees/{employeeId}/notes": {
-      "get": {
-        "operationId": "listPeopleForceEmployeeNotes",
-        "summary": "List HR notes on an employee profile",
-        "description": "List HR notes on an employee profile. Mirrors the MCP tool `listEmployeeNotes`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/employees/{employeeId}/emergency-contacts": {
-      "get": {
-        "operationId": "listPeopleForceEmployeeEmergencyContacts",
-        "summary": "List emergency contacts on an employee profile",
-        "description": "List emergency contacts on an employee profile. Mirrors the MCP tool `listEmployeeEmergencyContacts`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/employee-tables": {
-      "get": {
-        "operationId": "listPeopleForceEmployeeTables",
-        "summary": "List PeopleForce employee custom-table definitions",
-        "description": "List PeopleForce employee custom-table definitions. Mirrors the MCP tool `listEmployeeTables`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/employees/{employeeId}/tables/{tableInternalName}": {
-      "get": {
-        "operationId": "getPeopleForceEmployeeTable",
-        "summary": "Get one employee custom-table row data",
-        "description": "Get one employee custom-table row data. Mirrors the MCP tool `getEmployeeTable`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/objectives": {
-      "get": {
-        "operationId": "listPeopleForceObjectives",
-        "summary": "List PeopleForce performance objectives (OKRs)",
-        "description": "List PeopleForce performance objectives (OKRs). Mirrors the MCP tool `listObjectives`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/kpis": {
-      "get": {
-        "operationId": "listPeopleForceKpis",
-        "summary": "List PeopleForce key performance indicators",
-        "description": "List PeopleForce key performance indicators. Mirrors the MCP tool `listKeyPerformanceIndicators`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/knowledge-base/categories": {
-      "get": {
-        "operationId": "listPeopleForceKnowledgeBaseCategories",
-        "summary": "List PeopleForce knowledge base categories",
-        "description": "List PeopleForce knowledge base categories. Mirrors the MCP tool `listKnowledgeBaseCategories`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/knowledge-base/articles": {
-      "get": {
-        "operationId": "listPeopleForceKnowledgeBaseArticles",
-        "summary": "List knowledge base articles in a category",
-        "description": "List knowledge base articles in a category. Mirrors the MCP tool `listKnowledgeBaseArticles`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/knowledge-base/articles/{articleId}": {
-      "get": {
-        "operationId": "getPeopleForceKnowledgeBaseArticle",
-        "summary": "Get a single knowledge base article with its body",
-        "description": "Get a single knowledge base article with its body. Mirrors the MCP tool `getKnowledgeBaseArticle`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/recruitment/vacancies": {
-      "get": {
-        "operationId": "listPeopleForceVacancies",
-        "summary": "List PeopleForce recruitment vacancies",
-        "description": "List PeopleForce recruitment vacancies. Mirrors the MCP tool `listVacancies`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/recruitment/vacancies/{vacancyId}": {
-      "get": {
-        "operationId": "getPeopleForceVacancy",
-        "summary": "Get a single recruitment vacancy with its pipeline stages",
-        "description": "Get a single recruitment vacancy with its pipeline stages. Mirrors the MCP tool `getVacancy`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/recruitment/vacancies/{vacancyId}/applications": {
-      "get": {
-        "operationId": "listPeopleForceVacancyApplications",
-        "summary": "List the applications on a recruitment vacancy",
-        "description": "List the applications on a recruitment vacancy. Mirrors the MCP tool `listVacancyApplications`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/recruitment/vacancies/{vacancyId}/applications/{applicationId}": {
-      "get": {
-        "operationId": "getPeopleForceVacancyApplication",
-        "summary": "Get a single vacancy application",
-        "description": "Get a single vacancy application. Mirrors the MCP tool `getVacancyApplication`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/recruitment/pipelines": {
-      "get": {
-        "operationId": "listPeopleForceRecruitmentPipelines",
-        "summary": "List recruitment pipelines and their stage definitions",
-        "description": "List recruitment pipelines and their stage definitions. Mirrors the MCP tool `listRecruitmentPipelines`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/recruitment/candidates": {
-      "get": {
-        "operationId": "listPeopleForceCandidates",
-        "summary": "List recruitment candidates with filters",
-        "description": "List recruitment candidates with filters. Mirrors the MCP tool `listCandidates`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/recruitment/candidates/{candidateId}": {
-      "get": {
-        "operationId": "getPeopleForceCandidate",
-        "summary": "Get a single recruitment candidate profile",
-        "description": "Get a single recruitment candidate profile. Mirrors the MCP tool `getCandidate`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/recruitment/candidates/{candidateId}/notes": {
-      "get": {
-        "operationId": "listPeopleForceCandidateNotes",
-        "summary": "List recruiter notes on a candidate",
-        "description": "List recruiter notes on a candidate. Mirrors the MCP tool `listCandidateNotes`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/recruitment/candidates/{candidateId}/experiences": {
-      "get": {
-        "operationId": "listPeopleForceCandidateExperiences",
-        "summary": "List a candidate work experience entries",
-        "description": "List a candidate work experience entries. Mirrors the MCP tool `listCandidateExperiences`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/recruitment/candidates/{candidateId}/educations": {
-      "get": {
-        "operationId": "listPeopleForceCandidateEducations",
-        "summary": "List a candidate education entries",
-        "description": "List a candidate education entries. Mirrors the MCP tool `listCandidateEducations`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/recruitment/candidates/{candidateId}/dossier": {
-      "get": {
-        "operationId": "getPeopleForceCandidateDossier",
-        "summary": "Assemble a candidate dossier for assessment in one call",
-        "description": "Assemble a candidate dossier for assessment in one call. Mirrors the MCP tool `getCandidateDossier`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/recruitment/candidate-movements": {
-      "get": {
-        "operationId": "listPeopleForceCandidateMovements",
-        "summary": "List candidate pipeline stage transitions",
-        "description": "List candidate pipeline stage transitions. Mirrors the MCP tool `listCandidateMovements`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/recruitment/disqualify-reasons": {
-      "get": {
-        "operationId": "listPeopleForceDisqualifyReasons",
-        "summary": "List recruitment disqualify reasons with their IDs",
-        "description": "List recruitment disqualify reasons with their IDs. Mirrors the MCP tool `listDisqualifyReasons`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/recruitment/sources": {
-      "get": {
-        "operationId": "listPeopleForceRecruitmentSources",
-        "summary": "List recruitment sources with their IDs",
-        "description": "List recruitment sources with their IDs. Mirrors the MCP tool `listRecruitmentSources`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/peopleforce/recruitment/published-vacancies/{vacancyId}": {
-      "get": {
-        "operationId": "getPeopleForcePublishedJobDescription",
-        "summary": "Get the public careers-site job description for a vacancy",
-        "description": "Get the public careers-site job description for a vacancy. Mirrors the MCP tool `getPublishedJobDescription`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "peopleforce"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
     }
   },
   "components": {
@@ -7523,6 +10685,58 @@
           "size": {
             "type": "integer",
             "description": "Size of the attachment in bytes"
+          }
+        }
+      },
+      "Pagination": {
+        "type": "object",
+        "description": "PeopleForce pagination envelope. Fields are present only when upstream supplies them.",
+        "properties": {
+          "page": {
+            "type": "integer"
+          },
+          "pages": {
+            "type": "integer"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "integer"
+          }
+        }
+      },
+      "ListResponse": {
+        "type": "object",
+        "description": "Upstream list envelope, returned untransformed.",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "properties": {
+              "pagination": {
+                "$ref": "#/components/schemas/Pagination"
+              }
+            }
+          }
+        },
+        "required": [
+          "data"
+        ]
+      },
+      "ObjectResponse": {
+        "type": "object",
+        "description": "Upstream single-resource envelope, returned untransformed.",
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       },

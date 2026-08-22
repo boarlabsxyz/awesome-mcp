@@ -5431,6 +5431,129 @@ function registerRestApiRoutes(app: express.Express): void {
     });
   }
 
+
+  // --- PeopleForce writes ---
+  // Bodies are validated with the MCP tools' own Zod schemas rather than
+  // hand-rolled `if (!field)` checks: REST bypasses FastMCP's Zod layer, and
+  // reusing the schema is the only thing keeping the two surfaces in step.
+  // Path params are merged over the body so a URL and a mismatched body key
+  // can't disagree about which record is being written.
+  //
+  // Note these widen what the permanent dashboard API key can do — it reaches
+  // the same createServiceAuth gate as the reads.
+
+  // POST /api/v1/peopleforce/leave-requests - Create a leave request
+  app.post('/api/v1/peopleforce/leave-requests', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const { createLeaveRequestSchema } = await import('../peopleforce/server.js');
+      const parsed = createLeaveRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const { PeopleForceClient } = await import('../peopleforce/apiHelpers.js');
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.createLeaveRequest(parsed.data);
+      if (!result?.data) {
+        res.status(502).json({ error: 'PeopleForce accepted the request but returned no leave request' });
+        return;
+      }
+      res.status(201).json(result);
+    } catch (err: any) {
+      console.error('Error creating PeopleForce leave request:', err);
+      sendUpstreamError(res, err, { notFound: 'Employee or leave type not found', fallback: 'Failed to create leave request' });
+    }
+  });
+
+  // POST /api/v1/peopleforce/recruitment/candidates/:candidateId/notes - Add a note
+  app.post('/api/v1/peopleforce/recruitment/candidates/:candidateId/notes', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const { addCandidateNoteSchema } = await import('../peopleforce/server.js');
+      const parsed = addCandidateNoteSchema.safeParse({ ...req.body, candidateId: req.params.candidateId });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const { PeopleForceClient, formatCandidateNotes } = await import('../peopleforce/apiHelpers.js');
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      await client.addCandidateNote(parsed.data);
+      // The add call returns no usable body, so re-read: a caller chaining curls
+      // needs the created note's id, and a bare {ok:true} would force them to
+      // issue the follow-up GET themselves.
+      const notes = await client.listCandidateNotes(parsed.data.candidateId);
+      respondNegotiated(req, res.status(201), notes, () => formatCandidateNotes(notes.data ?? []));
+    } catch (err: any) {
+      console.error('Error adding PeopleForce candidate note:', err);
+      sendUpstreamError(res, err, { notFound: 'Candidate not found', fallback: 'Failed to add candidate note' });
+    }
+  });
+
+  // POST /api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications/:applicationId/move
+  app.post('/api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications/:applicationId/move', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const { moveVacancyApplicationSchema } = await import('../peopleforce/server.js');
+      const parsed = moveVacancyApplicationSchema.safeParse({
+        ...req.body,
+        vacancyId: req.params.vacancyId,
+        applicationId: req.params.applicationId,
+      });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const { PeopleForceClient } = await import('../peopleforce/apiHelpers.js');
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      await client.moveVacancyApplication(parsed.data);
+      // Re-read so the response is the application as it now stands, not the
+      // move payload echoed back.
+      const result = await client.getVacancyApplication({
+        vacancyId: parsed.data.vacancyId,
+        applicationId: parsed.data.applicationId,
+      });
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error moving PeopleForce vacancy application:', err);
+      sendUpstreamError(res, err, { notFound: 'Vacancy, application or pipeline stage not found', fallback: 'Failed to move vacancy application' });
+    }
+  });
+
+  // POST /api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications/:applicationId/disqualify
+  // Consequential and not idempotent — repeating it re-disqualifies. There is no
+  // confirmation affordance behind a curl, hence the explicit catalog note.
+  app.post('/api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications/:applicationId/disqualify', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const { disqualifyVacancyApplicationSchema } = await import('../peopleforce/server.js');
+      const parsed = disqualifyVacancyApplicationSchema.safeParse({
+        ...req.body,
+        vacancyId: req.params.vacancyId,
+        applicationId: req.params.applicationId,
+      });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const { PeopleForceClient } = await import('../peopleforce/apiHelpers.js');
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      await client.disqualifyVacancyApplication(parsed.data);
+      const result = await client.getVacancyApplication({
+        vacancyId: parsed.data.vacancyId,
+        applicationId: parsed.data.applicationId,
+      });
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error disqualifying PeopleForce vacancy application:', err);
+      sendUpstreamError(res, err, { notFound: 'Vacancy, application or disqualify reason not found', fallback: 'Failed to disqualify vacancy application' });
+    }
+  });
+
   // GET /api/v1/drive/files/:fileId/download - Stream file content
   // Google native types are exported (?exportMime= to override the default).
   // Other types are downloaded as-is via alt=media. Content-Type and a
