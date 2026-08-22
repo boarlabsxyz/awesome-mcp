@@ -3,7 +3,14 @@ import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { z } from 'zod';
 import { UserError } from 'fastmcp';
-import { peopleForceServer, isoDate, createLeaveRequestSchema } from '../peopleforce/server.js';
+import {
+  peopleForceServer,
+  isoDate,
+  createLeaveRequestSchema,
+  moveVacancyApplicationSchema,
+  disqualifyVacancyApplicationSchema,
+  addCandidateNoteSchema,
+} from '../peopleforce/server.js';
 import {
   PeopleForceClient,
   formatEmployeeList,
@@ -1899,6 +1906,65 @@ describe('listEmployees status allowlist', () => {
     const schema = z.enum(EMPLOYEE_STATUS_VALUES);
     for (const v of EMPLOYEE_STATUS_VALUES) {
       assert.equal(schema.safeParse(v).success, true, `${v} should be accepted`);
+    }
+  });
+});
+
+// The REST write routes safeParse req.body with these exact schemas, so a gap
+// here is a gap in the REST surface too — that shared validation is the whole
+// reason the schemas were lifted out of the addTool calls.
+describe('write schemas shared with the REST routes', () => {
+  test('moveVacancyApplication requires a target stage', () => {
+    const r = moveVacancyApplicationSchema.safeParse({ vacancyId: 1, applicationId: 2 });
+    assert.equal(r.success, false);
+    if (!r.success) assert.ok(r.error.flatten().fieldErrors.pipelineStageId);
+  });
+
+  test('moveVacancyApplication accepts string or number ids and an optional automations flag', () => {
+    assert.equal(moveVacancyApplicationSchema.safeParse({
+      vacancyId: 'v-1', applicationId: 2, pipelineStageId: '3',
+    }).success, true);
+    assert.equal(moveVacancyApplicationSchema.safeParse({
+      vacancyId: 1, applicationId: 2, pipelineStageId: 3, performAutomations: false,
+    }).success, true);
+  });
+
+  test('moveVacancyApplication rejects a non-boolean automations flag', () => {
+    const r = moveVacancyApplicationSchema.safeParse({
+      vacancyId: 1, applicationId: 2, pipelineStageId: 3, performAutomations: 'yes',
+    });
+    assert.equal(r.success, false);
+  });
+
+  test('disqualifyVacancyApplication requires a reason id', () => {
+    const r = disqualifyVacancyApplicationSchema.safeParse({ vacancyId: 1, applicationId: 2 });
+    assert.equal(r.success, false);
+    if (!r.success) assert.ok(r.error.flatten().fieldErrors.disqualifyReasonId);
+  });
+
+  test('disqualifyVacancyApplication takes an optional comment', () => {
+    assert.equal(disqualifyVacancyApplicationSchema.safeParse({
+      vacancyId: 1, applicationId: 2, disqualifyReasonId: 3,
+    }).success, true);
+    assert.equal(disqualifyVacancyApplicationSchema.safeParse({
+      vacancyId: 1, applicationId: 2, disqualifyReasonId: 3, comment: 'not a fit',
+    }).success, true);
+  });
+
+  test('addCandidateNote rejects an empty body rather than filing a blank note', () => {
+    assert.equal(addCandidateNoteSchema.safeParse({ candidateId: 1, body: '' }).success, false);
+    assert.equal(addCandidateNoteSchema.safeParse({ candidateId: 1 }).success, false);
+    assert.equal(addCandidateNoteSchema.safeParse({ candidateId: 1, body: 'ok' }).success, true);
+  });
+
+  test('flatten() gives the shape the REST 400 response returns', () => {
+    const r = addCandidateNoteSchema.safeParse({});
+    assert.equal(r.success, false);
+    if (!r.success) {
+      const flat = r.error.flatten();
+      assert.ok(Array.isArray(flat.formErrors));
+      assert.ok(flat.fieldErrors.candidateId);
+      assert.ok(flat.fieldErrors.body);
     }
   });
 });

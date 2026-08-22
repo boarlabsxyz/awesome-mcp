@@ -29,9 +29,11 @@ export function registerListRestEndpoints(server: FastMCP<UserSession>): void {
       '(the client) can run shell commands like curl. The regular MCP tools ' +
       'work without any of this; do NOT call this as a routine discovery step. ' +
       `Lists REST data-plane endpoints under ${BASE_URL}/api/v1/* so a ` +
-      'shell-capable client can fetch bulk responses straight to disk instead ' +
-      'of through the LLM context window. Optional `service` narrows the ' +
-      'result to one provider.',
+      'shell-capable client can move bulk payloads without them crossing the ' +
+      'LLM context window: GET fetches large responses straight to disk, and ' +
+      'POST sends a large request body (or chains a write into a curl | jq ' +
+      'pipeline) without pasting it through a tool call. Optional `service` ' +
+      'narrows the result to one provider.',
     parameters: z.object({
       service: z.enum(SERVICE_VALUES).optional().describe('Restrict to one service.'),
     }),

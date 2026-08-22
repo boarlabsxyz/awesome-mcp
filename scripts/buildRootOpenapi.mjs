@@ -33,6 +33,7 @@ const SERVICE_PREFIX = {
   'openapi-gmail.json': 'Gmail',
   'openapi-slides.json': 'Slides',
   'openapi-clickup.json': 'ClickUp',
+  'openapi-peopleforce.json': 'PeopleForce',
 };
 
 const SHARED_SCHEMAS = new Set(['Error']);
