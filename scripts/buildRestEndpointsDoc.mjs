@@ -71,7 +71,7 @@ lines.push('Every MCP tool response flows through the LLM\'s tool-result channel
 lines.push('');
 lines.push('## Auth');
 lines.push('');
-lines.push('1. From any MCP session, call the `getSecurityToken` MCP tool — it returns a 5-minute bearer.');
+lines.push('1. From any MCP session, call the `mintRestBearerForCurl` MCP tool — it returns a 5-minute bearer.');
 lines.push('2. Pass it as `Authorization: Bearer <token>` against the URLs below.');
 lines.push('');
 lines.push('The same endpoints also accept the permanent dashboard API key (for ChatGPT Custom Actions backward compatibility).');

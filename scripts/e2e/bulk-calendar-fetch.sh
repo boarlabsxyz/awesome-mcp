@@ -5,7 +5,7 @@
 # the raw event bytes flowing through the LLM context window.
 #
 # Inputs:
-#   $1                 bearer token (from the getSecurityToken MCP tool)
+#   $1                 bearer token (from the mintRestBearerForCurl MCP tool)
 #   $2 (optional)      calendar-ids file, one ID per line. Defaults to
 #                      $REPO_ROOT/scripts/e2e/calendar-ids.example.txt
 #                      which contains 16 placeholder IDs.
