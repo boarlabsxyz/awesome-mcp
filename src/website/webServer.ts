@@ -302,9 +302,9 @@ import { getOAuthState, deleteOAuthState, storeAuthCode, storeClient, getClient,
 import { createSession, getSession, deleteSession, Session } from './sessionStore.js';
 import { lookupRestToken } from './restTokenStore.js';
 import { mapSlackErrorToHttpStatus } from './slackErrorMapper.js';
-import { negotiateFormat } from './restContent.js';
+import { negotiateFormat, respondNegotiated } from './restContent.js';
 import { sendUpstreamError } from './restUpstreamError.js';
-import { qstr, qint } from '../util/queryParams.js';
+import { qstr, qint, qarr } from '../util/queryParams.js';
 import { stripTrailingSlashes } from '../util/url.js';
 import { selectTabContent, extractDocBodyText, truncateJsonByLength } from './docContent.js';
 import { clearSessionCache, createUserSession, createUserSessionFromConnection, UserSession } from '../userSession.js';
@@ -2636,6 +2636,13 @@ function registerRestApiRoutes(app: express.Express): void {
             // Outline uses its own session with outlineAccessToken
             const { createOutlineSession } = await import('../userSession.js');
             req.userSession = createOutlineSession(user, connection);
+          } else if (connection.provider === 'peopleforce') {
+            // PeopleForce uses its own session with peopleForceAccessToken.
+            // Without this branch the connection falls through to the Google
+            // OAuth path below and yields a session with no provider token —
+            // auth would pass and the handler would throw at call time.
+            const { createPeopleForceSession } = await import('../userSession.js');
+            req.userSession = createPeopleForceSession(user, connection);
           } else {
             const mcp = await getMcpCatalog(connection.mcpSlug);
             const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
@@ -2665,6 +2672,7 @@ function registerRestApiRoutes(app: express.Express): void {
   const requireSlidesApiKey = createServiceAuth('google-slides', 'slides');
   const requireClickUpApiKey = createServiceAuth('clickup', 'clickup');
   const requireSlackApiKey = createServiceAuth('slack-bot', 'slack');
+  const requirePeopleForceApiKey = createServiceAuth('peopleforce', 'peopleforce');
 
   // JSON body parser already added above for auth routes
 
@@ -4810,6 +4818,618 @@ function registerRestApiRoutes(app: express.Express): void {
       res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || 'Failed to list users' });
     }
   });
+
+
+  // === PeopleForce ===
+  // Every PeopleForce route resolves its token through this guard first.
+  // createServiceAuth falls back to a plain Google session when the user has no
+  // PeopleForce connection, so auth can pass with no provider token at all —
+  // without the check we would build a client with an undefined bearer and
+  // surface a confusing upstream 401 instead of "connect PeopleForce".
+  // peopleForceBaseUrl is deliberately NOT required: it is optional, and
+  // PeopleForceClient falls back to the default tenant base when it is absent.
+  function peopleForceToken(req: ApiAuthenticatedRequest, res: Response): string | null {
+    const token = req.userSession?.peopleForceAccessToken;
+    if (!token) {
+      res.status(403).json({ error: 'PeopleForce connection required for REST. Connect via the dashboard.' });
+      return null;
+    }
+    return token;
+  }
+
+  // Bulk HRIS reads: the employee directory is ~260 records at 50/page, so a
+  // full headcount pull through the LLM context is exactly what this plane
+  // avoids. All four support ?format=text to get the same markdown the MCP
+  // tools render (see respondNegotiated) so the two surfaces can't drift.
+
+  // GET /api/v1/peopleforce/employees - List employees
+  // NOTE: omitting ?status returns ACTIVE employees only, not everyone —
+  // PeopleForce has no "all". A full headcount is status=active + status=inactive.
+  app.get('/api/v1/peopleforce/employees', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatEmployeeList, EMPLOYEE_STATUS_VALUES } = await import('../peopleforce/apiHelpers.js');
+      const status = qstr(req.query.status) || undefined;
+      // Validate against the allowlist rather than passing through: PeopleForce
+      // silently ignores an unknown status and returns the byte-identical
+      // default directory, so a typo would fail open with plausible wrong data.
+      if (status && !(EMPLOYEE_STATUS_VALUES as readonly string[]).includes(status)) {
+        res.status(400).json({ error: `status must be one of: ${EMPLOYEE_STATUS_VALUES.join(', ')}` });
+        return;
+      }
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listEmployees({
+        page: qint(req.query.page, 1, { min: 1 }),
+        status: status as any,
+      });
+      respondNegotiated(req, res, result, () => formatEmployeeList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce employees:', err);
+      sendUpstreamError(res, err, { notFound: 'Employees not found', fallback: 'Failed to list employees' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/employees/:employeeId - Get a single employee
+  app.get('/api/v1/peopleforce/employees/:employeeId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatEmployee } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getEmployee(req.params.employeeId as string);
+      if (!result?.data) {
+        res.status(404).json({ error: 'Employee not found' });
+        return;
+      }
+      respondNegotiated(req, res, result, () => formatEmployee(result.data));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce employee:', err);
+      sendUpstreamError(res, err, { notFound: 'Employee not found', fallback: 'Failed to fetch employee' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/departments - List departments
+  app.get('/api/v1/peopleforce/departments', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatDepartmentList } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listDepartments({ page: qint(req.query.page, 1, { min: 1 }) });
+      respondNegotiated(req, res, result, () => formatDepartmentList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce departments:', err);
+      sendUpstreamError(res, err, { notFound: 'Departments not found', fallback: 'Failed to list departments' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/leave-requests - List leave requests
+  // ?state filters by lifecycle state. PeopleForce has no server-side filter by
+  // employee or date range — page through and filter with jq.
+  app.get('/api/v1/peopleforce/leave-requests', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatLeaveRequestList } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listLeaveRequests({
+        page: qint(req.query.page, 1, { min: 1 }),
+        state: qstr(req.query.state) || undefined,
+      });
+      respondNegotiated(req, res, result, () => formatLeaveRequestList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce leave requests:', err);
+      sendUpstreamError(res, err, { notFound: 'Leave requests not found', fallback: 'Failed to list leave requests' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/leave-requests/:leaveRequestId - Get one leave request
+  app.get('/api/v1/peopleforce/leave-requests/:leaveRequestId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatLeaveRequestList } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getLeaveRequest(req.params.leaveRequestId as string);
+      if (!result?.data) {
+        res.status(404).json({ error: 'Leave request not found' });
+        return;
+      }
+      respondNegotiated(req, res, result, () => formatLeaveRequestList([result.data]));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce leave request:', err);
+      sendUpstreamError(res, err, { notFound: 'Leave request not found', fallback: 'Failed to fetch leave request' });
+    }
+  });
+
+  // --- Reference / lookup lists ---
+  // Every one of these is the same shape: one `page` param, one client call,
+  // one formatter. They're registered from a table rather than fifteen
+  // copy-pasted handlers so a change to the error/negotiation contract lands
+  // in one place — the same reason the MCP side has addPaginatedListTool.
+  const PF_LOOKUP_ROUTES: ReadonlyArray<{
+    path: string;
+    fetch: (client: any, page: number) => Promise<any>;
+    format: (helpers: any, result: any) => string;
+    notFound: string;
+    fallback: string;
+  }> = [
+    {
+      path: '/api/v1/peopleforce/leave-types',
+      fetch: (c, page) => c.listLeaveTypes({ page }),
+      format: (h, r) => h.formatLeaveTypeList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Leave types not found',
+      fallback: 'Failed to list leave types',
+    },
+    {
+      path: '/api/v1/peopleforce/positions',
+      fetch: (c, page) => c.listPositions({ page }),
+      format: (h, r) => h.formatNamedList('Positions', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Positions not found',
+      fallback: 'Failed to list positions',
+    },
+    {
+      path: '/api/v1/peopleforce/divisions',
+      fetch: (c, page) => c.listDivisions({ page }),
+      format: (h, r) => h.formatNamedList('Divisions', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Divisions not found',
+      fallback: 'Failed to list divisions',
+    },
+    {
+      path: '/api/v1/peopleforce/locations',
+      fetch: (c, page) => c.listLocations({ page }),
+      format: (h, r) => h.formatLocationList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Locations not found',
+      fallback: 'Failed to list locations',
+    },
+    {
+      path: '/api/v1/peopleforce/employment-types',
+      fetch: (c, page) => c.listEmploymentTypes({ page }),
+      format: (h, r) => h.formatNamedList('Employment Types', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Employment types not found',
+      fallback: 'Failed to list employment types',
+    },
+    {
+      path: '/api/v1/peopleforce/job-levels',
+      fetch: (c, page) => c.listJobLevels({ page }),
+      format: (h, r) => h.formatNamedList('Job Levels', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Job levels not found',
+      fallback: 'Failed to list job levels',
+    },
+    {
+      path: '/api/v1/peopleforce/skills',
+      fetch: (c, page) => c.listSkills({ page }),
+      format: (h, r) => h.formatNamedList('Skills', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Skills not found',
+      fallback: 'Failed to list skills',
+    },
+    {
+      path: '/api/v1/peopleforce/competencies',
+      fetch: (c, page) => c.listCompetencies({ page }),
+      format: (h, r) => h.formatNamedList('Competencies', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Competencies not found',
+      fallback: 'Failed to list competencies',
+    },
+    {
+      path: '/api/v1/peopleforce/tasks',
+      fetch: (c, page) => c.listTasks({ page }),
+      format: (h, r) => h.formatTaskList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Tasks not found',
+      fallback: 'Failed to list tasks',
+    },
+    {
+      path: '/api/v1/peopleforce/objectives',
+      fetch: (c, page) => c.listObjectives({ page }),
+      format: (h, r) => h.formatObjectiveList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Objectives not found',
+      fallback: 'Failed to list objectives',
+    },
+    {
+      path: '/api/v1/peopleforce/kpis',
+      fetch: (c, page) => c.listKeyPerformanceIndicators({ page }),
+      format: (h, r) => h.formatKpiList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'KPIs not found',
+      fallback: 'Failed to list KPIs',
+    },
+    {
+      path: '/api/v1/peopleforce/employee-tables',
+      fetch: (c, page) => c.listEmployeeTables({ page }),
+      format: (h, r) => h.formatEmployeeTableList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Employee tables not found',
+      fallback: 'Failed to list employee tables',
+    },
+    {
+      path: '/api/v1/peopleforce/knowledge-base/categories',
+      fetch: (c, page) => c.listKnowledgeBaseCategories({ page }),
+      format: (h, r) => h.formatKnowledgeCategoryList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Knowledge base categories not found',
+      fallback: 'Failed to list knowledge base categories',
+    },
+    {
+      path: '/api/v1/peopleforce/recruitment/pipelines',
+      fetch: (c, page) => c.listRecruitmentPipelines({ page }),
+      format: (h, r) => h.formatPipelineList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Recruitment pipelines not found',
+      fallback: 'Failed to list recruitment pipelines',
+    },
+    {
+      path: '/api/v1/peopleforce/recruitment/candidate-movements',
+      fetch: (c, page) => c.listCandidateMovements({ page }),
+      format: (h, r) => h.formatMovementList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Candidate movements not found',
+      fallback: 'Failed to list candidate movements',
+    },
+    {
+      path: '/api/v1/peopleforce/recruitment/disqualify-reasons',
+      fetch: (c, page) => c.listDisqualifyReasons({ page }),
+      format: (h, r) => h.formatNamedList('Disqualify Reasons', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Disqualify reasons not found',
+      fallback: 'Failed to list disqualify reasons',
+    },
+    {
+      path: '/api/v1/peopleforce/recruitment/sources',
+      fetch: (c, page) => c.listRecruitmentSources({ page }),
+      format: (h, r) => h.formatNamedList('Recruitment Sources', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Recruitment sources not found',
+      fallback: 'Failed to list recruitment sources',
+    },
+  ];
+
+  for (const route of PF_LOOKUP_ROUTES) {
+    app.get(route.path, requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const helpers = await import('../peopleforce/apiHelpers.js');
+        const token = peopleForceToken(req, res);
+        if (!token) return;
+        const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+        const result = await route.fetch(client, qint(req.query.page, 1, { min: 1 }));
+        respondNegotiated(req, res, result, () => route.format(helpers, result));
+      } catch (err: any) {
+        console.error(`Error on PeopleForce ${route.path}:`, err);
+        sendUpstreamError(res, err, { notFound: route.notFound, fallback: route.fallback });
+      }
+    });
+  }
+
+  // --- Employee-nested reads ---
+  // These endpoints don't paginate upstream — they always return the full list.
+  const PF_EMPLOYEE_ROUTES: ReadonlyArray<{
+    path: string;
+    fetch: (client: any, employeeId: string) => Promise<any>;
+    format: (helpers: any, result: any) => string;
+    notFound: string;
+    fallback: string;
+  }> = [
+    {
+      path: '/api/v1/peopleforce/employees/:employeeId/leave-balances',
+      fetch: (c, id) => c.listEmployeeLeaveBalances(id),
+      format: (h, r) => h.formatLeaveBalances(r.data ?? []),
+      notFound: 'Leave balances not found',
+      fallback: 'Failed to list leave balances',
+    },
+    {
+      path: '/api/v1/peopleforce/employees/:employeeId/skills',
+      fetch: (c, id) => c.listEmployeeSkills(id),
+      format: (h, r) => h.formatEmployeeSkills(r.data ?? []),
+      notFound: 'Employee skills not found',
+      fallback: 'Failed to list employee skills',
+    },
+    {
+      path: '/api/v1/peopleforce/employees/:employeeId/documents',
+      fetch: (c, id) => c.listEmployeeDocuments(id),
+      format: (h, r) => h.formatUnknownItemList('Employee Documents', r.data ?? []),
+      notFound: 'Employee documents not found',
+      fallback: 'Failed to list employee documents',
+    },
+    {
+      path: '/api/v1/peopleforce/employees/:employeeId/notes',
+      fetch: (c, id) => c.listEmployeeNotes(id),
+      format: (h, r) => h.formatUnknownItemList('Employee Notes', r.data ?? []),
+      notFound: 'Employee notes not found',
+      fallback: 'Failed to list employee notes',
+    },
+    {
+      path: '/api/v1/peopleforce/employees/:employeeId/emergency-contacts',
+      fetch: (c, id) => c.listEmployeeEmergencyContacts(id),
+      format: (h, r) => h.formatUnknownItemList('Emergency Contacts', r.data ?? []),
+      notFound: 'Emergency contacts not found',
+      fallback: 'Failed to list emergency contacts',
+    },
+  ];
+
+  for (const route of PF_EMPLOYEE_ROUTES) {
+    app.get(route.path, requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const helpers = await import('../peopleforce/apiHelpers.js');
+        const token = peopleForceToken(req, res);
+        if (!token) return;
+        const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+        const result = await route.fetch(client, req.params.employeeId as string);
+        respondNegotiated(req, res, result, () => route.format(helpers, result));
+      } catch (err: any) {
+        console.error(`Error on PeopleForce ${route.path}:`, err);
+        sendUpstreamError(res, err, { notFound: route.notFound, fallback: route.fallback });
+      }
+    });
+  }
+
+  // GET /api/v1/peopleforce/employees/:employeeId/tables/:tableInternalName
+  // tableInternalName is a system slug from /employee-tables, not the display
+  // name. The row payload is wrapped in { data: {...} } and unwrapped by the
+  // client — without that every table would read as empty.
+  app.get('/api/v1/peopleforce/employees/:employeeId/tables/:tableInternalName', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatEmployeeTable } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getEmployeeTable(req.params.employeeId as string, req.params.tableInternalName as string);
+      if (!result || typeof result !== 'object') {
+        res.status(404).json({ error: 'Employee table not found' });
+        return;
+      }
+      respondNegotiated(req, res, result, () => formatEmployeeTable(result));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce employee table:', err);
+      sendUpstreamError(res, err, { notFound: 'Employee table not found', fallback: 'Failed to fetch employee table' });
+    }
+  });
+
+  // --- Knowledge base ---
+  // GET /api/v1/peopleforce/knowledge-base/articles?categoryId=... - List articles
+  // Registered before the :articleId route below purely for readability; the two
+  // differ in path depth so ordering is not load-bearing here.
+  app.get('/api/v1/peopleforce/knowledge-base/articles', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatKnowledgeArticleList } = await import('../peopleforce/apiHelpers.js');
+      // Upstream only exposes articles nested under a category — there is no
+      // workspace-wide article list to fall back to.
+      const categoryId = qstr(req.query.categoryId);
+      if (!categoryId) {
+        res.status(400).json({ error: 'categoryId query parameter is required' });
+        return;
+      }
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listKnowledgeBaseArticles({ categoryId, page: qint(req.query.page, 1, { min: 1 }) });
+      respondNegotiated(req, res, result, () => formatKnowledgeArticleList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce knowledge base articles:', err);
+      sendUpstreamError(res, err, { notFound: 'Knowledge base category not found', fallback: 'Failed to list knowledge base articles' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/knowledge-base/articles/:articleId - Get one article
+  app.get('/api/v1/peopleforce/knowledge-base/articles/:articleId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatKnowledgeArticle } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getKnowledgeBaseArticle(req.params.articleId as string);
+      if (!result?.data) {
+        res.status(404).json({ error: 'Knowledge base article not found' });
+        return;
+      }
+      respondNegotiated(req, res, result, () => formatKnowledgeArticle(result.data));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce knowledge base article:', err);
+      sendUpstreamError(res, err, { notFound: 'Knowledge base article not found', fallback: 'Failed to fetch knowledge base article' });
+    }
+  });
+
+  // --- Recruitment: vacancies ---
+  // GET /api/v1/peopleforce/recruitment/vacancies - List vacancies
+  // ?status and ?tagIds are repeatable (?status=a&status=b) or comma-separated.
+  app.get('/api/v1/peopleforce/recruitment/vacancies', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatVacancyList } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listVacancies({
+        page: qint(req.query.page, 1, { min: 1 }),
+        status: qarr(req.query.status),
+        tagIds: qarr(req.query.tagIds),
+      });
+      respondNegotiated(req, res, result, () => formatVacancyList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce vacancies:', err);
+      sendUpstreamError(res, err, { notFound: 'Vacancies not found', fallback: 'Failed to list vacancies' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/recruitment/vacancies/:vacancyId - Get one vacancy
+  app.get('/api/v1/peopleforce/recruitment/vacancies/:vacancyId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatVacancy } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getVacancy(req.params.vacancyId as string);
+      if (!result?.data) {
+        res.status(404).json({ error: 'Vacancy not found' });
+        return;
+      }
+      respondNegotiated(req, res, result, () => formatVacancy(result.data));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce vacancy:', err);
+      sendUpstreamError(res, err, { notFound: 'Vacancy not found', fallback: 'Failed to fetch vacancy' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications - Pipeline excerpt
+  app.get('/api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatApplicationList } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listVacancyApplications({
+        vacancyId: req.params.vacancyId as string,
+        page: qint(req.query.page, 1, { min: 1 }),
+      });
+      respondNegotiated(req, res, result, () => formatApplicationList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce vacancy applications:', err);
+      sendUpstreamError(res, err, { notFound: 'Vacancy not found', fallback: 'Failed to list vacancy applications' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications/:applicationId
+  app.get('/api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications/:applicationId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatApplicationList } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getVacancyApplication({
+        vacancyId: req.params.vacancyId as string,
+        applicationId: req.params.applicationId as string,
+      });
+      if (!result?.data) {
+        res.status(404).json({ error: 'Vacancy application not found' });
+        return;
+      }
+      respondNegotiated(req, res, result, () => formatApplicationList([result.data]));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce vacancy application:', err);
+      sendUpstreamError(res, err, { notFound: 'Vacancy application not found', fallback: 'Failed to fetch vacancy application' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/recruitment/published-vacancies/:vacancyId - Careers-site JD
+  // Some tenants gate the Careers API behind a separate career-site token; on a
+  // not-authorized error, fall back to getVacancy's internal description.
+  app.get('/api/v1/peopleforce/recruitment/published-vacancies/:vacancyId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatPublishedVacancy } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getPublishedVacancy(req.params.vacancyId as string);
+      respondNegotiated(req, res, result, () => formatPublishedVacancy(result));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce published job description:', err);
+      sendUpstreamError(res, err, { notFound: 'Published vacancy not found', fallback: 'Failed to fetch published job description' });
+    }
+  });
+
+  // --- Recruitment: candidates ---
+  // GET /api/v1/peopleforce/recruitment/candidates - List candidates
+  // ?vacancyIds and ?skills are repeatable or comma-separated.
+  app.get('/api/v1/peopleforce/recruitment/candidates', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatCandidateList } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listCandidates({
+        page: qint(req.query.page, 1, { min: 1 }),
+        vacancyIds: qarr(req.query.vacancyIds),
+        pipelineStageId: qstr(req.query.pipelineStageId) || undefined,
+        skills: qarr(req.query.skills),
+        email: qstr(req.query.email) || undefined,
+        createdAtGte: qstr(req.query.createdAtGte) || undefined,
+        createdAtLte: qstr(req.query.createdAtLte) || undefined,
+        updatedAtGte: qstr(req.query.updatedAtGte) || undefined,
+        updatedAtLte: qstr(req.query.updatedAtLte) || undefined,
+      });
+      respondNegotiated(req, res, result, () => formatCandidateList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce candidates:', err);
+      sendUpstreamError(res, err, { notFound: 'Candidates not found', fallback: 'Failed to list candidates' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/recruitment/candidates/:candidateId - Get one candidate
+  app.get('/api/v1/peopleforce/recruitment/candidates/:candidateId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatCandidate } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getCandidate(req.params.candidateId as string);
+      if (!result?.data) {
+        res.status(404).json({ error: 'Candidate not found' });
+        return;
+      }
+      respondNegotiated(req, res, result, () => formatCandidate(result.data));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce candidate:', err);
+      sendUpstreamError(res, err, { notFound: 'Candidate not found', fallback: 'Failed to fetch candidate' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/recruitment/candidates/:candidateId/dossier
+  // Best-effort bundle (profile + notes + experience + education, plus the
+  // application when ?vacancyId is given). Parts that fail are reported inside
+  // the payload rather than failing the request.
+  app.get('/api/v1/peopleforce/recruitment/candidates/:candidateId/dossier', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatCandidateDossier } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getCandidateDossier({
+        candidateId: req.params.candidateId as string,
+        vacancyId: qstr(req.query.vacancyId) || undefined,
+      });
+      respondNegotiated(req, res, result, () => formatCandidateDossier(result));
+    } catch (err: any) {
+      console.error('Error building PeopleForce candidate dossier:', err);
+      sendUpstreamError(res, err, { notFound: 'Candidate not found', fallback: 'Failed to build candidate dossier' });
+    }
+  });
+
+  // --- Candidate-nested reads (no upstream pagination) ---
+  const PF_CANDIDATE_ROUTES: ReadonlyArray<{
+    path: string;
+    fetch: (client: any, candidateId: string) => Promise<any>;
+    format: (helpers: any, result: any) => string;
+    notFound: string;
+    fallback: string;
+  }> = [
+    {
+      path: '/api/v1/peopleforce/recruitment/candidates/:candidateId/notes',
+      fetch: (c, id) => c.listCandidateNotes(id),
+      format: (h, r) => h.formatCandidateNotes(r.data ?? []),
+      notFound: 'Candidate notes not found',
+      fallback: 'Failed to list candidate notes',
+    },
+    {
+      path: '/api/v1/peopleforce/recruitment/candidates/:candidateId/experiences',
+      fetch: (c, id) => c.listCandidateExperiences(id),
+      format: (h, r) => h.formatCandidateExperiences(r.data ?? []),
+      notFound: 'Candidate experiences not found',
+      fallback: 'Failed to list candidate experiences',
+    },
+    {
+      path: '/api/v1/peopleforce/recruitment/candidates/:candidateId/educations',
+      fetch: (c, id) => c.listCandidateEducations(id),
+      format: (h, r) => h.formatCandidateEducations(r.data ?? []),
+      notFound: 'Candidate educations not found',
+      fallback: 'Failed to list candidate educations',
+    },
+  ];
+
+  for (const route of PF_CANDIDATE_ROUTES) {
+    app.get(route.path, requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const helpers = await import('../peopleforce/apiHelpers.js');
+        const token = peopleForceToken(req, res);
+        if (!token) return;
+        const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+        const result = await route.fetch(client, req.params.candidateId as string);
+        respondNegotiated(req, res, result, () => route.format(helpers, result));
+      } catch (err: any) {
+        console.error(`Error on PeopleForce ${route.path}:`, err);
+        sendUpstreamError(res, err, { notFound: route.notFound, fallback: route.fallback });
+      }
+    });
+  }
 
   // GET /api/v1/drive/files/:fileId/download - Stream file content
   // Google native types are exported (?exportMime= to override the default).

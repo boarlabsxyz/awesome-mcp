@@ -1837,21 +1837,30 @@ describe('probationStatus', () => {
 });
 
 describe('probation rendering', () => {
+  // formatEmployee/formatEmployeeList take no `today` argument — they fall
+  // through to probationStatus's `new Date()` default. A hard-coded future date
+  // would therefore start rendering "probation passed" the day it went by, so
+  // derive one at run time instead.
+  const futureDate = (): string =>
+    new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
   test('formatEmployee shows the date and the derived state', () => {
+    const endsOn = futureDate();
     const out = formatEmployee({
-      id: 1, full_name: 'A B', active: true, probation_ends_on: '2026-10-22',
+      id: 1, full_name: 'A B', active: true, probation_ends_on: endsOn,
     });
-    assert.match(out, /Probation ends: 2026-10-22/);
+    assert.match(out, new RegExp(`Probation ends: ${endsOn}`));
     assert.match(out, /Probation: on probation \(derived\)/);
   });
 
   test('formatEmployeeList surfaces probation across the cohort', () => {
     // The list view previously showed no probation at all, so a
     // status=probation query returned rows you could not read.
+    const endsOn = futureDate();
     const out = formatEmployeeList([
-      { id: 1, full_name: 'A B', active: true, probation_ends_on: '2026-10-22' },
+      { id: 1, full_name: 'A B', active: true, probation_ends_on: endsOn },
     ]);
-    assert.match(out, /Probation ends: 2026-10-22/);
+    assert.match(out, new RegExp(`Probation ends: ${endsOn}`));
     assert.match(out, /Probation: on probation \(derived\)/);
   });
 

@@ -40,7 +40,7 @@ const args = parsed.data;
 
 If the schema is currently inline in the `addTool({ parameters: z.object({...}) })` call, lift it to a named `export const XParams = z.object({...})` and reference it from the tool. That refactor is part of adding the endpoint, not a separate cleanup — it's the single mechanism keeping the two surfaces in sync. Shared fragments already live in `src/types.ts` (`DocumentIdParameter`, `RangeParameters`, `TextStyleParameters`) — prefer those.
 
-`z.error.flatten()` gives `{ formErrors, fieldErrors }`, which is genuinely actionable in a curl response. Return it.
+`parsed.error.flatten()` gives `{ formErrors, fieldErrors }`, which is genuinely actionable in a curl response. Return it.
 
 ## Body size
 

@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "awesome-mcp REST Data Plane",
-    "description": "Combined catalog of REST passthrough endpoints across every service wired into this awesome-mcp instance. Use the getSecurityToken MCP tool to mint a 5-minute bearer token, then GET these URLs to fetch bulk responses directly to disk without burning LLM context.",
+    "description": "Combined catalog of REST passthrough endpoints across every service wired into this awesome-mcp instance. Use the mintRestBearerForCurl MCP tool to mint a 5-minute bearer token, then GET these URLs to fetch bulk responses directly to disk without burning LLM context.",
     "version": "1.0.0"
   },
   "servers": [
@@ -5848,6 +5848,990 @@
           }
         }
       }
+    },
+    "/api/v1/peopleforce/employees": {
+      "get": {
+        "operationId": "listPeopleForceEmployees",
+        "summary": "List PeopleForce employees",
+        "description": "List PeopleForce employees. Mirrors the MCP tool `listEmployees`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}": {
+      "get": {
+        "operationId": "getPeopleForceEmployee",
+        "summary": "Get a single PeopleForce employee",
+        "description": "Get a single PeopleForce employee. Mirrors the MCP tool `getEmployee`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/departments": {
+      "get": {
+        "operationId": "listPeopleForceDepartments",
+        "summary": "List PeopleForce departments",
+        "description": "List PeopleForce departments. Mirrors the MCP tool `listDepartments`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/leave-requests": {
+      "get": {
+        "operationId": "listPeopleForceLeaveRequests",
+        "summary": "List PeopleForce leave requests",
+        "description": "List PeopleForce leave requests. Mirrors the MCP tool `listLeaveRequests`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/leave-requests/{leaveRequestId}": {
+      "get": {
+        "operationId": "getPeopleForceLeaveRequest",
+        "summary": "Get a single PeopleForce leave request",
+        "description": "Get a single PeopleForce leave request. Mirrors the MCP tool `getLeaveRequest`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/leave-types": {
+      "get": {
+        "operationId": "listPeopleForceLeaveTypes",
+        "summary": "List PeopleForce leave types with their IDs",
+        "description": "List PeopleForce leave types with their IDs. Mirrors the MCP tool `listLeaveTypes`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/positions": {
+      "get": {
+        "operationId": "listPeopleForcePositions",
+        "summary": "List PeopleForce job positions",
+        "description": "List PeopleForce job positions. Mirrors the MCP tool `listPositions`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/divisions": {
+      "get": {
+        "operationId": "listPeopleForceDivisions",
+        "summary": "List PeopleForce divisions",
+        "description": "List PeopleForce divisions. Mirrors the MCP tool `listDivisions`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/locations": {
+      "get": {
+        "operationId": "listPeopleForceLocations",
+        "summary": "List PeopleForce locations",
+        "description": "List PeopleForce locations. Mirrors the MCP tool `listLocations`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employment-types": {
+      "get": {
+        "operationId": "listPeopleForceEmploymentTypes",
+        "summary": "List PeopleForce employment types",
+        "description": "List PeopleForce employment types. Mirrors the MCP tool `listEmploymentTypes`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/job-levels": {
+      "get": {
+        "operationId": "listPeopleForceJobLevels",
+        "summary": "List PeopleForce job levels",
+        "description": "List PeopleForce job levels. Mirrors the MCP tool `listJobLevels`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/skills": {
+      "get": {
+        "operationId": "listPeopleForceSkills",
+        "summary": "List the PeopleForce workspace skills catalog",
+        "description": "List the PeopleForce workspace skills catalog. Mirrors the MCP tool `listSkills`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/competencies": {
+      "get": {
+        "operationId": "listPeopleForceCompetencies",
+        "summary": "List PeopleForce competencies",
+        "description": "List PeopleForce competencies. Mirrors the MCP tool `listCompetencies`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/tasks": {
+      "get": {
+        "operationId": "listPeopleForceTasks",
+        "summary": "List PeopleForce tasks",
+        "description": "List PeopleForce tasks. Mirrors the MCP tool `listTasks`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/leave-balances": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeLeaveBalances",
+        "summary": "List an employee current leave balances per leave type",
+        "description": "List an employee current leave balances per leave type. Mirrors the MCP tool `listEmployeeLeaveBalances`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/skills": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeSkills",
+        "summary": "List the skills recorded on an employee profile",
+        "description": "List the skills recorded on an employee profile. Mirrors the MCP tool `listEmployeeSkills`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/documents": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeDocuments",
+        "summary": "List documents attached to an employee profile",
+        "description": "List documents attached to an employee profile. Mirrors the MCP tool `listEmployeeDocuments`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/notes": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeNotes",
+        "summary": "List HR notes on an employee profile",
+        "description": "List HR notes on an employee profile. Mirrors the MCP tool `listEmployeeNotes`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/emergency-contacts": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeEmergencyContacts",
+        "summary": "List emergency contacts on an employee profile",
+        "description": "List emergency contacts on an employee profile. Mirrors the MCP tool `listEmployeeEmergencyContacts`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employee-tables": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeTables",
+        "summary": "List PeopleForce employee custom-table definitions",
+        "description": "List PeopleForce employee custom-table definitions. Mirrors the MCP tool `listEmployeeTables`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/tables/{tableInternalName}": {
+      "get": {
+        "operationId": "getPeopleForceEmployeeTable",
+        "summary": "Get one employee custom-table row data",
+        "description": "Get one employee custom-table row data. Mirrors the MCP tool `getEmployeeTable`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/objectives": {
+      "get": {
+        "operationId": "listPeopleForceObjectives",
+        "summary": "List PeopleForce performance objectives (OKRs)",
+        "description": "List PeopleForce performance objectives (OKRs). Mirrors the MCP tool `listObjectives`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/kpis": {
+      "get": {
+        "operationId": "listPeopleForceKpis",
+        "summary": "List PeopleForce key performance indicators",
+        "description": "List PeopleForce key performance indicators. Mirrors the MCP tool `listKeyPerformanceIndicators`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/knowledge-base/categories": {
+      "get": {
+        "operationId": "listPeopleForceKnowledgeBaseCategories",
+        "summary": "List PeopleForce knowledge base categories",
+        "description": "List PeopleForce knowledge base categories. Mirrors the MCP tool `listKnowledgeBaseCategories`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/knowledge-base/articles": {
+      "get": {
+        "operationId": "listPeopleForceKnowledgeBaseArticles",
+        "summary": "List knowledge base articles in a category",
+        "description": "List knowledge base articles in a category. Mirrors the MCP tool `listKnowledgeBaseArticles`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/knowledge-base/articles/{articleId}": {
+      "get": {
+        "operationId": "getPeopleForceKnowledgeBaseArticle",
+        "summary": "Get a single knowledge base article with its body",
+        "description": "Get a single knowledge base article with its body. Mirrors the MCP tool `getKnowledgeBaseArticle`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/vacancies": {
+      "get": {
+        "operationId": "listPeopleForceVacancies",
+        "summary": "List PeopleForce recruitment vacancies",
+        "description": "List PeopleForce recruitment vacancies. Mirrors the MCP tool `listVacancies`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/vacancies/{vacancyId}": {
+      "get": {
+        "operationId": "getPeopleForceVacancy",
+        "summary": "Get a single recruitment vacancy with its pipeline stages",
+        "description": "Get a single recruitment vacancy with its pipeline stages. Mirrors the MCP tool `getVacancy`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/vacancies/{vacancyId}/applications": {
+      "get": {
+        "operationId": "listPeopleForceVacancyApplications",
+        "summary": "List the applications on a recruitment vacancy",
+        "description": "List the applications on a recruitment vacancy. Mirrors the MCP tool `listVacancyApplications`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/vacancies/{vacancyId}/applications/{applicationId}": {
+      "get": {
+        "operationId": "getPeopleForceVacancyApplication",
+        "summary": "Get a single vacancy application",
+        "description": "Get a single vacancy application. Mirrors the MCP tool `getVacancyApplication`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/pipelines": {
+      "get": {
+        "operationId": "listPeopleForceRecruitmentPipelines",
+        "summary": "List recruitment pipelines and their stage definitions",
+        "description": "List recruitment pipelines and their stage definitions. Mirrors the MCP tool `listRecruitmentPipelines`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/candidates": {
+      "get": {
+        "operationId": "listPeopleForceCandidates",
+        "summary": "List recruitment candidates with filters",
+        "description": "List recruitment candidates with filters. Mirrors the MCP tool `listCandidates`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/candidates/{candidateId}": {
+      "get": {
+        "operationId": "getPeopleForceCandidate",
+        "summary": "Get a single recruitment candidate profile",
+        "description": "Get a single recruitment candidate profile. Mirrors the MCP tool `getCandidate`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/candidates/{candidateId}/notes": {
+      "get": {
+        "operationId": "listPeopleForceCandidateNotes",
+        "summary": "List recruiter notes on a candidate",
+        "description": "List recruiter notes on a candidate. Mirrors the MCP tool `listCandidateNotes`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/candidates/{candidateId}/experiences": {
+      "get": {
+        "operationId": "listPeopleForceCandidateExperiences",
+        "summary": "List a candidate work experience entries",
+        "description": "List a candidate work experience entries. Mirrors the MCP tool `listCandidateExperiences`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/candidates/{candidateId}/educations": {
+      "get": {
+        "operationId": "listPeopleForceCandidateEducations",
+        "summary": "List a candidate education entries",
+        "description": "List a candidate education entries. Mirrors the MCP tool `listCandidateEducations`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/candidates/{candidateId}/dossier": {
+      "get": {
+        "operationId": "getPeopleForceCandidateDossier",
+        "summary": "Assemble a candidate dossier for assessment in one call",
+        "description": "Assemble a candidate dossier for assessment in one call. Mirrors the MCP tool `getCandidateDossier`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/candidate-movements": {
+      "get": {
+        "operationId": "listPeopleForceCandidateMovements",
+        "summary": "List candidate pipeline stage transitions",
+        "description": "List candidate pipeline stage transitions. Mirrors the MCP tool `listCandidateMovements`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/disqualify-reasons": {
+      "get": {
+        "operationId": "listPeopleForceDisqualifyReasons",
+        "summary": "List recruitment disqualify reasons with their IDs",
+        "description": "List recruitment disqualify reasons with their IDs. Mirrors the MCP tool `listDisqualifyReasons`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/sources": {
+      "get": {
+        "operationId": "listPeopleForceRecruitmentSources",
+        "summary": "List recruitment sources with their IDs",
+        "description": "List recruitment sources with their IDs. Mirrors the MCP tool `listRecruitmentSources`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/recruitment/published-vacancies/{vacancyId}": {
+      "get": {
+        "operationId": "getPeopleForcePublishedJobDescription",
+        "summary": "Get the public careers-site job description for a vacancy",
+        "description": "Get the public careers-site job description for a vacancy. Mirrors the MCP tool `getPublishedJobDescription`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "peopleforce"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5855,7 +6839,7 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Bearer token from the getSecurityToken MCP tool (5-minute TTL) or a permanent dashboard API key."
+        "description": "Bearer token from the mintRestBearerForCurl MCP tool (5-minute TTL) or a permanent dashboard API key."
       }
     },
     "schemas": {
