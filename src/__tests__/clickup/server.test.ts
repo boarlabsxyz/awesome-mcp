@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
-import { describe, it, afterEach } from 'node:test';
+import { describe, it, afterEach, before } from 'node:test';
 import { UserError } from 'fastmcp';
+import sharp from 'sharp';
+import { __setImageBlobPoolForTests } from '../../images/imageBlobStore.js';
 
 // ---------------------------------------------------------------------------
 // Capture tools from the FastMCP instance.
@@ -81,8 +83,14 @@ describe('ClickUp server tools', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('should have registered all 34 tools', () => {
-    assert.equal(toolMap.size, 34);
+  it('should have registered all 47 tools', () => {
+    // 45 ClickUp-specific tools (incl. tag-management + filterTeamTasks +
+    // subscribeToTaskEvents + getTaskEventHistory + listTaskEventSubscriptions
+    // + debugTaskEventSubscription + unsubscribeFromTaskEvents + doc-image
+    // tools insertImageIntoPage + uploadClickUpDocImage) + 2 shared
+    // (mintRestBearerForCurl, listRestEndpoints) registered on every FastMCP
+    // server.
+    assert.equal(toolMap.size, 47);
   });
 
   // === getClickUpClient / auth guard ===
@@ -433,6 +441,20 @@ describe('ClickUp server tools', () => {
       assert.equal(result, 'No comments on this task.');
     });
 
+    it('returns the full comment text without truncation', async () => {
+      const longComment = 'y'.repeat(500);
+      mockFetch([{
+        status: 200,
+        body: {
+          comments: [
+            { user: { username: 'alice' }, date: '1700000000000', comment_text: longComment },
+          ],
+        },
+      }]);
+      const result = await callTool('getTaskComments', { taskId: 't1' });
+      assert.ok(result.includes(longComment));
+    });
+
     it('handles comment with no user or empty text', async () => {
       mockFetch([{
         status: 200,
@@ -470,6 +492,48 @@ describe('ClickUp server tools', () => {
       const result = await callTool('searchTasks', { workspaceId: 'w1', query: 'nonexistent' });
       assert.ok(result.includes('No tasks found matching'));
       assert.ok(result.includes('nonexistent'));
+    });
+  });
+
+  describe('listSpaceTags', () => {
+    it('formats tags with foreground and background colors', async () => {
+      mockFetch([{
+        status: 200,
+        body: { tags: [{ name: 'bug', tag_fg: '#fff', tag_bg: '#f00' }, { name: 'wip' }] },
+      }]);
+      const result = await callTool('listSpaceTags', { spaceId: 's1' });
+      assert.ok(result.includes('Tag: bug'));
+      assert.ok(result.includes('#fff'));
+      assert.ok(result.includes('#f00'));
+      assert.ok(result.includes('Tag: wip'));
+    });
+
+    it('returns message when no tags', async () => {
+      mockFetch([{ status: 200, body: { tags: [] } }]);
+      const result = await callTool('listSpaceTags', { spaceId: 's1' });
+      assert.ok(result.includes('No tags'));
+    });
+  });
+
+  describe('addTagToTask', () => {
+    it('posts to the per-task tag endpoint and confirms', async () => {
+      const { calls } = mockFetch([{ status: 200, text: '' }]);
+      const result = await callTool('addTagToTask', { taskId: 't1', tagName: 'bug' });
+      assert.equal(calls[0].method, 'POST');
+      assert.equal(calls[0].url, 'https://api.clickup.com/api/v2/task/t1/tag/bug');
+      assert.ok(result.includes('bug'));
+      assert.ok(result.includes('t1'));
+    });
+  });
+
+  describe('removeTagFromTask', () => {
+    it('deletes via the per-task tag endpoint and confirms', async () => {
+      const { calls } = mockFetch([{ status: 200, text: '' }]);
+      const result = await callTool('removeTagFromTask', { taskId: 't1', tagName: 'bug' });
+      assert.equal(calls[0].method, 'DELETE');
+      assert.equal(calls[0].url, 'https://api.clickup.com/api/v2/task/t1/tag/bug');
+      assert.ok(result.includes('bug'));
+      assert.ok(result.includes('t1'));
     });
   });
 
@@ -613,6 +677,28 @@ describe('ClickUp server tools', () => {
       assert.ok(result.includes('Untitled'));
       assert.ok(result.includes('unknown'));
     });
+
+    it('surfaces the pagination cursor when more pages exist', async () => {
+      mockFetch([{
+        status: 200,
+        body: { docs: [{ id: 'd1', name: 'A' }], next_cursor: 'cur-2' },
+      }]);
+      const result = await callTool('listDocs', { workspaceId: 'w1' });
+      assert.ok(result.includes('More docs available. Use cursor: "cur-2"'), result);
+    });
+
+    it('forwards limit and cursor upstream', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { docs: [{ id: 'd1', name: 'A' }] } }]);
+      await callTool('listDocs', { workspaceId: 'w1', limit: 25, cursor: 'abc' });
+      assert.ok(calls[0].url.includes('limit=25'), calls[0].url);
+      assert.ok(calls[0].url.includes('cursor=abc'), calls[0].url);
+    });
+
+    it('emits no cursor line on the last page', async () => {
+      mockFetch([{ status: 200, body: { docs: [{ id: 'd1', name: 'A' }] } }]);
+      const result = await callTool('listDocs', { workspaceId: 'w1' });
+      assert.ok(!result.includes('More docs available'));
+    });
   });
 
   describe('searchDocs', () => {
@@ -631,6 +717,67 @@ describe('ClickUp server tools', () => {
       const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'xyz' });
       assert.ok(result.includes('No docs found matching'));
       assert.ok(result.includes('xyz'));
+    });
+
+    // === Regressions for ClickUp ticket 86cb5r680 ===
+
+    it('matches a multi-word query across punctuation', async () => {
+      // The reported failure: this returned "No docs found" for a doc named
+      // "[AWESOME] Sync - 08/15/2026" because "] " breaks the substring.
+      mockFetch([{
+        status: 200,
+        body: { docs: [{ id: '2kyq568v-29615', name: '[AWESOME] Sync - 08/15/2026' }] },
+      }]);
+      const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'AWESOME Sync' });
+      assert.ok(result.includes('2kyq568v-29615'), result);
+    });
+
+    it('finds a doc that only appears on a later page', async () => {
+      mockFetch([
+        { status: 200, body: { docs: [{ id: 'd1', name: 'Onboarding' }], next_cursor: 'c2' } },
+        { status: 200, body: { docs: [{ id: 'd2', name: 'Sync notes' }] } },
+      ]);
+      const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'Sync' });
+      assert.ok(result.includes('d2'), result);
+    });
+
+    it('always reports the scan extent, so an empty result is not read as absent', async () => {
+      mockFetch([{ status: 200, body: { docs: [{ id: 'd1', name: 'Unrelated' }] } }]);
+      const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'nope' });
+      assert.ok(result.includes('No docs found matching'));
+      assert.ok(/Scanned 1 doc\(s\) across 1 page\(s\)/.test(result), result);
+    });
+
+    it('flags an incomplete scan when the page cap is hit', async () => {
+      mockFetch([{ status: 200, body: { docs: [{ id: 'x', name: 'x' }], next_cursor: 'more' } }]);
+      const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'nope' });
+      assert.ok(result.includes('⚠'), result);
+      assert.ok(/scan cap/i.test(result), result);
+    });
+
+    it('sorts results newest first', async () => {
+      mockFetch([{
+        status: 200,
+        body: { docs: [
+          { id: 'older', name: 'Sync A', date_created: '1000' },
+          { id: 'newer', name: 'Sync B', date_created: '9000' },
+        ] },
+      }]);
+      const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'Sync' });
+      assert.ok(result.indexOf('newer') < result.indexOf('older'), result);
+    });
+
+    it('omits parent_type from the request when EVERYTHING is passed', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { docs: [{ id: 'd1', name: 'Sync' }] } }]);
+      const result = await callTool('searchDocs', { workspaceId: 'w1', query: 'Sync', parentType: 'EVERYTHING' });
+      assert.ok(!calls[0].url.includes('parent_type'), calls[0].url);
+      assert.ok(result.includes('d1'));
+    });
+
+    it('rejects SPACE/FOLDER/LIST without a parentId', async () => {
+      const tool = toolMap.get('searchDocs')!;
+      const parsed = tool.parameters.safeParse({ workspaceId: 'w1', parentType: 'SPACE' });
+      assert.equal(parsed.success, false);
     });
   });
 
@@ -744,16 +891,18 @@ describe('ClickUp server tools', () => {
       assert.ok(result.includes('Status: unknown'));
     });
 
-    it('truncates long descriptions', async () => {
+    it('returns the full, untruncated description', async () => {
       const longDesc = 'x'.repeat(300);
       mockFetch([{
         status: 200,
         body: { id: 't1', name: 'Verbose', status: { status: 'open' }, description: longDesc },
       }]);
       const result = await callTool('getTask', { taskId: 't1' });
-      assert.ok(result.includes('...'));
-      // Should only include first 200 chars
-      assert.ok(result.includes('x'.repeat(200)));
+      // getTask is the single-record tool: it must return everything so
+      // template/summarization workflows read the whole ticket, not a fragment.
+      assert.ok(result.includes(`Description: ${longDesc}`));
+      assert.ok(!result.includes('truncated'));
+      assert.ok(!result.includes('…'));
     });
 
     it('does not add ellipsis for short descriptions', async () => {
@@ -1014,6 +1163,276 @@ describe('ClickUp server tools', () => {
       mockFetch([{ status: 200, body: { teams: [{ id: '999', name: 'Other', members: [] }] } }]);
       const result = await callTool('listWorkspaceMembers', { workspaceId: '123' });
       assert.ok(result.includes('not found'));
+    });
+  });
+
+  // === Doc image tools: insertImageIntoPage / uploadClickUpDocImage ===
+
+  describe('doc image tools', () => {
+    const prevImageBase = process.env.IMAGE_PUBLIC_BASE_URL;
+    const HOSTED_URL = /https:\/\/host\.example\/images\/[0-9a-f]{64}\.webp/;
+    let png: Buffer;
+
+    before(async () => {
+      png = await sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 1, g: 2, b: 3 } } })
+        .png().toBuffer();
+    });
+
+    // Routes fetch() by host: the image URL streams a REAL png (so sharp can
+    // recompress it); api.clickup.com (editPage) returns an OK JSON body. Records
+    // fetched URLs so tests can assert when the image fetch is skipped.
+    function mockFetch({ clickUpOk = true }: { clickUpOk?: boolean } = {}) {
+      const urls: string[] = [];
+      globalThis.fetch = (async (input: any) => {
+        const u = String(input);
+        urls.push(u);
+        if (u.includes('api.clickup.com')) {
+          return clickUpOk
+            ? { ok: true, status: 200, text: async () => '{}', json: async () => ({}) } as any
+            : { ok: false, status: 500, text: async () => 'boom' } as any;
+        }
+        let sent = false;
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (n: string) => (n.toLowerCase() === 'content-type' ? 'image/png' : null) },
+          body: {
+            getReader: () => ({
+              read: async () => (sent ? { done: true } : ((sent = true), { done: false, value: new Uint8Array(png) })),
+              cancel: async () => {},
+              releaseLock: () => {},
+            }),
+            cancel: async () => {},
+          },
+        } as any;
+      }) as any;
+      return urls;
+    }
+
+    // Fake image_blobs pool: emulates INSERT ... ON CONFLICT (rowCount) + SELECT.
+    function fakeImagePool() {
+      const rows = new Map<string, number>();
+      const calls: string[] = [];
+      __setImageBlobPoolForTests({
+        query: async (text: string, params: any[] = []) => {
+          calls.push(text.trim().split('\n')[0]);
+          if (/INSERT INTO image_blobs/.test(text)) {
+            const key = params[0];
+            if (rows.has(key)) return { rows: [], rowCount: 0 };
+            rows.set(key, 1);
+            return { rows: [], rowCount: 1 };
+          }
+          return { rows: [] };
+        },
+      });
+      return calls;
+    }
+
+    afterEach(() => {
+      __setImageBlobPoolForTests(null);
+      if (prevImageBase === undefined) delete process.env.IMAGE_PUBLIC_BASE_URL;
+      else process.env.IMAGE_PUBLIC_BASE_URL = prevImageBase;
+    });
+
+    it('insertImageIntoPage requires a connected ClickUp session', async () => {
+      await assert.rejects(
+        () => callTool('insertImageIntoPage', { workspaceId: 'w', docId: 'd', pageId: 'p', imageUrl: 'https://example.com/x.png' }, sessionWith()),
+        (err: any) => { assert.ok(err instanceof UserError); assert.match(err.message, /ClickUp not connected/); return true; },
+      );
+    });
+
+    it('insertImageIntoPage fails fast when IMAGE_PUBLIC_BASE_URL is unset', async () => {
+      delete process.env.IMAGE_PUBLIC_BASE_URL;
+      await assert.rejects(
+        () => callTool('insertImageIntoPage', { workspaceId: 'w', docId: 'd', pageId: 'p', imageUrl: 'https://example.com/x.png' }),
+        (err: any) => { assert.match(err.message, /IMAGE_PUBLIC_BASE_URL/); return true; },
+      );
+    });
+
+    it('insertImageIntoPage surfaces the Postgres requirement when the store has no DB', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      __setImageBlobPoolForTests(null); // store() → no pool → throws
+      mockFetch();
+      await assert.rejects(
+        () => callTool('insertImageIntoPage', { workspaceId: 'w', docId: 'd', pageId: 'p', imageUrl: 'https://cdn.example.com/pic.png' }),
+        (err: any) => { assert.match(err.message, /requires Postgres/); return true; },
+      );
+    });
+
+    it('insertImageIntoPage re-hosts (WebP) and embeds the image into the page', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example/';
+      const calls = fakeImagePool();
+      mockFetch();
+      const result = await callTool('insertImageIntoPage', {
+        workspaceId: 'w', docId: 'd', pageId: 'p', imageUrl: 'https://cdn.example.com/pic.png', altText: 'hello',
+      });
+      assert.match(result, /Image added to page p \(append\)/);
+      assert.match(result, HOSTED_URL);
+      assert.equal(calls.filter((q) => /INSERT INTO image_blobs/.test(q)).length, 1);
+    });
+
+    it('insertImageIntoPage does NOT delete the blob when the page edit fails', async () => {
+      // Content-addressed blobs are shared/deduped, so there is no orphan cleanup.
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      const calls = fakeImagePool();
+      mockFetch({ clickUpOk: false });
+      await assert.rejects(() => callTool('insertImageIntoPage', {
+        workspaceId: 'w', docId: 'd', pageId: 'p', imageUrl: 'https://cdn.example.com/pic.png',
+      }));
+      assert.equal(calls.filter((q) => /INSERT/.test(q)).length, 1);
+      assert.equal(calls.filter((q) => /DELETE/.test(q)).length, 0);
+    });
+
+    it('insertImageIntoPage skips re-hosting when imageUrl is already on this server (auto-detect)', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      fakeImagePool();
+      const urls = mockFetch();
+      const hosted = 'https://host.example/images/abc.webp';
+      const result = await callTool('insertImageIntoPage', {
+        workspaceId: 'w', docId: 'd', pageId: 'p', imageUrl: hosted,
+      });
+      assert.match(result, new RegExp(`Hosted at: ${hosted.replace(/[.]/g, '\\.')}`));
+      // only the ClickUp editPage call was made — no image fetch/re-host
+      assert.equal(urls.filter((u) => u.includes('/images/')).length, 0);
+      assert.ok(urls.every((u) => u.includes('api.clickup.com')));
+    });
+
+    it('insertImageIntoPage re-hosts a look-alike host (prefix, not our origin)', async () => {
+      // https://host.example.evil.com starts with the base as a string but is a
+      // DIFFERENT origin — it must be fetched and re-hosted, not embedded as-is.
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      fakeImagePool();
+      const urls = mockFetch();
+      const evil = 'https://host.example.evil.com/x.png';
+      const result = await callTool('insertImageIntoPage', {
+        workspaceId: 'w', docId: 'd', pageId: 'p', imageUrl: evil,
+      });
+      // embedded URL is our re-hosted webp, NOT the attacker URL
+      assert.match(result, HOSTED_URL);
+      assert.doesNotMatch(result, /evil\.com/);
+      // the attacker URL was actually fetched (re-hosted)
+      assert.equal(urls.filter((u) => u === evil).length, 1);
+    });
+
+    it('insertImageIntoPage skips re-hosting when skipRehost=true', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      fakeImagePool();
+      const urls = mockFetch();
+      const external = 'https://cdn.example.com/already-fine.png';
+      const result = await callTool('insertImageIntoPage', {
+        workspaceId: 'w', docId: 'd', pageId: 'p', imageUrl: external, skipRehost: true,
+      });
+      assert.match(result, /already-fine\.png/);
+      assert.equal(urls.filter((u) => u.includes('cdn.example.com')).length, 0);
+    });
+
+    it('uploadClickUpDocImage re-hosts and returns a public webp URL', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      fakeImagePool();
+      mockFetch();
+      const result = await callTool('uploadClickUpDocImage', { imageUrl: 'https://cdn.example.com/pic.png' });
+      assert.match(result, /Public URL:/);
+      assert.match(result, HOSTED_URL);
+    });
+
+    it('uploadClickUpDocImage fails fast when IMAGE_PUBLIC_BASE_URL is unset', async () => {
+      delete process.env.IMAGE_PUBLIC_BASE_URL;
+      await assert.rejects(
+        () => callTool('uploadClickUpDocImage', { imageUrl: 'https://example.com/x.png' }),
+        (err: any) => { assert.match(err.message, /IMAGE_PUBLIC_BASE_URL/); return true; },
+      );
+    });
+
+    // === base64 ingest ===
+
+    // Fake pool that records the inserted content-hash key (params[0]).
+    function keyCapturingPool() {
+      const keys: string[] = [];
+      __setImageBlobPoolForTests({
+        query: async (text: string, params: any[] = []) => {
+          if (/INSERT INTO image_blobs/.test(text)) { keys.push(params[0]); return { rows: [], rowCount: 1 }; }
+          return { rows: [] };
+        },
+      });
+      return keys;
+    }
+
+    it('base64 round-trip produces the SAME key as the identical bytes via URL', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      const keys = keyCapturingPool();
+      mockFetch(); // the URL path streams the same `png` bytes
+      await callTool('uploadClickUpDocImage', { imageUrl: 'https://cdn.example.com/pic.png' });
+      await callTool('uploadClickUpDocImage', { imageBase64: png.toString('base64') });
+      assert.equal(keys.length, 2);
+      assert.equal(keys[0], keys[1]);
+    });
+
+    it('accepts a data-URL prefixed base64 payload', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      fakeImagePool();
+      const result = await callTool('uploadClickUpDocImage', {
+        imageBase64: `data:image/png;base64,${png.toString('base64')}`,
+      });
+      assert.match(result, HOSTED_URL);
+    });
+
+    it('accepts whitespace/newline-padded base64', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      fakeImagePool();
+      mockFetch(); // insertImageIntoPage still calls editPage (api.clickup.com)
+      const padded = png.toString('base64').replace(/(.{8})/g, '$1\n  ');
+      const result = await callTool('insertImageIntoPage', {
+        workspaceId: 'w', docId: 'd', pageId: 'p', imageBase64: padded,
+      });
+      assert.match(result, /Image added to page p/);
+      assert.match(result, HOSTED_URL);
+    });
+
+    it('rejects a non-base64 string without echoing it (small error)', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      fakeImagePool();
+      const bad = '@@@not base64@@@ ###';
+      await assert.rejects(
+        () => callTool('uploadClickUpDocImage', { imageBase64: bad }),
+        (err: any) => {
+          assert.match(err.message, /not valid base64/);
+          assert.ok(err.message.length < 1024);
+          assert.ok(!err.message.includes(bad));
+          return true;
+        },
+      );
+    });
+
+    it('rejects when BOTH imageUrl and imageBase64 are provided', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      await assert.rejects(
+        () => callTool('uploadClickUpDocImage', { imageUrl: 'https://x/y.png', imageBase64: png.toString('base64') }),
+        (err: any) => { assert.match(err.message, /only one of imageUrl or imageBase64/); return true; },
+      );
+    });
+
+    it('rejects when NEITHER imageUrl nor imageBase64 is provided', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      await assert.rejects(
+        () => callTool('insertImageIntoPage', { workspaceId: 'w', docId: 'd', pageId: 'p' }),
+        (err: any) => { assert.match(err.message, /exactly one of imageUrl or imageBase64/); return true; },
+      );
+    });
+
+    it('rejects an oversized base64 string BEFORE decoding, with a small error and no store', async () => {
+      process.env.IMAGE_PUBLIC_BASE_URL = 'https://host.example';
+      const calls = fakeImagePool();
+      const huge = 'A'.repeat(2 * 1024 * 1024 + 4); // > 2MB, valid chars, len % 4 === 0
+      await assert.rejects(
+        () => callTool('uploadClickUpDocImage', { imageBase64: huge }),
+        (err: any) => {
+          assert.match(err.message, /too large/);
+          assert.ok(err.message.length < 1024);
+          assert.ok(!err.message.includes(huge));
+          return true;
+        },
+      );
+      assert.equal(calls.filter((q) => /INSERT/.test(q)).length, 0);
     });
   });
 });

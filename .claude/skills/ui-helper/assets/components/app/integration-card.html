@@ -1,0 +1,74 @@
+<!-- Integration card. Use in a .integrations-grid layout. Mirror public/integrations.html:127-200. -->
+<div class="integrations-grid">
+  <article class="integration-card">
+    <header class="integration-head">
+      <div class="integration-icon">
+        <img src="{{iconUrl}}" alt="" /> <!-- or: <span class="integration-icon-fallback">{{emoji}}</span> -->
+      </div>
+      <div class="integration-title">
+        <h3>{{name}}</h3>
+        <span class="provider-badge">{{provider}}</span>
+      </div>
+    </header>
+    <p class="integration-tagline">{{tagline}}</p>
+    <!-- TODO: action footer -->
+  </article>
+</div>
+
+<style>
+.integrations-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 1rem;
+}
+.integration-card {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+.integration-card:hover,
+.integration-card:focus-within {
+  background: rgba(255,255,255,0.05);
+  border-color: rgba(255,255,255,0.15);
+}
+.integration-head { display: flex; align-items: center; gap: 0.85rem; }
+.integration-icon {
+  width: 44px;
+  height: 44px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.integration-icon img { width: 28px; height: 28px; object-fit: contain; }
+.integration-icon-fallback { font-size: 1.4rem; }
+.integration-title { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+.integration-title h3 { font-size: 1rem; font-weight: 600; letter-spacing: -0.01em; }
+.provider-badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 500;
+  background: rgba(0,112,243,0.15);
+  color: #4ea3ff;
+  border: 1px solid rgba(0,112,243,0.3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  align-self: flex-start;
+}
+.integration-tagline {
+  font-size: 0.9rem;
+  color: #aaa;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+</style>

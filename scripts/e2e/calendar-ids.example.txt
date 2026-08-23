@@ -1,0 +1,19 @@
+# Example calendar IDs file for scripts/e2e/bulk-calendar-fetch.sh.
+# One calendar ID per line. Lines starting with # are ignored.
+# Replace these with real calendar IDs from your tenant before running.
+primary
+team-calendar-1@group.calendar.google.com
+team-calendar-2@group.calendar.google.com
+team-calendar-3@group.calendar.google.com
+team-calendar-4@group.calendar.google.com
+team-calendar-5@group.calendar.google.com
+team-calendar-6@group.calendar.google.com
+team-calendar-7@group.calendar.google.com
+team-calendar-8@group.calendar.google.com
+team-calendar-9@group.calendar.google.com
+team-calendar-10@group.calendar.google.com
+team-calendar-11@group.calendar.google.com
+team-calendar-12@group.calendar.google.com
+team-calendar-13@group.calendar.google.com
+team-calendar-14@group.calendar.google.com
+team-calendar-15@group.calendar.google.com

@@ -1,0 +1,17 @@
+<!-- App empty state. Use when a list has zero items. -->
+<div class="empty-state">
+  <p>{{message}}</p>
+  <button class="btn-primary" type="button">{{action-label}}</button>
+</div>
+
+<style>
+.empty-state {
+  text-align: center;
+  padding: 3rem;
+  color: #888;
+  background: #0a0a0a;
+  border-radius: 12px;
+  border: 2px dashed rgba(255,255,255,0.15);
+}
+.empty-state p { margin-bottom: 1rem; }
+</style>

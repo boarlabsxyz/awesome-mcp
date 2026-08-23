@@ -3,13 +3,37 @@ import { FastMCP, UserError } from 'fastmcp';
 import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
-import { ClickUpClient, markdownToCommentBlocks } from './apiHelpers.js';
+import {
+  ClickUpClient,
+  collectTasksInCloseWindow,
+  cursorFromEnvelope,
+  DOCS_MAX_PAGES,
+  docsFromEnvelope,
+  formatCloseWindowCapMessage,
+  markdownToCommentBlocks,
+  parseCloseWindow,
+  parseTimestampInput,
+} from './apiHelpers.js';
+import { formatTask, formatTaskList } from './formatHelpers.js';
+import { fetchImageBytes } from './docImageStore.js';
+import { store as storeImageBlob, getImagePublicBaseUrl } from '../images/imageBlobStore.js';
+import {
+  CAPTURED_EVENTS,
+  debugTaskEventSubscriptionFlow,
+  queryTaskEventsFlow,
+  subscribeToTaskEventsFlow,
+} from './webhookHelpers.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 export const clickUpServer = new FastMCP<UserSession>({
   name: 'ClickUp MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'clickup'),
 });
+
+registerMintRestBearerForCurl(clickUpServer);
+registerListRestEndpoints(clickUpServer);
 
 function getClickUpClient(session?: UserSession): ClickUpClient {
   if (!session?.clickUpAccessToken) {
@@ -18,49 +42,106 @@ function getClickUpClient(session?: UserSession): ClickUpClient {
   return new ClickUpClient(session.clickUpAccessToken);
 }
 
-function formatCustomFieldValue(cf: any): string {
-  if (cf.value === null || cf.value === undefined) return '[empty]';
-  // Dropdown: value is the option orderindex, type_config.options has the labels
-  if (cf.type === 'drop_down' && cf.type_config?.options) {
-    const opt = cf.type_config.options.find((o: any) => String(o.orderindex) === String(cf.value));
-    return opt ? `${opt.name} (id: ${opt.id})` : String(cf.value);
+// Base64 ingest is a fallback for clients that can't reach POST /images/upload.
+// Caps are much tighter than the URL path's 20MB because the payload rides in the
+// calling model's context window. The 2MB post-recompression cap in store() still
+// applies afterward.
+const MAX_BASE64_STRING_BYTES = 2 * 1024 * 1024;    // reject the string before decode
+const MAX_BASE64_DECODED_BYTES = 1.5 * 1024 * 1024; // reject decoded bytes
+
+// Exactly one of imageUrl / imageBase64 must be present. Never echoes values.
+function assertOneImageSource(args: { imageUrl?: string; imageBase64?: string }): void {
+  const hasUrl = typeof args.imageUrl === 'string' && args.imageUrl.length > 0;
+  const hasB64 = typeof args.imageBase64 === 'string' && args.imageBase64.length > 0;
+  if (hasUrl && hasB64) {
+    throw new UserError('Provide only one of imageUrl or imageBase64, not both.');
   }
-  // Labels: value is array of label UUIDs
-  if (cf.type === 'labels' && Array.isArray(cf.value) && cf.type_config?.options) {
-    return cf.value.map((uuid: string) => {
-      const opt = cf.type_config.options.find((o: any) => o.id === uuid);
-      return opt ? opt.label : uuid;
-    }).join(', ');
+  if (!hasUrl && !hasB64) {
+    throw new UserError('Provide exactly one of imageUrl or imageBase64.');
   }
-  // Users: value is array of user objects
-  if (cf.type === 'users' && Array.isArray(cf.value)) {
-    return cf.value.map((u: any) => u.username || u.email || u.id).join(', ');
-  }
-  if (typeof cf.value === 'object') return JSON.stringify(cf.value);
-  return String(cf.value);
 }
 
-function formatTask(task: any): string {
-  const parts = [
-    `Task: ${task.name}`,
-    `  ID: ${task.id}`,
-    `  Status: ${task.status?.status || 'unknown'}`,
-  ];
-  if (task.priority) parts.push(`  Priority: ${task.priority.priority || task.priority}`);
-  if (task.assignees?.length) parts.push(`  Assignees: ${task.assignees.map((a: any) => a.username || a.email).join(', ')}`);
-  if (task.due_date) parts.push(`  Due: ${new Date(parseInt(task.due_date)).toISOString()}`);
-  if (task.description) parts.push(`  Description: ${task.description.substring(0, 200)}${task.description.length > 200 ? '...' : ''}`);
-  if (task.url) parts.push(`  URL: ${task.url}`);
-  if (task.list) parts.push(`  List: ${task.list.name} (${task.list.id})`);
-  if (task.tags?.length) parts.push(`  Tags: ${task.tags.map((t: any) => t.name).join(', ')}`);
-  if (task.custom_fields?.length) {
-    const cfParts = task.custom_fields
-      .filter((cf: any) => cf.value !== null && cf.value !== undefined)
-      .map((cf: any) => `    ${cf.name}: ${formatCustomFieldValue(cf)}`);
-    if (cfParts.length) parts.push(`  Custom Fields:\n${cfParts.join('\n')}`);
+// Decode a base64 image payload to raw bytes. Does NOT validate the image format
+// or normalize it — that stays store()'s single responsibility. CRITICAL: never
+// put the payload (or any slice of it) into an error; it can be ~2MB and would
+// blow up the caller's context and flood logs. Only fileName + sizes appear.
+function decodeBase64Image(raw: string, fileName?: string): Buffer {
+  const where = fileName ? ` (${fileName})` : '';
+
+  // Strip a data-URL prefix (data:image/png;base64,....) if present.
+  let s = raw;
+  if (s.startsWith('data:')) {
+    const comma = s.indexOf(',');
+    if (comma !== -1) s = s.slice(comma + 1);
   }
-  return parts.join('\n');
+  // Strip all whitespace / newlines.
+  s = s.replace(/\s+/g, '');
+
+  if (s.length === 0) {
+    throw new UserError(`imageBase64${where} is empty.`);
+  }
+  // Reject the STRING before decoding.
+  if (s.length > MAX_BASE64_STRING_BYTES) {
+    throw new UserError(`imageBase64${where} is too large (${s.length} chars). base64 is for small images (~100KB); use imageUrl for anything larger.`);
+  }
+  // Validate it is actually base64 BEFORE decoding — Buffer.from silently drops
+  // invalid characters and returns garbage otherwise, which would reach sharp as
+  // nonsense bytes.
+  if (s.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(s)) {
+    throw new UserError(`imageBase64${where} is not valid base64.`);
+  }
+
+  const buf = Buffer.from(s, 'base64');
+  if (buf.length === 0) {
+    throw new UserError(`imageBase64${where} decoded to zero bytes.`);
+  }
+  if (buf.length > MAX_BASE64_DECODED_BYTES) {
+    throw new UserError(`Decoded image${where} is too large (${buf.length} bytes, max ${MAX_BASE64_DECODED_BYTES}). base64 is for small images; use imageUrl for anything larger.`);
+  }
+  return buf;
 }
+
+// Produce raw image bytes from whichever source the caller supplied. Assumes
+// assertOneImageSource() already ran. Both branches converge on store().
+async function imageBytesFromArgs(
+  args: { imageUrl?: string; imageBase64?: string; fileName?: string },
+): Promise<Buffer> {
+  if (typeof args.imageBase64 === 'string' && args.imageBase64.length > 0) {
+    return decodeBase64Image(args.imageBase64, args.fileName);
+  }
+  return fetchImageBytes(args.imageUrl as string);
+}
+
+// The single write path for image bytes: source → store() (magic-byte validation,
+// WebP normalization, 2MB cap, dedup) → public URL to embed.
+async function storeImageFromArgs(
+  args: { imageUrl?: string; imageBase64?: string; fileName?: string },
+): Promise<string> {
+  const bytes = await imageBytesFromArgs(args);
+  const { url } = await storeImageBlob(bytes, '');
+  return url;
+}
+
+// True only when imageUrl is an http(s) URL actually served by our image host:
+// same origin as the public base AND a /images/ path. A naive startsWith(base)
+// check would wrongly match https://host.example.evil.com/... (a different
+// origin that merely shares the base as a string prefix).
+function isImageUrlOnOurHost(imageUrl: string, publicBase: string): boolean {
+  let parsed: URL;
+  let base: URL;
+  try {
+    parsed = new URL(imageUrl);
+    base = new URL(publicBase);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  return parsed.origin === base.origin && parsed.pathname.startsWith('/images/');
+}
+
+// formatTask / formatCustomFieldValue / formatTaskList moved to ./formatHelpers.js
+// so the REST data plane (webServer.ts) can reuse the same rendering when
+// callers request `Accept: text/plain` on /api/v1/clickup/tasks/* endpoints.
 
 // === Tier 1: Core Navigation ===
 
@@ -159,7 +240,7 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'getTask',
   annotations: { readOnlyHint: true },
-  description: 'Get detailed information about a specific ClickUp task by its ID.',
+  description: 'Get detailed information about a specific ClickUp task by its ID. Returns the FULL, untruncated description — use this (not the list tools, which show a bounded preview) when you need to read a ticket in full to summarize it, reuse it as a template, or check acceptance criteria.',
   parameters: z.object({
     taskId: z.string().describe('The task ID (e.g., "abc123" or custom task ID).'),
     includeSubtasks: z.boolean().optional().default(false).describe('Include subtasks in response.'),
@@ -167,7 +248,9 @@ clickUpServer.addTool({
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
     const task = await client.getTask(args.taskId, args.includeSubtasks);
-    let output = formatTask(task);
+    // Single-record tool: return the description untruncated so template/
+    // summarization workflows read the whole ticket, not a 200-char fragment.
+    let output = formatTask(task, { fullDescription: true });
     if (args.includeSubtasks && task.subtasks?.length) {
       output += '\n\n  Subtasks:\n' + task.subtasks.map((st: any) =>
         `    - ${st.name} (${st.id}) [${st.status?.status || 'unknown'}]`
@@ -180,20 +263,47 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'listTasks',
   annotations: { readOnlyHint: true },
-  description: 'List tasks in a ClickUp list with optional filters.',
+  description: 'List tasks in a ClickUp list with optional filters. To query tasks closed within a window, set closedAfter and/or closedBefore — the tool then forces include_closed, auto-paginates up to 2000 tasks, and filters locally on date_closed (ClickUp\'s REST API has no server-side close-date filter).',
   parameters: z.object({
     listId: z.string().describe('The list ID to get tasks from.'),
     archived: z.boolean().optional().default(false).describe('Include archived tasks.'),
-    page: z.number().int().min(0).optional().describe('Page number (0-based). Each page returns up to 100 tasks.'),
+    page: z.number().int().min(0).optional().describe('Page number (0-based). Each page returns up to 100 tasks. Ignored when closedAfter/closedBefore is set.'),
     orderBy: z.enum(['id', 'created', 'updated', 'due_date']).optional().describe('Field to order by.'),
     reverse: z.boolean().optional().default(false).describe('Reverse the order.'),
     subtasks: z.boolean().optional().default(false).describe('Include subtasks.'),
     statuses: z.array(z.string()).optional().describe('Filter by status names.'),
-    includeClosed: z.boolean().optional().default(false).describe('Include closed tasks.'),
+    includeClosed: z.boolean().optional().default(false).describe('Include closed tasks. Automatically forced true when closedAfter/closedBefore is set.'),
     assignees: z.array(z.string()).optional().describe('Filter by assignee user IDs.'),
+    closedAfter: z.string().optional().describe('Only return tasks closed at/after this time. ISO string or Unix ms. Enables auto-pagination + local date_closed filtering.'),
+    closedBefore: z.string().optional().describe('Only return tasks closed at/before this time. ISO string or Unix ms. Enables auto-pagination + local date_closed filtering.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
+    const win = parseCloseWindow(args.closedAfter, args.closedBefore);
+    if (win.error) throw new UserError(win.error);
+
+    if (win.from !== undefined || win.to !== undefined) {
+      const { tasks, pagesScanned, hitCap } = await collectTasksInCloseWindow(
+        async (page) => {
+          const res = await client.getTasks(args.listId, {
+            archived: args.archived,
+            page,
+            order_by: args.orderBy,
+            reverse: args.reverse,
+            subtasks: args.subtasks,
+            statuses: args.statuses,
+            include_closed: true,
+            assignees: args.assignees,
+          });
+          return res.tasks || [];
+        },
+        win.from,
+        win.to,
+      );
+      if (hitCap) throw new UserError(formatCloseWindowCapMessage(pagesScanned));
+      return formatTaskList(tasks);
+    }
+
     const result = await client.getTasks(args.listId, {
       archived: args.archived,
       page: args.page,
@@ -204,9 +314,7 @@ clickUpServer.addTool({
       include_closed: args.includeClosed,
       assignees: args.assignees,
     });
-    const tasks = result.tasks || [];
-    if (tasks.length === 0) return 'No tasks found.';
-    return tasks.map(formatTask).join('\n\n');
+    return formatTaskList(result.tasks || []);
   },
 });
 
@@ -360,7 +468,11 @@ clickUpServer.addTool({
       const text = c.comment_text
         || (Array.isArray(c.comment) ? c.comment.map((p: any) => p.text || '').join('') : '')
         || '[empty]';
-      return `Comment by ${author} (${date}):\n  ${text.substring(0, 300)}`;
+      // Return the full comment text. This is the only comments tool, so
+      // truncating silently (previously at 300 chars, with no ellipsis or
+      // length signal) dropped thread content with no way for the caller to
+      // tell — the same silent-truncation failure fixed for getTask.
+      return `Comment by ${author} (${date}):\n  ${text}`;
     }).join('\n\n');
   },
 });
@@ -368,26 +480,113 @@ clickUpServer.addTool({
 // === Tier 3: Search ===
 
 clickUpServer.addTool({
+  name: 'filterTeamTasks',
+  annotations: { readOnlyHint: true },
+  description: 'Query tasks across a ClickUp workspace using ClickUp\'s server-side "Get Filtered Team Tasks" endpoint (GET /api/v2/team/{team_id}/task). One paginated call replaces per-list enumeration for workspace-wide digests. Returns tasks the caller can access (naturally scoped by the OAuth identity), 100 per page — iterate `page` from 0 to fetch all. Supports assignees, statuses, tags, scope narrowing (spaceIds/projectIds/listIds), and date ranges on date_created / date_updated / due_date. IMPORTANT: ClickUp does NOT support date_closed / date_done filters or a close-date sort here — for "closed since T", query with `dateUpdatedGt=T` (closing bumps date_updated, so this is a superset) and partition on each task\'s `date_closed` client-side.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+    assignees: z.array(z.string()).optional().describe('Filter to tasks assigned to any of these user IDs.'),
+    statuses: z.array(z.string()).optional().describe('Filter to tasks in any of these status names.'),
+    tags: z.array(z.string()).optional().describe('Filter to tasks with any of these tag names.'),
+    spaceIds: z.array(z.string()).optional().describe('Narrow to tasks in these space IDs.'),
+    projectIds: z.array(z.string()).optional().describe('Narrow to tasks in these folder (project) IDs.'),
+    listIds: z.array(z.string()).optional().describe('Narrow to tasks in these list IDs.'),
+    dateCreatedGt: z.string().optional().describe('Only tasks created at/after this time. ISO string or Unix ms.'),
+    dateCreatedLt: z.string().optional().describe('Only tasks created at/before this time. ISO string or Unix ms.'),
+    dateUpdatedGt: z.string().optional().describe('Only tasks updated at/after this time. ISO string or Unix ms. Use as a superset for "closed since T" queries — closing a task bumps date_updated.'),
+    dateUpdatedLt: z.string().optional().describe('Only tasks updated at/before this time. ISO string or Unix ms.'),
+    dueDateGt: z.string().optional().describe('Only tasks with due_date at/after this time. ISO string or Unix ms.'),
+    dueDateLt: z.string().optional().describe('Only tasks with due_date at/before this time. ISO string or Unix ms.'),
+    orderBy: z.enum(['id', 'created', 'updated', 'due_date']).optional().describe('Sort field. No server-side close-date sort — sort client-side if needed.'),
+    reverse: z.boolean().optional().default(false).describe('Reverse the sort order.'),
+    subtasks: z.boolean().optional().default(false).describe('Include subtasks in results.'),
+    includeClosed: z.boolean().optional().default(false).describe('Include closed/completed tasks.'),
+    page: z.number().int().min(0).optional().describe('Page number (0-based). 100 tasks per page. Omit to start at page 0; iterate until a page returns fewer than 100.'),
+    custom_fields: z.array(z.object({
+      field_id: z.string().describe('The custom field ID.'),
+      operator: z.enum(['=', '<', '>', '>=', '<=', '!=', 'IS NULL', 'IS NOT NULL', 'RANGE', 'ANY', 'ALL', 'NOT ANY', 'NOT ALL']).describe('Comparison operator.'),
+      value: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional().describe('Value to compare against. Use an array for ANY/ALL. For dropdown fields, use the option UUID (id from getAccessibleCustomFields), not orderindex or label.'),
+    })).optional().describe('Filter by custom fields.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    const parseTs = (input: string | undefined, field: string): number | undefined => {
+      if (!input) return undefined;
+      const ts = parseTimestampInput(input);
+      if (Number.isNaN(ts)) throw new UserError(`Invalid ${field}: ${input}`);
+      return ts;
+    };
+    const result = await client.filterTeamTasks(args.workspaceId, {
+      page: args.page,
+      order_by: args.orderBy,
+      reverse: args.reverse,
+      subtasks: args.subtasks,
+      include_closed: args.includeClosed,
+      assignees: args.assignees,
+      statuses: args.statuses,
+      tags: args.tags,
+      space_ids: args.spaceIds,
+      project_ids: args.projectIds,
+      list_ids: args.listIds,
+      date_created_gt: parseTs(args.dateCreatedGt, 'dateCreatedGt'),
+      date_created_lt: parseTs(args.dateCreatedLt, 'dateCreatedLt'),
+      date_updated_gt: parseTs(args.dateUpdatedGt, 'dateUpdatedGt'),
+      date_updated_lt: parseTs(args.dateUpdatedLt, 'dateUpdatedLt'),
+      due_date_gt: parseTs(args.dueDateGt, 'dueDateGt'),
+      due_date_lt: parseTs(args.dueDateLt, 'dueDateLt'),
+      custom_fields: args.custom_fields,
+    });
+    const tasks = result.tasks || [];
+    if (tasks.length === 0) return 'No tasks found matching filters.';
+    return `Found ${tasks.length} task(s):\n\n` + tasks.map((t: any) => formatTask(t)).join('\n\n');
+  },
+});
+
+clickUpServer.addTool({
   name: 'searchTasks',
   annotations: { readOnlyHint: true },
-  description: 'Search for tasks across a ClickUp workspace. Supports filtering by name (client-side substring match) and/or custom fields. By default excludes closed/completed tasks — set includeClosed=true to include them.',
+  description: 'Search for tasks across a ClickUp workspace. Supports filtering by name (client-side substring match) and/or custom fields. By default excludes closed/completed tasks — set includeClosed=true to include them. To query tasks closed within a window, set closedAfter and/or closedBefore — the tool then forces include_closed, auto-paginates up to 2000 tasks, and filters locally on date_closed (ClickUp\'s REST API has no server-side close-date filter).',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID to search in.'),
     query: z.string().describe('Filter by task name (case-insensitive substring match). Use empty string to skip name filtering.'),
-    page: z.number().int().min(0).optional().describe('Page number (0-based). Results limited to 100 per page.'),
-    includeClosed: z.boolean().optional().default(false).describe('Include closed/completed tasks in results.'),
+    page: z.number().int().min(0).optional().describe('Page number (0-based). Results limited to 100 per page. Ignored when closedAfter/closedBefore is set.'),
+    includeClosed: z.boolean().optional().default(false).describe('Include closed/completed tasks in results. Automatically forced true when closedAfter/closedBefore is set.'),
     custom_fields: z.array(z.object({
       field_id: z.string().describe('The custom field ID.'),
       operator: z.enum(['=', '<', '>', '>=', '<=', '!=', 'IS NULL', 'IS NOT NULL', 'RANGE', 'ANY', 'ALL', 'NOT ANY', 'NOT ALL']).describe('Comparison operator.'),
       value: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional().describe('Value to compare against. Use an array for ANY/ALL operators. For dropdown fields, use the option UUID (id from getAccessibleCustomFields), not orderindex or label.'),
     })).optional().describe('Filter by custom fields. Each entry needs field_id, operator, and optionally value.'),
+    closedAfter: z.string().optional().describe('Only return tasks closed at/after this time. ISO string or Unix ms. Enables auto-pagination + local date_closed filtering.'),
+    closedBefore: z.string().optional().describe('Only return tasks closed at/before this time. ISO string or Unix ms. Enables auto-pagination + local date_closed filtering.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
+    const win = parseCloseWindow(args.closedAfter, args.closedBefore);
+    if (win.error) throw new UserError(win.error);
+
+    if (win.from !== undefined || win.to !== undefined) {
+      // Pass empty query to bypass client.searchTasks's client-side name filter so
+      // the loop's "page < 100 → stop" heuristic sees the raw ClickUp page size,
+      // not the name-filtered subset. We re-apply the name filter after collecting.
+      const { tasks, pagesScanned, hitCap } = await collectTasksInCloseWindow(
+        async (page) => {
+          const res = await client.searchTasks(args.workspaceId, '', page, args.custom_fields, true);
+          return res.tasks || [];
+        },
+        win.from,
+        win.to,
+      );
+      if (hitCap) throw new UserError(formatCloseWindowCapMessage(pagesScanned));
+      const q = args.query.toLowerCase();
+      const filtered = args.query ? tasks.filter((t: any) => t.name?.toLowerCase().includes(q)) : tasks;
+      if (filtered.length === 0) return `No tasks found${args.query ? ` matching "${args.query}"` : ''} closed in window.`;
+      return `Found ${filtered.length} task(s) closed in window:\n\n` + filtered.map((t) => formatTask(t)).join('\n\n');
+    }
+
     const result = await client.searchTasks(args.workspaceId, args.query, args.page, args.custom_fields, args.includeClosed);
     const tasks = result.tasks || [];
     if (tasks.length === 0) return `No tasks found${args.query ? ` matching "${args.query}"` : ''}.`;
-    return `Found ${tasks.length} task(s):\n\n` + tasks.map(formatTask).join('\n\n');
+    return `Found ${tasks.length} task(s):\n\n` + tasks.map((t: any) => formatTask(t)).join('\n\n');
   },
 });
 
@@ -420,7 +619,7 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'setCustomFieldValue',
   annotations: { readOnlyHint: false },
-  description: 'Set a custom field value on a ClickUp task. Use getAccessibleCustomFields first to find the field ID and type.',
+  description: 'Set a custom field value on a ClickUp task. Use getAccessibleCustomFields first to find the field ID and type. Value shape depends on field type: text/email/phone → string; number → number; drop_down → option orderindex (int); users → array of user IDs; labels → array of label UUIDs; date → unix ms. NOTE: drop_down uses orderindex here, but searchTasks custom_fields filter uses the option UUID — getAccessibleCustomFields returns both.',
   parameters: z.object({
     taskId: z.string().describe('The task ID.'),
     fieldId: z.string().describe('The custom field ID (from getAccessibleCustomFields).'),
@@ -448,6 +647,59 @@ clickUpServer.addTool({
   },
 });
 
+// === Tags ===
+
+clickUpServer.addTool({
+  name: 'listSpaceTags',
+  annotations: { readOnlyHint: true },
+  description: 'List all tags defined in a ClickUp space. Use this to discover tag names available for addTagToTask / removeTagFromTask.',
+  parameters: z.object({
+    spaceId: z.string().describe('The space ID.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    const result = await client.getSpaceTags(args.spaceId);
+    const tags = result.tags || [];
+    if (tags.length === 0) return 'No tags found in this space.';
+    return tags.map((t: any) => {
+      const parts = [`Tag: ${t.name}`];
+      if (t.tag_fg) parts.push(`  Foreground: ${t.tag_fg}`);
+      if (t.tag_bg) parts.push(`  Background: ${t.tag_bg}`);
+      return parts.join('\n');
+    }).join('\n\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'addTagToTask',
+  annotations: { readOnlyHint: false },
+  description: 'Add a tag to a ClickUp task. If the tag does not already exist in the task\'s space, ClickUp auto-creates it on the fly — call listSpaceTags first when you want to reuse existing tags and avoid tag proliferation. ClickUp\'s updateTask endpoint does not accept tags; this is the correct way to tag an existing task.',
+  parameters: z.object({
+    taskId: z.string().describe('The task ID.'),
+    tagName: z.string().min(1).describe('The tag name. ClickUp will auto-create it in the task\'s space if it does not already exist.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    await client.addTagToTask(args.taskId, args.tagName);
+    return `Tag "${args.tagName}" added to task ${args.taskId}.`;
+  },
+});
+
+clickUpServer.addTool({
+  name: 'removeTagFromTask',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Remove a tag from a ClickUp task. Does not delete the tag from the space — only unassigns it from this task.',
+  parameters: z.object({
+    taskId: z.string().describe('The task ID.'),
+    tagName: z.string().min(1).describe('The tag name to remove from the task.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    await client.removeTagFromTask(args.taskId, args.tagName);
+    return `Tag "${args.tagName}" removed from task ${args.taskId}.`;
+  },
+});
+
 clickUpServer.addTool({
   name: 'getTaskMembers',
   annotations: { readOnlyHint: true },
@@ -463,6 +715,287 @@ clickUpServer.addTool({
     return members.map((m: any) =>
       `${m.username || m.email} (ID: ${m.id})`
     ).join('\n');
+  },
+});
+
+// === Tier 3.5: Task event webhooks (PR1 — subscribe only; query tool in PR2) ===
+
+clickUpServer.addTool({
+  name: 'subscribeToTaskEvents',
+  annotations: { readOnlyHint: false },
+  description: 'Subscribe this user\'s digest routine to ClickUp task events for a workspace. Creates a webhook on ClickUp\'s side and stores its shared secret so the ingestion endpoint can verify inbound POSTs. IDEMPOTENT: re-calling with the same (user, workspace) returns the existing subscription without hitting ClickUp again. Default event bundle is `taskCreated`, `taskStatusUpdated`, `taskAssigneeUpdated`, `taskMoved`, `taskDeleted` — deliberately excludes `taskUpdated` (firehose, redundant with the pull-side `date_updated_gt` filter on filterTeamTasks). Requires the BASE_URL env var so ClickUp can call back. Once subscribed, the event store accrues from this moment forward — history queries against events before this timestamp fall back to the `date_updated + current status` approximation.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID to subscribe to.'),
+    events: z.array(z.enum([
+      'taskCreated',
+      'taskStatusUpdated',
+      'taskAssigneeUpdated',
+      'taskMoved',
+      'taskDeleted',
+    ])).optional().describe('Event types to subscribe to. Defaults to all five in the recommended bundle.'),
+  }),
+  execute: async (args, { session }) => {
+    if (!session?.userId) {
+      throw new UserError('subscribeToTaskEvents requires a logged-in user context.');
+    }
+    const client = getClickUpClient(session);
+    const events = (args.events && args.events.length > 0) ? args.events : [...CAPTURED_EVENTS];
+    const store = await import('./taskEventStore.js');
+
+    const baseUrl = (process.env.BASE_URL || '').replace(/\/+$/, '');
+    if (!baseUrl) {
+      throw new UserError('BASE_URL env var must be set to create webhooks (ClickUp needs a callback URL).');
+    }
+    const endpoint = `${baseUrl}/webhooks/clickup/inbound`;
+
+    let result;
+    try {
+      result = await subscribeToTaskEventsFlow(
+        {
+          createWebhook: (ws, p) => client.createWebhook(ws, p),
+          deleteWebhook: (id) => client.deleteWebhook(id),
+          findSubscription: store.findSubscription,
+          createSubscription: store.createSubscription,
+        },
+        { userId: session.userId, workspaceId: args.workspaceId, events, endpoint },
+      );
+    } catch (err: any) {
+      throw new UserError(err?.message || String(err));
+    }
+
+    const sub = result.subscription;
+    if (result.kind === 'existing') {
+      return [
+        'Subscription already active (idempotent no-op).',
+        `  Subscription ID: ${sub.id}`,
+        `  ClickUp webhook ID: ${sub.clickupWebhookId}`,
+        `  Events: ${sub.events.join(', ')}`,
+        `  Status: ${sub.status} (fail_count: ${sub.failCount})`,
+        `  Created: ${sub.createdAt}`,
+      ].join('\n');
+    }
+    return [
+      'Subscription created.',
+      `  Subscription ID: ${sub.id}`,
+      `  ClickUp webhook ID: ${sub.clickupWebhookId}`,
+      `  Events: ${sub.events.join(', ')}`,
+      `  Callback URL: ${endpoint}`,
+      `  History accrues from: ${sub.createdAt}`,
+    ].join('\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'getTaskEventHistory',
+  annotations: { readOnlyHint: true },
+  description: 'Read from-status→to-status transitions (and other captured events) for a ClickUp workspace, sourced from the event store populated by subscribeToTaskEvents. Use this to answer "what moved to In Review since last report" exactly, instead of approximating from date_updated + current status. IMPORTANT: history accrues from the moment subscribeToTaskEvents was first called — events before that boundary are NOT in the store; the response includes `eventStoreStartedAt` so the caller can fall back to filterTeamTasks with dateUpdatedGt for any earlier window. If no subscription exists for the (user, workspace), the response is `kind: "no-subscription"` with a warning — not an error — so the digest can gracefully fall back to pull.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+    since: z.string().optional().describe('Only return events at/after this time. ISO string or Unix ms.'),
+    until: z.string().optional().describe('Only return events at/before this time. ISO string or Unix ms.'),
+    eventTypes: z.array(z.enum([
+      'taskCreated',
+      'taskStatusUpdated',
+      'taskAssigneeUpdated',
+      'taskMoved',
+      'taskDeleted',
+    ])).optional().describe('Filter to specific event types. Omit for all captured events.'),
+    toStatus: z.string().optional().describe('Only return status-transition events whose destination status equals this label. Combine with eventTypes=["taskStatusUpdated"] for "moved to X since T".'),
+    taskId: z.string().optional().describe('Narrow to a single task.'),
+    limit: z.number().int().min(1).max(2000).optional().describe('Row cap (default 500, max 2000). Narrow via `since` if you hit the cap.'),
+  }),
+  execute: async (args, { session }) => {
+    if (!session?.userId) {
+      throw new UserError('getTaskEventHistory requires a logged-in user context.');
+    }
+    const parseTs = (input: string | undefined, field: string): number | undefined => {
+      if (!input) return undefined;
+      const ts = parseTimestampInput(input);
+      if (Number.isNaN(ts)) throw new UserError(`Invalid ${field}: ${input}`);
+      return ts;
+    };
+    const since = parseTs(args.since, 'since');
+    const until = parseTs(args.until, 'until');
+    const store = await import('./taskEventStore.js');
+
+    const result = await queryTaskEventsFlow(
+      {
+        findSubscription: store.findSubscription,
+        queryTaskEvents: store.queryTaskEvents,
+      },
+      {
+        userId: session.userId,
+        workspaceId: args.workspaceId,
+        since, until,
+        eventTypes: args.eventTypes,
+        toStatus: args.toStatus,
+        taskId: args.taskId,
+        limit: args.limit,
+      },
+    );
+
+    if (result.kind === 'no-subscription') {
+      return [
+        'No task-event subscription for this workspace.',
+        `  Warning: ${result.warning}`,
+      ].join('\n');
+    }
+
+    const header = [
+      `Found ${result.events.length} event(s) in workspace ${args.workspaceId}.`,
+      `  Event store started: ${result.eventStoreStartedAt}`,
+      `  Subscription: ${result.subscription!.id} (fail_count: ${result.subscription!.failCount})`,
+    ];
+    if (result.warning) header.push(`  Warning: ${result.warning}`);
+    if (result.events.length === 0) return header.join('\n');
+
+    const rows = result.events.map(e => {
+      const when = new Date(e.occurredAt).toISOString();
+      const actor = e.actorUsername || e.actorId || 'unknown';
+      const transition = e.field
+        ? `${e.field}: ${e.fromVal ?? '?'} → ${e.toVal ?? '?'}`
+        : '(no field diff)';
+      return `- ${when}  task=${e.taskId}  ${e.eventType}  ${transition}  by ${actor}`;
+    });
+    return [...header, '', ...rows].join('\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'listTaskEventSubscriptions',
+  annotations: { readOnlyHint: true },
+  description: 'List task-event webhook subscriptions owned by the current user. Surfaces fail_count so operators can spot a dying webhook (ClickUp stops delivering after 5 consecutive failures). Optionally narrow to a single workspace.',
+  parameters: z.object({
+    workspaceId: z.string().optional().describe('Optional workspace ID to narrow to a single subscription.'),
+  }),
+  execute: async (_args, { session }) => {
+    if (!session?.userId) {
+      throw new UserError('listTaskEventSubscriptions requires a logged-in user context.');
+    }
+    const store = await import('./taskEventStore.js');
+    const subs = await store.listSubscriptionsForUser(session.userId, _args.workspaceId);
+    if (subs.length === 0) return 'No task-event subscriptions.';
+    return subs.map(s => [
+      `Subscription ${s.id}`,
+      `  Workspace: ${s.workspaceId}`,
+      `  ClickUp webhook: ${s.clickupWebhookId}`,
+      `  Events: ${s.events.join(', ')}`,
+      `  Status: ${s.status} (fail_count: ${s.failCount})`,
+      `  Created: ${s.createdAt}`,
+    ].join('\n')).join('\n\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'debugTaskEventSubscription',
+  annotations: { readOnlyHint: true },
+  description: 'Cross-reference the local task-event subscription against ClickUp\'s own view of the webhook and the event store, and surface anomalies. Use when subscribeToTaskEvents reports success but events aren\'t landing, or when local fail_count doesn\'t match reality. Detects: endpoint-URL drift (BASE_URL changed since subscribe), orphaned ClickUp webhook (local record points at a webhook ClickUp deleted), event-bundle mismatch, ClickUp fail_count > local fail_count (ClickUp seeing non-2xx/timeouts while our counter stays flat — NOT the silent-200 pattern), disabled webhook status, and the "zero events with zero failures" pattern (silent 200s: ingestion returning success without persisting).',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+  }),
+  execute: async (args, { session }) => {
+    if (!session?.userId) {
+      throw new UserError('debugTaskEventSubscription requires a logged-in user context.');
+    }
+    const client = getClickUpClient(session);
+    const store = await import('./taskEventStore.js');
+    const baseUrl = (process.env.BASE_URL || '').replace(/\/+$/, '');
+    const expectedEndpoint = baseUrl ? `${baseUrl}/webhooks/clickup/inbound` : '';
+
+    const report = await debugTaskEventSubscriptionFlow(
+      {
+        findSubscription: store.findSubscription,
+        listWebhooks: (workspaceId) => client.listWebhooks(workspaceId),
+        countTaskEventsForSubscription: store.countTaskEventsForSubscription,
+        queryTaskEvents: store.queryTaskEvents,
+      },
+      { userId: session.userId, workspaceId: args.workspaceId, expectedEndpoint },
+    );
+
+    const lines: string[] = [
+      `Task-Event Subscription Diagnostic — workspace ${report.workspaceId}`,
+      `  Expected endpoint (from current BASE_URL): ${report.expectedEndpoint || '(BASE_URL not set)'}`,
+      `  Overall: ${report.kind}`,
+      '',
+    ];
+    if (report.local) {
+      lines.push(
+        'Local subscription record:',
+        `  Subscription ID: ${report.local.id}`,
+        `  ClickUp webhook ID: ${report.local.clickupWebhookId}`,
+        `  Events: [${report.local.events.join(', ')}]`,
+        `  Status: ${report.local.status}, fail_count: ${report.local.failCount}`,
+        `  Created: ${report.local.createdAt}`,
+        '',
+      );
+    } else {
+      lines.push('Local subscription record: (none)', '');
+    }
+    if (report.clickup) {
+      lines.push(
+        'ClickUp\'s view:',
+        `  Webhook ID: ${report.clickup.id}`,
+        `  Endpoint: ${report.clickup.endpoint}`,
+        `  Events: [${report.clickup.events.join(', ')}]`,
+        `  health.status: ${report.clickup.healthStatus ?? '(unknown)'}`,
+        `  health.fail_count: ${report.clickup.healthFailCount ?? '(unknown)'}`,
+        '',
+      );
+    } else {
+      lines.push('ClickUp\'s view: (no matching webhook found in this workspace)', '');
+    }
+    if (report.eventStore) {
+      lines.push(
+        'Event store:',
+        `  Total events for this subscription: ${report.eventStore.count}`,
+        `  Most recent occurredAt: ${report.eventStore.mostRecentOccurredAt !== null ? new Date(report.eventStore.mostRecentOccurredAt).toISOString() : '(none)'}`,
+        `  Most recent receivedAt: ${report.eventStore.mostRecentReceivedAt ?? '(none)'}`,
+        '',
+      );
+    }
+    lines.push('Findings:');
+    for (const f of report.findings) lines.push(`  - ${f}`);
+    return lines.join('\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'unsubscribeFromTaskEvents',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Delete the ClickUp task-event subscription for a workspace. Best-effort deletes both the ClickUp-side webhook and the local record; if ClickUp already deleted or disabled the webhook, still clears the local row so a fresh subscribeToTaskEvents can create a new one. Use this to recover from the "webhook disabled by ClickUp after 5 fails" state or after debugTaskEventSubscription flags an endpoint mismatch.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID to unsubscribe from.'),
+  }),
+  execute: async (args, { session }) => {
+    if (!session?.userId) {
+      throw new UserError('unsubscribeFromTaskEvents requires a logged-in user context.');
+    }
+    const client = getClickUpClient(session);
+    const store = await import('./taskEventStore.js');
+
+    const sub = await store.findSubscription(session.userId, args.workspaceId);
+    if (!sub) {
+      return `No task-event subscription found for workspace ${args.workspaceId}. Nothing to unsubscribe.`;
+    }
+
+    // Try ClickUp first. If ClickUp already deleted/disabled the webhook,
+    // this may 404 or 5xx — we still want to clear the local row so a
+    // subsequent subscribe isn't blocked by the idempotency short-circuit.
+    let clickupNote = 'deleted';
+    try {
+      await client.deleteWebhook(sub.clickupWebhookId);
+    } catch (err: any) {
+      clickupNote = `delete failed (${err?.message || err}) — may be orphaned on ClickUp's side`;
+    }
+
+    const deleted = await store.deleteSubscription(session.userId, args.workspaceId);
+    return [
+      'Unsubscribed.',
+      `  Local record: ${deleted ? 'deleted' : 'not found (unexpected — findSubscription had returned a row)'}`,
+      `  ClickUp webhook (${sub.clickupWebhookId}): ${clickupNote}`,
+      '',
+      `Call subscribeToTaskEvents again to start a fresh subscription with a new shared_secret.`,
+    ].join('\n');
   },
 });
 
@@ -571,18 +1104,23 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'listDocs',
   annotations: { readOnlyHint: true },
-  description: 'List ClickUp Docs in a workspace.',
+  description: 'List one page of ClickUp Docs in a workspace, in ClickUp\'s own order (oldest first). Returns a cursor when more pages exist. To find a doc by name, or to get every doc newest-first, use searchDocs instead — it pages through the whole workspace for you.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
+    limit: z.number().optional().default(100).describe('Docs per page (10-100, default 100).'),
+    cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
-    const result = await client.listDocs(args.workspaceId);
-    const docs = result.data || result.docs || [];
+    const result = await client.listDocs(args.workspaceId, { limit: args.limit, cursor: args.cursor });
+    const docs = docsFromEnvelope(result);
     if (docs.length === 0) return 'No docs found in this workspace.';
-    return docs.map((d: any) =>
+    let output = docs.map((d: any) =>
       `Doc: ${d.name || d.title || 'Untitled'}\n  ID: ${d.id}\n  Created: ${d.date_created ? new Date(parseInt(d.date_created)).toISOString() : 'unknown'}`
     ).join('\n\n');
+    const nextCursor = cursorFromEnvelope(result);
+    if (nextCursor) output += `\n\n---\nMore docs available. Use cursor: "${nextCursor}"`;
+    return output;
   },
 });
 
@@ -636,34 +1174,45 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'searchDocs',
   annotations: { readOnlyHint: true },
-  description: 'Search ClickUp Docs in a workspace by name. Optionally filter by creator, parent, or status.',
+  description: 'Find ClickUp Docs by name, newest first. Pages through the entire workspace, so a recently-created doc is found regardless of how many docs exist. Matching is case-insensitive and token-based: every word in the query must appear in the title, in any order, so "AWESOME Sync" matches "[AWESOME] Sync - 08/15/2026". Omit query to list every doc newest-first. Always reports how many docs were scanned, so an empty result means "not there" rather than "did not look".',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
-    query: z.string().optional().describe('Text to match against doc names (case-insensitive). Omit to list all docs.'),
+    query: z.string().optional().describe('Words to match against doc names (case-insensitive, order-independent, all words must appear). Omit to list all docs.'),
     creator: z.number().optional().describe('Filter by creator user ID.'),
-    parentId: z.string().optional().describe('Filter by parent ID (Space, Folder, or List).'),
-    parentType: z.enum(['SPACE', 'FOLDER', 'LIST', 'EVERYTHING', 'WORKSPACE']).optional().describe('Type of parent to filter by.'),
-  }),
+    parentId: z.string().optional().describe('Filter by parent ID (Space, Folder, or List). Required when parentType is SPACE, FOLDER, or LIST.'),
+    parentType: z.enum(['SPACE', 'FOLDER', 'LIST', 'EVERYTHING', 'WORKSPACE']).optional().describe('Restrict to docs living in this kind of container. EVERYTHING means no restriction (the default behaviour). SPACE/FOLDER/LIST require parentId.'),
+  }).refine(
+    (a) => !(a.parentType && ['SPACE', 'FOLDER', 'LIST'].includes(a.parentType)) || !!a.parentId,
+    { message: 'parentType SPACE, FOLDER, or LIST requires parentId.', path: ['parentId'] },
+  ),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
-    const result = await client.searchDocs(args.workspaceId, {
+    const scan = await client.searchAllDocs(args.workspaceId, {
+      query: args.query,
       creator: args.creator,
       parentId: args.parentId,
       parentType: args.parentType,
     });
-    let docs = result.data || result.docs || [];
-    // Client-side text filtering (ClickUp v3 API doesn't support text search)
-    if (args.query) {
-      const q = args.query.toLowerCase();
-      docs = docs.filter((d: any) => {
-        const name = (d.name || d.title || '').toLowerCase();
-        return name.includes(q);
-      });
+
+    // The scan extent goes on every response, hit or miss. The bug this fixes
+    // was not "search missed a doc" so much as "search said the doc did not
+    // exist", so a bare no-match line is never acceptable here.
+    const scope = `Scanned ${scan.totalScanned} doc(s) across ${scan.pagesScanned} page(s).`;
+    const warnings: string[] = [];
+    if (scan.hitCap) warnings.push(`⚠ Stopped at the ${DOCS_MAX_PAGES}-page scan cap — results may be incomplete. Narrow with parentId/creator, or page manually with listDocs.`);
+    if (scan.rateLimited) warnings.push('⚠ ClickUp rate-limited the scan partway through — results may be incomplete. Retry in a moment.');
+
+    if (scan.docs.length === 0) {
+      const head = args.query
+        ? `No docs found matching "${args.query}".`
+        : 'No docs found in this workspace.';
+      return [head, scope, ...warnings].join('\n');
     }
-    if (docs.length === 0) return args.query ? `No docs found matching "${args.query}".` : 'No docs found in this workspace.';
-    return docs.map((d: any) =>
-      `Doc: ${d.name || d.title || 'Untitled'}\n  ID: ${d.id}`
+
+    const body = scan.docs.map((d: any) =>
+      `Doc: ${d.name || d.title || 'Untitled'}\n  ID: ${d.id}${d.date_created ? `\n  Created: ${new Date(parseInt(d.date_created)).toISOString()}` : ''}`
     ).join('\n\n');
+    return [body, '---', scope, ...warnings].join('\n');
   },
 });
 
@@ -676,6 +1225,9 @@ clickUpServer.addTool({
     name: z.string().min(1).describe('Title of the new doc.'),
     content: z.string().optional().describe('Initial content of the doc (markdown supported).'),
     parentId: z.string().optional().describe('ID of the parent (Space, Folder, or List) to place the doc in.'),
+    // NOT the same parameter as searchDocs.parentType, despite the name: this
+    // one is a numeric code in the POST body, that one is a string filter in
+    // the query string. Do not "unify" them.
     parentType: z.number().optional().describe('Type of parent: 4 = Space, 5 = Folder, 6 = List. Required if parentId is provided.'),
   }),
   execute: async (args, { session }) => {
@@ -786,6 +1338,67 @@ clickUpServer.addTool({
     }
     await client.editPage(args.workspaceId, args.docId, args.pageId, data);
     return `Page ${args.pageId} updated (${args.editMode || 'replace'}).`;
+  },
+});
+
+clickUpServer.addTool({
+  name: 'insertImageIntoPage',
+  annotations: { readOnlyHint: false },
+  description: 'Add an image to a ClickUp Doc page. Provide the image as EXACTLY ONE of imageUrl (a public http(s) URL — strongly preferred) or imageBase64 (base64 bytes, for SMALL images only — the payload consumes the calling model context, so use imageUrl whenever a public URL exists). The image is re-hosted (recompressed to WebP) and embedded as markdown (append by default). ClickUp has no image-upload API for docs, so the image is stored and served by this server — requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL. If imageUrl is already on this server, re-hosting is skipped automatically; pass skipRehost:true to force embedding the given URL as-is.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+    docId: z.string().describe('The doc ID.'),
+    pageId: z.string().describe('The page ID to add the image to.'),
+    imageUrl: z.string().optional().describe('Public http(s) URL of the image (jpg, png, gif, bmp, or webp; max 20 MB). Provide exactly one of imageUrl or imageBase64; prefer imageUrl when a public URL exists.'),
+    imageBase64: z.string().optional().describe('Base64-encoded image bytes (a data:...;base64, prefix is accepted and stripped). For SMALL images only — ~100KB ideal, hard limit ~1.5 MB decoded — because the payload consumes the calling model context. Provide exactly one of imageUrl or imageBase64.'),
+    fileName: z.string().optional().describe('Optional filename, used only for error messages/logging. NOT used to determine the image format (magic bytes decide).'),
+    altText: z.string().optional().default('').describe('Alt text for the image.'),
+    editMode: z.enum(['append', 'prepend', 'replace']).optional().default('append').describe('How to place the image: append (default), prepend, or replace the page content.'),
+    skipRehost: z.boolean().optional().default(false).describe('Embed imageUrl as-is without fetching/re-hosting it (applies to imageUrl only). Auto-enabled when imageUrl is already on this server.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    // Fail fast if the image host isn't configured (also the base for the
+    // already-hosted check below). Only the storage module reads the env.
+    const publicBase = getImagePublicBaseUrl();
+    assertOneImageSource(args);
+
+    // Skip the fetch-and-store round trip when the image is already served by
+    // our own image host (never needs re-hosting), or when the caller explicitly
+    // opts out (imageUrl only). The host check is origin+path strict. Otherwise
+    // both URL and base64 sources converge on the single store path.
+    const url = (args.imageUrl && (args.skipRehost || isImageUrlOnOurHost(args.imageUrl, publicBase)))
+      ? args.imageUrl
+      : await storeImageFromArgs(args);
+
+    const editMode = args.editMode || 'append';
+    // No orphan cleanup on failure: image_blobs is content-addressed and deduped,
+    // so a blob may be shared by other docs — deleting it here could break them.
+    // A leftover, unreferenced blob is harmless (immutable, reclaimable by GC).
+    await client.editPage(args.workspaceId, args.docId, args.pageId, {
+      content: `![${args.altText || ''}](${url})`,
+      content_format: 'text/md',
+      content_edit_mode: editMode,
+    });
+    return `Image added to page ${args.pageId} (${editMode}).\nHosted at: ${url}`;
+  },
+});
+
+clickUpServer.addTool({
+  name: 'uploadClickUpDocImage',
+  annotations: { readOnlyHint: false },
+  description: 'Re-host an image on this server (recompressed to WebP) and return a public URL you can embed in a ClickUp Doc page as markdown (![](url)). Provide the image as EXACTLY ONE of imageUrl (a public http(s) URL — strongly preferred) or imageBase64 (base64 bytes, for SMALL images only — the payload consumes the calling model context, so use imageUrl whenever a public URL exists). Use this when you want the URL without immediately writing to a page; otherwise use insertImageIntoPage. Requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL to be configured.',
+  parameters: z.object({
+    imageUrl: z.string().optional().describe('Public http(s) URL of the image to re-host (jpg, png, gif, bmp, or webp; max 20 MB). Provide exactly one of imageUrl or imageBase64; prefer imageUrl when a public URL exists.'),
+    imageBase64: z.string().optional().describe('Base64-encoded image bytes (a data:...;base64, prefix is accepted and stripped). For SMALL images only — ~100KB ideal, hard limit ~1.5 MB decoded — because the payload consumes the calling model context. Provide exactly one of imageUrl or imageBase64.'),
+    fileName: z.string().optional().describe('Optional filename, used only for error messages/logging. NOT used to determine the image format (magic bytes decide).'),
+  }),
+  execute: async (args) => {
+    // Fail fast if the image host isn't configured, before spending a fetch/decode.
+    getImagePublicBaseUrl();
+    assertOneImageSource(args);
+    const url = await storeImageFromArgs(args);
+    return `Image re-hosted. Public URL:\n${url}\n\nEmbed it in a page with markdown: ![](${url})`;
   },
 });
 

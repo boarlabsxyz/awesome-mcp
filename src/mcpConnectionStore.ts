@@ -49,7 +49,17 @@ export function migrateSlackTokens(tokens: any): SlackUserTokens {
   };
 }
 
-export type ProviderTokens = GoogleTokens | ClickUpTokens | SlackUserTokens;
+export interface OutlineTokens {
+  access_token: string;
+  /** OAuth authorization_code flow only. Absent for pasted personal API keys. */
+  refresh_token?: string;
+  /** Access-token expiry as ms-epoch. Absent = non-expiring (personal API key). */
+  expiry_date?: number;
+  /** Per-connection Outline base URL (e.g. https://wiki.example.com). */
+  baseUrl?: string;
+}
+
+export type ProviderTokens = GoogleTokens | ClickUpTokens | SlackUserTokens | OutlineTokens;
 
 export interface McpConnection {
   id: number;

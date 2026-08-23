@@ -36,6 +36,7 @@ import { UserSession } from '../userSession.js';
 import { loadUsers } from '../userStore.js';
 import { initDatabase, closeDatabase } from '../db.js';
 import { createWebApp } from '../website/webServer.js';
+import { assertImagePublicBaseUrlConfigured } from '../images/imageBlobStore.js';
 import { seedDefaultCatalogs } from '../mcpCatalogStore.js';
 import { calendarServer } from '../google-calendar/server.js';
 import { sheetsServer } from '../google-sheets/server.js';
@@ -45,6 +46,9 @@ import { driveServer } from '../google-drive/server.js';
 import { clickUpServer } from '../clickup/server.js';
 import { slackBotServer } from '../slack/server.js';
 import { slackUserServer } from '../slack-user/server.js';
+import { outlineServer } from '../outline/server.js';
+import { peopleForceServer } from '../peopleforce/server.js';
+import { hubspotServer } from '../hubspot/server.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 
 // Global clients for stdio (single-user) mode
@@ -111,6 +115,11 @@ const server = new FastMCP<UserSession>({
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(MCP_SLUG),
 });
+
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
+registerMintRestBearerForCurl(server);
+registerListRestEndpoints(server);
 
 // --- Helper to get Docs client within tools ---
 // In multi-user mode, session provides the client; in stdio mode, falls back to global client
@@ -595,7 +604,7 @@ execute: async (args, { log, session }) => {
 server.addTool({
 name: 'appendToGoogleDoc',
 annotations: { readOnlyHint: false },
-description: 'Appends text to the very end of a specific Google Document or tab.',
+description: 'Appends text to the very end of a specific Google Document or tab. Equivalent to insertText at the document end; use this when you do not know the end index.',
 parameters: DocumentIdParameter.extend({
 textToAppend: z.string().min(1).describe('The text to add to the end.'),
 addNewlineIfNeeded: z.boolean().optional().default(true).describe("Automatically add a newline before the appended text if the doc doesn't end with one."),
@@ -668,7 +677,7 @@ log.info(`Appending to Google Doc: ${args.documentId}${args.tabId ? ` (tab: ${ar
 server.addTool({
 name: 'insertText',
 annotations: { readOnlyHint: false },
-description: 'Inserts text at a specific index within the document body or a specific tab.',
+description: 'Inserts text at a specific 1-based index within the document body or a specific tab. For end-of-document inserts where you do not have an index, prefer appendToGoogleDoc.',
 parameters: DocumentIdParameter.extend({
 textToInsert: z.string().min(1).describe('The text to insert.'),
 index: z.number().int().min(1).describe('The index (1-based) where the text should be inserted.'),
@@ -768,7 +777,7 @@ try {
 server.addTool({
 name: 'applyTextStyle',
 annotations: { readOnlyHint: false },
-description: 'Applies character-level formatting (bold, color, font, etc.) to a specific range or found text.',
+description: 'Applies character-level formatting to a specific range or found text. Supported style keys: bold, italic, underline, strikethrough, fontSize, fontFamily, foregroundColor, backgroundColor, link.',
 parameters: ApplyTextStyleToolParameters,
 execute: async (args: ApplyTextStyleToolArgs, { log, session }) => {
 const docs = await getDocsClient(session);
@@ -950,7 +959,7 @@ throw new UserError(`Failed to insert table: ${error.message || 'Unknown error'}
 server.addTool({
 name: 'editTableCell',
 annotations: { readOnlyHint: false },
-description: 'Edits the content and/or basic style of a specific table cell. Requires knowing table start index.',
+description: 'NOT IMPLEMENTED — always throws. Editing table cells requires non-trivial index calculation that has not been built yet. Use batchUpdateDoc with raw insert/delete requests if you need to modify table contents.',
 parameters: DocumentIdParameter.extend({
 tableStartIndex: z.number().int().min(1).describe("The starting index of the TABLE element itself (tricky to find, may require reading structure first)."),
 rowIndex: z.number().int().min(0).describe("Row index (0-based)."),
@@ -1468,7 +1477,7 @@ server.addTool({
 server.addTool({
 name: 'findElement',
 annotations: { readOnlyHint: true },
-description: 'Finds elements (paragraphs, tables, etc.) based on various criteria. (Not Implemented)',
+description: 'NOT IMPLEMENTED — always throws. For text search use findAndReplace or formatMatchingText; for structure exploration use inspectDocStructure.',
 parameters: DocumentIdParameter.extend({
 // Define complex query parameters...
 textQuery: z.string().optional(),
@@ -1820,6 +1829,17 @@ async function startServer() {
 
     if (TRANSPORT === "httpStream" || TRANSPORT === "http" || TRANSPORT === "remote") {
       // Multi-user HTTP mode
+
+      // Fail fast if the image host isn't configured — a bad/missing value would
+      // otherwise get permanently embedded in ClickUp docs on first upload. Only
+      // services that actually upload images need this: the all-in-one service
+      // and the ClickUp MCP. The website and non-image MCP services start without
+      // it (an errant upload there still fails safely via store()'s own check).
+      const hostsImages = (MCP_MODE !== "web" && MCP_MODE !== "mcp") || (MCP_MODE === "mcp" && MCP_SLUG === "clickup");
+      if (hostsImages) {
+        assertImagePublicBaseUrlConfigured();
+      }
+
       await initDatabase();
       await loadUsers();
 
@@ -1857,6 +1877,9 @@ async function startServer() {
                          : MCP_SLUG === "clickup"         ? clickUpServer
                          : MCP_SLUG === "slack-bot"        ? slackBotServer
                          : MCP_SLUG === "slack"           ? slackUserServer
+                         : MCP_SLUG === "outline"         ? outlineServer
+                         : MCP_SLUG === "peopleforce"     ? peopleForceServer
+                         : MCP_SLUG === "hubspot"         ? hubspotServer
                          : server; // default: google-docs
 
         mcpToStart.start({

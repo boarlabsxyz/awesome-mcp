@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it, afterEach } from 'node:test';
-import { ClickUpClient } from '../../clickup/apiHelpers.js';
+import { ClickUpClient, matchesDocQuery, sortDocsNewestFirst } from '../../clickup/apiHelpers.js';
 
 // Mock global fetch
 const originalFetch = globalThis.fetch;
@@ -116,6 +116,38 @@ describe('ClickUpClient', () => {
     });
   });
 
+  describe('getTasks — array filter serialization', () => {
+    // Same ClickUp v2 parser quirk as filterTeamTasks: bare `foo=X` alone
+    // 400s (scalar), `foo[]=X` silently drops the filter. Only ≥2 repeated
+    // bare occurrences work — verify the workaround propagates here too.
+    it('duplicates single-element assignees so the filter is parsed as an array', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { tasks: [] } }]);
+      const client = new ClickUpClient('token');
+      await client.getTasks('list1', { assignees: ['u1'] });
+      const url = new URL(calls[0].url);
+      assert.deepEqual(url.searchParams.getAll('assignees'), ['u1', 'u1']);
+      assert.doesNotMatch(calls[0].url, /%5B%5D/);
+    });
+
+    it('duplicates single-element statuses the same way', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { tasks: [] } }]);
+      const client = new ClickUpClient('token');
+      await client.getTasks('list1', { statuses: ['open'] });
+      const url = new URL(calls[0].url);
+      assert.deepEqual(url.searchParams.getAll('statuses'), ['open', 'open']);
+    });
+
+    it('leaves multi-element arrays as repeated bare keys', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { tasks: [] } }]);
+      const client = new ClickUpClient('token');
+      await client.getTasks('list1', { assignees: ['u1', 'u2'], statuses: ['open', 'in progress'] });
+      const url = new URL(calls[0].url);
+      assert.deepEqual(url.searchParams.getAll('assignees'), ['u1', 'u2']);
+      assert.deepEqual(url.searchParams.getAll('statuses'), ['open', 'in progress']);
+      assert.doesNotMatch(calls[0].url, /%5B%5D/);
+    });
+  });
+
   describe('error handling', () => {
     it('should throw UserError on rate limit (429)', async () => {
       mockFetch([{ status: 429, text: 'rate limited' }]);
@@ -200,6 +232,42 @@ describe('ClickUpClient', () => {
     });
   });
 
+  describe('tags', () => {
+    it('should list tags in a space', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { tags: [{ name: 'bug', tag_fg: '#fff', tag_bg: '#f00' }] } }]);
+      const client = new ClickUpClient('token');
+      const result = await client.getSpaceTags('space1');
+      assert.equal(calls[0].url, 'https://api.clickup.com/api/v2/space/space1/tag');
+      assert.equal(calls[0].method, 'GET');
+      assert.equal(result.tags[0].name, 'bug');
+    });
+
+    it('should add a tag to a task', async () => {
+      const { calls } = mockFetch([{ status: 200, text: '' }]);
+      const client = new ClickUpClient('token');
+      await client.addTagToTask('task1', 'bug');
+      assert.equal(calls[0].url, 'https://api.clickup.com/api/v2/task/task1/tag/bug');
+      assert.equal(calls[0].method, 'POST');
+    });
+
+    it('should url-encode tag names with spaces or special chars', async () => {
+      const { calls } = mockFetch([{ status: 200, text: '' }, { status: 200, text: '' }]);
+      const client = new ClickUpClient('token');
+      await client.addTagToTask('task1', 'high priority');
+      await client.removeTagFromTask('task1', 'needs review/qa');
+      assert.equal(calls[0].url, 'https://api.clickup.com/api/v2/task/task1/tag/high%20priority');
+      assert.equal(calls[1].url, 'https://api.clickup.com/api/v2/task/task1/tag/needs%20review%2Fqa');
+    });
+
+    it('should remove a tag from a task', async () => {
+      const { calls } = mockFetch([{ status: 200, text: '' }]);
+      const client = new ClickUpClient('token');
+      await client.removeTagFromTask('task1', 'bug');
+      assert.equal(calls[0].url, 'https://api.clickup.com/api/v2/task/task1/tag/bug');
+      assert.equal(calls[0].method, 'DELETE');
+    });
+  });
+
   describe('lists', () => {
     it('should create a list in folder', async () => {
       const { calls } = mockFetch([{ status: 200, body: { id: 'l1', name: 'New List' } }]);
@@ -221,5 +289,178 @@ describe('ClickUpClient', () => {
       await client.deleteList('l1');
       assert.equal(calls[0].method, 'DELETE');
     });
+  });
+});
+
+// === Docs search: matching, pagination, sorting ===
+// See ClickUp ticket 86cb5r680. The endpoint has no text-search and no sort
+// parameter, and defaults to 50 docs per page, so all three behaviours are
+// implemented client-side and all three are asserted here.
+
+describe('matchesDocQuery', () => {
+  const TITLE = '[AWESOME] Sync - 08/15/2026';
+
+  it('matches every token regardless of intervening punctuation', () => {
+    // The reported bug: "AWESOME Sync" is not a contiguous substring of the
+    // title because "] " sits between the words.
+    assert.equal(matchesDocQuery(TITLE, 'AWESOME Sync'), true);
+  });
+
+  it('is order-independent', () => {
+    assert.equal(matchesDocQuery(TITLE, 'Sync AWESOME'), true);
+  });
+
+  it('is case-insensitive', () => {
+    assert.equal(matchesDocQuery(TITLE, 'awesome sYnC'), true);
+  });
+
+  it('still matches a single token, as before', () => {
+    assert.equal(matchesDocQuery(TITLE, 'Sync'), true);
+    assert.equal(matchesDocQuery(TITLE, 'AWESOME'), true);
+  });
+
+  it('still matches a literal substring containing punctuation', () => {
+    assert.equal(matchesDocQuery(TITLE, '] Sync'), true);
+  });
+
+  it('requires ALL tokens, not any', () => {
+    assert.equal(matchesDocQuery(TITLE, 'AWESOME Standup'), false);
+  });
+
+  it('treats an empty or blank query as match-everything', () => {
+    assert.equal(matchesDocQuery(TITLE, ''), true);
+    assert.equal(matchesDocQuery(TITLE, '   '), true);
+    assert.equal(matchesDocQuery(TITLE, undefined), true);
+  });
+
+  it('tolerates a missing title', () => {
+    assert.equal(matchesDocQuery('', 'anything'), false);
+    assert.equal(matchesDocQuery('', ''), true);
+  });
+});
+
+describe('sortDocsNewestFirst', () => {
+  it('orders by date_created descending', () => {
+    const sorted = sortDocsNewestFirst([
+      { id: 'old', date_created: '1000' },
+      { id: 'new', date_created: '3000' },
+      { id: 'mid', date_created: '2000' },
+    ]);
+    assert.deepEqual(sorted.map((d) => d.id), ['new', 'mid', 'old']);
+  });
+
+  it('puts undated docs last rather than first', () => {
+    const sorted = sortDocsNewestFirst([
+      { id: 'undated' },
+      { id: 'dated', date_created: '1000' },
+    ]);
+    assert.deepEqual(sorted.map((d) => d.id), ['dated', 'undated']);
+  });
+
+  it('does not mutate its input', () => {
+    const input = [{ id: 'a', date_created: '1' }, { id: 'b', date_created: '2' }];
+    sortDocsNewestFirst(input);
+    assert.deepEqual(input.map((d) => d.id), ['a', 'b']);
+  });
+});
+
+describe('ClickUpClient.searchDocs query params', () => {
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  it('omits parent_type when EVERYTHING is requested', async () => {
+    // EVERYTHING is a valid upstream value that matches nothing; omitting the
+    // filter is what actually returns the whole workspace.
+    const { calls } = mockFetch([{ status: 200, body: { docs: [] } }]);
+    await new ClickUpClient('tok').searchDocs('w1', { parentType: 'EVERYTHING' });
+    assert.ok(!calls[0].url.includes('parent_type'), calls[0].url);
+  });
+
+  it('forwards a real parent_type', async () => {
+    const { calls } = mockFetch([{ status: 200, body: { docs: [] } }]);
+    await new ClickUpClient('tok').searchDocs('w1', { parentType: 'SPACE', parentId: 's1' });
+    assert.ok(calls[0].url.includes('parent_type=SPACE'));
+    assert.ok(calls[0].url.includes('parent_id=s1'));
+  });
+
+  it('clamps limit into ClickUp’s 10-100 range', async () => {
+    const { calls } = mockFetch([{ status: 200, body: { docs: [] } }]);
+    const client = new ClickUpClient('tok');
+    await client.searchDocs('w1', { limit: 5000 });
+    assert.ok(calls[0].url.includes('limit=100'));
+    await client.searchDocs('w1', { limit: 1 });
+    assert.ok(calls[1].url.includes('limit=10'));
+  });
+
+  it('forwards the pagination cursor', async () => {
+    const { calls } = mockFetch([{ status: 200, body: { docs: [] } }]);
+    await new ClickUpClient('tok').searchDocs('w1', { cursor: 'abc123' });
+    assert.ok(calls[0].url.includes('cursor=abc123'));
+  });
+});
+
+describe('ClickUpClient.searchAllDocs', () => {
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  it('pages until the cursor runs out and finds a match on a later page', async () => {
+    // The core regression: before this, a doc on page 2 reported "No docs found".
+    const { calls } = mockFetch([
+      { status: 200, body: { docs: [{ id: 'd1', name: 'Onboarding' }], next_cursor: 'c2' } },
+      { status: 200, body: { docs: [{ id: 'd2', name: '[AWESOME] Sync - 08/15/2026' }] } },
+    ]);
+    const scan = await new ClickUpClient('tok').searchAllDocs('w1', { query: 'AWESOME Sync' });
+
+    assert.equal(calls.length, 2);
+    assert.ok(calls[1].url.includes('cursor=c2'), calls[1].url);
+    assert.deepEqual(scan.docs.map((d: any) => d.id), ['d2']);
+    assert.equal(scan.totalScanned, 2);
+    assert.equal(scan.pagesScanned, 2);
+    assert.equal(scan.hitCap, false);
+    assert.equal(scan.rateLimited, false);
+  });
+
+  it('stops at the page cap and reports it', async () => {
+    // Every page hands back another cursor, so only the cap ends the loop.
+    const { calls } = mockFetch([
+      { status: 200, body: { docs: [{ id: 'x', name: 'x' }], next_cursor: 'more' } },
+    ]);
+    const scan = await new ClickUpClient('tok').searchAllDocs('w1', { query: 'nope', maxPages: 3 });
+    assert.equal(calls.length, 3);
+    assert.equal(scan.pagesScanned, 3);
+    assert.equal(scan.hitCap, true);
+  });
+
+  it('returns partial results instead of throwing when rate-limited mid-scan', async () => {
+    const { calls } = mockFetch([
+      { status: 200, body: { docs: [{ id: 'd1', name: 'Sync notes' }], next_cursor: 'c2' } },
+      { status: 429 },
+    ]);
+    const scan = await new ClickUpClient('tok').searchAllDocs('w1', { query: 'Sync' });
+    assert.equal(calls.length, 2);
+    assert.equal(scan.rateLimited, true);
+    assert.deepEqual(scan.docs.map((d: any) => d.id), ['d1']);
+  });
+
+  it('propagates a rate limit on the very first page', async () => {
+    // Nothing collected yet, so there is no partial result worth preserving.
+    mockFetch([{ status: 429 }]);
+    await assert.rejects(() => new ClickUpClient('tok').searchAllDocs('w1'), /rate limit/i);
+  });
+
+  it('returns every doc newest-first when no query is given', async () => {
+    mockFetch([{
+      status: 200,
+      body: { docs: [
+        { id: 'old', name: 'A', date_created: '1000' },
+        { id: 'new', name: 'B', date_created: '9000' },
+      ] },
+    }]);
+    const scan = await new ClickUpClient('tok').searchAllDocs('w1');
+    assert.deepEqual(scan.docs.map((d: any) => d.id), ['new', 'old']);
+  });
+
+  it('reads the data envelope as well as docs', async () => {
+    mockFetch([{ status: 200, body: { data: [{ id: 'd1', name: 'Spec' }] } }]);
+    const scan = await new ClickUpClient('tok').searchAllDocs('w1', { query: 'Spec' });
+    assert.equal(scan.docs.length, 1);
   });
 });

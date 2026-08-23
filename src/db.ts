@@ -141,6 +141,182 @@ ALTER TABLE mcp_catalog
   ADD COLUMN IF NOT EXISTS oauth_token_url VARCHAR(2048);
 `;
 
+// ClickUp task-event webhook subscriptions.
+// One row per (user, workspace) — per-user scoping keeps a departing user's
+// creator-binding failure to their own digest rather than everyone's. The
+// shared_secret is stored as-is: it's issued per-webhook by ClickUp and is
+// only ever used HMAC-side for verifying inbound POSTs; we don't send it back
+// out to the caller.
+const CREATE_CLICKUP_WEBHOOK_SUBSCRIPTIONS_TABLE = `
+CREATE TABLE IF NOT EXISTS clickup_webhook_subscriptions (
+  id                   SERIAL PRIMARY KEY,
+  user_id              INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  workspace_id         VARCHAR(100) NOT NULL,
+  clickup_webhook_id   VARCHAR(100) NOT NULL,
+  shared_secret        VARCHAR(255) NOT NULL,
+  events               JSONB NOT NULL,
+  status               VARCHAR(20) NOT NULL DEFAULT 'active',
+  fail_count           INTEGER NOT NULL DEFAULT 0,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, workspace_id),
+  UNIQUE(clickup_webhook_id)
+);
+`;
+
+// Normalized task-event store. One row per history_item (a single ClickUp
+// webhook POST can carry several: e.g. moving a task also fires a status
+// change). from_val / to_val are stringified for querying; raw_payload keeps
+// the full history_item for anything the routine needs later.
+const CREATE_CLICKUP_TASK_EVENTS_TABLE = `
+CREATE TABLE IF NOT EXISTS clickup_task_events (
+  id                BIGSERIAL PRIMARY KEY,
+  subscription_id   INTEGER NOT NULL REFERENCES clickup_webhook_subscriptions(id) ON DELETE CASCADE,
+  workspace_id      VARCHAR(100) NOT NULL,
+  task_id           VARCHAR(100) NOT NULL,
+  event_type        VARCHAR(50) NOT NULL,
+  field             VARCHAR(50),
+  from_val          TEXT,
+  to_val            TEXT,
+  actor_id          VARCHAR(100),
+  actor_username    VARCHAR(255),
+  occurred_at       BIGINT NOT NULL,
+  received_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  raw_payload       JSONB NOT NULL
+);
+`;
+
+const CREATE_CLICKUP_EVENTS_WORKSPACE_TASK_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_clickup_events_ws_task_time
+  ON clickup_task_events(workspace_id, task_id, occurred_at DESC);
+`;
+
+const CREATE_CLICKUP_EVENTS_SUBSCRIPTION_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_clickup_events_sub_time
+  ON clickup_task_events(subscription_id, occurred_at DESC);
+`;
+
+// Slack channel-event subscriptions.
+//
+// Unlike ClickUp there is no remote object to mirror: Slack event subscriptions
+// are declared once on the app, and every workspace event arrives at one
+// Request URL. A row here is purely a local interest filter — "this user wants
+// these event types from this channel" — which is why there is no
+// slack_webhook_id and no per-row shared_secret (verification uses the
+// app-level SLACK_SIGNING_SECRET). N users can watch the same channel, so
+// ingestion looks rows up by (team, channel) and fans out.
+const CREATE_SLACK_EVENT_SUBSCRIPTIONS_TABLE = `
+CREATE TABLE IF NOT EXISTS slack_event_subscriptions (
+  id             SERIAL PRIMARY KEY,
+  user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  team_id        VARCHAR(100) NOT NULL,
+  channel_id     VARCHAR(100) NOT NULL,
+  events         JSONB NOT NULL,
+  match_pattern  TEXT,
+  status         VARCHAR(20) NOT NULL DEFAULT 'active',
+  fail_count     INTEGER NOT NULL DEFAULT 0,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, team_id, channel_id)
+);
+`;
+
+// Captured Slack events, one row per (subscription, event).
+//
+// UNIQUE(subscription_id, event_id) is load-bearing in a way the ClickUp
+// equivalent isn't: Slack retries any delivery it doesn't get a prompt 2xx for
+// (flagging the retry in X-Slack-Retry-Num), so without a dedup key a single
+// slow response duplicates every event in the window. Slack's own `event_id`
+// is the natural key — ClickUp never provided one.
+const CREATE_SLACK_CHANNEL_EVENTS_TABLE = `
+CREATE TABLE IF NOT EXISTS slack_channel_events (
+  id               BIGSERIAL PRIMARY KEY,
+  subscription_id  INTEGER NOT NULL REFERENCES slack_event_subscriptions(id) ON DELETE CASCADE,
+  team_id          VARCHAR(100) NOT NULL,
+  channel_id       VARCHAR(100) NOT NULL,
+  event_id         VARCHAR(100) NOT NULL,
+  event_type       VARCHAR(50) NOT NULL,
+  message_ts       VARCHAR(50),
+  thread_ts        VARCHAR(50),
+  actor_id         VARCHAR(100),
+  text             TEXT,
+  occurred_at      BIGINT NOT NULL,
+  received_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  raw_payload      JSONB NOT NULL,
+  UNIQUE(subscription_id, event_id)
+);
+`;
+
+const CREATE_SLACK_EVENTS_CHANNEL_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_slack_events_team_channel_time
+  ON slack_channel_events(team_id, channel_id, occurred_at DESC);
+`;
+
+const CREATE_SLACK_EVENTS_SUBSCRIPTION_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_slack_events_sub_time
+  ON slack_channel_events(subscription_id, occurred_at DESC);
+`;
+
+// Lookup path for ingestion: one POST arrives per event and must find every
+// subscription interested in that (team, channel).
+const CREATE_SLACK_SUBSCRIPTIONS_CHANNEL_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_slack_subs_team_channel
+  ON slack_event_subscriptions(team_id, channel_id);
+`;
+
+// Re-hosted images for ClickUp Docs. ClickUp Doc pages render markdown, so an
+// image is embedded as ![alt](url) pointing at our own public serve route
+// (/images/clickup-doc/:id). Bytes live here; see src/clickup/docImageStore.ts.
+const CREATE_CLICKUP_DOC_IMAGES_TABLE = `
+CREATE TABLE IF NOT EXISTS clickup_doc_images (
+  id          TEXT PRIMARY KEY,
+  bytes       BYTEA NOT NULL,
+  mime        TEXT NOT NULL,
+  byte_size   INTEGER NOT NULL,
+  created_by  TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+`;
+
+// Content-addressed image blob store (WebP, sha256-keyed). The DDL lives here
+// with the other migrations, but all DML is confined to src/images/imageBlobStore.ts
+// (the swap-to-R2 seam). STORAGE EXTERNAL disables TOAST compression: WebP is
+// already compressed, so column compression would just waste CPU on every write.
+const CREATE_IMAGE_BLOBS_TABLE = `
+CREATE TABLE IF NOT EXISTS image_blobs (
+  key          TEXT PRIMARY KEY,
+  data         BYTEA NOT NULL,
+  content_type TEXT NOT NULL,
+  bytes        INT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at   TIMESTAMPTZ
+);
+`;
+
+const ALTER_IMAGE_BLOBS_STORAGE_EXTERNAL = `
+ALTER TABLE image_blobs ALTER COLUMN data SET STORAGE EXTERNAL;
+`;
+
+// Retention. NULL means "keep forever" and is the default for every existing
+// row and every caller that doesn't opt in, so adding this column changes no
+// current behaviour.
+//
+// Expiry is a property of the USE CASE, not of the bytes. A ClickUp Doc image
+// must live forever because ClickUp's renderer re-fetches it on every page
+// view; a Slack image re-hosted for insertImageFromUrl is consumed once, since
+// Google copies the image into the document at insert time. A single global
+// TTL would silently 404 every ClickUp doc image, so callers opt in instead.
+const ALTER_IMAGE_BLOBS_ADD_EXPIRES_AT = `
+ALTER TABLE image_blobs ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+`;
+
+// Partial index: only expiring rows are ever scanned by the pruner, so
+// permanent blobs (the majority) cost nothing to index.
+const CREATE_IMAGE_BLOBS_EXPIRES_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_image_blobs_expires_at
+  ON image_blobs(expires_at) WHERE expires_at IS NOT NULL;
+`;
+
 // Add unique constraint on instance_id (each instance must be unique)
 const ADD_INSTANCE_ID_UNIQUE_CONSTRAINT = `
 DO $$
@@ -247,7 +423,53 @@ export async function initDatabase(): Promise<void> {
     await pool.query(ALTER_MCP_CATALOG_ADD_PROVIDER_COLUMNS);
     console.error('MCP catalog provider columns ensured.');
 
+    // ClickUp webhook subscriptions + task event store (PR1: schema + ingestion)
+    await pool.query(CREATE_CLICKUP_WEBHOOK_SUBSCRIPTIONS_TABLE);
+    console.error('ClickUp webhook subscriptions table ensured.');
+    await pool.query(CREATE_CLICKUP_TASK_EVENTS_TABLE);
+    console.error('ClickUp task events table ensured.');
+    await pool.query(CREATE_CLICKUP_EVENTS_WORKSPACE_TASK_INDEX);
+    await pool.query(CREATE_CLICKUP_EVENTS_SUBSCRIPTION_INDEX);
+    console.error('ClickUp task events indexes ensured.');
+    // Slack channel-event subscriptions + event store
+    await pool.query(CREATE_SLACK_EVENT_SUBSCRIPTIONS_TABLE);
+    console.error('Slack event subscriptions table ensured.');
+    await pool.query(CREATE_SLACK_CHANNEL_EVENTS_TABLE);
+    console.error('Slack channel events table ensured.');
+    await pool.query(CREATE_SLACK_EVENTS_CHANNEL_INDEX);
+    await pool.query(CREATE_SLACK_EVENTS_SUBSCRIPTION_INDEX);
+    await pool.query(CREATE_SLACK_SUBSCRIPTIONS_CHANNEL_INDEX);
+    console.error('Slack channel events indexes ensured.');
+    await pool.query(CREATE_CLICKUP_DOC_IMAGES_TABLE);
+    console.error('ClickUp doc images table ensured.');
+    await pool.query(CREATE_IMAGE_BLOBS_TABLE);
+    await pool.query(ALTER_IMAGE_BLOBS_STORAGE_EXTERNAL);
+    await pool.query(ALTER_IMAGE_BLOBS_ADD_EXPIRES_AT);
+    await pool.query(CREATE_IMAGE_BLOBS_EXPIRES_INDEX);
+    console.error('Image blobs table ensured.');
+
     dbAvailable = true;
+
+    // Kick off the retention scheduler now that dbAvailable=true. Dynamic
+    // import to avoid a boot-time cycle with the clickup module.
+    try {
+      const { startTaskEventRetentionScheduler } = await import('./clickup/taskEventStore.js');
+      startTaskEventRetentionScheduler();
+    } catch (err: any) {
+      console.error('[db] failed to start ClickUp event retention scheduler:', err?.message || err);
+    }
+    try {
+      const { startSlackEventRetentionScheduler } = await import('./slack/eventStore.js');
+      startSlackEventRetentionScheduler();
+    } catch (err: any) {
+      console.error('[db] failed to start Slack event retention scheduler:', err?.message || err);
+    }
+    try {
+      const { startImageBlobRetentionScheduler } = await import('./images/imageBlobStore.js');
+      startImageBlobRetentionScheduler();
+    } catch (err: any) {
+      console.error('[db] failed to start image blob retention scheduler:', err?.message || err);
+    }
   } catch (err) {
     console.error('Failed to connect to database(s), falling back to file storage:', err);
     await cleanupPartial();

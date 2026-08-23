@@ -1,0 +1,42 @@
+<!-- Section heading with optional right-aligned action button. The h2 is uppercase #888 by design — that's the pattern. -->
+<section class="section">
+  <div class="section-header">
+    <h2>{{heading}}</h2>
+    <button class="btn-add" type="button">
+      <span aria-hidden="true">+</span> {{action-label}}
+    </button>
+  </div>
+  <!-- TODO: section content -->
+</section>
+
+<style>
+.section { margin-bottom: 2rem; }
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+.section-header h2 {
+  font-size: 1.1rem;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+}
+.btn-add {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  background: #0070f3;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: background-color 0.2s;
+  touch-action: manipulation;
+}
+.btn-add:hover { background: #005bb5; }
+</style>

@@ -4,13 +4,18 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { SlackClient } from './apiHelpers.js';
-import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handlePostMessage, handleReplyInThread } from './helpers.js';
+import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread } from './helpers.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 export const slackBotServer = new FastMCP<UserSession>({
   name: 'Slack Bot MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'slack-bot'),
 });
+
+registerMintRestBearerForCurl(slackBotServer);
+registerListRestEndpoints(slackBotServer);
 
 function getSlackClient(session?: UserSession): SlackClient {
   if (!session?.slackBotToken) {
@@ -100,9 +105,25 @@ slackBotServer.addTool({
 });
 
 slackBotServer.addTool({
+  name: 'downloadFile',
+  // readOnlyHint describes Slack, which this never modifies. The "url" format
+  // does write the bytes into our own image blob store.
+  annotations: { readOnlyHint: true },
+  description: 'Download a file attached to a Slack message. Get the fileId from the 📎 lines in readChannelHistory or readThreadReplies output, and pass the channel you read it from. Images: format "url" (default) re-hosts the image at a public URL suitable for tools that take an image URL (e.g. insertImageFromUrl), format "inline" returns the image itself so you can look at it. Text files are returned as text; other file types return metadata only.',
+  parameters: z.object({
+    fileId: z.string().describe('The Slack file ID (e.g., F01234ABCDE).'),
+    channelId: z.string().describe('The channel or DM the file was shared in — the one you read the message from.'),
+    format: z.enum(['url', 'inline']).optional().default('url').describe('"url" re-hosts an image and returns a public link; "inline" returns the image directly (max 1.5 MB). Ignored for text files.'),
+  }),
+  execute: async (args, { session }) => {
+    return handleDownloadFile(getSlackClient(session), args);
+  },
+});
+
+slackBotServer.addTool({
   name: 'postMessage',
   annotations: { readOnlyHint: false },
-  description: 'Post a message to a Slack channel. Requires SLACK_WRITES_ENABLED=true.',
+  description: 'Post a message to a Slack channel.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID to post to.'),
     text: z.string().describe('Message text (supports Slack markdown/mrkdwn).'),
@@ -115,7 +136,7 @@ slackBotServer.addTool({
 slackBotServer.addTool({
   name: 'replyInThread',
   annotations: { readOnlyHint: false },
-  description: 'Reply to a thread in a Slack channel. Requires SLACK_WRITES_ENABLED=true.',
+  description: 'Reply to a thread in a Slack channel.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID containing the thread.'),
     threadTs: z.string().describe('The timestamp of the parent message to reply to.'),

@@ -13,12 +13,17 @@ import {
   handleListLabels, handleCreateLabel, handleUpdateLabel, handleDeleteLabel,
   handleGetOrCreateLabel, handleGetAttachment,
 } from './toolHandlers.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 const gmailServer = new FastMCP<UserSession>({
   name: 'Gmail MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-gmail'),
 });
+
+registerMintRestBearerForCurl(gmailServer);
+registerListRestEndpoints(gmailServer);
 
 // --- Helper to get Gmail client within tools ---
 function getGmailClient(session?: UserSession): gmail_v1.Gmail {
@@ -85,7 +90,7 @@ gmailServer.addTool({
 gmailServer.addTool({
   name: 'modifyEmail',
   annotations: { readOnlyHint: false },
-  description: 'Modify labels on a single email message (add or remove labels).',
+  description: 'Modify labels on a single email message (add or remove labels). For more than one message, prefer batchModifyEmails.',
   parameters: z.object({
     messageId: z.string().describe('The Gmail message ID to modify.'),
     addLabelIds: z.array(z.string()).optional().describe('Label IDs to add to the message.'),
@@ -109,7 +114,7 @@ gmailServer.addTool({
 gmailServer.addTool({
   name: 'batchModifyEmails',
   annotations: { readOnlyHint: false },
-  description: 'Modify labels on multiple email messages at once.',
+  description: 'Modify labels on multiple email messages at once (single atomic request). For a single message, modifyEmail is simpler. Limit: 1000 message IDs per call.',
   parameters: z.object({
     messageIds: z.array(z.string()).max(1000).describe('Array of Gmail message IDs to modify (max 1000).'),
     addLabelIds: z.array(z.string()).optional().describe('Label IDs to add to all messages.'),

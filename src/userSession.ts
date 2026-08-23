@@ -22,6 +22,33 @@ export interface UserSession {
   slackUserToken?: string;
   slackAccessRules?: import('./mcpConnectionStore.js').SlackAccessRules;
   slackInstanceId?: string;
+  outlineAccessToken?: string;
+  /** Per-connection Outline base URL (e.g. https://wiki.example.com), used by OutlineClient. */
+  outlineBaseUrl?: string;
+  /** OAuth refresh token (authorization_code flow only; absent for pasted API keys). */
+  outlineRefreshToken?: string;
+  /** Access-token expiry as ms-epoch; absent = non-expiring (paste-token flow). */
+  outlineTokenExpiry?: number;
+  /** OAuth client credentials (from env) used to drive the refresh_token grant. */
+  outlineOauthClientId?: string;
+  outlineOauthClientSecret?: string;
+  /** Connection instance id, so a refresh can persist rotated tokens back to the store. */
+  outlineInstanceId?: string;
+  peopleForceAccessToken?: string;
+  /** Optional per-connection PeopleForce base URL; falls back to PEOPLEFORCE_BASE_URL or the public default. */
+  peopleForceBaseUrl?: string;
+  hubspotAccessToken?: string;
+  /** Optional per-connection HubSpot base URL; falls back to HUBSPOT_BASE_URL or the public default. */
+  hubspotBaseUrl?: string;
+  /** OAuth refresh token (authorization_code flow only; absent for pasted private-app tokens). */
+  hubspotRefreshToken?: string;
+  /** Access-token expiry as ms-epoch; absent = non-expiring (paste-token flow). */
+  hubspotTokenExpiry?: number;
+  /** OAuth client credentials (from env) used to drive the refresh_token grant. */
+  hubspotOauthClientId?: string;
+  hubspotOauthClientSecret?: string;
+  /** Connection instance id, so a refresh can persist rotated tokens back to the store. */
+  hubspotInstanceId?: string;
 }
 
 // Cache sessions to avoid recreating clients per request
@@ -236,6 +263,172 @@ export function createSlackUserSession(
     googleSlides: null as any,
     oauthClient: null as any,
   };
+}
+
+/**
+ * Create a user session for Outline connections.
+ *
+ * Outline uses either a personal API key (paste-token flow) or an OAuth
+ * bearer token; either way the connection's `providerTokens.access_token`
+ * holds it, and `providerTokens.baseUrl` (paste-token flow) or the
+ * OUTLINE_BASE_URL env var (OAuth flow) locates the instance.
+ */
+export function createOutlineSession(
+  user: UserRecord,
+  connection: McpConnection,
+): UserSession {
+  const providerTokens = connection.providerTokens as {
+    access_token?: string;
+    refresh_token?: string;
+    expiry_date?: number;
+    baseUrl?: string;
+  } | undefined;
+  const accessToken = providerTokens?.access_token;
+  if (!accessToken) {
+    throw new Error(`Outline access token missing for connection ${connection.instanceId}. Please reconnect.`);
+  }
+  const baseUrl = providerTokens?.baseUrl || process.env.OUTLINE_BASE_URL || undefined;
+
+  const cacheKey = `${user.apiKey}:${connection.instanceId}`;
+  const cached = mcpSessionCache.get(cacheKey);
+  if (cached) return cached;
+
+  // OAuth client credentials live in env (same vars the catalog seed reads to
+  // enable the OAuth flow). Present only for OAuth deployments; when absent
+  // (paste-token deployments) the refresh path in withOutlineClient no-ops.
+  const oauthClientId = process.env.OUTLINE_CLIENT_ID || undefined;
+  const oauthClientSecret = process.env.OUTLINE_CLIENT_SECRET || undefined;
+
+  const session: UserSession = {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: connection.mcpSlug,
+    outlineAccessToken: accessToken,
+    outlineBaseUrl: baseUrl,
+    // Refresh plumbing — only populated for OAuth connections (paste tokens
+    // carry no refresh_token/expiry_date, so refresh stays a no-op).
+    outlineRefreshToken: providerTokens?.refresh_token,
+    outlineTokenExpiry: providerTokens?.expiry_date,
+    outlineOauthClientId: oauthClientId,
+    outlineOauthClientSecret: oauthClientSecret,
+    outlineInstanceId: connection.instanceId,
+    // Null placeholders for Google clients (Outline MCP won't use them)
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
+  };
+
+  mcpSessionCache.set(cacheKey, session);
+  return session;
+}
+
+/**
+ * Create a user session for PeopleForce connections.
+ *
+ * PeopleForce uses a personal API key that the user pastes into the dashboard.
+ * The connection's `providerTokens.access_token` holds it; `providerTokens.baseUrl`
+ * lets self-hosted / regional deployments override the default endpoint.
+ */
+export function createPeopleForceSession(
+  user: UserRecord,
+  connection: McpConnection,
+): UserSession {
+  const providerTokens = connection.providerTokens as { access_token?: string; baseUrl?: string } | undefined;
+  const accessToken = providerTokens?.access_token;
+  if (!accessToken) {
+    throw new Error(`PeopleForce access token missing for connection ${connection.instanceId}. Please reconnect.`);
+  }
+  const baseUrl = providerTokens?.baseUrl || process.env.PEOPLEFORCE_BASE_URL || undefined;
+
+  const cacheKey = `${user.apiKey}:${connection.instanceId}`;
+  const cached = mcpSessionCache.get(cacheKey);
+  if (cached) return cached;
+
+  const session: UserSession = {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: connection.mcpSlug,
+    peopleForceAccessToken: accessToken,
+    peopleForceBaseUrl: baseUrl,
+    // Null placeholders for Google clients (PeopleForce MCP won't use them)
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
+  };
+
+  mcpSessionCache.set(cacheKey, session);
+  return session;
+}
+
+/**
+ * Create a user session for HubSpot connections.
+ *
+ * HubSpot uses a private-app access token (a bearer token) that the user pastes
+ * into the dashboard. The connection's `providerTokens.access_token` holds it;
+ * `providerTokens.baseUrl` lets a non-default deployment override the endpoint.
+ */
+export function createHubSpotSession(
+  user: UserRecord,
+  connection: McpConnection,
+): UserSession {
+  const providerTokens = connection.providerTokens as {
+    access_token?: string;
+    refresh_token?: string;
+    expiry_date?: number;
+    baseUrl?: string;
+  } | undefined;
+  const accessToken = providerTokens?.access_token;
+  if (!accessToken) {
+    throw new Error(`HubSpot access token missing for connection ${connection.instanceId}. Please reconnect.`);
+  }
+  const baseUrl = providerTokens?.baseUrl || process.env.HUBSPOT_BASE_URL || undefined;
+
+  const cacheKey = `${user.apiKey}:${connection.instanceId}`;
+  const cached = mcpSessionCache.get(cacheKey);
+  if (cached) return cached;
+
+  // OAuth client credentials live in env (same vars the catalog seed reads to
+  // enable the OAuth flow). Present only for OAuth deployments; when absent
+  // (paste-token deployments) the refresh path in withHubSpotClient no-ops.
+  const oauthClientId = process.env.HUBSPOT_CLIENT_ID || undefined;
+  const oauthClientSecret = process.env.HUBSPOT_CLIENT_SECRET || undefined;
+
+  const session: UserSession = {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: connection.mcpSlug,
+    hubspotAccessToken: accessToken,
+    hubspotBaseUrl: baseUrl,
+    // Refresh plumbing — only populated for OAuth connections (paste tokens
+    // carry no refresh_token/expiry_date, so refresh stays a no-op).
+    hubspotRefreshToken: providerTokens?.refresh_token,
+    hubspotTokenExpiry: providerTokens?.expiry_date,
+    hubspotOauthClientId: oauthClientId,
+    hubspotOauthClientSecret: oauthClientSecret,
+    hubspotInstanceId: connection.instanceId,
+    // Null placeholders for Google clients (HubSpot MCP won't use them)
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
+  };
+
+  mcpSessionCache.set(cacheKey, session);
+  return session;
 }
 
 export function clearSessionCache(apiKey: string): void {

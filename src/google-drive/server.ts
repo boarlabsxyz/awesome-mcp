@@ -24,12 +24,17 @@ import {
   handleShareDriveFile,
   handleCheckPublicAccess,
 } from './toolHandlers.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 const driveServer = new FastMCP<UserSession>({
   name: 'Google Drive MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-drive'),
 });
+
+registerMintRestBearerForCurl(driveServer);
+registerListRestEndpoints(driveServer);
 
 driveServer.addTool({
   name: 'getDocumentInfo',
@@ -88,7 +93,7 @@ driveServer.addTool({
 driveServer.addTool({
   name: 'copyFile',
   annotations: { readOnlyHint: false },
-  description: 'Creates a copy of a Google Drive file or document (works with shared drives).',
+  description: 'Creates a copy of an existing Google Drive file or document (works with shared drives). For a brand-new blank document, use createDocument instead.',
   parameters: z.object({
     fileId: z.string().describe('ID of the file to copy.'),
     newName: z.string().optional().describe('Name for the copied file. If not provided, will use "Copy of [original name]".'),
@@ -182,7 +187,7 @@ driveServer.addTool({
 driveServer.addTool({
   name: 'shareDriveFile',
   annotations: { readOnlyHint: false },
-  description: 'Share a Google Drive file or folder by creating a permission. Can share with specific users/groups, a domain, or create an "anyone with the link" share.',
+  description: 'Share a Google Drive file or folder by creating a permission. Required fields by type: type=user|group → emailAddress; type=domain → domain; type=anyone → no extra field.',
   parameters: z.object({
     fileId: z.string().describe('The Drive file or folder ID to share.'),
     role: z.enum(['reader', 'writer', 'commenter']).describe('The access role to grant.'),
@@ -220,7 +225,7 @@ driveServer.addTool({
 driveServer.addTool({
   name: 'checkPublicAccess',
   annotations: { readOnlyHint: true },
-  description: 'Check whether a Google Drive file is publicly accessible ("anyone with the link"). Returns public/private status, file info, and permissions summary.',
+  description: 'List the file\'s direct permissions and report whether an "anyone with link" grant exists on the file itself. Does NOT follow folder-inherited, domain-wide, or shared-drive policies, so a file inside a public folder may report private here.',
   parameters: z.object({
     fileId: z.string().describe('The Drive file ID to check.'),
   }),

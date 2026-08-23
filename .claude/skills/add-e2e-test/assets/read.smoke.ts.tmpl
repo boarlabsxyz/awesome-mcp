@@ -1,0 +1,35 @@
+import { test } from 'node:test';
+import { runSmokeTest } from '../../runSmokeTest.ts';
+import { preface } from '../../promptTemplates.ts';
+import type { ClientName } from '../../drivers/driver.ts';
+
+const FIXTURE_ID = required('{{FIXTURE_ID_ENV}}');
+const FIXTURE_NEEDLE = required('{{FIXTURE_NEEDLE_ENV}}');
+const CLIENT = (process.env.CLIENT ?? 'claude-desktop') as ClientName;
+
+test(`{{toolName}} returns fixture content (${CLIENT})`, { timeout: 180_000 }, async () => {
+  await runSmokeTest({
+    name: '{{toolName}}',
+    client: CLIENT,
+    mode: 'readonly',
+    prompt: [
+      preface('readonly') +
+        `Call the {{toolName}} MCP tool with {{paramCallSpec}}.`,
+      'After the tool returns, reply with exactly this format and nothing else:',
+      'OUTPUT_BEGIN<verbatim relevant content>OUTPUT_END',
+      'Do not paraphrase, summarize, or add commentary. Do not use markdown formatting.',
+    ].join('\n'),
+    assertions: {
+      containsBetween: ['OUTPUT_BEGIN', 'OUTPUT_END'],
+      includes: [FIXTURE_NEEDLE],
+    },
+  });
+});
+
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Missing required env var: ${name}. See e2e/fixtures/read.md.`);
+  }
+  return value;
+}

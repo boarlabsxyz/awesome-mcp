@@ -1,0 +1,46 @@
+<!-- Marketing top nav. Place inside .container as the first child. -->
+<nav class="nav" aria-label="Primary">
+  <a href="/" class="nav-brand" translate="no">{{brand}}</a>
+  <div class="nav-inline">
+    <a href="/integrations" class="nav-inline-link">Integrations</a>
+    <a href="{{ctaHref}}" class="nav-link">{{ctaLabel}}</a>
+  </div>
+</nav>
+
+<style>
+.nav {
+  padding: 1.25rem 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.nav-brand {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #333;
+  text-decoration: none;
+}
+.nav-link {
+  padding: 0.5rem 1.25rem;
+  background: #4285F4;
+  color: #fff;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: background-color 0.2s;
+  touch-action: manipulation;
+}
+.nav-link:hover { background: #3367d6; }
+.nav-inline {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+.nav-inline-link {
+  color: #555;
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+</style>

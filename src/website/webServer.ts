@@ -1,5 +1,6 @@
 // src/webServer.ts
 import express, { Request, Response, NextFunction } from 'express';
+import { timingSafeEqual } from 'crypto';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
@@ -10,6 +11,7 @@ import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
 import { validateJwt, validateOpaqueToken, hasScope } from '../auth/jwtValidator.js';
 import { mapJwtToUser } from '../auth/userMapping.js';
 import { looksLikeJwt } from '../auth/resourceServerMiddleware.js';
+import { buildMeetConferenceData, hasExistingConference } from '../google-calendar/conferenceFormatter.js';
 
 /** Normalize Auth0 domain to https:// URL. */
 function auth0Issuer(): string {
@@ -298,8 +300,21 @@ import { loadUsers, createOrUpdateUser, getUserByGoogleId, getUserByApiKey, getU
 import { loadClientCredentials } from '../auth.js';
 import { getOAuthState, deleteOAuthState, storeAuthCode, storeClient, getClient, exchangeAuthCode } from './oauthServer.js';
 import { createSession, getSession, deleteSession, Session } from './sessionStore.js';
+import { lookupRestToken } from './restTokenStore.js';
+import { mapSlackErrorToHttpStatus } from './slackErrorMapper.js';
+import { negotiateFormat, respondNegotiated } from './restContent.js';
+import { sendUpstreamError } from './restUpstreamError.js';
+import { qstr, qint, qarr } from '../util/queryParams.js';
+import { stripTrailingSlashes } from '../util/url.js';
+import { selectTabContent, extractDocBodyText, truncateJsonByLength } from './docContent.js';
 import { clearSessionCache, createUserSession, createUserSessionFromConnection, UserSession } from '../userSession.js';
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
+import { exchangeOutlineOauthCode, buildOutlineInstanceName } from '../outline/oauthCallback.js';
+import { exchangeHubSpotOauthCode, buildHubSpotOauthInstanceName, HUBSPOT_TOKEN_URL } from '../hubspot/oauthCallback.js';
+import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceNameFromToken } from '../outline/connectToken.js';
+import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
+import { validateHubSpotToken } from '../hubspot/connectToken.js';
+import { buildSimpleInstanceName, type ValidateResult } from '../util/pasteTokenValidation.js';
 import {
   connectMcp,
   getMcpConnection,
@@ -346,7 +361,7 @@ export function computeEffectiveScopes(
   return declared;
 }
 
-const BASE_URL = (process.env.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
+const BASE_URL = stripTrailingSlashes(process.env.BASE_URL || 'http://localhost:8080');
 const COOKIE_SECRET = process.env.COOKIE_SECRET || 'dev-secret-change-me';
 const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
@@ -374,7 +389,11 @@ export function computeTokenStatus(
   expiryDate: number | null;
   isExpired: boolean;
 } {
-  // ClickUp and Slack tokens are long-lived (no refresh needed, no expiry)
+  // ClickUp and Slack tokens are long-lived (no refresh needed, no expiry).
+  // Outline is intentionally NOT here: OAuth-connected Outline tokens expire
+  // (~1h) and carry a refresh token, so they are computed from the passed
+  // tokens below (paste-token Outline connections have neither field and so
+  // still resolve to non-expiring).
   if (provider === 'clickup' || provider === 'slack-bot' || provider === 'slack') {
     return { hasRefreshToken: false, expiryDate: null, isExpired: false };
   }
@@ -399,6 +418,244 @@ export function mergeReconnectTokens(
     return { ...newTokens, refresh_token: existingRefreshToken };
   }
   return newTokens;
+}
+
+/**
+ * Mount the ClickUp task-event webhook ingestion endpoint on any Express app.
+ *
+ * Called from every app factory (createWebApp, createWebOnlyApp,
+ * createMcpOnlyApp) so subscribeToTaskEvents can safely construct
+ * `${BASE_URL}/webhooks/clickup/inbound` regardless of which pod BASE_URL
+ * points at. Before this helper existed, MCP-only pods (createMcpOnlyApp)
+ * had no /webhooks route and returned Express's default 404 for every
+ * delivery — the exact production symptom that motivated PR5.
+ *
+ * Design notes:
+ * - Registered with express.raw() so we consume the exact bytes ClickUp
+ *   signed. Must be registered BEFORE any global express.json() on the
+ *   same app; each caller is responsible for that ordering.
+ * - Auth is signature-only. The URL is public because ClickUp POSTs to it.
+ *   Trust is anchored in the X-Signature header vs the shared_secret we
+ *   stored at subscribe time.
+ * - Emits one structured JSON log line per delivery, greppable via
+ *   [clickup-ingest]. Never logs the shared_secret itself (see
+ *   IngestionLogContext).
+ * - Outer catch returns 500 on infra crashes (import failure, DB down)
+ *   so ClickUp counts them — the previous 200-swallow hid a 30-delivery
+ *   failure behind a green counter.
+ */
+export function registerClickUpWebhookIngest(app: express.Express): void {
+  app.post(
+    '/webhooks/clickup/inbound',
+    express.raw({ type: '*/*', limit: '1mb' }),
+    async (req, res) => {
+      try {
+        const store = await import('../clickup/taskEventStore.js');
+        const { handleClickUpWebhookIngest } = await import('../clickup/webhookHelpers.js');
+        const rawBody: Buffer = req.body instanceof Buffer ? req.body : Buffer.from(req.body as any);
+        const result = await handleClickUpWebhookIngest(
+          rawBody,
+          req.headers['x-signature'] as string | undefined,
+          store,
+        );
+        console.error(`[clickup-ingest] ${JSON.stringify({
+          status: result.status,
+          ...result.logContext,
+        })}`);
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        console.error(`[clickup-ingest] handler crash: ${err?.message || err}`);
+        res.status(500).json({ error: 'Internal error' });
+      }
+    },
+  );
+}
+
+/**
+ * Mount the Slack Events API ingestion endpoint on any Express app.
+ *
+ * Same transport shape as registerClickUpWebhookIngest, and mounted at the same
+ * places for the same reason — an MCP-only pod without this route 404s every
+ * delivery, and Slack disables a Request URL that keeps failing. Slack's blast
+ * radius is worse than ClickUp's: one Request URL serves the whole workspace,
+ * so a disabled URL takes out every subscriber in every channel, not one user's
+ * digest.
+ *
+ * Design notes:
+ * - express.raw() so we see the exact bytes Slack signed. MUST be registered
+ *   before any global express.json() on the same app.
+ * - Auth is signature-only; the URL is public because Slack POSTs to it. Trust
+ *   comes from the v0 HMAC against SLACK_SIGNING_SECRET, plus the ±5-minute
+ *   replay window enforced in verifySlackSignature.
+ * - The url_verification handshake is answered by the same handler, after the
+ *   signature check, so saving the Request URL in Slack works with no special
+ *   casing here.
+ * - One structured JSON log line per delivery, greppable via [slack-ingest].
+ *   Never includes message text — see the eventHelpers module header.
+ */
+export function registerSlackEventsIngest(app: express.Express): void {
+  app.post(
+    '/webhooks/slack/inbound',
+    express.raw({ type: '*/*', limit: '1mb' }),
+    async (req, res) => {
+      try {
+        const store = await import('../slack/eventStore.js');
+        const { handleSlackEventIngest } = await import('../slack/eventHelpers.js');
+        const rawBody: Buffer = req.body instanceof Buffer ? req.body : Buffer.from(req.body as any);
+        const result = await handleSlackEventIngest(
+          rawBody,
+          {
+            signature: req.headers['x-slack-signature'] as string | undefined,
+            timestamp: req.headers['x-slack-request-timestamp'] as string | undefined,
+            retryNum: req.headers['x-slack-retry-num'] as string | undefined,
+          },
+          store,
+          process.env.SLACK_SIGNING_SECRET,
+        );
+        console.error(`[slack-ingest] ${JSON.stringify({
+          status: result.status,
+          ...result.logContext,
+        })}`);
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        console.error(`[slack-ingest] handler crash: ${err?.message || err}`);
+        res.status(500).json({ error: 'Internal error' });
+      }
+    },
+  );
+}
+
+/**
+ * Serves re-hosted ClickUp Doc images. The insertImageIntoPage /
+ * uploadClickUpDocImage tools store image bytes in Postgres and embed a
+ * markdown link pointing here; ClickUp's renderer fetches this URL, so the
+ * route is intentionally public (unauthenticated). Ids are unguessable UUIDs.
+ * Registered on every pod that can receive public traffic, mirroring
+ * registerClickUpWebhookIngest.
+ */
+export function registerClickUpDocImageRoutes(app: express.Express): void {
+  app.get('/images/clickup-doc/:id', async (req, res) => {
+    try {
+      // Dynamic import to avoid a boot-time cycle with the db/clickup modules.
+      const { getDocImage } = await import('../clickup/docImageStore.js');
+      const img = await getDocImage(req.params.id);
+      if (!img) {
+        res.status(404).send('Not found');
+        return;
+      }
+      res
+        .type(img.mime)
+        // nosniff: don't let a browser re-interpret stored bytes as HTML/SVG
+        // (defense-in-depth against XSS; ingest already rejects SVG).
+        .set('X-Content-Type-Options', 'nosniff')
+        .set('Cache-Control', 'public, max-age=31536000, immutable')
+        .send(img.bytes);
+    } catch (err: any) {
+      console.error(`[clickup-doc-image] serve error: ${err?.message || err}`);
+      res.status(500).send('Internal error');
+    }
+  });
+}
+
+// Constant-time bearer comparison (avoids leaking the token via timing).
+function bearerMatches(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+// Bearer auth for the upload endpoint. Runs BEFORE express.raw so an
+// unauthenticated request is rejected without buffering its (up to 20MB) body.
+// Fail closed: no configured token means no valid upload is possible.
+function authorizeImageUpload(req: Request, res: Response, next: NextFunction): void {
+  const expected = process.env.IMAGE_UPLOAD_TOKEN;
+  const header = String(req.headers['authorization'] || '');
+  const provided = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (!expected || !provided || !bearerMatches(provided, expected)) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  next();
+}
+
+/**
+ * Content-addressed image blob host (see src/images/imageBlobStore.ts).
+ *   POST /images/upload  — bearer-auth'd raw-binary upload → 201 { url, key, ... }
+ *   GET  /images/:key    — public, immutable, ETag/304 (keys are content hashes,
+ *                          so bytes at a URL never change; read must be anonymous
+ *                          because ClickUp's image proxy can't authenticate).
+ * Mounted on a sub-router so the raw-body-size 413 is handled in scope.
+ */
+export function registerImageBlobRoutes(app: express.Express): void {
+  const router = express.Router();
+
+  router.post(
+    '/upload',
+    // Auth first, so unauthorized requests are rejected before the body is read.
+    authorizeImageUpload,
+    // Input-side DoS guard: reject oversized bodies BEFORE sharp decodes them.
+    // This is the real memory protection (see imageBlobStore for why the 2 MB
+    // output cap is storage hygiene, not security). Do not remove it.
+    express.raw({ type: '*/*', limit: '20mb' }),
+    async (req, res) => {
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        res.status(415).json({ error: 'Empty or non-binary request body.' });
+        return;
+      }
+
+      try {
+        const { store, STORED_CONTENT_TYPE } = await import('../images/imageBlobStore.js');
+        const result = await store(body, String(req.headers['content-type'] || ''));
+        res.status(201).json({ ...result, contentType: STORED_CONTENT_TYPE });
+      } catch (err: any) {
+        if (err?.httpStatus === 415) { res.status(415).json({ error: err.message }); return; }
+        if (err?.httpStatus === 413) { res.status(413).json({ error: err.message }); return; }
+        console.error(`[image-upload] error: ${err?.message || err}`);
+        res.status(500).json({ error: 'Internal error' });
+      }
+    },
+  );
+
+  router.get('/:key', async (req, res) => {
+    try {
+      const { fetch: fetchBlob } = await import('../images/imageBlobStore.js');
+      const found = await fetchBlob(req.params.key);
+      if (!found) { res.status(404).send('Not found'); return; }
+
+      // Content-hash key ⇒ the bytes can never change, so it doubles as a strong
+      // ETag and the response is immutable-cacheable forever.
+      const etag = JSON.stringify(req.params.key); // quoted per RFC 7232
+      const inm = req.headers['if-none-match'];
+      if (inm && (inm === etag || inm === req.params.key)) {
+        res.status(304).set('ETag', etag).end();
+        return;
+      }
+
+      res
+        .status(200)
+        .type(found.contentType)
+        .set('X-Content-Type-Options', 'nosniff')
+        .set('Cache-Control', 'public, max-age=31536000, immutable')
+        .set('ETag', etag)
+        .send(found.buffer);
+    } catch (err: any) {
+      console.error(`[image-serve] error: ${err?.message || err}`);
+      res.status(500).send('Internal error');
+    }
+  });
+
+  // Map express.raw's oversize error to a clean 413 (the input DoS guard).
+  router.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+    if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+      res.status(413).json({ error: 'Request body too large (max 20MB).' });
+      return;
+    }
+    next(err);
+  });
+
+  app.use('/images', router);
 }
 
 /**
@@ -617,6 +874,23 @@ function registerSharedRoutes(app: express.Express): void {
     next();
   }
 
+  // === ClickUp task-event webhook ingestion (public, HMAC-verified) ===
+  // Mounted here (before the global express.json()) so we can consume the raw
+  // body. See registerClickUpWebhookIngest for the full design note.
+  registerClickUpWebhookIngest(app);
+
+  // === Slack Events API ingestion (public, signature-verified) ===
+  // Same raw-body ordering requirement as the ClickUp route above.
+  registerSlackEventsIngest(app);
+
+  // Public serve route for re-hosted ClickUp Doc images (unauthenticated).
+  registerClickUpDocImageRoutes(app);
+
+  // Content-addressed image blob host (upload + immutable serve). Registered
+  // before the global express.json() so the raw-binary upload body is consumed
+  // by its own express.raw() rather than a JSON parser.
+  registerImageBlobRoutes(app);
+
   // JSON body parser for API routes
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
@@ -705,7 +979,17 @@ function registerSharedRoutes(app: express.Express): void {
           const authorizeUrl = `${mcp.oauthAuthorizationUrl}?client_id=${encodeURIComponent(client_id)}&user_scope=${encodeURIComponent(userScopes)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
           res.redirect(authorizeUrl);
         } else {
-          const authorizeUrl = `${mcp.oauthAuthorizationUrl}?client_id=${encodeURIComponent(client_id)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
+          // Generic OAuth 2.0 authorization_code providers (e.g. Outline, ClickUp).
+          // response_type=code is REQUIRED by spec-compliant servers — Outline's
+          // OAuth server (@node-oauth/oauth2-server) rejects the request without
+          // it; ClickUp defaults to code and tolerates the explicit value. scope
+          // is only appended when the catalog declares scopes (ClickUp uses
+          // app-level scopes → none, so it is omitted for ClickUp).
+          let authorizeUrl = `${mcp.oauthAuthorizationUrl}?client_id=${encodeURIComponent(client_id)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&state=${encodeURIComponent(state)}`;
+          const scopeList = (mcp.oauthScopes || []).join(' ');
+          if (scopeList) {
+            authorizeUrl += `&scope=${encodeURIComponent(scopeList)}`;
+          }
           res.redirect(authorizeUrl);
         }
       } else {
@@ -997,6 +1281,101 @@ function registerSharedRoutes(app: express.Express): void {
           );
           console.error(`User ${user.id} connected ClickUp MCP: ${connection.instanceId}`);
         }
+      } else if (provider === 'outline') {
+        // Outline OAuth 2.0 authorization_code exchange, plus a best-effort
+        // /api/auth.info fetch for email + team name. See src/outline/oauthCallback.ts.
+        const outlineBaseUrl = process.env.OUTLINE_BASE_URL || 'https://wiki-dev.gluzdov.com';
+        const exchange = await exchangeOutlineOauthCode({
+          tokenUrl: mcp.oauthTokenUrl || `${outlineBaseUrl}/oauth/token`,
+          code,
+          clientId: client_id,
+          clientSecret: client_secret,
+          redirectUri,
+          baseUrl: outlineBaseUrl,
+        });
+        if (!exchange.ok) {
+          console.error(`[MCP Connect] ${exchange.logMessage}`);
+          res.status(exchange.status).send(exchange.userMessage);
+          return;
+        }
+        console.error(`[MCP Connect] Outline user email: ${exchange.email}, team: ${exchange.teamName}`);
+
+        // Persist baseUrl alongside the token so tool calls can locate the
+        // right Outline instance regardless of which env var is set on the MCP
+        // service later (matches the paste-token flow's shape). Outline OAuth
+        // access tokens expire (~1h default) and rotate their refresh token on
+        // each use, so we store refresh_token + expiry_date to drive the
+        // tool-call-time refresh in createOutlineSession/withOutlineClient.
+        const outlineProviderTokens = {
+          access_token: exchange.accessToken,
+          refresh_token: exchange.refreshToken ?? undefined,
+          expiry_date: exchange.expiresIn ? Date.now() + exchange.expiresIn * 1000 : undefined,
+          baseUrl: outlineBaseUrl,
+        };
+        const emptyGoogleTokensForOutline = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const outlineInstanceName = buildOutlineInstanceName({
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          providedInstanceName: stateData.instanceName,
+          teamName: exchange.teamName,
+          email: exchange.email,
+        });
+
+        const outlineConnections = await getUserConnectedMcps(user.id);
+        const existingOutline = outlineConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === outlineInstanceName);
+
+        if (existingOutline) {
+          console.error(`User ${user.id} already has ${mcpSlug} for ${exchange.email}: ${existingOutline.instanceId}`);
+          res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingOutline.instanceName));
+          return;
+        }
+        connection = await createMcpInstance(
+          user.id, mcpSlug, outlineInstanceName, emptyGoogleTokensForOutline, null,
+          'outline', outlineProviderTokens, exchange.email
+        );
+        console.error(`User ${user.id} connected Outline MCP: ${connection.instanceId}`);
+      } else if (provider === 'hubspot') {
+        // HubSpot OAuth 2.0 authorization_code exchange (see src/hubspot/oauthCallback.ts).
+        const exchange = await exchangeHubSpotOauthCode({
+          tokenUrl: mcp.oauthTokenUrl || HUBSPOT_TOKEN_URL,
+          code,
+          clientId: client_id,
+          clientSecret: client_secret,
+          redirectUri,
+        });
+        if (!exchange.ok) {
+          console.error(`[MCP Connect] ${exchange.logMessage}`);
+          res.status(exchange.status).send(exchange.userMessage);
+          return;
+        }
+        console.error(`[MCP Connect] HubSpot portal: ${exchange.hubDomain}, user: ${exchange.email}`);
+
+        // HubSpot access tokens expire (~30 min); store refresh_token + expiry_date
+        // to drive the tool-call-time refresh in createHubSpotSession/withHubSpotClient.
+        const hubspotProviderTokens = {
+          access_token: exchange.accessToken,
+          refresh_token: exchange.refreshToken ?? undefined,
+          expiry_date: exchange.expiresIn ? Date.now() + exchange.expiresIn * 1000 : undefined,
+        };
+        const emptyGoogleTokensForHubSpot = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const hubspotInstanceName = buildHubSpotOauthInstanceName({
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          providedInstanceName: stateData.instanceName,
+          hubDomain: exchange.hubDomain,
+          email: exchange.email,
+        });
+
+        const hubspotConnections = await getUserConnectedMcps(user.id);
+        const existingHubSpot = hubspotConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === hubspotInstanceName);
+        if (existingHubSpot) {
+          console.error(`User ${user.id} already has ${mcpSlug} for ${exchange.hubDomain}: ${existingHubSpot.instanceId}`);
+          res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingHubSpot.instanceName));
+          return;
+        }
+        connection = await createMcpInstance(
+          user.id, mcpSlug, hubspotInstanceName, emptyGoogleTokensForHubSpot, null,
+          'hubspot', hubspotProviderTokens, exchange.email
+        );
+        console.error(`User ${user.id} connected HubSpot MCP: ${connection.instanceId}`);
       } else {
         // Google OAuth (default)
         const oauthClient = new OAuth2Client(client_id, client_secret, redirectUri);
@@ -1107,6 +1486,35 @@ function registerSharedRoutes(app: express.Express): void {
       if (!googleId) { res.status(401).json({ error: 'Not authenticated' }); return; }
       const user = await getUserByGoogleId(googleId);
       if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
+      const userId = user.id;
+
+      // Shared paste-token connect flow for simple bearer/API-key providers:
+      // validate the pasted credential, then store just { access_token }. Each
+      // provider differs only in its validate() call, provider slug, and log label.
+      const connectPasteToken = async (
+        provider: string,
+        serviceLogName: string,
+        validate: () => Promise<ValidateResult>,
+      ): Promise<void> => {
+        const result = await validate();
+        if (!result.ok) {
+          console.error(`[connect-token] ${result.logMessage}`);
+          res.status(result.status).json({ error: result.userMessage });
+          return;
+        }
+        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const providerTokens = { access_token: token };
+        const name = buildSimpleInstanceName({
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          providedInstanceName: instanceName,
+        });
+        const connection = await createMcpInstance(
+          userId, mcpSlug, name, emptyGoogleTokens, null,
+          provider, providerTokens, null,
+        );
+        console.error(`User ${userId} connected ${serviceLogName} MCP: ${connection.instanceId}`);
+        res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
+      };
 
       if (mcpSlug === 'slack-bot') {
         // Validate the xoxb- bot token by calling auth.test
@@ -1142,6 +1550,54 @@ function registerSharedRoutes(app: express.Express): void {
           console.error('[connect-token] Slack token validation failed:', err);
           res.status(502).json({ error: 'Failed to validate Slack token. Check the token and try again.' });
         }
+        return;
+      }
+
+      if (mcpSlug === 'outline') {
+        // Outline paste-token flow: the request body carries { token, baseUrl,
+        // instanceName? }. We validate the pair by calling <baseUrl>/api/auth.info,
+        // then store baseUrl alongside the access_token so tool calls hit the
+        // right instance.
+        const { baseUrl } = req.body as { baseUrl?: string };
+        const validate = await validateOutlineToken({ baseUrl: baseUrl ?? '', token });
+        if (!validate.ok) {
+          console.error(`[connect-token] ${validate.logMessage}`);
+          res.status(validate.status).json({ error: validate.userMessage });
+          return;
+        }
+
+        const providerEmail = validate.email;
+        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const providerTokens = { access_token: token, baseUrl: validate.baseUrl };
+        const outlineInstanceName = buildOutlineInstanceNameFromToken({
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          providedInstanceName: instanceName,
+          teamName: validate.teamName,
+          email: providerEmail,
+        });
+
+        const connection = await createMcpInstance(
+          user.id, mcpSlug, outlineInstanceName, emptyGoogleTokens, null,
+          'outline', providerTokens, providerEmail
+        );
+        console.error(`User ${user.id} connected Outline MCP: ${connection.instanceId} (${validate.baseUrl})`);
+        res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
+        return;
+      }
+
+      if (mcpSlug === 'peopleforce') {
+        // Validate against the public API's /employees endpoint, then store the
+        // access_token. PeopleForce uses a fixed base URL for most tenants; the
+        // per-service PEOPLEFORCE_BASE_URL env var covers the rest.
+        await connectPasteToken('peopleforce', 'PeopleForce', () => validatePeopleForceToken({ token }));
+        return;
+      }
+
+      if (mcpSlug === 'hubspot') {
+        // Validate the private-app access token against the public CRM API
+        // (/crm/v3/objects/companies?limit=1), then store the access_token.
+        // HubSpot uses a fixed base URL for most tenants; HUBSPOT_BASE_URL covers the rest.
+        await connectPasteToken('hubspot', 'HubSpot', () => validateHubSpotToken({ token }));
         return;
       }
 
@@ -1542,7 +1998,15 @@ function registerSharedRoutes(app: express.Express): void {
           googleEmail: c.googleEmail || c.providerEmail,
           connectedAt: c.connectedAt,
           provider: c.provider || 'google',
-          tokenStatus: computeTokenStatus(c.googleTokens, c.provider),
+          // Outline stores its real (possibly expiring) OAuth token in
+          // providerTokens, not googleTokens — feed the right object so the
+          // dashboard reflects OAuth expiry/refresh state.
+          tokenStatus: computeTokenStatus(
+            c.provider === 'outline'
+              ? (c.providerTokens as { refresh_token?: string; expiry_date?: number } | undefined)
+              : c.googleTokens,
+            c.provider,
+          ),
         })),
       });
     } catch (err: any) {
@@ -1936,6 +2400,21 @@ function registerSharedRoutes(app: express.Express): void {
       'List the last 20 messages from #incidents',
       'Pin the runbook link in #oncall',
     ],
+    'outline': [
+      'Find the onboarding doc in the Engineering collection',
+      'Create a doc summarizing today\'s incident in the Runbooks collection',
+      'Search the wiki for our deployment checklist',
+    ],
+    'peopleforce': [
+      'Who\'s out on leave next week?',
+      'List everyone in the Engineering department',
+      'Show me the skills on Jane Doe\'s profile',
+    ],
+    'hubspot': [
+      'Find the Acme Corp company and summarize its recent activity',
+      'Update the lifecycle stage for contact jane@acme.com',
+      'List open tickets modified this week',
+    ],
   };
 
   // GET /api/v1/catalogs - List all active MCPs
@@ -1955,6 +2434,11 @@ function registerSharedRoutes(app: express.Express): void {
             mcpUrl: c.mcpUrl,
             provider,
             scopes: computeEffectiveScopes(provider, c.oauthScopes, c.scopes),
+            // Non-empty only when this connector has an OAuth authorize endpoint
+            // configured (e.g. Outline once OUTLINE_CLIENT_ID/SECRET/BASE_URL are
+            // set). The dashboard uses it to offer the OAuth "Connect" flow
+            // instead of the paste-token form for otherwise token-based providers.
+            oauthAuthorizationUrl: c.oauthAuthorizationUrl || null,
             samplePrompts: SAMPLE_PROMPTS[c.slug] || [],
           };
         }),
@@ -2064,6 +2548,12 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   // Register all shared routes (auth, dashboard, connect, API, admin, catalogs)
   registerSharedRoutes(app);
 
+  registerRestApiRoutes(app);
+
+  return app;
+}
+
+function registerRestApiRoutes(app: express.Express): void {
   // === REST API for ChatGPT Integration ===
 
   /**
@@ -2078,6 +2568,16 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         return await mapJwtToUser(payload);
       } catch { /* not a valid JWT — try next */ }
     }
+
+    // Try short-lived REST token (5-min, minted by mintRestBearerForCurl MCP tool)
+    try {
+      const restUserId = await lookupRestToken(token);
+      if (restUserId !== null) {
+        await loadUsers();
+        const restUser = await getUserById(restUserId);
+        if (restUser) return restUser;
+      }
+    } catch { /* fall through */ }
 
     // Try API key (cheap local lookup before hitting Auth0)
     await loadUsers();
@@ -2132,6 +2632,17 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
             // Slack User uses its own session with slackUserToken + allowedChannels
             const { createSlackUserSession } = await import('../userSession.js');
             req.userSession = createSlackUserSession(user, connection);
+          } else if (connection.provider === 'outline') {
+            // Outline uses its own session with outlineAccessToken
+            const { createOutlineSession } = await import('../userSession.js');
+            req.userSession = createOutlineSession(user, connection);
+          } else if (connection.provider === 'peopleforce') {
+            // PeopleForce uses its own session with peopleForceAccessToken.
+            // Without this branch the connection falls through to the Google
+            // OAuth path below and yields a session with no provider token —
+            // auth would pass and the handler would throw at call time.
+            const { createPeopleForceSession } = await import('../userSession.js');
+            req.userSession = createPeopleForceSession(user, connection);
           } else {
             const mcp = await getMcpCatalog(connection.mcpSlug);
             const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
@@ -2160,11 +2671,16 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   const requireGmailApiKey = createServiceAuth('google-gmail', 'gmail');
   const requireSlidesApiKey = createServiceAuth('google-slides', 'slides');
   const requireClickUpApiKey = createServiceAuth('clickup', 'clickup');
+  const requireSlackApiKey = createServiceAuth('slack-bot', 'slack');
+  const requirePeopleForceApiKey = createServiceAuth('peopleforce', 'peopleforce');
 
   // JSON body parser already added above for auth routes
 
-  // Serve OpenAPI specs
-  for (const spec of ['openapi', 'openapi-calendar', 'openapi-sheets', 'openapi-drive', 'openapi-gmail', 'openapi-slides', 'openapi-clickup']) {
+  // Serve OpenAPI specs.
+  // `openapi.json` is the combined REST data-plane spec (built by
+  // scripts/buildRootOpenapi.mjs). `openapi-docs.json` and the per-service
+  // siblings remain available for ChatGPT Custom Actions backward compat.
+  for (const spec of ['openapi', 'openapi-docs', 'openapi-calendar', 'openapi-sheets', 'openapi-drive', 'openapi-gmail', 'openapi-slides', 'openapi-clickup']) {
     app.get(`/${spec}.json`, (_req, res) => {
       res.sendFile(path.join(publicDir, `${spec}.json`));
     });
@@ -2265,6 +2781,87 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
     }
   });
 
+  // GET /api/v1/docs/recent - Recent Google Docs (most-recently-modified).
+  // Registered BEFORE /api/v1/docs/:documentId so Express picks this static
+  // path first instead of treating "recent" as a documentId.
+  app.get('/api/v1/docs/recent', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const maxResults = qint(req.query.maxResults, 20, { max: 200 });
+      const response = await drive.files.list({
+        q: "mimeType='application/vnd.google-apps.document' and trashed=false",
+        pageSize: maxResults,
+        orderBy: 'modifiedTime desc',
+        fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName,emailAddress))',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+      res.json({ files: response.data.files || [] });
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to list recent docs' });
+    }
+  });
+
+  // GET /api/v1/docs/:documentId - Read a Google Doc with content negotiation.
+  // Accept: application/json (default) or ?format=json → raw upstream Docs API JSON.
+  // Accept: text/plain or ?format=text → extracted plain text body.
+  // Optional query: ?tabId=, ?maxLength=.
+  // Sibling of the legacy POST /api/v1/docs/read (which stays unchanged for
+  // ChatGPT Custom Actions backward compat).
+  // Doc-content fields used when only the body text is requested. Avoids
+  // pulling all the formatting metadata when the caller asked for text.
+  const DOC_TEXT_FIELDS =
+    'body(content(paragraph(elements(textRun(content))),table(tableRows(tableCells(content(paragraph(elements(textRun(content))))))))),title';
+
+  app.get('/api/v1/docs/:documentId', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const documentId = req.params.documentId as string;
+      const tabId = qstr(req.query.tabId) || undefined;
+      const maxLength = Math.max(qint(req.query.maxLength, 0), 0);
+      const wantText = negotiateFormat(req) === 'text';
+
+      const docs = req.userSession!.googleDocs;
+      const docResponse = await docs.documents.get({
+        documentId,
+        includeTabsContent: !!tabId,
+        fields: wantText && !tabId ? DOC_TEXT_FIELDS : '*',
+      });
+
+      const selection = tabId
+        ? selectTabContent(docResponse.data as any, tabId)
+        : { kind: 'ok' as const, content: docResponse.data };
+      if (selection.kind === 'notFound') {
+        res.status(404).json({ error: selection.message });
+        return;
+      }
+      if (selection.kind === 'badRequest') {
+        res.status(400).json({ error: selection.message });
+        return;
+      }
+
+      if (wantText) {
+        let text = extractDocBodyText(selection.content as any);
+        if (maxLength > 0 && text.length > maxLength) text = text.substring(0, maxLength);
+        res.type('text/plain; charset=utf-8').send(text);
+        return;
+      }
+
+      const result = truncateJsonByLength(selection.content, maxLength);
+      if (result.truncated) {
+        res.json({
+          truncated: true,
+          originalLength: result.originalLength,
+          truncatedJson: result.truncatedJson,
+        });
+        return;
+      }
+      res.json(result.payload);
+    } catch (err) {
+      console.error('Error reading doc:', err);
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to read document' });
+    }
+  });
+
   // GET /api/v1/docs/:documentId/comments - List comments
   app.get('/api/v1/docs/:documentId/comments', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
@@ -2306,6 +2903,67 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       } else {
         res.status(500).json({ error: err.message || 'Failed to list comments' });
       }
+    }
+  });
+
+  // GET /api/v1/docs/:documentId/comments/:commentId - Get one comment + replies
+  // Same field mask and response shape as the list sibling above, so a caller
+  // can jq a single comment without special-casing the payload.
+  app.get('/api/v1/docs/:documentId/comments/:commentId', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const documentId = req.params.documentId as string;
+      const drive = google.drive({ version: 'v3', auth: req.userSession!.oauthClient });
+
+      const response = await drive.comments.get({
+        fileId: documentId,
+        commentId: req.params.commentId as string,
+        fields: 'id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime)',
+      });
+
+      const comment = response.data as any;
+      res.json({
+        documentId,
+        id: comment.id,
+        content: comment.content,
+        quotedText: comment.quotedFileContent?.value || null,
+        author: comment.author?.displayName || 'Unknown',
+        createdTime: comment.createdTime,
+        resolved: comment.resolved || false,
+        replies: (comment.replies || []).map((reply: any) => ({
+          id: reply.id,
+          content: reply.content,
+          author: reply.author?.displayName || 'Unknown',
+          createdTime: reply.createdTime,
+        })),
+      });
+    } catch (err) {
+      console.error('Error getting comment:', err);
+      sendUpstreamError(res, err, { notFound: 'Comment not found', fallback: 'Failed to get comment' });
+    }
+  });
+
+  // GET /api/v1/docs/:documentId/structure - Structure summary of a Google Doc.
+  // Optional query: ?detailed=true (element-by-element listing), ?tabId=.
+  // Reuses GDocsHelpers.parseDocStructure so this matches the inspectDocStructure
+  // MCP tool exactly rather than reimplementing the traversal.
+  app.get('/api/v1/docs/:documentId/structure', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const documentId = req.params.documentId as string;
+      const detailed = req.query.detailed === 'true';
+      const tabId = qstr(req.query.tabId) || undefined;
+
+      const docs = req.userSession!.googleDocs;
+      const docResponse = await docs.documents.get({ documentId, includeTabsContent: true });
+      if (!docResponse.data) {
+        res.status(404).json({ error: 'Document not found' });
+        return;
+      }
+
+      const { parseDocStructure } = await import('../google-docs/apiHelpers.js');
+      res.json(parseDocStructure(docResponse.data, detailed, tabId));
+    } catch (err) {
+      console.error('Error inspecting doc structure:', err);
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to inspect document structure' });
     }
   });
 
@@ -2525,7 +3183,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   app.post('/api/v1/calendars/:calendarId/events', requireCalendarApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const calendarId = req.params.calendarId as string;
-      const { summary, description, location, startDateTime, endDateTime, timeZone, attendees, sendUpdates = 'none' } = req.body;
+      const { summary, description, location, startDateTime, endDateTime, timeZone, attendees, addGoogleMeet = false, sendUpdates = 'none' } = req.body;
 
       if (!summary) {
         res.status(400).json({ error: 'summary is required' });
@@ -2554,10 +3212,15 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         eventResource.attendees = attendees.map((email: string) => ({ email }));
       }
 
+      if (addGoogleMeet) {
+        eventResource.conferenceData = buildMeetConferenceData();
+      }
+
       const response = await calendar.events.insert({
         calendarId,
         requestBody: eventResource,
         sendUpdates,
+        conferenceDataVersion: addGoogleMeet ? 1 : undefined,
       });
 
       const event = response.data;
@@ -2570,6 +3233,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         end: event.end?.dateTime || event.end?.date || null,
         status: event.status,
         htmlLink: event.htmlLink || null,
+        hangoutLink: event.hangoutLink || null,
+        conferenceData: event.conferenceData || null,
         creator: event.creator?.email || null,
         organizer: event.organizer?.email || null,
         attendees: (event.attendees || []).map((a: any) => ({
@@ -2591,7 +3256,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   app.patch('/api/v1/calendars/:calendarId/events/:eventId', requireCalendarApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { calendarId, eventId } = req.params;
-      const { summary, description, location, startDateTime, endDateTime, timeZone, sendUpdates = 'none' } = req.body;
+      const { summary, description, location, startDateTime, endDateTime, timeZone, addGoogleMeet = false, sendUpdates = 'none' } = req.body;
       const calendar = req.userSession!.googleCalendar;
 
       // Fetch existing event to merge fields
@@ -2601,6 +3266,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       });
       const existingEvent = existingResponse.data;
 
+      const wantsNewMeet = addGoogleMeet && !hasExistingConference(existingEvent);
       const eventResource: any = {
         summary: summary ?? existingEvent.summary,
         description: description ?? existingEvent.description,
@@ -2608,6 +3274,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         start: startDateTime ? { dateTime: startDateTime, timeZone } : existingEvent.start,
         end: endDateTime ? { dateTime: endDateTime, timeZone } : existingEvent.end,
         attendees: existingEvent.attendees,
+        conferenceData: wantsNewMeet ? buildMeetConferenceData() : existingEvent.conferenceData,
       };
 
       const response: any = await calendar.events.update({
@@ -2615,6 +3282,7 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         eventId: eventId as string,
         requestBody: eventResource,
         sendUpdates: sendUpdates as 'all' | 'externalOnly' | 'none',
+        conferenceDataVersion: wantsNewMeet ? 1 : undefined,
       });
 
       const event = response.data;
@@ -2627,6 +3295,8 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         end: event.end?.dateTime || event.end?.date || null,
         status: event.status,
         htmlLink: event.htmlLink || null,
+        hangoutLink: event.hangoutLink || null,
+        conferenceData: event.conferenceData || null,
         creator: event.creator?.email || null,
         organizer: event.organizer?.email || null,
         attendees: (event.attendees || []).map((a: any) => ({
@@ -2878,13 +3548,29 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   });
 
   // GET /api/v1/gmail/messages/:messageId - Read email
+  // JSON by default (raw Gmail API payload). Accept: text/plain returns the
+  // same markdown rendering the readEmail MCP tool emits. The `?format=`
+  // query selects the upstream Gmail detail level (full | metadata | minimal
+  // | raw); any non-Gmail value (e.g. a REST-negotiation `json`/`text`)
+  // falls back to `full`. For text rendering we always force `full` so the
+  // body is available.
   app.get('/api/v1/gmail/messages/:messageId', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const gmail = req.userSession!.googleGmail;
-      const format = (req.query.format as string) || 'full';
+      const wantText = negotiateFormat(req) === 'text';
+      type GmailDetail = 'full' | 'metadata' | 'minimal' | 'raw';
+      const isGmailDetail = (v: string): v is GmailDetail =>
+        v === 'full' || v === 'metadata' || v === 'minimal' || v === 'raw';
+      const rawFormat = (req.query.format ?? '').toString();
+      const gmailFormat: GmailDetail = wantText || !isGmailDetail(rawFormat) ? 'full' : rawFormat;
       const result = await gmail.users.messages.get({
-        userId: 'me', id: req.params.messageId as string, format: format as 'full' | 'metadata' | 'minimal',
+        userId: 'me', id: req.params.messageId as string, format: gmailFormat,
       });
+      if (wantText) {
+        const { renderEmail } = await import('../google-gmail/apiHelpers.js');
+        res.type('text/plain; charset=utf-8').send(renderEmail(result.data));
+        return;
+      }
       res.json(result.data);
     } catch (err: any) {
       res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to read email' });
@@ -3150,27 +3836,65 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
   });
 
   // GET /api/v1/clickup/lists/:listId/tasks - List tasks
+  // JSON by default; Accept: text/plain (or ?format=text) returns the same
+  // markdown rendering the listTasks MCP tool emits.
   app.get('/api/v1/clickup/lists/:listId/tasks', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const {
+        ClickUpClient,
+        collectTasksInCloseWindow,
+        formatCloseWindowCapMessage,
+        parseCloseWindow,
+      } = await import('../clickup/apiHelpers.js');
+      const { formatTaskList } = await import('../clickup/formatHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
       const params: any = {};
       if (req.query.page) params.page = parseInt(req.query.page as string);
       if (req.query.orderBy) params.order_by = req.query.orderBy;
       if (req.query.statuses) params.statuses = Array.isArray(req.query.statuses) ? req.query.statuses : [req.query.statuses];
-      const result = await client.getTasks(req.params.listId as string, params);
-      res.json({ tasks: result.tasks || [] });
+
+      const win = parseCloseWindow(req.query.closedAfter as string | undefined, req.query.closedBefore as string | undefined);
+      if (win.error) { res.status(400).json({ error: win.error }); return; }
+
+      let tasks: any[];
+      if (win.from !== undefined || win.to !== undefined) {
+        const listId = req.params.listId as string;
+        const winParams = { ...params, include_closed: true };
+        delete winParams.page;
+        const collected = await collectTasksInCloseWindow(
+          async (page) => (await client.getTasks(listId, { ...winParams, page })).tasks || [],
+          win.from,
+          win.to,
+        );
+        if (collected.hitCap) { res.status(400).json({ error: formatCloseWindowCapMessage(collected.pagesScanned) }); return; }
+        tasks = collected.tasks;
+      } else {
+        const result = await client.getTasks(req.params.listId as string, params);
+        tasks = result.tasks || [];
+      }
+
+      if (negotiateFormat(req) === 'text') {
+        res.type('text/plain; charset=utf-8').send(formatTaskList(tasks));
+        return;
+      }
+      res.json({ tasks });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to list tasks' });
     }
   });
 
   // GET /api/v1/clickup/tasks/:taskId - Get task
+  // JSON by default; Accept: text/plain returns the markdown rendering.
   app.get('/api/v1/clickup/tasks/:taskId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const { formatTask } = await import('../clickup/formatHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
       const result = await client.getTask(req.params.taskId as string);
+      if (negotiateFormat(req) === 'text') {
+        res.type('text/plain; charset=utf-8').send(formatTask(result));
+        return;
+      }
       res.json(result);
     } catch (err: any) {
       res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to get task' });
@@ -3281,12 +4005,201 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
       const query = req.query.query as string || '';
       const page = req.query.page ? parseInt(req.query.page as string) : undefined;
       const customFields = req.query.custom_fields ? JSON.parse(req.query.custom_fields as string) : undefined;
-      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const {
+        ClickUpClient,
+        collectTasksInCloseWindow,
+        formatCloseWindowCapMessage,
+        parseCloseWindow,
+      } = await import('../clickup/apiHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+
+      const win = parseCloseWindow(req.query.closedAfter as string | undefined, req.query.closedBefore as string | undefined);
+      if (win.error) { res.status(400).json({ error: win.error }); return; }
+
+      if (win.from !== undefined || win.to !== undefined) {
+        const workspaceId = req.params.workspaceId as string;
+        // Bypass client.searchTasks's client-side name filter during pagination so
+        // the loop's "page < 100 → stop" heuristic sees raw ClickUp page sizes.
+        const collected = await collectTasksInCloseWindow(
+          async (p) => (await client.searchTasks(workspaceId, '', p, customFields, true)).tasks || [],
+          win.from,
+          win.to,
+        );
+        if (collected.hitCap) { res.status(400).json({ error: formatCloseWindowCapMessage(collected.pagesScanned) }); return; }
+        const q = query.toLowerCase();
+        const filtered = query ? collected.tasks.filter((t: any) => t.name?.toLowerCase().includes(q)) : collected.tasks;
+        res.json({ tasks: filtered });
+        return;
+      }
+
       const result = await client.searchTasks(req.params.workspaceId as string, query, page, customFields);
       res.json({ tasks: result.tasks || [] });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to search tasks' });
+    }
+  });
+
+  // GET /api/v1/clickup/workspaces/:workspaceId/tasks/filter - Filtered team tasks
+  // Thin wrapper over ClickUp's server-side filter endpoint. Query params mirror
+  // the filterTeamTasks MCP tool 1:1, with camelCase names matching the tool's
+  // Zod schema. Date params accept ISO or Unix ms strings and are normalized via
+  // parseTimestampInput. Repeat a query param (assignees=a&assignees=b) to pass
+  // an array. custom_fields is a JSON-encoded string.
+  app.get('/api/v1/clickup/workspaces/:workspaceId/tasks/filter', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient, parseTimestampInput } = await import('../clickup/apiHelpers.js');
+      const { formatTaskList } = await import('../clickup/formatHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+
+      const toArr = (v: any): string[] | undefined => {
+        if (v === undefined) return undefined;
+        return Array.isArray(v) ? (v as string[]) : [v as string];
+      };
+      const parseTs = (v: any, field: string): number | undefined => {
+        if (v === undefined) return undefined;
+        const ts = parseTimestampInput(v as string);
+        if (Number.isNaN(ts)) throw new Error(`Invalid ${field}: ${v}`);
+        return ts;
+      };
+
+      let params: any;
+      try {
+        params = {
+          page: req.query.page !== undefined ? parseInt(req.query.page as string) : undefined,
+          order_by: req.query.orderBy as string | undefined,
+          reverse: req.query.reverse === 'true',
+          subtasks: req.query.subtasks === 'true',
+          include_closed: req.query.includeClosed === 'true',
+          assignees: toArr(req.query.assignees),
+          statuses: toArr(req.query.statuses),
+          tags: toArr(req.query.tags),
+          space_ids: toArr(req.query.spaceIds),
+          project_ids: toArr(req.query.projectIds),
+          list_ids: toArr(req.query.listIds),
+          date_created_gt: parseTs(req.query.dateCreatedGt, 'dateCreatedGt'),
+          date_created_lt: parseTs(req.query.dateCreatedLt, 'dateCreatedLt'),
+          date_updated_gt: parseTs(req.query.dateUpdatedGt, 'dateUpdatedGt'),
+          date_updated_lt: parseTs(req.query.dateUpdatedLt, 'dateUpdatedLt'),
+          due_date_gt: parseTs(req.query.dueDateGt, 'dueDateGt'),
+          due_date_lt: parseTs(req.query.dueDateLt, 'dueDateLt'),
+          custom_fields: req.query.custom_fields ? JSON.parse(req.query.custom_fields as string) : undefined,
+        };
+      } catch (e: any) {
+        res.status(400).json({ error: e.message });
+        return;
+      }
+
+      const result = await client.filterTeamTasks(req.params.workspaceId as string, params);
+      const tasks = result.tasks || [];
+      if (negotiateFormat(req) === 'text') {
+        res.type('text/plain; charset=utf-8').send(formatTaskList(tasks));
+        return;
+      }
+      res.json({ tasks });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to filter tasks' });
+    }
+  });
+
+  // GET /api/v1/clickup/workspaces/:workspaceId/events - Task-event history from the store
+  // Mirrors the getTaskEventHistory MCP tool 1:1. Query params: since/until
+  // (ISO or Unix ms), eventTypes (repeatable), toStatus, taskId, limit.
+  // If no subscription exists for (user, workspace), returns 200 with
+  // { kind: 'no-subscription', warning, events: [] } — not 404 — so the
+  // caller can fall back to filterTeamTasks without inspecting a status code.
+  app.get('/api/v1/clickup/workspaces/:workspaceId/events', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const userId = req.userSession?.userId;
+      if (!userId) { res.status(401).json({ error: 'Missing user context' }); return; }
+
+      const { parseTimestampInput } = await import('../clickup/apiHelpers.js');
+      const { queryTaskEventsFlow } = await import('../clickup/webhookHelpers.js');
+      const store = await import('../clickup/taskEventStore.js');
+
+      const toArr = (v: any): string[] | undefined => {
+        if (v === undefined) return undefined;
+        return Array.isArray(v) ? (v as string[]) : [v as string];
+      };
+      const parseTs = (v: any, field: string): number | undefined => {
+        if (v === undefined) return undefined;
+        const ts = parseTimestampInput(v as string);
+        if (Number.isNaN(ts)) throw new Error(`Invalid ${field}: ${v}`);
+        return ts;
+      };
+
+      let since: number | undefined, until: number | undefined;
+      try {
+        since = parseTs(req.query.since, 'since');
+        until = parseTs(req.query.until, 'until');
+      } catch (e: any) {
+        res.status(400).json({ error: e.message });
+        return;
+      }
+
+      const result = await queryTaskEventsFlow(
+        { findSubscription: store.findSubscription, queryTaskEvents: store.queryTaskEvents },
+        {
+          userId,
+          workspaceId: req.params.workspaceId as string,
+          since, until,
+          eventTypes: toArr(req.query.eventTypes),
+          toStatus: req.query.toStatus as string | undefined,
+          taskId: req.query.taskId as string | undefined,
+          limit: req.query.limit !== undefined ? parseInt(req.query.limit as string) : undefined,
+        },
+      );
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to query task events' });
+    }
+  });
+
+  // GET /api/v1/clickup/subscriptions - List task-event subscriptions owned by
+  // the caller. Optional ?workspaceId to narrow.
+  app.get('/api/v1/clickup/subscriptions', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const userId = req.userSession?.userId;
+      if (!userId) { res.status(401).json({ error: 'Missing user context' }); return; }
+      const { listSubscriptionsForUser } = await import('../clickup/taskEventStore.js');
+      const subs = await listSubscriptionsForUser(userId, req.query.workspaceId as string | undefined);
+      // Redact shared_secret before returning — it's for HMAC verification
+      // server-side only and must never leave the process.
+      const safe = subs.map(({ sharedSecret: _s, ...rest }) => rest);
+      res.json({ subscriptions: safe });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to list subscriptions' });
+    }
+  });
+
+  // GET /api/v1/clickup/workspaces/:workspaceId/subscription/debug -
+  // Structured diagnostic report cross-referencing local subscription vs
+  // ClickUp's own view vs the event store. Mirrors debugTaskEventSubscription
+  // MCP tool 1:1. Returns 200 with the report even when things are broken —
+  // this is a diagnostic tool, not a health check.
+  app.get('/api/v1/clickup/workspaces/:workspaceId/subscription/debug', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const userId = req.userSession?.userId;
+      if (!userId) { res.status(401).json({ error: 'Missing user context' }); return; }
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const { debugTaskEventSubscriptionFlow } = await import('../clickup/webhookHelpers.js');
+      const store = await import('../clickup/taskEventStore.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+
+      const baseUrl = (process.env.BASE_URL || '').replace(/\/+$/, '');
+      const expectedEndpoint = baseUrl ? `${baseUrl}/webhooks/clickup/inbound` : '';
+
+      const report = await debugTaskEventSubscriptionFlow(
+        {
+          findSubscription: store.findSubscription,
+          listWebhooks: (workspaceId) => client.listWebhooks(workspaceId),
+          countTaskEventsForSubscription: store.countTaskEventsForSubscription,
+          queryTaskEvents: store.queryTaskEvents,
+        },
+        { userId, workspaceId: req.params.workspaceId as string, expectedEndpoint },
+      );
+      res.json(report);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to build debug report' });
     }
   });
 
@@ -3314,32 +4227,41 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
     }
   });
 
-  // GET /api/v1/clickup/workspaces/:workspaceId/docs - List docs
+  // GET /api/v1/clickup/workspaces/:workspaceId/docs - List one page of docs
   app.get('/api/v1/clickup/workspaces/:workspaceId/docs', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const { ClickUpClient, docsFromEnvelope, cursorFromEnvelope } = await import('../clickup/apiHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
-      const result = await client.listDocs(req.params.workspaceId as string);
-      res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to list docs' });
+      const result = await client.listDocs(req.params.workspaceId as string, {
+        limit: qint(req.query.limit, 100, { min: 10, max: 100 }),
+        cursor: qstr(req.query.cursor) || undefined,
+      });
+      res.json({ docs: docsFromEnvelope(result), nextCursor: cursorFromEnvelope(result) || null });
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to list docs' });
     }
   });
 
-  // GET /api/v1/clickup/workspaces/:workspaceId/docs/search - Search docs
+  // GET /api/v1/clickup/workspaces/:workspaceId/docs/search - Search docs by
+  // name across the whole workspace. Matching, paging and sorting all live in
+  // ClickUpClient.searchAllDocs so this stays identical to the MCP tool — the
+  // two used to carry separate copies of a one-page substring filter.
   app.get('/api/v1/clickup/workspaces/:workspaceId/docs/search', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const query = (req.query.query as string || '').toLowerCase();
       const { ClickUpClient } = await import('../clickup/apiHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
-      const result = await client.searchDocs(req.params.workspaceId as string);
-      // Client-side name filtering (ClickUp v3 API has no text search param)
-      if (query && Array.isArray(result.data)) {
-        result.data = result.data.filter((d: any) => (d.name || d.title || '').toLowerCase().includes(query));
-      }
-      res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to search docs' });
+      const creatorRaw = qstr(req.query.creator);
+      const scan = await client.searchAllDocs(req.params.workspaceId as string, {
+        query: qstr(req.query.query) || undefined,
+        creator: creatorRaw ? Number(creatorRaw) : undefined,
+        parentId: qstr(req.query.parentId) || undefined,
+        parentType: qstr(req.query.parentType) || undefined,
+      });
+      // totalScanned/hitCap/rateLimited ride along so a caller can tell an
+      // empty result apart from an incomplete scan.
+      res.json(scan);
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to search docs' });
     }
   });
 
@@ -3383,8 +4305,1370 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
     }
   });
 
-  return app;
+  // POST /api/v1/images - Re-host an image and get a public URL to embed in a
+  // ClickUp Doc (the REST/API-key sibling of the uploadClickUpDocImage MCP tool).
+  // Two body shapes, both converging on the shared image store():
+  //   - raw binary bytes (Content-Type: image/png, image/jpeg, image/gif,
+  //     image/bmp, image/webp) — the bytes are stored directly; OR
+  //   - JSON { "imageUrl": "https://..." } — the URL is fetched and re-hosted.
+  // express.raw parses everything EXCEPT application/json (which the global JSON
+  // parser already handled), so a raw upload isn't blocked by the 100kb JSON cap.
+  app.post(
+    '/api/v1/images',
+    requireClickUpApiKey,
+    express.raw({ type: (req) => !(req.headers['content-type'] || '').includes('application/json'), limit: '20mb' }),
+    async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const { store, STORED_CONTENT_TYPE, getImagePublicBaseUrl } = await import('../images/imageBlobStore.js');
+        getImagePublicBaseUrl(); // fail fast if the image host isn't configured
+
+        let result;
+        const body = req.body;
+        const imageUrl = (body && typeof body === 'object' && !Buffer.isBuffer(body)) ? body.imageUrl : undefined;
+        if (Buffer.isBuffer(body) && body.length > 0) {
+          result = await store(body, String(req.headers['content-type'] || ''));
+        } else if (typeof imageUrl === 'string' && imageUrl.length > 0) {
+          const { fetchImageBytes } = await import('../clickup/docImageStore.js');
+          result = await store(await fetchImageBytes(imageUrl), '');
+        } else {
+          res.status(400).json({ error: 'Provide the image as a raw binary body (Content-Type: image/png, image/jpeg, image/gif, image/bmp, or image/webp) or JSON { "imageUrl": "https://..." }.' });
+          return;
+        }
+        res.status(201).json({ ...result, contentType: STORED_CONTENT_TYPE });
+      } catch (err: any) {
+        if (err?.httpStatus === 415) { res.status(415).json({ error: err.message }); return; }
+        if (err?.httpStatus === 413) { res.status(413).json({ error: err.message }); return; }
+        // fetchImageBytes throws UserError for bad/blocked/oversized URLs → 400.
+        if (err?.name === 'UserError') { res.status(400).json({ error: err.message }); return; }
+        console.error(`[api-images] ${err?.message || err}`);
+        res.status(500).json({ error: err?.message || 'Failed to store image' });
+      }
+    },
+  );
+
+  // === REST Data Plane: extended GET endpoints ===
+  // These are passthrough siblings of read-only MCP tools that return bulk
+  // data. Catalogued in src/restCatalog.ts and discoverable via the
+  // listRestEndpoints MCP tool. Bearer is either the permanent apiKey or a
+  // 5-minute token from the mintRestBearerForCurl MCP tool.
+
+  // sendUpstreamError lives in ./restUpstreamError.js so it's unit-testable
+  // in isolation and so each route's catch can stay a one-liner.
+
+  // GET /api/v1/docs - List Google Docs (?q= triggers search)
+  app.get('/api/v1/docs', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const q = qstr(req.query.q);
+      const maxResults = qint(req.query.maxResults, 50, { max: 1000 });
+      const orderBy = qstr(req.query.orderBy, 'modifiedTime');
+      let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
+      if (q) {
+        // Escape backslashes then single quotes so the value is safe to drop
+        // into a Drive query string literal. Use string-arg replaceAll to
+        // avoid the regex-escape gymnastics.
+        const escaped = q.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+        queryString += ` and (name contains '${escaped}' or fullText contains '${escaped}')`;
+      }
+      const response = await drive.files.list({
+        q: queryString,
+        pageSize: maxResults,
+        orderBy: orderBy === 'name' ? 'name' : orderBy,
+        fields: 'nextPageToken,files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress),driveId)',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+      res.json({ files: response.data.files || [], nextPageToken: response.data.nextPageToken });
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to list docs' });
+    }
+  });
+
+  // GET /api/v1/docs/:documentId/tabs - List tabs in a Google Doc
+  app.get('/api/v1/docs/:documentId/tabs', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const docs = req.userSession!.googleDocs;
+      const includeContent = req.query.includeContent === 'true';
+      const docResponse = await docs.documents.get({
+        documentId: req.params.documentId as string,
+        includeTabsContent: true,
+        fields: includeContent ? 'title,tabs' : 'title,tabs(tabProperties,childTabs)',
+      });
+      // Flatten the tab tree.
+      const flatten = (tabs: any[] = [], level = 0, out: any[] = []): any[] => {
+        for (const tab of tabs) {
+          out.push({
+            tabId: tab.tabProperties?.tabId,
+            title: tab.tabProperties?.title || null,
+            index: tab.tabProperties?.index ?? null,
+            level,
+          });
+          if (tab.childTabs?.length) flatten(tab.childTabs, level + 1, out);
+        }
+        return out;
+      };
+      const allTabs = flatten(docResponse.data.tabs as any[] || []);
+      res.json({
+        documentId: req.params.documentId,
+        title: docResponse.data.title || null,
+        tabCount: allTabs.length,
+        tabs: allTabs,
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to list tabs' });
+    }
+  });
+
+  // GET /api/v1/drive/shared-drives - List shared drives
+  app.get('/api/v1/drive/shared-drives', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const maxResults = qint(req.query.maxResults, 50, { max: 100 });
+      const q = qstr(req.query.q);
+      const response = await drive.drives.list({
+        pageSize: maxResults,
+        q: q ? `name contains '${q.replace(/'/g, "\\'")}'` : undefined,
+        fields: 'nextPageToken,drives(id,name,createdTime,capabilities)',
+      });
+      res.json({ drives: response.data.drives || [], nextPageToken: response.data.nextPageToken });
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to list shared drives' });
+    }
+  });
+
+  // GET /api/v1/drive/folders/:folderId - Get folder metadata
+  app.get('/api/v1/drive/folders/:folderId', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const response = await drive.files.get({
+        fileId: req.params.folderId as string,
+        supportsAllDrives: true,
+        fields: 'id,name,description,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName),shared,parents,driveId,mimeType',
+      });
+      if (response.data.mimeType !== 'application/vnd.google-apps.folder') {
+        res.status(400).json({ error: 'The specified ID does not belong to a folder.' });
+        return;
+      }
+      res.json(response.data);
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Folder not found', fallback: 'Failed to get folder info' });
+    }
+  });
+
+  // GET /api/v1/drive/files/:fileId/permissions - List permissions on a file
+  app.get('/api/v1/drive/files/:fileId/permissions', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const response = await drive.permissions.list({
+        fileId: req.params.fileId as string,
+        supportsAllDrives: true,
+        fields: 'permissions(id,type,role,emailAddress,displayName,domain,allowFileDiscovery,deleted)',
+      });
+      res.json({ fileId: req.params.fileId, permissions: response.data.permissions || [] });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'File not found', fallback: 'Failed to list permissions' });
+    }
+  });
+
+  // GET /api/v1/drive/files/:fileId/public - Check public accessibility
+  app.get('/api/v1/drive/files/:fileId/public', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const [meta, perms] = await Promise.all([
+        drive.files.get({
+          fileId: req.params.fileId as string,
+          supportsAllDrives: true,
+          fields: 'id,name,shared,webViewLink',
+        }),
+        drive.permissions.list({
+          fileId: req.params.fileId as string,
+          supportsAllDrives: true,
+          fields: 'permissions(type,role,domain,allowFileDiscovery)',
+        }),
+      ]);
+      const list = perms.data.permissions || [];
+      const anyone = list.find(p => p.type === 'anyone');
+      const domain = list.find(p => p.type === 'domain');
+      res.json({
+        fileId: meta.data.id,
+        name: meta.data.name,
+        shared: !!meta.data.shared,
+        webViewLink: meta.data.webViewLink,
+        publiclyAccessible: !!anyone,
+        anyoneAccess: anyone ? { role: anyone.role, discoverable: !!anyone.allowFileDiscovery } : null,
+        domainAccess: domain ? { domain: domain.domain, role: domain.role } : null,
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'File not found', fallback: 'Failed to check public access' });
+    }
+  });
+
+  // GET /api/v1/gmail/labels - List Gmail labels
+  app.get('/api/v1/gmail/labels', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const gmail = req.userSession!.googleGmail;
+      const response = await gmail.users.labels.list({ userId: 'me' });
+      res.json({ labels: response.data.labels || [] });
+    } catch (err) {
+      sendUpstreamError(res, err, { fallback: 'Failed to list labels' });
+    }
+  });
+
+  // GET /api/v1/slides/:presentationId/pages/:pageObjectId/thumbnail - Slide thumbnail URL
+  app.get('/api/v1/slides/:presentationId/pages/:pageObjectId/thumbnail', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const slides = req.userSession!.googleSlides;
+      const thumbnailSize = qstr(req.query.size, 'MEDIUM').toUpperCase();
+      const response = await slides.presentations.pages.getThumbnail({
+        presentationId: req.params.presentationId as string,
+        pageObjectId: req.params.pageObjectId as string,
+        'thumbnailProperties.mimeType': 'PNG',
+        'thumbnailProperties.thumbnailSize': thumbnailSize,
+      });
+      res.json({
+        presentationId: req.params.presentationId,
+        pageObjectId: req.params.pageObjectId,
+        contentUrl: response.data.contentUrl,
+        width: response.data.width,
+        height: response.data.height,
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Page or presentation not found', fallback: 'Failed to get thumbnail' });
+    }
+  });
+
+  // GET /api/v1/slides/:presentationId/comments - List comments on a presentation
+  app.get('/api/v1/slides/:presentationId/comments', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const response = await drive.comments.list({
+        fileId: req.params.presentationId as string,
+        fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime))',
+        pageSize: 100,
+      });
+      res.json({
+        presentationId: req.params.presentationId,
+        comments: response.data.comments || [],
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Presentation not found', fallback: 'Failed to list comments' });
+    }
+  });
+
+  // GET /api/v1/sheets/:spreadsheetId/ranges - Read a range (GET sibling of POST .../read)
+  app.get('/api/v1/sheets/:spreadsheetId/ranges', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const range = qstr(req.query.range);
+      if (!range) {
+        res.status(400).json({ error: 'Query param `range` is required (e.g. range=Sheet1!A1:D10)' });
+        return;
+      }
+      const sheets = req.userSession!.googleSheets;
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: req.params.spreadsheetId as string,
+        range,
+      });
+      const values = response.data.values || [];
+      if (negotiateFormat(req) === 'text') {
+        if (values.length === 0) {
+          res.type('text/plain; charset=utf-8').send(`Range ${range} is empty or does not exist.`);
+          return;
+        }
+        let body = `**Spreadsheet Range:** ${range}\n\n`;
+        values.forEach((row: any[], index: number) => {
+          body += `Row ${index + 1}: ${JSON.stringify(row)}\n`;
+        });
+        res.type('text/plain; charset=utf-8').send(body);
+        return;
+      }
+      res.json({
+        spreadsheetId: req.params.spreadsheetId,
+        range: response.data.range,
+        majorDimension: response.data.majorDimension,
+        values,
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to read range' });
+    }
+  });
+
+  // GET /api/v1/sheets/:spreadsheetId/rows/:rowNumber - Read a single row
+  app.get('/api/v1/sheets/:spreadsheetId/rows/:rowNumber', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const rowNumber = Number.parseInt(req.params.rowNumber as string, 10);
+      if (!Number.isInteger(rowNumber) || rowNumber < 1) {
+        res.status(400).json({ error: 'rowNumber must be a positive 1-based integer' });
+        return;
+      }
+      const sheetName = qstr(req.query.sheet);
+      const sheets = req.userSession!.googleSheets;
+      const range = sheetName ? `${sheetName}!${rowNumber}:${rowNumber}` : `${rowNumber}:${rowNumber}`;
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: req.params.spreadsheetId as string,
+        range,
+      });
+      const values = response.data.values?.[0] || [];
+      // If ?withHeaders=true, also fetch row 1 and pair them.
+      let asObject: Record<string, any> | undefined;
+      if (req.query.withHeaders === 'true') {
+        const headersRange = sheetName ? `${sheetName}!1:1` : '1:1';
+        const headersResp = await sheets.spreadsheets.values.get({
+          spreadsheetId: req.params.spreadsheetId as string,
+          range: headersRange,
+        });
+        const headers = (headersResp.data.values?.[0] || []).map(String);
+        asObject = {};
+        headers.forEach((h, i) => { asObject![h] = values[i] ?? null; });
+      }
+      res.json({
+        spreadsheetId: req.params.spreadsheetId,
+        rowNumber,
+        sheet: sheetName || null,
+        values,
+        ...(asObject ? { asObject } : {}),
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to read row' });
+    }
+  });
+
+  // GET /api/v1/sheets/:spreadsheetId/search - Find a row by column value
+  app.get('/api/v1/sheets/:spreadsheetId/search', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const col = qstr(req.query.col);
+      const val = qstr(req.query.val);
+      const sheetName = qstr(req.query.sheet);
+      if (!col || !val) {
+        res.status(400).json({ error: 'Query params `col` and `val` are required (e.g. col=A&val=foo)' });
+        return;
+      }
+      // Restrict `col` to A1-style column letters so it cannot expand the
+      // range (e.g. "A:Z") or inject sheet references like "A!Sheet2".
+      if (!/^[A-Z]+$/i.test(col)) {
+        res.status(400).json({ error: 'Query param `col` must be A1 column letters (e.g. A, B, AA).' });
+        return;
+      }
+      const sheets = req.userSession!.googleSheets;
+      // Cap the search window so an unbounded column read can't be triggered
+      // by a sparse value at row ~1M. Callers that need a different window
+      // can supply ?startRow= / ?maxRows= explicitly.
+      const MAX_ROWS = 10000;
+      const startRow = qint(req.query.startRow, 1, { min: 1 });
+      const maxRows = qint(req.query.maxRows, MAX_ROWS, { min: 1, max: MAX_ROWS });
+      const endRow = startRow + maxRows - 1;
+      const colRange = `${col}${startRow}:${col}${endRow}`;
+      const range = sheetName ? `${sheetName}!${colRange}` : colRange;
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: req.params.spreadsheetId as string,
+        range,
+      });
+      const rows = response.data.values || [];
+      let rowNumber: number | null = null;
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i][0] !== undefined && String(rows[i][0]) === val) {
+          rowNumber = startRow + i;
+          break;
+        }
+      }
+      res.json({
+        spreadsheetId: req.params.spreadsheetId,
+        column: col,
+        searchValue: val,
+        sheet: sheetName || null,
+        startRow,
+        maxRows,
+        rowNumber,
+        found: rowNumber !== null,
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to search' });
+    }
+  });
+
+  // GET /api/v1/clickup/docs/:docId - Get a ClickUp doc with its pages
+  app.get('/api/v1/clickup/docs/:docId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const workspaceId = qstr(req.query.workspaceId);
+      if (!workspaceId) {
+        res.status(400).json({ error: 'Query param `workspaceId` is required' });
+        return;
+      }
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      // Let getDocPages rejections propagate to the outer catch so a real
+      // failure is reported as 4xx/5xx, not masked as "no pages".
+      const [doc, pages] = await Promise.all([
+        client.getDoc(workspaceId, req.params.docId as string),
+        client.getDocPages(workspaceId, req.params.docId as string),
+      ]);
+      res.json({ doc, pages });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Doc not found', fallback: 'Failed to get doc' });
+    }
+  });
+
+  // GET /api/v1/clickup/docs/:docId/pages/:pageId - Get a page within a ClickUp doc
+  app.get('/api/v1/clickup/docs/:docId/pages/:pageId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const workspaceId = qstr(req.query.workspaceId);
+      if (!workspaceId) {
+        res.status(400).json({ error: 'Query param `workspaceId` is required' });
+        return;
+      }
+      const contentFormat = qstr(req.query.contentFormat, 'text/md');
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const page = await client.getPage(workspaceId, req.params.docId as string, req.params.pageId as string, contentFormat);
+      res.json(page);
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Page not found', fallback: 'Failed to get page' });
+    }
+  });
+
+  // Slack REST endpoints — require a slack-bot connection.
+  // slack-user (xoxp) connections have access-rules enforcement that we can't
+  // safely apply at the REST layer yet, so callers with only a slack-user
+  // connection get a clear error from createServiceAuth's connection lookup.
+
+  // GET /api/v1/slack/channels - List Slack channels and DMs
+  app.get('/api/v1/slack/channels', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      if (!req.userSession?.slackBotToken) {
+        res.status(403).json({ error: 'Slack-bot connection required for REST. Connect via the dashboard.' });
+        return;
+      }
+      const { SlackClient } = await import('../slack/apiHelpers.js');
+      const client = new SlackClient(req.userSession.slackBotToken);
+      const cursor = qstr(req.query.cursor) || undefined;
+      const types = qstr(req.query.types) || undefined;
+      const result = await client.conversationsList(cursor, types);
+      res.json({ channels: result.channels, nextCursor: result.response_metadata?.next_cursor || null });
+    } catch (err: any) {
+      res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || 'Failed to list channels' });
+    }
+  });
+
+  // GET /api/v1/slack/channels/:channelId/messages - Read recent messages
+  app.get('/api/v1/slack/channels/:channelId/messages', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      if (!req.userSession?.slackBotToken) {
+        res.status(403).json({ error: 'Slack-bot connection required for REST.' });
+        return;
+      }
+      const { SlackClient } = await import('../slack/apiHelpers.js');
+      const client = new SlackClient(req.userSession.slackBotToken);
+      const limit = qint(req.query.limit, 50, { max: 200 });
+      const result = await client.conversationsHistory(req.params.channelId as string, {
+        limit,
+        oldest: qstr(req.query.oldest) || undefined,
+        latest: qstr(req.query.latest) || undefined,
+        cursor: qstr(req.query.cursor) || undefined,
+      });
+      res.json({
+        channelId: req.params.channelId,
+        messages: result.messages,
+        hasMore: !!result.has_more,
+        nextCursor: result.response_metadata?.next_cursor || null,
+      });
+    } catch (err: any) {
+      res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || 'Failed to read history' });
+    }
+  });
+
+  // GET /api/v1/slack/channels/:channelId/threads/:threadTs - Read thread replies
+  app.get('/api/v1/slack/channels/:channelId/threads/:threadTs', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      if (!req.userSession?.slackBotToken) {
+        res.status(403).json({ error: 'Slack-bot connection required for REST.' });
+        return;
+      }
+      const { SlackClient } = await import('../slack/apiHelpers.js');
+      const client = new SlackClient(req.userSession.slackBotToken);
+      const limit = qint(req.query.limit, 50, { max: 200 });
+      const result = await client.conversationsReplies(
+        req.params.channelId as string,
+        req.params.threadTs as string,
+        { limit, cursor: qstr(req.query.cursor) || undefined },
+      );
+      res.json({
+        channelId: req.params.channelId,
+        threadTs: req.params.threadTs,
+        messages: result.messages,
+        hasMore: !!result.has_more,
+        nextCursor: result.response_metadata?.next_cursor || null,
+      });
+    } catch (err: any) {
+      res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || 'Failed to read thread' });
+    }
+  });
+
+  // GET /api/v1/slack/users - List workspace users
+  app.get('/api/v1/slack/users', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      if (!req.userSession?.slackBotToken) {
+        res.status(403).json({ error: 'Slack-bot connection required for REST.' });
+        return;
+      }
+      const { SlackClient } = await import('../slack/apiHelpers.js');
+      const client = new SlackClient(req.userSession.slackBotToken);
+      const limit = qint(req.query.limit, 200, { max: 1000 });
+      const result = await client.usersList(qstr(req.query.cursor) || undefined, limit);
+      res.json({ members: result.members, nextCursor: result.response_metadata?.next_cursor || null });
+    } catch (err: any) {
+      res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || 'Failed to list users' });
+    }
+  });
+
+
+  // === PeopleForce ===
+  // Every PeopleForce route resolves its token through this guard first.
+  // createServiceAuth falls back to a plain Google session when the user has no
+  // PeopleForce connection, so auth can pass with no provider token at all —
+  // without the check we would build a client with an undefined bearer and
+  // surface a confusing upstream 401 instead of "connect PeopleForce".
+  // peopleForceBaseUrl is deliberately NOT required: it is optional, and
+  // PeopleForceClient falls back to the default tenant base when it is absent.
+  function peopleForceToken(req: ApiAuthenticatedRequest, res: Response): string | null {
+    const token = req.userSession?.peopleForceAccessToken;
+    if (!token) {
+      res.status(403).json({ error: 'PeopleForce connection required for REST. Connect via the dashboard.' });
+      return null;
+    }
+    return token;
+  }
+
+  // Bulk HRIS reads: the employee directory is ~260 records at 50/page, so a
+  // full headcount pull through the LLM context is exactly what this plane
+  // avoids. All four support ?format=text to get the same markdown the MCP
+  // tools render (see respondNegotiated) so the two surfaces can't drift.
+
+  // GET /api/v1/peopleforce/employees - List employees
+  // NOTE: omitting ?status returns ACTIVE employees only, not everyone —
+  // PeopleForce has no "all". A full headcount is status=active + status=inactive.
+  app.get('/api/v1/peopleforce/employees', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatEmployeeList, EMPLOYEE_STATUS_VALUES } = await import('../peopleforce/apiHelpers.js');
+      const status = qstr(req.query.status) || undefined;
+      // Validate against the allowlist rather than passing through: PeopleForce
+      // silently ignores an unknown status and returns the byte-identical
+      // default directory, so a typo would fail open with plausible wrong data.
+      if (status && !(EMPLOYEE_STATUS_VALUES as readonly string[]).includes(status)) {
+        res.status(400).json({ error: `status must be one of: ${EMPLOYEE_STATUS_VALUES.join(', ')}` });
+        return;
+      }
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listEmployees({
+        page: qint(req.query.page, 1, { min: 1 }),
+        status: status as any,
+      });
+      respondNegotiated(req, res, result, () => formatEmployeeList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce employees:', err);
+      sendUpstreamError(res, err, { notFound: 'Employees not found', fallback: 'Failed to list employees' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/employees/:employeeId - Get a single employee
+  app.get('/api/v1/peopleforce/employees/:employeeId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatEmployee } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getEmployee(req.params.employeeId as string);
+      if (!result?.data) {
+        res.status(404).json({ error: 'Employee not found' });
+        return;
+      }
+      respondNegotiated(req, res, result, () => formatEmployee(result.data));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce employee:', err);
+      sendUpstreamError(res, err, { notFound: 'Employee not found', fallback: 'Failed to fetch employee' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/departments - List departments
+  app.get('/api/v1/peopleforce/departments', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatDepartmentList } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listDepartments({ page: qint(req.query.page, 1, { min: 1 }) });
+      respondNegotiated(req, res, result, () => formatDepartmentList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce departments:', err);
+      sendUpstreamError(res, err, { notFound: 'Departments not found', fallback: 'Failed to list departments' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/leave-requests - List leave requests
+  // ?state filters by lifecycle state. PeopleForce has no server-side filter by
+  // employee or date range — page through and filter with jq.
+  app.get('/api/v1/peopleforce/leave-requests', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatLeaveRequestList } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listLeaveRequests({
+        page: qint(req.query.page, 1, { min: 1 }),
+        state: qstr(req.query.state) || undefined,
+      });
+      respondNegotiated(req, res, result, () => formatLeaveRequestList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce leave requests:', err);
+      sendUpstreamError(res, err, { notFound: 'Leave requests not found', fallback: 'Failed to list leave requests' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/leave-requests/:leaveRequestId - Get one leave request
+  app.get('/api/v1/peopleforce/leave-requests/:leaveRequestId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatLeaveRequestList } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getLeaveRequest(req.params.leaveRequestId as string);
+      if (!result?.data) {
+        res.status(404).json({ error: 'Leave request not found' });
+        return;
+      }
+      respondNegotiated(req, res, result, () => formatLeaveRequestList([result.data]));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce leave request:', err);
+      sendUpstreamError(res, err, { notFound: 'Leave request not found', fallback: 'Failed to fetch leave request' });
+    }
+  });
+
+  // --- Reference / lookup lists ---
+  // Every one of these is the same shape: one `page` param, one client call,
+  // one formatter. They're registered from a table rather than fifteen
+  // copy-pasted handlers so a change to the error/negotiation contract lands
+  // in one place — the same reason the MCP side has addPaginatedListTool.
+  const PF_LOOKUP_ROUTES: ReadonlyArray<{
+    path: string;
+    fetch: (client: any, page: number) => Promise<any>;
+    format: (helpers: any, result: any) => string;
+    notFound: string;
+    fallback: string;
+  }> = [
+    {
+      path: '/api/v1/peopleforce/leave-types',
+      fetch: (c, page) => c.listLeaveTypes({ page }),
+      format: (h, r) => h.formatLeaveTypeList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Leave types not found',
+      fallback: 'Failed to list leave types',
+    },
+    {
+      path: '/api/v1/peopleforce/positions',
+      fetch: (c, page) => c.listPositions({ page }),
+      format: (h, r) => h.formatNamedList('Positions', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Positions not found',
+      fallback: 'Failed to list positions',
+    },
+    {
+      path: '/api/v1/peopleforce/divisions',
+      fetch: (c, page) => c.listDivisions({ page }),
+      format: (h, r) => h.formatNamedList('Divisions', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Divisions not found',
+      fallback: 'Failed to list divisions',
+    },
+    {
+      path: '/api/v1/peopleforce/locations',
+      fetch: (c, page) => c.listLocations({ page }),
+      format: (h, r) => h.formatLocationList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Locations not found',
+      fallback: 'Failed to list locations',
+    },
+    {
+      path: '/api/v1/peopleforce/employment-types',
+      fetch: (c, page) => c.listEmploymentTypes({ page }),
+      format: (h, r) => h.formatNamedList('Employment Types', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Employment types not found',
+      fallback: 'Failed to list employment types',
+    },
+    {
+      path: '/api/v1/peopleforce/job-levels',
+      fetch: (c, page) => c.listJobLevels({ page }),
+      format: (h, r) => h.formatNamedList('Job Levels', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Job levels not found',
+      fallback: 'Failed to list job levels',
+    },
+    {
+      path: '/api/v1/peopleforce/skills',
+      fetch: (c, page) => c.listSkills({ page }),
+      format: (h, r) => h.formatNamedList('Skills', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Skills not found',
+      fallback: 'Failed to list skills',
+    },
+    {
+      path: '/api/v1/peopleforce/competencies',
+      fetch: (c, page) => c.listCompetencies({ page }),
+      format: (h, r) => h.formatNamedList('Competencies', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Competencies not found',
+      fallback: 'Failed to list competencies',
+    },
+    {
+      path: '/api/v1/peopleforce/tasks',
+      fetch: (c, page) => c.listTasks({ page }),
+      format: (h, r) => h.formatTaskList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Tasks not found',
+      fallback: 'Failed to list tasks',
+    },
+    {
+      path: '/api/v1/peopleforce/objectives',
+      fetch: (c, page) => c.listObjectives({ page }),
+      format: (h, r) => h.formatObjectiveList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Objectives not found',
+      fallback: 'Failed to list objectives',
+    },
+    {
+      path: '/api/v1/peopleforce/kpis',
+      fetch: (c, page) => c.listKeyPerformanceIndicators({ page }),
+      format: (h, r) => h.formatKpiList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'KPIs not found',
+      fallback: 'Failed to list KPIs',
+    },
+    {
+      path: '/api/v1/peopleforce/employee-tables',
+      fetch: (c, page) => c.listEmployeeTables({ page }),
+      format: (h, r) => h.formatEmployeeTableList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Employee tables not found',
+      fallback: 'Failed to list employee tables',
+    },
+    {
+      path: '/api/v1/peopleforce/knowledge-base/categories',
+      fetch: (c, page) => c.listKnowledgeBaseCategories({ page }),
+      format: (h, r) => h.formatKnowledgeCategoryList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Knowledge base categories not found',
+      fallback: 'Failed to list knowledge base categories',
+    },
+    {
+      path: '/api/v1/peopleforce/recruitment/pipelines',
+      fetch: (c, page) => c.listRecruitmentPipelines({ page }),
+      format: (h, r) => h.formatPipelineList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Recruitment pipelines not found',
+      fallback: 'Failed to list recruitment pipelines',
+    },
+    {
+      path: '/api/v1/peopleforce/recruitment/candidate-movements',
+      fetch: (c, page) => c.listCandidateMovements({ page }),
+      format: (h, r) => h.formatMovementList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Candidate movements not found',
+      fallback: 'Failed to list candidate movements',
+    },
+    {
+      path: '/api/v1/peopleforce/recruitment/disqualify-reasons',
+      fetch: (c, page) => c.listDisqualifyReasons({ page }),
+      format: (h, r) => h.formatNamedList('Disqualify Reasons', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Disqualify reasons not found',
+      fallback: 'Failed to list disqualify reasons',
+    },
+    {
+      path: '/api/v1/peopleforce/recruitment/sources',
+      fetch: (c, page) => c.listRecruitmentSources({ page }),
+      format: (h, r) => h.formatNamedList('Recruitment Sources', r.data ?? [], r.metadata?.pagination),
+      notFound: 'Recruitment sources not found',
+      fallback: 'Failed to list recruitment sources',
+    },
+  ];
+
+  for (const route of PF_LOOKUP_ROUTES) {
+    app.get(route.path, requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const helpers = await import('../peopleforce/apiHelpers.js');
+        const token = peopleForceToken(req, res);
+        if (!token) return;
+        const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+        const result = await route.fetch(client, qint(req.query.page, 1, { min: 1 }));
+        respondNegotiated(req, res, result, () => route.format(helpers, result));
+      } catch (err: any) {
+        console.error(`Error on PeopleForce ${route.path}:`, err);
+        sendUpstreamError(res, err, { notFound: route.notFound, fallback: route.fallback });
+      }
+    });
+  }
+
+  // --- Employee-nested reads ---
+  // These endpoints don't paginate upstream — they always return the full list.
+  const PF_EMPLOYEE_ROUTES: ReadonlyArray<{
+    path: string;
+    fetch: (client: any, employeeId: string) => Promise<any>;
+    format: (helpers: any, result: any) => string;
+    notFound: string;
+    fallback: string;
+  }> = [
+    {
+      path: '/api/v1/peopleforce/employees/:employeeId/leave-balances',
+      fetch: (c, id) => c.listEmployeeLeaveBalances(id),
+      format: (h, r) => h.formatLeaveBalances(r.data ?? []),
+      notFound: 'Leave balances not found',
+      fallback: 'Failed to list leave balances',
+    },
+    {
+      path: '/api/v1/peopleforce/employees/:employeeId/skills',
+      fetch: (c, id) => c.listEmployeeSkills(id),
+      format: (h, r) => h.formatEmployeeSkills(r.data ?? []),
+      notFound: 'Employee skills not found',
+      fallback: 'Failed to list employee skills',
+    },
+    {
+      path: '/api/v1/peopleforce/employees/:employeeId/documents',
+      fetch: (c, id) => c.listEmployeeDocuments(id),
+      format: (h, r) => h.formatUnknownItemList('Employee Documents', r.data ?? []),
+      notFound: 'Employee documents not found',
+      fallback: 'Failed to list employee documents',
+    },
+    {
+      path: '/api/v1/peopleforce/employees/:employeeId/notes',
+      fetch: (c, id) => c.listEmployeeNotes(id),
+      format: (h, r) => h.formatUnknownItemList('Employee Notes', r.data ?? []),
+      notFound: 'Employee notes not found',
+      fallback: 'Failed to list employee notes',
+    },
+    {
+      path: '/api/v1/peopleforce/employees/:employeeId/emergency-contacts',
+      fetch: (c, id) => c.listEmployeeEmergencyContacts(id),
+      format: (h, r) => h.formatUnknownItemList('Emergency Contacts', r.data ?? []),
+      notFound: 'Emergency contacts not found',
+      fallback: 'Failed to list emergency contacts',
+    },
+  ];
+
+  for (const route of PF_EMPLOYEE_ROUTES) {
+    app.get(route.path, requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const helpers = await import('../peopleforce/apiHelpers.js');
+        const token = peopleForceToken(req, res);
+        if (!token) return;
+        const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+        const result = await route.fetch(client, req.params.employeeId as string);
+        respondNegotiated(req, res, result, () => route.format(helpers, result));
+      } catch (err: any) {
+        console.error(`Error on PeopleForce ${route.path}:`, err);
+        sendUpstreamError(res, err, { notFound: route.notFound, fallback: route.fallback });
+      }
+    });
+  }
+
+  // GET /api/v1/peopleforce/employees/:employeeId/tables/:tableInternalName
+  // tableInternalName is a system slug from /employee-tables, not the display
+  // name. The row payload is wrapped in { data: {...} } and unwrapped by the
+  // client — without that every table would read as empty.
+  app.get('/api/v1/peopleforce/employees/:employeeId/tables/:tableInternalName', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatEmployeeTable } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getEmployeeTable(req.params.employeeId as string, req.params.tableInternalName as string);
+      if (!result || typeof result !== 'object') {
+        res.status(404).json({ error: 'Employee table not found' });
+        return;
+      }
+      respondNegotiated(req, res, result, () => formatEmployeeTable(result));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce employee table:', err);
+      sendUpstreamError(res, err, { notFound: 'Employee table not found', fallback: 'Failed to fetch employee table' });
+    }
+  });
+
+  // --- Knowledge base ---
+  // GET /api/v1/peopleforce/knowledge-base/articles?categoryId=... - List articles
+  // Registered before the :articleId route below purely for readability; the two
+  // differ in path depth so ordering is not load-bearing here.
+  app.get('/api/v1/peopleforce/knowledge-base/articles', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatKnowledgeArticleList } = await import('../peopleforce/apiHelpers.js');
+      // Upstream only exposes articles nested under a category — there is no
+      // workspace-wide article list to fall back to.
+      const categoryId = qstr(req.query.categoryId);
+      if (!categoryId) {
+        res.status(400).json({ error: 'categoryId query parameter is required' });
+        return;
+      }
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listKnowledgeBaseArticles({ categoryId, page: qint(req.query.page, 1, { min: 1 }) });
+      respondNegotiated(req, res, result, () => formatKnowledgeArticleList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce knowledge base articles:', err);
+      sendUpstreamError(res, err, { notFound: 'Knowledge base category not found', fallback: 'Failed to list knowledge base articles' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/knowledge-base/articles/:articleId - Get one article
+  app.get('/api/v1/peopleforce/knowledge-base/articles/:articleId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatKnowledgeArticle } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getKnowledgeBaseArticle(req.params.articleId as string);
+      if (!result?.data) {
+        res.status(404).json({ error: 'Knowledge base article not found' });
+        return;
+      }
+      respondNegotiated(req, res, result, () => formatKnowledgeArticle(result.data));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce knowledge base article:', err);
+      sendUpstreamError(res, err, { notFound: 'Knowledge base article not found', fallback: 'Failed to fetch knowledge base article' });
+    }
+  });
+
+  // --- Recruitment: vacancies ---
+  // GET /api/v1/peopleforce/recruitment/vacancies - List vacancies
+  // ?status and ?tagIds are repeatable (?status=a&status=b) or comma-separated.
+  app.get('/api/v1/peopleforce/recruitment/vacancies', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatVacancyList } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listVacancies({
+        page: qint(req.query.page, 1, { min: 1 }),
+        status: qarr(req.query.status),
+        tagIds: qarr(req.query.tagIds),
+      });
+      respondNegotiated(req, res, result, () => formatVacancyList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce vacancies:', err);
+      sendUpstreamError(res, err, { notFound: 'Vacancies not found', fallback: 'Failed to list vacancies' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/recruitment/vacancies/:vacancyId - Get one vacancy
+  app.get('/api/v1/peopleforce/recruitment/vacancies/:vacancyId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatVacancy } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getVacancy(req.params.vacancyId as string);
+      if (!result?.data) {
+        res.status(404).json({ error: 'Vacancy not found' });
+        return;
+      }
+      respondNegotiated(req, res, result, () => formatVacancy(result.data));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce vacancy:', err);
+      sendUpstreamError(res, err, { notFound: 'Vacancy not found', fallback: 'Failed to fetch vacancy' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications - Pipeline excerpt
+  app.get('/api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatApplicationList } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listVacancyApplications({
+        vacancyId: req.params.vacancyId as string,
+        page: qint(req.query.page, 1, { min: 1 }),
+      });
+      respondNegotiated(req, res, result, () => formatApplicationList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce vacancy applications:', err);
+      sendUpstreamError(res, err, { notFound: 'Vacancy not found', fallback: 'Failed to list vacancy applications' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications/:applicationId
+  app.get('/api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications/:applicationId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatApplicationList } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getVacancyApplication({
+        vacancyId: req.params.vacancyId as string,
+        applicationId: req.params.applicationId as string,
+      });
+      if (!result?.data) {
+        res.status(404).json({ error: 'Vacancy application not found' });
+        return;
+      }
+      respondNegotiated(req, res, result, () => formatApplicationList([result.data]));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce vacancy application:', err);
+      sendUpstreamError(res, err, { notFound: 'Vacancy application not found', fallback: 'Failed to fetch vacancy application' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/recruitment/published-vacancies/:vacancyId - Careers-site JD
+  // Some tenants gate the Careers API behind a separate career-site token; on a
+  // not-authorized error, fall back to getVacancy's internal description.
+  app.get('/api/v1/peopleforce/recruitment/published-vacancies/:vacancyId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatPublishedVacancy } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getPublishedVacancy(req.params.vacancyId as string);
+      respondNegotiated(req, res, result, () => formatPublishedVacancy(result));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce published job description:', err);
+      sendUpstreamError(res, err, { notFound: 'Published vacancy not found', fallback: 'Failed to fetch published job description' });
+    }
+  });
+
+  // --- Recruitment: candidates ---
+  // GET /api/v1/peopleforce/recruitment/candidates - List candidates
+  // ?vacancyIds and ?skills are repeatable or comma-separated.
+  app.get('/api/v1/peopleforce/recruitment/candidates', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatCandidateList } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listCandidates({
+        page: qint(req.query.page, 1, { min: 1 }),
+        vacancyIds: qarr(req.query.vacancyIds),
+        pipelineStageId: qstr(req.query.pipelineStageId) || undefined,
+        skills: qarr(req.query.skills),
+        email: qstr(req.query.email) || undefined,
+        createdAtGte: qstr(req.query.createdAtGte) || undefined,
+        createdAtLte: qstr(req.query.createdAtLte) || undefined,
+        updatedAtGte: qstr(req.query.updatedAtGte) || undefined,
+        updatedAtLte: qstr(req.query.updatedAtLte) || undefined,
+      });
+      respondNegotiated(req, res, result, () => formatCandidateList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce candidates:', err);
+      sendUpstreamError(res, err, { notFound: 'Candidates not found', fallback: 'Failed to list candidates' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/recruitment/candidates/:candidateId - Get one candidate
+  app.get('/api/v1/peopleforce/recruitment/candidates/:candidateId', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatCandidate } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getCandidate(req.params.candidateId as string);
+      if (!result?.data) {
+        res.status(404).json({ error: 'Candidate not found' });
+        return;
+      }
+      respondNegotiated(req, res, result, () => formatCandidate(result.data));
+    } catch (err: any) {
+      console.error('Error fetching PeopleForce candidate:', err);
+      sendUpstreamError(res, err, { notFound: 'Candidate not found', fallback: 'Failed to fetch candidate' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/recruitment/candidates/:candidateId/dossier
+  // Best-effort bundle (profile + notes + experience + education, plus the
+  // application when ?vacancyId is given). Parts that fail are reported inside
+  // the payload rather than failing the request.
+  app.get('/api/v1/peopleforce/recruitment/candidates/:candidateId/dossier', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { PeopleForceClient, formatCandidateDossier } = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.getCandidateDossier({
+        candidateId: req.params.candidateId as string,
+        vacancyId: qstr(req.query.vacancyId) || undefined,
+      });
+      respondNegotiated(req, res, result, () => formatCandidateDossier(result));
+    } catch (err: any) {
+      console.error('Error building PeopleForce candidate dossier:', err);
+      sendUpstreamError(res, err, { notFound: 'Candidate not found', fallback: 'Failed to build candidate dossier' });
+    }
+  });
+
+  // --- Candidate-nested reads (no upstream pagination) ---
+  const PF_CANDIDATE_ROUTES: ReadonlyArray<{
+    path: string;
+    fetch: (client: any, candidateId: string) => Promise<any>;
+    format: (helpers: any, result: any) => string;
+    notFound: string;
+    fallback: string;
+  }> = [
+    {
+      path: '/api/v1/peopleforce/recruitment/candidates/:candidateId/notes',
+      fetch: (c, id) => c.listCandidateNotes(id),
+      format: (h, r) => h.formatCandidateNotes(r.data ?? []),
+      notFound: 'Candidate notes not found',
+      fallback: 'Failed to list candidate notes',
+    },
+    {
+      path: '/api/v1/peopleforce/recruitment/candidates/:candidateId/experiences',
+      fetch: (c, id) => c.listCandidateExperiences(id),
+      format: (h, r) => h.formatCandidateExperiences(r.data ?? []),
+      notFound: 'Candidate experiences not found',
+      fallback: 'Failed to list candidate experiences',
+    },
+    {
+      path: '/api/v1/peopleforce/recruitment/candidates/:candidateId/educations',
+      fetch: (c, id) => c.listCandidateEducations(id),
+      format: (h, r) => h.formatCandidateEducations(r.data ?? []),
+      notFound: 'Candidate educations not found',
+      fallback: 'Failed to list candidate educations',
+    },
+  ];
+
+  for (const route of PF_CANDIDATE_ROUTES) {
+    app.get(route.path, requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const helpers = await import('../peopleforce/apiHelpers.js');
+        const token = peopleForceToken(req, res);
+        if (!token) return;
+        const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+        const result = await route.fetch(client, req.params.candidateId as string);
+        respondNegotiated(req, res, result, () => route.format(helpers, result));
+      } catch (err: any) {
+        console.error(`Error on PeopleForce ${route.path}:`, err);
+        sendUpstreamError(res, err, { notFound: route.notFound, fallback: route.fallback });
+      }
+    });
+  }
+
+
+  // --- PeopleForce writes ---
+  // Bodies are validated with the MCP tools' own Zod schemas rather than
+  // hand-rolled `if (!field)` checks: REST bypasses FastMCP's Zod layer, and
+  // reusing the schema is the only thing keeping the two surfaces in step.
+  // Path params are merged over the body so a URL and a mismatched body key
+  // can't disagree about which record is being written.
+  //
+  // Note these widen what the permanent dashboard API key can do — it reaches
+  // the same createServiceAuth gate as the reads.
+
+  // POST /api/v1/peopleforce/leave-requests - Create a leave request
+  app.post('/api/v1/peopleforce/leave-requests', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const { createLeaveRequestSchema } = await import('../peopleforce/server.js');
+      const parsed = createLeaveRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const { PeopleForceClient } = await import('../peopleforce/apiHelpers.js');
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.createLeaveRequest(parsed.data);
+      if (!result?.data) {
+        res.status(502).json({ error: 'PeopleForce accepted the request but returned no leave request' });
+        return;
+      }
+      res.status(201).json(result);
+    } catch (err: any) {
+      console.error('Error creating PeopleForce leave request:', err);
+      sendUpstreamError(res, err, { notFound: 'Employee or leave type not found', fallback: 'Failed to create leave request' });
+    }
+  });
+
+  // POST /api/v1/peopleforce/recruitment/candidates/:candidateId/notes - Add a note
+  app.post('/api/v1/peopleforce/recruitment/candidates/:candidateId/notes', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const { addCandidateNoteSchema } = await import('../peopleforce/server.js');
+      const parsed = addCandidateNoteSchema.safeParse({ ...req.body, candidateId: req.params.candidateId });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const { PeopleForceClient, formatCandidateNotes } = await import('../peopleforce/apiHelpers.js');
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      await client.addCandidateNote(parsed.data);
+      // The add call returns no usable body, so re-read: a caller chaining curls
+      // needs the created note's id, and a bare {ok:true} would force them to
+      // issue the follow-up GET themselves.
+      const notes = await client.listCandidateNotes(parsed.data.candidateId);
+      respondNegotiated(req, res.status(201), notes, () => formatCandidateNotes(notes.data ?? []));
+    } catch (err: any) {
+      console.error('Error adding PeopleForce candidate note:', err);
+      sendUpstreamError(res, err, { notFound: 'Candidate not found', fallback: 'Failed to add candidate note' });
+    }
+  });
+
+  // POST /api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications/:applicationId/move
+  app.post('/api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications/:applicationId/move', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const { moveVacancyApplicationSchema } = await import('../peopleforce/server.js');
+      const parsed = moveVacancyApplicationSchema.safeParse({
+        ...req.body,
+        vacancyId: req.params.vacancyId,
+        applicationId: req.params.applicationId,
+      });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const { PeopleForceClient } = await import('../peopleforce/apiHelpers.js');
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      await client.moveVacancyApplication(parsed.data);
+      // Re-read so the response is the application as it now stands, not the
+      // move payload echoed back.
+      const result = await client.getVacancyApplication({
+        vacancyId: parsed.data.vacancyId,
+        applicationId: parsed.data.applicationId,
+      });
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error moving PeopleForce vacancy application:', err);
+      sendUpstreamError(res, err, { notFound: 'Vacancy, application or pipeline stage not found', fallback: 'Failed to move vacancy application' });
+    }
+  });
+
+  // POST /api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications/:applicationId/disqualify
+  // Consequential and not idempotent — repeating it re-disqualifies. There is no
+  // confirmation affordance behind a curl, hence the explicit catalog note.
+  app.post('/api/v1/peopleforce/recruitment/vacancies/:vacancyId/applications/:applicationId/disqualify', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const { disqualifyVacancyApplicationSchema } = await import('../peopleforce/server.js');
+      const parsed = disqualifyVacancyApplicationSchema.safeParse({
+        ...req.body,
+        vacancyId: req.params.vacancyId,
+        applicationId: req.params.applicationId,
+      });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const { PeopleForceClient } = await import('../peopleforce/apiHelpers.js');
+      const client = new PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      await client.disqualifyVacancyApplication(parsed.data);
+      const result = await client.getVacancyApplication({
+        vacancyId: parsed.data.vacancyId,
+        applicationId: parsed.data.applicationId,
+      });
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error disqualifying PeopleForce vacancy application:', err);
+      sendUpstreamError(res, err, { notFound: 'Vacancy, application or disqualify reason not found', fallback: 'Failed to disqualify vacancy application' });
+    }
+  });
+
+  // GET /api/v1/drive/files/:fileId/download - Stream file content
+  // Google native types are exported (?exportMime= to override the default).
+  // Other types are downloaded as-is via alt=media. Content-Type and a
+  // best-effort Content-Disposition header are set from upstream metadata.
+  app.get('/api/v1/drive/files/:fileId/download', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const drive = req.userSession!.googleDrive;
+      const fileId = req.params.fileId as string;
+      const meta = await drive.files.get({
+        fileId,
+        supportsAllDrives: true,
+        fields: 'id,name,mimeType,size',
+      });
+      const sourceMime = meta.data.mimeType || 'application/octet-stream';
+      const name = meta.data.name || 'download';
+      // Default export targets for Google native types when caller doesn't override.
+      const DEFAULT_EXPORTS: Record<string, string> = {
+        'application/vnd.google-apps.document': 'application/pdf',
+        'application/vnd.google-apps.spreadsheet': 'text/csv',
+        'application/vnd.google-apps.presentation': 'application/pdf',
+        'application/vnd.google-apps.drawing': 'image/png',
+      };
+      const isNative = sourceMime.startsWith('application/vnd.google-apps.');
+      const exportMime = qstr(req.query.exportMime) || (isNative ? DEFAULT_EXPORTS[sourceMime] : undefined);
+
+      // Stream the upstream response straight to the client so multi-MB/GB
+      // files don't get buffered in memory. Pipeline awaits completion and
+      // surfaces errors to the catch below.
+      let upstream: NodeJS.ReadableStream;
+      let outMime: string;
+      let knownSize: number | undefined;
+      if (isNative) {
+        if (!exportMime) {
+          res.status(400).json({ error: `No default export format for ${sourceMime}. Pass ?exportMime=...` });
+          return;
+        }
+        const resp = await drive.files.export(
+          { fileId, mimeType: exportMime },
+          { responseType: 'stream' },
+        );
+        upstream = resp.data as NodeJS.ReadableStream;
+        outMime = exportMime;
+        // Google Docs exports are generated on demand; no reliable upfront size.
+      } else {
+        const resp = await drive.files.get(
+          { fileId, alt: 'media', supportsAllDrives: true },
+          { responseType: 'stream' },
+        );
+        upstream = resp.data as NodeJS.ReadableStream;
+        outMime = sourceMime;
+        const size = Number(meta.data.size);
+        if (Number.isFinite(size) && size > 0) knownSize = size;
+      }
+      const safeName = name.replaceAll(/[^\w.-]+/g, '_');
+      res.setHeader('Content-Type', outMime);
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+      if (knownSize !== undefined) res.setHeader('Content-Length', String(knownSize));
+      const { pipeline } = await import('node:stream/promises');
+      await pipeline(upstream, res);
+    } catch (err: any) {
+      if (res.headersSent) {
+        // Mid-stream failure: response already committed; destroy the socket
+        // so the client sees a truncated transfer instead of a hang.
+        res.destroy(err);
+        return;
+      }
+      if (err.code === 404) res.status(404).json({ error: 'File not found' });
+      else if (err.code === 403) res.status(403).json({ error: 'Permission denied' });
+      else res.status(500).json({ error: err.message || 'Failed to download file' });
+    }
+  });
+
+  // GET /api/v1/gmail/messages/:messageId/attachments/:attachmentId
+  // Returns Gmail's base64url-encoded attachment payload plus size. Callers
+  // decode the body locally (the message's part headers carry the mime type).
+  app.get('/api/v1/gmail/messages/:messageId/attachments/:attachmentId', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const gmail = req.userSession!.googleGmail;
+      const resp = await gmail.users.messages.attachments.get({
+        userId: 'me',
+        messageId: req.params.messageId as string,
+        id: req.params.attachmentId as string,
+      });
+      res.json({
+        messageId: req.params.messageId,
+        attachmentId: req.params.attachmentId,
+        size: resp.data.size ?? 0,
+        // base64url, exactly as Gmail returns it
+        data: resp.data.data ?? '',
+      });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Attachment or message not found', fallback: 'Failed to fetch attachment' });
+    }
+  });
+
+  // GET /api/v1/clickup/workspaces/:workspaceId/members
+  // ClickUp's API exposes members inside the team payload from getWorkspaces,
+  // so we fetch all teams and slice the matching one. Returns members[].
+  app.get('/api/v1/clickup/workspaces/:workspaceId/members', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.getWorkspaces();
+      const team = (result.teams || []).find((t: any) => String(t.id) === req.params.workspaceId);
+      if (!team) {
+        res.status(404).json({ error: 'Workspace not found or not accessible to this user' });
+        return;
+      }
+      res.json({ workspaceId: team.id, members: team.members || [] });
+    } catch (err) {
+      sendUpstreamError(res, err, { notFound: 'Workspace not found', fallback: 'Failed to list workspace members' });
+    }
+  });
 }
+
 
 // Helper function to find a tab by ID in a document
 function findTabById(doc: any, tabId: string): any {
@@ -3437,6 +5721,10 @@ export function createWebOnlyApp(): express.Express {
 
   // Register all shared routes (auth, dashboard, connect, API, admin, catalogs)
   registerSharedRoutes(app);
+  // REST data plane (/api/v1/*). Same routes the all-in-one createWebApp
+  // mounts — kept reachable in MCP_MODE=web (multi-service Railway split)
+  // where the website pod runs this factory instead of createWebApp.
+  registerRestApiRoutes(app);
 
   return app;
 }
@@ -3456,6 +5744,24 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
   app.get('/health', (_req, res) => {
     res.status(200).json({ status: 'ok' });
   });
+
+  // ClickUp task-event webhook ingestion. Mounted here so an MCP-only pod
+  // whose BASE_URL was used at subscribeToTaskEvents time (very common in
+  // multi-service Railway deploys where each MCP has its own domain) can
+  // still receive deliveries — previously this returned Express's default
+  // 404 and ClickUp fail_count climbed to 30 while nothing landed. Must be
+  // registered BEFORE any express.json() on this app.
+  registerClickUpWebhookIngest(app);
+
+  // Slack Events API ingestion. Mounted here for the same reason as the ClickUp
+  // route above: the Slack app's Request URL may point at this pod's domain.
+  registerSlackEventsIngest(app);
+
+  // Public serve route for re-hosted ClickUp Doc images (unauthenticated).
+  registerClickUpDocImageRoutes(app);
+
+  // Content-addressed image blob host (upload + immutable serve).
+  registerImageBlobRoutes(app);
 
   // RFC 9728: OAuth Protected Resource Metadata (scoped to this MCP service)
   const mcpSlug = process.env.MCP_SLUG || 'google-docs';
@@ -3525,6 +5831,14 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
       res.status(401).json({ error: 'invalid_token', message: 'Authentication failed.' });
     }
   };
+
+  // REST data plane (/api/v1/*). Same routes createWebApp / createWebOnlyApp
+  // mount — kept reachable in MCP_MODE=mcp (per-service Railway subdomains
+  // like google-calendar.awesome-mcp.xyz) so bearers minted by the shared
+  // mintRestBearerForCurl tool actually work on the subdomain they were
+  // minted from. Registered BEFORE the /mcp proxy so the /api/v1/* prefix
+  // is matched against the concrete routes rather than falling through.
+  registerRestApiRoutes(app);
 
   app.use(['/mcp', '/sse'], mcpOnlyMiddleware);
   const mcpProxy = createProxyMiddleware({

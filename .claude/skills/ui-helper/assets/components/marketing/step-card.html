@@ -1,0 +1,58 @@
+<!-- Numbered step card. Use in a .steps grid. Mirror public/index.html:130-172. -->
+<section class="how-it-works">
+  <h2>{{section-heading}}</h2>
+  <div class="steps">
+    <div class="step">
+      <div class="step-number" aria-hidden="true">1</div>
+      <h3>{{step-title}}</h3>
+      <p>{{step-body}}</p>
+    </div>
+    <!-- repeat .step -->
+  </div>
+</section>
+
+<style>
+.how-it-works {
+  padding: 2rem 0 3rem;
+}
+.how-it-works h2 {
+  text-align: center;
+  font-size: 1.5rem;
+  margin-bottom: 2rem;
+  text-wrap: balance;
+}
+.steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.25rem;
+}
+.step {
+  background: #fff;
+  border-radius: 12px;
+  padding: 1.75rem;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  text-align: center;
+}
+.step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: #4285F4;
+  color: #fff;
+  border-radius: 50%;
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+.step h3 {
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
+}
+.step p {
+  font-size: 0.85rem;
+  color: #666;
+  line-height: 1.5;
+}
+</style>

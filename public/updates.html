@@ -172,6 +172,463 @@
 
     <main id="main">
       <div id="releases">
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.9.7</span>
+        <span class="release-date">August 20, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>Slack: Search for messages and files across your workspace</li>
+          <li>Slack: Subscribe to channel events to get notified of new activity</li>
+          <li>Slack: View and download file attachments from messages</li>
+          <li>PeopleForce: See probation end dates for employees</li>
+          <li>Google Docs: New REST endpoints for fetching comments and document structure</li>
+        </ul>
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>ClickUp: Fixed doc search to find documents by name across your entire workspace</li>
+          <li>PeopleForce: Fixed employee status filter to return accurate results</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.9.6</span>
+        <span class="release-date">August 15, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>HubSpot: You can now search for companies and contacts by name or other properties</li>
+          <li>HubSpot: Added support for deals, pipelines, and stages — create deals, update them, and see which stage they're in</li>
+          <li>HubSpot: You can now create notes, tasks, calls, and meetings on company and contact timelines</li>
+          <li>HubSpot: Added the ability to delete notes, tasks, calls, and meetings</li>
+        </ul>
+        <h3>Improvements</h3>
+        <ul>
+          <li>HubSpot: Search results now clearly show when a property is empty versus unsupported, making it easier to understand what data is available</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.9.5</span>
+        <span class="release-date">August 14, 2026</span>
+        <span class="release-tag tag-fix">Fix</span>
+      </div>
+      <div class="release-body">
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>Fixed ClickUp comments being cut off at 300 characters when reading task discussions</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.9.4</span>
+        <span class="release-date">August 12, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>ClickUp can now insert images into Docs — Claude can upload local images or embed images from URLs directly into your ClickUp pages</li>
+          <li>Added setup instructions throughout the site explaining how to enable image uploads in Claude (by adding clickup.awesome-mcp.xyz to Claude's allowed domains)</li>
+          <li>Sample prompts are now available for Outline, PeopleForce, and HubSpot on the integrations page</li>
+        </ul>
+        <h3>Improvements</h3>
+        <ul>
+          <li>When viewing a single ClickUp task, you now see the full description instead of a truncated preview</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.9.3</span>
+        <span class="release-date">August 10, 2026</span>
+        <span class="release-tag tag-fix">Fix</span>
+      </div>
+      <div class="release-body">
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>Fixed PeopleForce employee tables returning empty when they should contain data</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.9.2</span>
+        <span class="release-date">August 10, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>PeopleForce now supports reading employee custom tables, like Dev Sprint participation records</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.9.1</span>
+        <span class="release-date">August 8, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>PeopleForce now tracks Learning &amp; Development trends over time, including skills development, training participation, and knowledge base growth</li>
+        </ul>
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>Fixed an issue where PeopleForce knowledge base article content wasn't displaying correctly</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.9.0</span>
+        <span class="release-date">August 8, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>New Integrations</h3>
+        <ul>
+          <li>HubSpot CRM is now available — connect your contacts, companies, tickets, conversations, and custom properties</li>
+        </ul>
+        <h3>What's New</h3>
+        <ul>
+          <li>HubSpot supports both OAuth and private app tokens — choose the connection method that works best for you</li>
+          <li>PeopleForce now includes Learning &amp; Development data — view employee custom fields, performance reviews, and training records</li>
+        </ul>
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>Fixed HubSpot ticket searches that were failing with default date filters</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.8.5</span>
+        <span class="release-date">July 23, 2026</span>
+        <span class="release-tag tag-improvement">Improvement</span>
+      </div>
+      <div class="release-body">
+        <h3>Improvements</h3>
+        <ul>
+          <li>Under-the-hood improvements to reliability and performance.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.8.4</span>
+        <span class="release-date">July 22, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>PeopleForce now supports recruitment tools — manage vacancies, candidates, applications, job pipelines, and published job descriptions directly from Claude or ChatGPT</li>
+        </ul>
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>Fixed PeopleForce recruitment features that were returning errors or missing data</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.8.3</span>
+        <span class="release-date">July 21, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>You can now connect Outline using OAuth instead of pasting an API key</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.8.2</span>
+        <span class="release-date">July 17, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>add 15 tools covering reference data + employee-nested endpoints</li>
+          <li>wire paste-token connect flow end-to-end</li>
+        </ul>
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>preserve missing balance/completed instead of defaulting</li>
+          <li>calendar-aware dates + surface pagination on empty pages + dedupe list tools</li>
+          <li>align tools with what the public API actually supports</li>
+          <li>drop instance-name field, add icon, shorten catalog name</li>
+          <li>debug finding stops falsely accusing silent-200</li>
+          <li>duplicate single-element array filters for v2 REST</li>
+        </ul>
+        <h3>Improvements</h3>
+        <ul>
+          <li>Revert &quot;chore(catalog): hide PeopleForce MCP from dashboard&quot;</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.8.1</span>
+        <span class="release-date">July 15, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>scaffold PeopleForce HRIS MCP server</li>
+        </ul>
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>filterTeamTasks array params must be bare, not foo[]</li>
+          <li>use /leave_requests API contract + boost coverage to 88%</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.8.0</span>
+        <span class="release-date">July 10, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>add addGoogleMeet opt-in to createEvent/updateEvent</li>
+          <li>auto-name Outline instances from upstream team/email</li>
+          <li>render comment ProseMirror to markdown</li>
+          <li>honest ingestion counters + observability + unsubscribe (PR4)</li>
+          <li>debugTaskEventSubscription diagnostic tool (PR3)</li>
+          <li>task-event query + subscription listing tools (PR2)</li>
+          <li>route Outline through the paste-token form</li>
+          <li>task-event webhook ingestion + idempotent subscribe (PR1)</li>
+          <li>support paste-token connect flow (personal API keys)</li>
+          <li>wire per-connector OAuth flow end-to-end</li>
+          <li>add filterTeamTasks tool for server-side workspace queries</li>
+        </ul>
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>treat in-flight Meet createRequest as an existing conference</li>
+          <li>use { n } quantifier for literal spaces in nested-tree test</li>
+          <li>map unarchiveDocument to documents.restore</li>
+          <li>mount webhook ingestion route on every app factory (PR5)</li>
+          <li>orphan-cleanup + secret redaction in subscribeToTaskEvents</li>
+          <li>block redirects on auth.info to close SSRF-via-3xx</li>
+          <li>block SSRF via baseUrl + extend timeout over body reading</li>
+          <li>seed outline entry in seedDefaultCatalogs so it appears on dashboard</li>
+        </ul>
+        <h3>Improvements</h3>
+        <ul>
+          <li>Revert &quot;chore(catalog): hide outline connector from dashboard + connect flow&quot;</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.7.4</span>
+        <span class="release-date">July 6, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>add closedAfter/closedBefore filter to listTasks + searchTasks</li>
+          <li>scaffold Outline Wiki MCP connector with 27 read/write tools</li>
+        </ul>
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>use { n } quantifier for literal spaces in outline test regex</li>
+          <li>use { n } quantifier for literal spaces in outline test regex</li>
+          <li>add 30s timeout to OutlineClient.request</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.7.3</span>
+        <span class="release-date">July 4, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>expose date_closed, date_created, date_updated in task output</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.7.2</span>
+        <span class="release-date">July 1, 2026</span>
+        <span class="release-tag tag-fix">Fix</span>
+      </div>
+      <div class="release-body">
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>mount REST data plane in createMcpOnlyApp too</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.7.1</span>
+        <span class="release-date">June 30, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>add tab-lifecycle ops to batchUpdateSpreadsheet</li>
+          <li>Mac Studio bootstrap scripts and launch agents</li>
+          <li>scaffold live-client smoke test harness</li>
+        </ul>
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>drop Appium --base-path /wd/hub to match WDIO + CI verify</li>
+          <li>close race in claude-desktop waitForResponseComplete</li>
+          <li>close race in chatgpt-web waitForResponseComplete</li>
+          <li>use documentId, not title, in readGoogleDoc smoke prompt</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.7.0</span>
+        <span class="release-date">June 29, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>final 3 endpoints — drive download, gmail attachment, clickup members</li>
+          <li>GET /api/v1/docs/{id} with Accept-based content negotiation</li>
+          <li>add 4 slack-bot GET endpoints + catalog-driven spec stubs</li>
+          <li>add 7 more GET endpoints — slides, sheets, clickup docs</li>
+          <li>REST data plane with short-lived bearer for bulk reads</li>
+        </ul>
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>paginate validate-ci check_runs and pick best per name</li>
+          <li>probe actual PAT write capability in preflight</li>
+          <li>validate PAT_TOKEN against GitHub API in preflight</li>
+          <li>preflight PAT_TOKEN and use it for checkout fetch</li>
+          <li>push to main with PAT embedded in remote URL</li>
+          <li>mount REST data plane in createWebOnlyApp too</li>
+          <li>resolve PREVIOUS_TAG relative to CURRENT_TAG</li>
+          <li>pass tag inputs via env and validate SemVer + sha shape</li>
+          <li>guard marker + duplicate before injecting into updates.html</li>
+          <li>pass commit range via env to block shell injection</li>
+          <li>render release date in UTC</li>
+          <li>stream drive downloads instead of buffering into memory</li>
+          <li>whitelist gmail ?format= against the upstream Gmail detail set</li>
+          <li>register /api/v1/docs/recent before /docs/:documentId</li>
+          <li>compute default week range by day-of-week offset</li>
+          <li>exact-match calendar attendee domains and tolerate missing emails</li>
+          <li>tag the docs commit so prod /updates ships in the first deploy</li>
+          <li>drop unnecessary backslash in download filename regex</li>
+          <li>replace placeholder server URL across all per-service specs</li>
+          <li>add tag management tools</li>
+          <li>bound and validate the sheets search range</li>
+          <li>stop swallowing getDocPages errors in clickup GET /docs/{id}</li>
+          <li>map slack error codes to proper HTTP status</li>
+          <li>sweep expired in-memory tokens to prevent leak</li>
+          <li>warn-and-skip on per-method openapi collision</li>
+          <li>set language on REST_ENDPOINTS.md base-URL fence</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.6.2</span>
+        <span class="release-date">June 10, 2026</span>
+        <span class="release-tag tag-fix">Fix</span>
+      </div>
+      <div class="release-body">
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>surface hangoutLink and conferenceData in event output</li>
+          <li>add im:write and mpim:write OAuth scopes</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.6.1</span>
+        <span class="release-date">May 22, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>redeploy prod after approval to include updated /updates page</li>
+          <li>add approval gate before publishing to Slack and email</li>
+          <li>add Integrations and Updates links to the header nav</li>
+        </ul>
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>wait for prod deploy to succeed before sending notifications</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
+        <span class="release-version">v0.6.0</span>
+        <span class="release-date">May 20, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>What's New</h3>
+        <ul>
+          <li>download text file content instead of just returning links</li>
+          <li>annotate every tool with readOnlyHint / destructiveHint</li>
+          <li>filter internal commits and strip CU- IDs from display</li>
+          <li>move integrations grid to dedicated /integrations route</li>
+        </ul>
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li>restore inline layout for &quot;How to Connect&quot; steps</li>
+          <li>use event delegation for instance rows and access-rules chips</li>
+          <li>a11y compliance across public/*.html</li>
+          <li>surface effective OAuth scopes on /api/v1/catalogs</li>
+        </ul>
+      </div>
+    </div>
+
         <article class="release">
           <header class="release-header">
             <h2 class="release-version" translate="no">v0.5.0</h2>

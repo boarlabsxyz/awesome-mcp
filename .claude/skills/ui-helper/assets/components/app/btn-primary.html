@@ -1,0 +1,21 @@
+<!-- App primary button. Default style for actions that proceed forward. -->
+<a href="{{href}}" class="btn-primary">{{label}}</a>
+<!-- or: <button class="btn-primary" type="button">{{label}}</button> -->
+
+<style>
+.btn-primary {
+  padding: 0.5rem 1rem;
+  background: #0070f3;
+  color: #fff;
+  border-radius: 6px;
+  text-decoration: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: background-color 0.2s;
+  touch-action: manipulation;
+}
+.btn-primary:hover { background: #005bb5; }
+.btn-primary:disabled { background: #333; cursor: not-allowed; }
+</style>

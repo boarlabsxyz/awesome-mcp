@@ -10,12 +10,17 @@ import * as SheetsHelpers from './apiHelpers.js';
 import { operationToRequest, createBatchState } from './formatHelpers.js';
 import { SharedDriveParameters, BatchUpdateOperationSchema } from '../types.js';
 import { buildSharedDriveParams } from '../google-drive/toolHandlers.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
 const sheetsServer = new FastMCP<UserSession>({
   name: 'Google Sheets MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-sheets'),
 });
+
+registerMintRestBearerForCurl(sheetsServer);
+registerListRestEndpoints(sheetsServer);
 
 // --- Helper to get Sheets client within tools ---
 function getSheetsClient(session?: UserSession): sheets_v4.Sheets {
@@ -427,7 +432,7 @@ sheetsServer.addTool({
 sheetsServer.addTool({
   name: 'updateCellByFieldName',
   annotations: { readOnlyHint: false },
-  description: 'Find a row by searching a column for a value, then update a specific field (identified by header name) in that row.',
+  description: 'Find a row by searching a column for a value, then update a specific field (identified by header name) in that row. Assumes row 1 contains the header names.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
     searchColumn: z.string().describe('Column letter to search in (e.g., "A").'),
@@ -486,7 +491,7 @@ sheetsServer.addTool({
 sheetsServer.addTool({
   name: 'batchUpdateSpreadsheet',
   annotations: { readOnlyHint: false },
-  description: 'Apply multiple formatting operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, and column/row sizing.',
+  description: 'Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, column/row sizing, and tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet).',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
     operations: z.array(BatchUpdateOperationSchema).min(1).describe('Array of formatting operations to apply atomically.'),
@@ -504,7 +509,11 @@ sheetsServer.addTool({
       args.operations.forEach((op, i) => {
         try {
           requests.push(operationToRequest(op, metadata, batchState));
-          const target = 'range' in op ? op.range : ('sheetName' in op && op.sheetName) ? op.sheetName : '(first sheet)';
+          const target = 'range' in op ? op.range
+            : ('sheetName' in op && op.sheetName) ? op.sheetName
+            : ('sourceSheetName' in op && op.sourceSheetName) ? op.sourceSheetName
+            : ('title' in op && op.title) ? op.title
+            : '(first sheet)';
           summaries.push(`  ${i}. ${op.type} → ${target}`);
         } catch (e: any) {
           if (e instanceof UserError) {

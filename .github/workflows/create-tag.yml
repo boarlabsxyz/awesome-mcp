@@ -1,5 +1,15 @@
 name: Create Tag (CI-gated)
 
+# Tagging IS the release. Flow:
+#   1. validate-ci         — required CI checks must be green on the ref the user picked
+#   2. update-release-notes — generate the vX.Y.Z block, inject into public/updates.html,
+#                             commit + push to main (so the deployed code carries the entry)
+#   3. create-tag          — tag the docs commit (the new main HEAD)
+#
+# When the tag push triggers deploy-prod.yml it ships main HEAD, which already
+# contains the updates entry — so /updates on prod is never one version behind.
+# Slack + email notifications are handled separately by release-notes.yml on tag push.
+
 on:
   workflow_dispatch:
     inputs:
@@ -8,7 +18,7 @@ on:
         required: true
         type: string
       ref:
-        description: 'Branch or SHA to tag (defaults to main)'
+        description: 'Must resolve to current main HEAD (other refs are rejected)'
         required: true
         type: string
         default: main
@@ -49,17 +59,30 @@ jobs:
         with:
           script: |
             const sha = '${{ steps.resolve.outputs.sha }}';
-            const { data: checkRuns } = await github.rest.checks.listForRef({
+            // Paginate. With the default per_page of 30, repeated Create Tag
+            // dispatches against the same SHA accumulate check_runs and push
+            // the required CI checks off the first page, leaving validate-ci
+            // to (incorrectly) report them as "missing".
+            const checkRuns = await github.paginate(github.rest.checks.listForRef, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               ref: sha,
-              filter: 'latest'
+              filter: 'latest',
+              per_page: 100,
             });
 
             const required = ['lint', 'typecheck', 'test', 'build'];
+            // Multiple suites can produce a check_run with the same name on
+            // the same commit. Prefer the most successful conclusion per name
+            // so a later failed dispatch on the same SHA can't mask a passed
+            // CI run that happened earlier.
+            const rank = { success: 4, neutral: 3, skipped: 2, cancelled: 1, failure: 0, timed_out: 0, action_required: 0 };
             const results = {};
-            for (const run of checkRuns.check_runs) {
-              results[run.name] = run.conclusion;
+            for (const run of checkRuns) {
+              const prev = results[run.name];
+              if (!prev || (rank[run.conclusion] ?? 0) > (rank[prev] ?? 0)) {
+                results[run.name] = run.conclusion;
+              }
             }
 
             console.log('Check results:', JSON.stringify(results, null, 2));
@@ -78,17 +101,256 @@ jobs:
 
             console.log('All required CI checks passed.');
 
-  create-tag:
+  update-release-notes:
     needs: [validate-ci]
+    runs-on: ubuntu-latest
+    outputs:
+      release_sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      # Fail fast with an actionable message before checkout. Without this,
+      # an empty/invalid PAT_TOKEN surfaces as the cryptic "could not read
+      # Username for 'https://github.com'" from git inside actions/checkout.
+      - name: Verify PAT_TOKEN secret is configured and valid
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          if [ -z "${PAT_TOKEN:-}" ]; then
+            echo "::error::Required secret PAT_TOKEN is missing or empty."
+            echo "::error::Add a Personal Access Token with repo write access (Fine-grained: Contents=Read+Write; Classic: 'repo' scope) under Settings → Secrets and variables → Actions → Secrets, named PAT_TOKEN."
+            echo "::error::If you defined it as an environment-scoped secret (e.g. on 'release-approval'), expose it at the repo level too — this job runs without an environment."
+            exit 1
+          fi
+          # Probe the GitHub API with the token so we can distinguish an
+          # invalid token from other failures before the cryptic git error.
+          REPO_STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${PAT_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}")
+          if [ "$REPO_STATUS" = "401" ]; then
+            echo "::error::PAT_TOKEN was rejected by the GitHub API (HTTP 401 Unauthorized)."
+            echo "::error::The token is invalid, expired, or revoked. Regenerate the PAT and update the PAT_TOKEN secret."
+            exit 1
+          fi
+          if [ "$REPO_STATUS" = "404" ]; then
+            echo "::error::PAT_TOKEN authenticated but cannot see ${GITHUB_REPOSITORY} (HTTP 404)."
+            echo "::error::Fine-grained PAT? Make sure it has 'Contents: Read and write' on this repo. Classic PAT? Use the 'repo' scope (or 'public_repo' for public repos)."
+            exit 1
+          fi
+          if [ "$REPO_STATUS" != "200" ]; then
+            echo "::error::PAT_TOKEN preflight against api.github.com returned unexpected HTTP ${REPO_STATUS}."
+            exit 1
+          fi
+          # permissions.push reflects the USER's repo role, not the PAT's effective
+          # capability — a repo admin with a Contents=Read-only fine-grained PAT
+          # will still see push=true here.
+          REPO_JSON=$(curl -sS \
+            -H "Authorization: Bearer ${PAT_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}")
+          if ! echo "$REPO_JSON" | grep -q '"push"[[:space:]]*:[[:space:]]*true'; then
+            echo "::error::PAT_TOKEN's user lacks push permission on ${GITHUB_REPOSITORY}."
+            echo "::error::Either the user is a read-only collaborator, or the PAT belongs to a different user."
+            exit 1
+          fi
+          # Write probe: do a no-op PATCH on the repo description. If the PAT
+          # can't write (fine-grained PAT with Contents=Read-only, classic PAT
+          # missing 'repo' scope), GitHub returns a JSON object with a "message"
+          # field like "Resource not accessible by personal access token".
+          # A successful no-op PATCH returns the full repo object (no "message").
+          DESC=$(echo "$REPO_JSON" | jq -r '.description // ""')
+          WRITE_PROBE=$(curl -sS -X PATCH \
+            -H "Authorization: Bearer ${PAT_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -d "$(jq -n --arg d "$DESC" '{description: $d}')" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}")
+          if echo "$WRITE_PROBE" | jq -e 'type=="object" and has("message") and (has("full_name") | not)' >/dev/null 2>&1; then
+            WRITE_ERR=$(echo "$WRITE_PROBE" | jq -r '.message')
+            echo "::error::PAT_TOKEN failed write probe: ${WRITE_ERR}"
+            echo "::error::The token's user has push role on the repo, but the PAT itself can't write."
+            echo "::error::Fine-grained PAT: set 'Repository permissions → Contents: Read and write' on ${GITHUB_REPOSITORY}, regenerate, and update the PAT_TOKEN secret."
+            echo "::error::Classic PAT: enable the full 'repo' scope, regenerate, and update the PAT_TOKEN secret."
+            exit 1
+          fi
+          echo "PAT_TOKEN preflight OK (api 200, user push=true, write probe succeeded)."
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+          # Use the PAT for fetch so the rest of the job can rely on the
+          # same credentials it will use for the push below.
+          token: ${{ secrets.PAT_TOKEN }}
+          # We rewrite the remote URL with PAT_TOKEN below before pushing,
+          # so don't let checkout leave a stale extraheader behind.
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Require validated ref to be on main HEAD
+        env:
+          VALIDATED_SHA: ${{ needs.validate-ci.outputs.sha }}
+        run: |
+          MAIN_SHA=$(git rev-parse HEAD)
+          if [ "$MAIN_SHA" != "$VALIDATED_SHA" ]; then
+            echo "Refusing to tag: validated ref ${VALIDATED_SHA} is not current main HEAD ${MAIN_SHA}."
+            echo "create-tag.yml only supports tagging the current tip of main."
+            exit 1
+          fi
+
+      - name: Determine previous tag and commit range
+        id: range
+        run: |
+          PREVIOUS_TAG=$(git tag -l 'v*' --sort=-version:refname | head -1)
+          echo "previous=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
+          if [ -n "$PREVIOUS_TAG" ]; then
+            echo "range=${PREVIOUS_TAG}..HEAD" >> "$GITHUB_OUTPUT"
+          else
+            echo "range=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Collect commits and parse ClickUp IDs
+        id: commits
+        env:
+          # Pass via env + quoted shell var so a hostile tag name can't break out of the shell context.
+          RANGE: ${{ steps.range.outputs.range }}
+        run: |
+          if [ -n "$RANGE" ]; then
+            git log "$RANGE" --pretty=format:"%H%x1f%s%x1f%b%x1e" --no-merges > /tmp/commits_raw.txt
+          else
+            git log --pretty=format:"%H%x1f%s%x1f%b%x1e" --no-merges > /tmp/commits_raw.txt
+          fi
+          node -e "
+            const fs = require('fs');
+            const raw = fs.readFileSync('/tmp/commits_raw.txt', 'utf8');
+            const records = raw.split('\x1e').filter(r => r.trim());
+            const lines = records.map(r => {
+              const [hash, subject, ...bodyParts] = r.split('\x1f');
+              const body = bodyParts.join(' ').replace(/\n/g, ' ').trim();
+              return [hash.trim(), subject.trim(), body].join('|');
+            });
+            fs.writeFileSync('/tmp/commits.txt', lines.join('\n'));
+          "
+          if [ -n "$RANGE" ]; then
+            ALL_TEXT=$(git log "$RANGE" --pretty=format:"%s %b")
+          else
+            ALL_TEXT=$(git log --pretty=format:"%s %b")
+          fi
+          TASK_IDS=$(echo "$ALL_TEXT" | grep -oi 'CU-[a-z0-9]\+' | tr '[:upper:]' '[:lower:]' | sed 's/cu-//' | sort -u | tr '\n' ',' | sed 's/,$//' || true)
+          echo "task_ids=$TASK_IDS" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch ClickUp task titles
+        if: steps.commits.outputs.task_ids != ''
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+        run: |
+          IFS=',' read -ra IDS <<< "${{ steps.commits.outputs.task_ids }}"
+          > /tmp/task_map.txt
+          for id in "${IDS[@]}"; do
+            RESPONSE=$(curl -s -H "Authorization: Bearer ${CLICKUP_API_TOKEN}" \
+              "https://api.clickup.com/api/v2/task/${id}" || echo '{}')
+            TITLE=$(echo "$RESPONSE" | jq -r '.name // empty')
+            URL=$(echo "$RESPONSE" | jq -r '.url // empty')
+            if [ -n "$TITLE" ]; then
+              echo "${id}|${TITLE}|${URL}" >> /tmp/task_map.txt
+            fi
+            sleep 0.2
+          done
+
+      - name: Generate release notes
+        env:
+          TAG: ${{ inputs.tag }}
+          # When set, generate-release-notes.mjs asks Claude (via OpenRouter) to rewrite
+          # the commit list into a user-facing summary (drops chores/refactors/CI/internal
+          # fixes). If missing or the API call fails, the script falls back to
+          # conventional-commit categorization.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          # Stamp today as the release date and persist it so release-notes.yml
+          # reuses the same value when it regenerates outputs for notifications.
+          RELEASE_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "$RELEASE_DATE" > /tmp/release_date.txt
+          node .github/scripts/generate-release-notes.mjs \
+            --tag "$TAG" \
+            --date "$RELEASE_DATE" \
+            --commits /tmp/commits.txt \
+            --tasks /tmp/task_map.txt \
+            --output-dir /tmp/release
+
+      - name: Inject release block into updates.html
+        run: |
+          node -e "
+            const fs = require('fs');
+            const html = fs.readFileSync('public/updates.html', 'utf8');
+            const block = fs.readFileSync('/tmp/release/updates-block.html', 'utf8');
+            const marker = '<div id=\"releases\">';
+            if (!html.includes(marker)) {
+              console.error('Cannot inject: marker ' + marker + ' not found in public/updates.html');
+              process.exit(1);
+            }
+            const vMarker = 'class=\"release-version\">';
+            const vIdx = block.indexOf(vMarker);
+            if (vIdx !== -1) {
+              const vEnd = block.indexOf('<', vIdx + vMarker.length);
+              const version = block.slice(vIdx + vMarker.length, vEnd);
+              if (html.includes(vMarker + version + '<')) {
+                console.error('Release block for ' + version + ' is already in public/updates.html; refusing to insert duplicate.');
+                process.exit(1);
+              }
+            }
+            const updated = html.replace(marker, marker + '\n' + block);
+            fs.writeFileSync('public/updates.html', updated);
+          "
+
+      - name: Commit and push updates.html to main
+        id: commit
+        env:
+          TAG: ${{ inputs.tag }}
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/updates.html
+          if git diff --cached --quiet; then
+            echo "No changes to updates.html — tagging current main HEAD."
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "docs: release notes for ${TAG}"
+            # Mirror release-notes.yml's known-working push pattern: embed PAT in the
+            # remote URL right before push instead of relying on a persisted extraheader.
+            git remote set-url origin "https://x-access-token:${PAT_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git push origin main
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+  create-tag:
+    needs: [validate-ci, update-release-notes]
     runs-on: ubuntu-latest
     steps:
       - name: Create and push tag
         uses: actions/github-script@v7
+        env:
+          # Pass via env so workflow_dispatch values can't break out of the JS source literal.
+          TAG: ${{ inputs.tag }}
+          TAG_SHA: ${{ needs.update-release-notes.outputs.release_sha }}
         with:
           github-token: ${{ secrets.PAT_TOKEN }}
           script: |
-            const tag = '${{ inputs.tag }}';
-            const sha = '${{ needs.validate-ci.outputs.sha }}';
+            const tag = process.env.TAG;
+            const sha = process.env.TAG_SHA;
+
+            // SemVer 2.0.0 with required leading "v": vMAJOR.MINOR.PATCH[-prerelease][+build]
+            const semver = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+            if (!semver.test(tag)) {
+              core.setFailed(`Tag "${tag}" is not a valid SemVer tag (e.g. v1.2.3 or v1.2.3-rc.1).`);
+              return;
+            }
+            if (!/^[0-9a-f]{40}$/.test(sha)) {
+              core.setFailed(`Refusing to tag: sha "${sha}" is not a 40-char commit hash.`);
+              return;
+            }
 
             await github.rest.git.createRef({
               owner: context.repo.owner,

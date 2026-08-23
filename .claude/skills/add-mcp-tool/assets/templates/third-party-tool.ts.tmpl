@@ -1,0 +1,19 @@
+{{serverConst}}.addTool({
+  name: '{{toolName}}',
+  {{readOnlyAnnotationLine}}
+  description: '{{description}}',
+  parameters: z.object({
+    {{zodFields}}
+  }),
+  execute: async (args, { log, session }) => {
+    const client = get{{X}}Client(session);
+    log.info(`{{logBreadcrumb}}`);
+
+    try {
+      {{executeBody}}
+    } catch (error: any) {
+      log.error(`Error {{actionPhrase}}: ${error.message || error}`);
+      throw new UserError(`Failed to {{actionPhrase}}: ${error.message || 'Unknown error'}`);
+    }
+  },
+});

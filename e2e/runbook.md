@@ -18,7 +18,7 @@ Operational procedures for the live-client e2e suite. Covers the Mac Studio runn
 
 ```bash
 # 1. Appium (foreground or via launchd)
-appium --base-path /wd/hub
+appium
 
 # 2. Chrome with persistent profile + CDP
 open -na "Google Chrome" --args \

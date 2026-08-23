@@ -1,0 +1,28 @@
+// src/{{slug}}/server.ts
+import { FastMCP, UserError } from 'fastmcp';
+import { z } from 'zod';
+
+import { UserSession } from '../userSession.js';
+import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
+import { {{X}}Client } from './apiHelpers.js';
+
+export const {{slugCamel}}Server = new FastMCP<UserSession>({
+  name: '{{displayName}}',
+  version: '1.0.0',
+  authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || '{{slug}}'),
+});
+
+function get{{X}}Client(session?: UserSession): {{X}}Client {
+  if (!session?.{{tokenField}}) {
+    throw new UserError('{{displayName}} not connected. Visit the dashboard to connect your account.');
+  }
+  return new {{X}}Client(session.{{tokenField}});
+}
+
+{{slugCamel}}Server.addTool({
+  name: 'ping',
+  annotations: { readOnlyHint: true },
+  description: 'Health check — returns "pong".',
+  parameters: z.object({}),
+  execute: async () => 'pong',
+});

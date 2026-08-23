@@ -439,6 +439,51 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
+  // Outline MCP
+  //
+  // Two auth flows are supported and the seed picks between them based on
+  // whether an OAuth App has been provisioned (i.e. OUTLINE_CLIENT_ID is set):
+  //
+  //   OAuth flow    — admin creates an OAuth App on the Outline instance
+  //                   (Settings → API → Applications). Sets OUTLINE_CLIENT_ID
+  //                   + OUTLINE_CLIENT_SECRET + OUTLINE_BASE_URL. Dashboard
+  //                   shows the "Connect" button, /connect/outline runs the
+  //                   authorization_code exchange (webServer.ts).
+  //   Paste-token   — no admin. Each user creates a Personal API Key in
+  //                   Outline (Settings → API Keys → New API Key) and pastes
+  //                   { baseUrl, token } into the dashboard's connect form.
+  //                   Router validates via POST <baseUrl>/api/auth.info.
+  //                   This is the reference implementation's model.
+  //
+  // If OAuth env vars aren't set the OAuth URLs stay blank, which routes the
+  // dashboard through the paste-token flow (empty oauthAuthorizationUrl → the
+  // direct-token connect-token endpoint).
+  const outlineClientId     = process.env.OUTLINE_CLIENT_ID || null;
+  const outlineClientSecret = process.env.OUTLINE_CLIENT_SECRET || null;
+  const outlineOauthEnabled = !!(outlineClientId && outlineClientSecret && process.env.OUTLINE_BASE_URL);
+  const outlineOauthBaseUrl = process.env.OUTLINE_BASE_URL || '';
+  const outlineMcpUrl       = normalizeUrl(process.env.OUTLINE_MCP_URL, '/outline');
+
+  await createMcpCatalog({
+    slug: 'outline',
+    name: 'Outline Wiki MCP',
+    description: 'Read, write, and manage Outline wiki documents and collections',
+    iconUrl: 'https://www.getoutline.com/images/icon-desktop.png',
+    mcpUrl: outlineMcpUrl,
+    provider: 'outline',
+    scopes: [],
+    googleClientId: outlineClientId,
+    googleClientSecret: outlineClientSecret,
+    oauthAuthorizationUrl: outlineOauthEnabled ? `${outlineOauthBaseUrl}/oauth/authorize` : '',
+    oauthTokenUrl:         outlineOauthEnabled ? `${outlineOauthBaseUrl}/oauth/token`     : '',
+    // Outline's MCP surface includes write tools (create/update/delete docs,
+    // collections, comments), so request read+write. Scopes are only sent when
+    // OAuth is enabled; the paste-token flow ignores them.
+    oauthScopes: outlineOauthEnabled ? ['read', 'write'] : [],
+    isLocal: !process.env.OUTLINE_MCP_URL,
+    isActive: true,
+  });
+
   // Slack Bot MCP (bot-token provider — no OAuth, user pastes xoxb- token)
   const slackBotMcpUrl = normalizeUrl(process.env.SLACK_BOT_MCP_URL, '/slack-bot');
 
@@ -474,8 +519,87 @@ export async function seedDefaultCatalogs(): Promise<void> {
     googleClientSecret: slackClientSecret,
     oauthAuthorizationUrl: 'https://slack.com/oauth/v2/authorize',
     oauthTokenUrl: 'https://slack.com/api/oauth.v2.access',
-    oauthScopes: ['channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'mpim:history', 'mpim:read', 'chat:write', 'users:read', 'team:read'],
+    // files:read powers downloadFile AND the file metadata shown in message
+    // reads — without it Slack returns file stubs with file_access:
+    // 'check_file_info'. search:read powers searchMessages/searchFiles; it is
+    // user-token-only, which is why those tools exist on this connector and not
+    // on slack-bot. reactions:read lets the channel-event subscriptions capture
+    // reaction_added (message events ride on channels:history/groups:history,
+    // already above). Every addition here costs every already-connected user a
+    // reconnect to re-consent, so batch them rather than shipping one at a time.
+    oauthScopes: ['channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'im:write', 'mpim:history', 'mpim:read', 'mpim:write', 'chat:write', 'users:read', 'team:read', 'files:read', 'search:read', 'reactions:read'],
     isLocal: !process.env.SLACK_USER_MCP_URL,
+    isActive: true,
+  });
+
+  // PeopleForce MCP (paste-token provider — user pastes a personal API key)
+  const peopleForceMcpUrl = normalizeUrl(process.env.PEOPLEFORCE_MCP_URL, '/peopleforce');
+
+  await createMcpCatalog({
+    slug: 'peopleforce',
+    name: 'PeopleForce MCP',
+    description: 'Read and manage HR data (employees, departments, leave requests) via PeopleForce API',
+    iconUrl: 'https://intercom.help/peopleforce/assets/favicon',
+    mcpUrl: peopleForceMcpUrl,
+    provider: 'peopleforce',
+    scopes: [],
+    googleClientId: null,
+    googleClientSecret: null,
+    oauthAuthorizationUrl: '',
+    oauthTokenUrl: '',
+    oauthScopes: [],
+    isLocal: !process.env.PEOPLEFORCE_MCP_URL,
+    isActive: true,
+  });
+
+  // HubSpot MCP — OAuth 2.0 ("Connect with HubSpot") by default. The catalog
+  // always advertises the OAuth endpoints so the dashboard shows the Connect
+  // button (never the paste-token form). The client_id/secret come from a
+  // registered HubSpot app via HUBSPOT_CLIENT_ID / HUBSPOT_CLIENT_SECRET —
+  // these MUST be set (on both the web service and the hubspot MCP service) or
+  // the connect flow has no client and fails. Redirect URL to register in the
+  // HubSpot app: <BASE_URL>/connect/hubspot/callback.
+  const hubspotClientId = process.env.HUBSPOT_CLIENT_ID || null;
+  const hubspotClientSecret = process.env.HUBSPOT_CLIENT_SECRET || null;
+  const hubspotMcpUrl = normalizeUrl(process.env.HUBSPOT_MCP_URL, '/hubspot');
+
+  await createMcpCatalog({
+    slug: 'hubspot',
+    name: 'HubSpot MCP',
+    description: 'Read, search, and manage HubSpot CRM data (contacts, companies, deals, properties, activities) via the CRM API',
+    iconUrl: 'https://www.hubspot.com/hubfs/HubSpot_Logos/HubSpot-Inversed-Favicon.png',
+    mcpUrl: hubspotMcpUrl,
+    provider: 'hubspot',
+    scopes: [],
+    googleClientId: hubspotClientId,
+    googleClientSecret: hubspotClientSecret,
+    oauthAuthorizationUrl: 'https://app.hubspot.com/oauth/authorize',
+    oauthTokenUrl: 'https://api.hubapi.com/oauth/v1/token',
+    // Granular CRM scopes the tools use. Must be a subset of what the HubSpot
+    // app is configured to request.
+    oauthScopes: [
+      'crm.objects.contacts.read', 'crm.objects.contacts.write',
+      'crm.objects.companies.read', 'crm.objects.companies.write',
+      'crm.objects.deals.read', 'crm.objects.deals.write',
+      'crm.schemas.contacts.read', 'crm.schemas.contacts.write',
+      'crm.schemas.companies.read', 'crm.schemas.companies.write',
+      'crm.schemas.deals.read', 'crm.schemas.deals.write',
+      'tickets', 'conversations.read',
+      // Without sales-email-read, getCompanyActivity gets EMAIL engagement
+      // bodies redacted (meetings/calls come through fine).
+      'sales-email-read',
+      // Engagement writes/deletes (createNote / createTask / logCall /
+      // logMeeting / deleteEngagement) need NO extra scope: HubSpot's notes,
+      // tasks, calls, and meetings APIs all document their requirement as
+      // crm.objects.contacts.read + .write, already granted above.
+      // Do NOT add crm.objects.{notes,tasks,calls,meetings}.* — no such scope
+      // exists in HubSpot's public list, and an unknown scope makes the whole
+      // consent flow fail, taking every HubSpot connection down with it.
+      // If an engagement write 401/403s, check the scopes actually granted on
+      // the token (GET /oauth/v1/access-tokens/{token}) rather than guessing
+      // at a new scope string.
+    ],
+    isLocal: !process.env.HUBSPOT_MCP_URL,
     isActive: true,
   });
 
