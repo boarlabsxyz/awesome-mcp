@@ -1,8 +1,14 @@
 // Direct Google API client for e2e setup/teardown — independent of the MCP.
 //
-// Write tests need to create scratch resources (docs, sheets) before invoking
-// the MCP tool, and clean them up after. Going through the MCP for setup
-// couples the test to the very thing it's testing, so we hit Google directly.
+// Write tests need to create scratch resources (docs, sheets, slides, Drive
+// files, calendar events, Gmail drafts) before invoking the MCP tool, and clean
+// them up after. Going through the MCP for setup couples the test to the very
+// thing it's testing, so we hit Google directly.
+//
+// ONE OAuth client backs all six Google services (google-docs, google-drive,
+// google-sheets, google-slides, google-gmail, google-calendar) — same refresh
+// token, same env vars, just extra googleapis namespaces. Non-Google services
+// have their own clients: setup/clickupClient.ts, setup/slackClient.ts.
 //
 // Mirrors the OAuth client pattern in src/userSession.ts:42-50 — same library
 // (google-auth-library + googleapis), same token-refresh listener shape. The
@@ -10,12 +16,23 @@
 // populated by GHA secrets.
 
 import { OAuth2Client } from 'google-auth-library';
-import { google, type docs_v1, type drive_v3, type sheets_v4 } from 'googleapis';
+import {
+  google,
+  type calendar_v3,
+  type docs_v1,
+  type drive_v3,
+  type gmail_v1,
+  type sheets_v4,
+  type slides_v1,
+} from 'googleapis';
 
 export interface GoogleClients {
   docs: docs_v1.Docs;
   drive: drive_v3.Drive;
   sheets: sheets_v4.Sheets;
+  slides: slides_v1.Slides;
+  gmail: gmail_v1.Gmail;
+  calendar: calendar_v3.Calendar;
   oauthClient: OAuth2Client;
 }
 
@@ -44,6 +61,9 @@ export function getWriteAccountClients(): GoogleClients {
     docs: google.docs({ version: 'v1', auth: oauthClient }),
     drive: google.drive({ version: 'v3', auth: oauthClient }),
     sheets: google.sheets({ version: 'v4', auth: oauthClient }),
+    slides: google.slides({ version: 'v1', auth: oauthClient }),
+    gmail: google.gmail({ version: 'v1', auth: oauthClient }),
+    calendar: google.calendar({ version: 'v3', auth: oauthClient }),
     oauthClient,
   };
   return cached;
@@ -53,7 +73,7 @@ function required(name: string): string {
   const value = process.env[name];
   if (!value) {
     throw new Error(
-      `Missing required env var ${name}. See e2e/fixtures/write.md for the setup procedure.`,
+      `Missing required env var ${name}. See e2e/fixtures/write-google.md for the setup procedure.`,
     );
   }
   return value;

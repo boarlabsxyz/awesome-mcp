@@ -1,6 +1,7 @@
 import { writeForensicsBundle } from './forensics.ts';
 import type { ClientName, Driver } from './drivers/driver.ts';
-import type { Mode } from './promptTemplates.ts';
+import { preface, type Mode } from './promptTemplates.ts';
+import type { ServiceName } from './tools/index.ts';
 
 export interface AssertionSpec {
   containsBetween?: [string, string];
@@ -9,10 +10,16 @@ export interface AssertionSpec {
 
 export interface SmokeTestSpec<Ctx = void> {
   name: string;
+  /** Which src/<service>/server.ts this test exercises. Selects the connector. */
+  service: ServiceName;
   client: ClientName;
   mode: Mode;
   setup?: () => Promise<Ctx>;
   teardown?: (ctx: Ctx) => Promise<void>;
+  /**
+   * Prompt body WITHOUT the connector preface — runSmokeTest prepends
+   * `preface(service, mode)` so no test can name the wrong connector.
+   */
   prompt: string | ((ctx: Ctx) => string);
   assertions: AssertionSpec | ((ctx: Ctx) => AssertionSpec);
 }
@@ -42,8 +49,7 @@ export async function runSmokeTest<Ctx = void>(spec: SmokeTestSpec<Ctx>): Promis
       driver = await loadDriver(spec.client);
       await driver.newConversation();
 
-      const promptText = typeof spec.prompt === 'function' ? spec.prompt(ctx) : spec.prompt;
-      response = await driver.sendAndWait(promptText);
+      response = await driver.sendAndWait(renderPrompt(spec, ctx));
 
       const assertions =
         typeof spec.assertions === 'function' ? spec.assertions(ctx) : spec.assertions;
@@ -57,7 +63,7 @@ export async function runSmokeTest<Ctx = void>(spec: SmokeTestSpec<Ctx>): Promis
     await writeForensicsBundle({
       testName: spec.name,
       client: spec.client,
-      prompt: resolvePromptForForensics(spec.prompt, ctx),
+      prompt: resolvePromptForForensics(spec, ctx),
       response,
       error: caught,
       driver,
@@ -88,12 +94,14 @@ export async function runSmokeTest<Ctx = void>(spec: SmokeTestSpec<Ctx>): Promis
   if (caught) throw caught;
 }
 
-function resolvePromptForForensics<Ctx>(
-  prompt: SmokeTestSpec<Ctx>['prompt'],
-  ctx: Ctx,
-): string {
+function renderPrompt<Ctx>(spec: SmokeTestSpec<Ctx>, ctx: Ctx): string {
+  const body = typeof spec.prompt === 'function' ? spec.prompt(ctx) : spec.prompt;
+  return preface(spec.service, spec.mode) + body;
+}
+
+function resolvePromptForForensics<Ctx>(spec: SmokeTestSpec<Ctx>, ctx: Ctx): string {
   try {
-    return typeof prompt === 'function' ? prompt(ctx) : prompt;
+    return renderPrompt(spec, ctx);
   } catch {
     return '<prompt failed to render — setup error prevented context>';
   }

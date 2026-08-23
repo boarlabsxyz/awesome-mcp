@@ -1,10 +1,9 @@
 import { test, after } from 'node:test';
 import { runSmokeTest } from '../../runSmokeTest.ts';
-import { preface } from '../../promptTemplates.ts';
+import { outputContract } from '../../promptTemplates.ts';
 import { createScratchDoc, trashFile, cleanupScratchFolder } from '../../setup/scratchFactory.ts';
-import type { ClientName } from '../../drivers/driver.ts';
-
-const CLIENT = (process.env.CLIENT ?? 'claude-desktop') as ClientName;
+import { scratchMarker } from '../../setup/scratchNaming.ts';
+import { CLIENT } from '../fixtureEnv.ts';
 
 after(async () => {
   // Safety net: trash anything per-test teardown missed. Cheap, idempotent.
@@ -14,21 +13,18 @@ after(async () => {
 test(`appendToGoogleDoc writes a marker to a scratch doc (${CLIENT})`, { timeout: 240_000 }, async () => {
   await runSmokeTest({
     name: 'appendToGoogleDoc',
+    service: 'google-docs',
     client: CLIENT,
     mode: 'full',
     setup: async () => {
       const docId = await createScratchDoc('append smoke', 'initial content');
-      const marker = `BANANA-APPEND-${Date.now()}`;
-      return { docId, marker };
+      return { docId, marker: scratchMarker('append') };
     },
     prompt: ({ docId, marker }) =>
       [
-        preface('full') +
-          `Call the appendToGoogleDoc MCP tool with documentId "${docId}" and text "${marker}".`,
+        `Call the appendToGoogleDoc MCP tool with documentId "${docId}" and text "${marker}".`,
         `Then call the readGoogleDoc MCP tool with documentId "${docId}" and format "text".`,
-        'Reply with exactly this format and nothing else:',
-        'OUTPUT_BEGIN<verbatim text of the doc after appending>OUTPUT_END',
-        'Do not paraphrase, summarize, or add commentary. Do not use markdown formatting.',
+        outputContract('verbatim text of the doc after appending'),
       ].join('\n'),
     assertions: ({ marker }) => ({
       containsBetween: ['OUTPUT_BEGIN', 'OUTPUT_END'],

@@ -1,30 +1,69 @@
-# Read fixtures (readonly Google account)
+# Read fixtures (readonly identities)
 
-Read-tool smoke tests assert against deterministic content in a **dedicated readonly Google account** (`mcp-e2e-readonly@…`). The account is pre-populated once and **never modified**. Assertions match exact substrings, so any drift in fixture content surfaces as a test failure.
+Read-tool smoke tests assert against deterministic content held by a **dedicated
+readonly identity per service**. Each identity is pre-populated once and **never
+modified**. Assertions match exact substrings, so any drift in fixture content
+surfaces as a test failure.
 
-The readonly account is bound to the `awesome-mcp-readonly` MCP connector via the dashboard-side OAuth flow (separate connection from the write account). See `e2e/runbook.md` for the connection setup procedure.
+Each readonly identity is bound to that service's `awesome-mcp-<service>-readonly`
+connector via its own dashboard-side Connect. See `e2e/runbook.md` § Two-connector
+model for the registration procedure, and for the per-service connector names.
 
-## Readonly account requirements
+## Ground rules (all services)
 
-- Account: `mcp-e2e-readonly@…` (or a dedicated workspace user)
-- Fixtures are owned by this account; do not share externally.
-- All write tools must be **manually unchecked** on the `awesome-mcp-readonly` connector in Claude Desktop (and in ChatGPT if the UI supports per-tool toggles). See `e2e/tools.ts` `WRITE_TOOLS` for the list.
+- Fixtures are owned by the readonly identity; do not share externally.
+- **Never edit a fixture after creation.** The needle is the assertion.
+- Every service's write tools must be **manually unchecked** on its
+  `-readonly` connector. The canonical per-service list is
+  `e2e/tools/<service>.ts` `WRITE_TOOLS` — read it from code, not from here.
+- Needles use the `BANANA-<WORD>-<N>` shape so they never collide with real
+  content and are greppable across forensics bundles.
 
-## Required fixture documents
+## Fixture + env var per service
 
-Create these once, record their IDs. **Do not edit after creation.**
+Every read smoke takes exactly two required env vars: a **locator** (which
+resource to read) and a **needle** (the string that must come back). Both are
+GHA **repository variables**, not secrets.
 
-### Doc: smoke fixture
+| Service | Test file | Locator var | Needle var | Fixture to provision |
+|---|---|---|---|---|
+| `google-docs` | `tests/read/readGoogleDoc.smoke.ts` | `E2E_FIXTURE_DOC_ID` | `E2E_FIXTURE_DOC_NEEDLE` | Doc `E2E Smoke Fixture Doc`, plain-text body containing `BANANA-PHONE-7714` on its own line |
+| `google-drive` | `tests/read/listFolderContents.smoke.ts` | `E2E_FIXTURE_DRIVE_FOLDER_ID` | `E2E_FIXTURE_DRIVE_NEEDLE` | Folder `E2E Read Fixtures` holding a file literally named `BANANA-DRIVE-FILE` |
+| `google-gmail` | `tests/read/searchEmails.smoke.ts` | `E2E_FIXTURE_GMAIL_QUERY` | `E2E_FIXTURE_GMAIL_NEEDLE` | One message with subject `E2E Read Fixture BANANA-MAIL-3301`. Locator is a Gmail query, e.g. `subject:"BANANA-MAIL-3301"` |
+| `google-calendar` | `tests/read/listEvents.smoke.ts` | `E2E_FIXTURE_CALENDAR_ID` | `E2E_FIXTURE_CALENDAR_NEEDLE` | A dedicated calendar holding one **yearly recurring** all-day event titled `E2E Fixture BANANA-CAL-5150` |
+| `google-sheets` | `tests/read/readSpreadsheet.smoke.ts` | `E2E_FIXTURE_SHEET_ID` | `E2E_FIXTURE_SHEET_NEEDLE` | Sheet with `BANANA-CELL-8842` in a cell inside `A1:C10` |
+| `google-slides` | `tests/read/getPresentation.smoke.ts` | `E2E_FIXTURE_SLIDES_ID` | `E2E_FIXTURE_SLIDES_NEEDLE` | Deck whose first slide's title text is `BANANA-SLIDE-2205` |
+| `clickup` | `tests/read/listTasks.smoke.ts` | `E2E_FIXTURE_CLICKUP_LIST_ID` | `E2E_FIXTURE_CLICKUP_NEEDLE` | A **read-only** list (not the scratch list) holding a task named `E2E Fixture BANANA-TASK-6677` |
+| `slack` | `tests/read/readChannelHistory.slack.smoke.ts` | `E2E_FIXTURE_SLACK_CHANNEL_ID` | `E2E_FIXTURE_SLACK_NEEDLE` | A channel the **bot** is `/invite`d to, with a pinned message containing `BANANA-SLACK-9110` |
+| `slack-user` | `tests/read/readChannelHistory.slack-user.smoke.ts` | `E2E_FIXTURE_SLACK_USER_CHANNEL_ID` | `E2E_FIXTURE_SLACK_USER_NEEDLE` | A channel the **user token** can read and that the access rules allow, with a message containing `BANANA-SLACKU-4404` |
 
-| Field | Value |
-|---|---|
-| Title | `E2E Smoke Fixture Doc` (human-readable only — the test uses the doc ID) |
-| Doc ID | _record after creation — from `docs.google.com/document/d/<ID>/edit`_ |
-| Content | Plain text body containing `BANANA-PHONE-7714` on its own line. No formatting. |
+### Optional overrides
 
-### Additional read fixtures (for Phase 3 regression suite — create them now)
+Unset is fine — the test falls back to the default. (Actions passes `''` for an
+unconfigured variable, so the tests use `||`, not `??`.)
 
-Provision once so adding more read smokes later doesn't block on fixture creation.
+| Variable | Default | Used by |
+|---|---|---|
+| `E2E_FIXTURE_SHEET_RANGE` | `A1:C10` | `readSpreadsheet.smoke.ts` |
+| `E2E_FIXTURE_CALENDAR_TIME_MIN` | `2020-01-01T00:00:00Z` | `listEvents.smoke.ts` |
+| `E2E_FIXTURE_CALENDAR_TIME_MAX` | `2040-01-01T00:00:00Z` | `listEvents.smoke.ts` |
+
+The calendar window is deliberately wide and fixed: the fixture event recurs
+yearly, so any window this size contains an instance no matter when the suite runs.
+
+## Slack: two servers, two fixtures
+
+`src/slack/` (bot token, catalog slug `slack-bot`) and `src/slack-user/` (user
+OAuth, catalog slug `slack`) expose the same tool names against different
+identities. They get separate connectors, separate fixture channels, and
+separate needles — a shared channel would let one server's test pass on the
+other's access. See `e2e/runbook.md` for the slug/directory mapping.
+
+## Additional read fixtures (for the per-tool regression suite)
+
+Provision once so adding more read smokes later doesn't block on fixture
+creation. These are Google Docs specific; extend per service as regression
+coverage grows.
 
 | Purpose | Title | Notes |
 |---|---|---|
@@ -34,30 +73,23 @@ Provision once so adding more read smokes later doesn't block on fixture creatio
 | `listComments`/`getComment` target | `E2E Comment Anchor` | Add 2 comments with bodies `BANANA-COMMENT-1` and `BANANA-COMMENT-2`. |
 | `inspectDocStructure` target | `E2E Structured Doc` | Heading 1 `BANANA-H1`, paragraph, table, page break, second heading `BANANA-H2`. |
 
-Phase 3 smokes will reference these by ID via additional `E2E_FIXTURE_*_ID` env vars.
-
-## Required GHA repository variables (Phase 2)
-
-Set under **Settings → Secrets and variables → Actions → Variables**:
-
-| Variable | Example | Used by |
-|---|---|---|
-| `E2E_FIXTURE_DOC_ID` | `1AbCdEfGh...` | `readGoogleDoc.smoke.ts` prompt |
-| `E2E_FIXTURE_DOC_NEEDLE` | `BANANA-PHONE-7714` | `readGoogleDoc.smoke.ts` assertion |
-
 ## Required client-side accounts
 
 The Claude and ChatGPT accounts on the Mac Studio (e.g. `mcp-e2e@boarlabs.xyz`) must:
 
 1. Be on a plan tier that supports MCP/Connectors.
-2. Have **two** connectors registered: `awesome-mcp-readonly` and `awesome-mcp-full`, each with its own dashboard-generated URL (different `instanceId` query params). See `runbook.md`.
-3. Have "Always allow" set on both connectors.
-4. Have `awesome-mcp-readonly`'s write tools manually unchecked. See `tools.ts` `WRITE_TOOLS` for the canonical list.
+2. Have **both** connectors registered for every service under test — 18 in
+   total, named per the table in `runbook.md`, each with its own
+   dashboard-generated URL (different `instanceId` query params).
+3. Have "Always allow" set on every connector.
+4. Have each `-readonly` connector's write tools manually unchecked.
 
 ## Rotation triggers
 
 Rotate fixture content and update this doc whenever:
 
-- The first read smoke test starts failing with an assertion shift (the readonly account's content was modified). Investigate: was a write tool left enabled on the readonly connector?
-- A read fixture's needle starts appearing in unrelated test responses (needle isn't unique enough).
-- A new read tool is added to `src/google-docs/server.ts` that needs its own fixture.
+- A read smoke starts failing with an assertion shift (the readonly identity's
+  content was modified). Investigate: was a write tool left enabled on that
+  service's readonly connector?
+- A needle starts appearing in unrelated test responses (it isn't unique enough).
+- A new read tool is added to `src/<service>/server.ts` that needs its own fixture.

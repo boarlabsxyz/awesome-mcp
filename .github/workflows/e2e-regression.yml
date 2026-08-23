@@ -5,8 +5,9 @@ name: E2E Regression (Nightly)
 # tagging. They post to Slack so the team sees them in the morning and can
 # triage from the forensics artifact on the run page.
 #
-# As Phase 3 adds more tests (one per Google Docs tool), this is the workflow
-# that exercises them. The deploy gate stays at the 1 read + 1 write minimum.
+# As later phases add more tests (one per tool, across every service in src/),
+# this is the workflow that exercises them. The deploy gate stays at the
+# 1 read + 1 write per service minimum defined in e2e/tests/gate.manifest.ts.
 
 on:
   schedule:
@@ -31,12 +32,45 @@ jobs:
       APPIUM_HOST: 127.0.0.1
       APPIUM_PORT: '4723'
       RESPONSE_TIMEOUT_MS: '120000'
+      # --- Read fixtures (readonly identity, per service) ---
       E2E_FIXTURE_DOC_ID: ${{ vars.E2E_FIXTURE_DOC_ID }}
       E2E_FIXTURE_DOC_NEEDLE: ${{ vars.E2E_FIXTURE_DOC_NEEDLE }}
+      E2E_FIXTURE_DRIVE_FOLDER_ID: ${{ vars.E2E_FIXTURE_DRIVE_FOLDER_ID }}
+      E2E_FIXTURE_DRIVE_NEEDLE: ${{ vars.E2E_FIXTURE_DRIVE_NEEDLE }}
+      E2E_FIXTURE_GMAIL_QUERY: ${{ vars.E2E_FIXTURE_GMAIL_QUERY }}
+      E2E_FIXTURE_GMAIL_NEEDLE: ${{ vars.E2E_FIXTURE_GMAIL_NEEDLE }}
+      E2E_FIXTURE_CALENDAR_ID: ${{ vars.E2E_FIXTURE_CALENDAR_ID }}
+      E2E_FIXTURE_CALENDAR_NEEDLE: ${{ vars.E2E_FIXTURE_CALENDAR_NEEDLE }}
+      E2E_FIXTURE_SHEET_ID: ${{ vars.E2E_FIXTURE_SHEET_ID }}
+      E2E_FIXTURE_SHEET_NEEDLE: ${{ vars.E2E_FIXTURE_SHEET_NEEDLE }}
+      E2E_FIXTURE_SLIDES_ID: ${{ vars.E2E_FIXTURE_SLIDES_ID }}
+      E2E_FIXTURE_SLIDES_NEEDLE: ${{ vars.E2E_FIXTURE_SLIDES_NEEDLE }}
+      E2E_FIXTURE_CLICKUP_LIST_ID: ${{ vars.E2E_FIXTURE_CLICKUP_LIST_ID }}
+      E2E_FIXTURE_CLICKUP_NEEDLE: ${{ vars.E2E_FIXTURE_CLICKUP_NEEDLE }}
+      E2E_FIXTURE_SLACK_CHANNEL_ID: ${{ vars.E2E_FIXTURE_SLACK_CHANNEL_ID }}
+      E2E_FIXTURE_SLACK_NEEDLE: ${{ vars.E2E_FIXTURE_SLACK_NEEDLE }}
+      E2E_FIXTURE_SLACK_USER_CHANNEL_ID: ${{ vars.E2E_FIXTURE_SLACK_USER_CHANNEL_ID }}
+      E2E_FIXTURE_SLACK_USER_NEEDLE: ${{ vars.E2E_FIXTURE_SLACK_USER_NEEDLE }}
+      # Optional read-fixture overrides; the tests fall back to a sane default
+      # when these are unset (Actions passes '' for an unconfigured var).
+      E2E_FIXTURE_SHEET_RANGE: ${{ vars.E2E_FIXTURE_SHEET_RANGE }}
+      E2E_FIXTURE_CALENDAR_TIME_MIN: ${{ vars.E2E_FIXTURE_CALENDAR_TIME_MIN }}
+      E2E_FIXTURE_CALENDAR_TIME_MAX: ${{ vars.E2E_FIXTURE_CALENDAR_TIME_MAX }}
+      # --- Write scratch scopes (write identity, per backend) ---
       E2E_SCRATCH_FOLDER_ID: ${{ vars.E2E_SCRATCH_FOLDER_ID }}
+      E2E_CALENDAR_SCRATCH_ID: ${{ vars.E2E_CALENDAR_SCRATCH_ID }}
+      E2E_GMAIL_SCRATCH_LABEL: ${{ vars.E2E_GMAIL_SCRATCH_LABEL }}
+      E2E_GMAIL_SCRATCH_RECIPIENT: ${{ vars.E2E_GMAIL_SCRATCH_RECIPIENT }}
+      E2E_CLICKUP_SCRATCH_LIST_ID: ${{ vars.E2E_CLICKUP_SCRATCH_LIST_ID }}
+      E2E_CLICKUP_SCRATCH_SPACE_ID: ${{ vars.E2E_CLICKUP_SCRATCH_SPACE_ID }}
+      E2E_SLACK_SCRATCH_CHANNEL_ID: ${{ vars.E2E_SLACK_SCRATCH_CHANNEL_ID }}
+      # --- Direct-API credentials for setup/teardown (never the MCP's own) ---
       E2E_WRITE_GOOGLE_REFRESH_TOKEN: ${{ secrets.E2E_WRITE_GOOGLE_REFRESH_TOKEN }}
       E2E_GOOGLE_CLIENT_ID: ${{ secrets.E2E_GOOGLE_CLIENT_ID }}
       E2E_GOOGLE_CLIENT_SECRET: ${{ secrets.E2E_GOOGLE_CLIENT_SECRET }}
+      E2E_CLICKUP_API_TOKEN: ${{ secrets.E2E_CLICKUP_API_TOKEN }}
+      E2E_SLACK_BOT_TOKEN: ${{ secrets.E2E_SLACK_BOT_TOKEN }}
+      E2E_SLACK_USER_TOKEN: ${{ secrets.E2E_SLACK_USER_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -94,12 +128,45 @@ jobs:
       ARTIFACTS_DIR: ${{ github.workspace }}/e2e/.artifacts
       CHATGPT_CDP_ENDPOINT: http://127.0.0.1:9222
       RESPONSE_TIMEOUT_MS: '120000'
+      # --- Read fixtures (readonly identity, per service) ---
       E2E_FIXTURE_DOC_ID: ${{ vars.E2E_FIXTURE_DOC_ID }}
       E2E_FIXTURE_DOC_NEEDLE: ${{ vars.E2E_FIXTURE_DOC_NEEDLE }}
+      E2E_FIXTURE_DRIVE_FOLDER_ID: ${{ vars.E2E_FIXTURE_DRIVE_FOLDER_ID }}
+      E2E_FIXTURE_DRIVE_NEEDLE: ${{ vars.E2E_FIXTURE_DRIVE_NEEDLE }}
+      E2E_FIXTURE_GMAIL_QUERY: ${{ vars.E2E_FIXTURE_GMAIL_QUERY }}
+      E2E_FIXTURE_GMAIL_NEEDLE: ${{ vars.E2E_FIXTURE_GMAIL_NEEDLE }}
+      E2E_FIXTURE_CALENDAR_ID: ${{ vars.E2E_FIXTURE_CALENDAR_ID }}
+      E2E_FIXTURE_CALENDAR_NEEDLE: ${{ vars.E2E_FIXTURE_CALENDAR_NEEDLE }}
+      E2E_FIXTURE_SHEET_ID: ${{ vars.E2E_FIXTURE_SHEET_ID }}
+      E2E_FIXTURE_SHEET_NEEDLE: ${{ vars.E2E_FIXTURE_SHEET_NEEDLE }}
+      E2E_FIXTURE_SLIDES_ID: ${{ vars.E2E_FIXTURE_SLIDES_ID }}
+      E2E_FIXTURE_SLIDES_NEEDLE: ${{ vars.E2E_FIXTURE_SLIDES_NEEDLE }}
+      E2E_FIXTURE_CLICKUP_LIST_ID: ${{ vars.E2E_FIXTURE_CLICKUP_LIST_ID }}
+      E2E_FIXTURE_CLICKUP_NEEDLE: ${{ vars.E2E_FIXTURE_CLICKUP_NEEDLE }}
+      E2E_FIXTURE_SLACK_CHANNEL_ID: ${{ vars.E2E_FIXTURE_SLACK_CHANNEL_ID }}
+      E2E_FIXTURE_SLACK_NEEDLE: ${{ vars.E2E_FIXTURE_SLACK_NEEDLE }}
+      E2E_FIXTURE_SLACK_USER_CHANNEL_ID: ${{ vars.E2E_FIXTURE_SLACK_USER_CHANNEL_ID }}
+      E2E_FIXTURE_SLACK_USER_NEEDLE: ${{ vars.E2E_FIXTURE_SLACK_USER_NEEDLE }}
+      # Optional read-fixture overrides; the tests fall back to a sane default
+      # when these are unset (Actions passes '' for an unconfigured var).
+      E2E_FIXTURE_SHEET_RANGE: ${{ vars.E2E_FIXTURE_SHEET_RANGE }}
+      E2E_FIXTURE_CALENDAR_TIME_MIN: ${{ vars.E2E_FIXTURE_CALENDAR_TIME_MIN }}
+      E2E_FIXTURE_CALENDAR_TIME_MAX: ${{ vars.E2E_FIXTURE_CALENDAR_TIME_MAX }}
+      # --- Write scratch scopes (write identity, per backend) ---
       E2E_SCRATCH_FOLDER_ID: ${{ vars.E2E_SCRATCH_FOLDER_ID }}
+      E2E_CALENDAR_SCRATCH_ID: ${{ vars.E2E_CALENDAR_SCRATCH_ID }}
+      E2E_GMAIL_SCRATCH_LABEL: ${{ vars.E2E_GMAIL_SCRATCH_LABEL }}
+      E2E_GMAIL_SCRATCH_RECIPIENT: ${{ vars.E2E_GMAIL_SCRATCH_RECIPIENT }}
+      E2E_CLICKUP_SCRATCH_LIST_ID: ${{ vars.E2E_CLICKUP_SCRATCH_LIST_ID }}
+      E2E_CLICKUP_SCRATCH_SPACE_ID: ${{ vars.E2E_CLICKUP_SCRATCH_SPACE_ID }}
+      E2E_SLACK_SCRATCH_CHANNEL_ID: ${{ vars.E2E_SLACK_SCRATCH_CHANNEL_ID }}
+      # --- Direct-API credentials for setup/teardown (never the MCP's own) ---
       E2E_WRITE_GOOGLE_REFRESH_TOKEN: ${{ secrets.E2E_WRITE_GOOGLE_REFRESH_TOKEN }}
       E2E_GOOGLE_CLIENT_ID: ${{ secrets.E2E_GOOGLE_CLIENT_ID }}
       E2E_GOOGLE_CLIENT_SECRET: ${{ secrets.E2E_GOOGLE_CLIENT_SECRET }}
+      E2E_CLICKUP_API_TOKEN: ${{ secrets.E2E_CLICKUP_API_TOKEN }}
+      E2E_SLACK_BOT_TOKEN: ${{ secrets.E2E_SLACK_BOT_TOKEN }}
+      E2E_SLACK_USER_TOKEN: ${{ secrets.E2E_SLACK_USER_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:

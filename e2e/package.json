@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "npm run test:full",
-    "test:gate": "node --import tsx --test tests/read/readGoogleDoc.smoke.ts tests/write/appendToGoogleDoc.smoke.ts",
-    "test:full": "node --import tsx --test \"tests/**/*.smoke.ts\"",
+    "test:gate": "node --import tsx scripts/runGate.ts",
+    "test:full": "node --import tsx scripts/runFull.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

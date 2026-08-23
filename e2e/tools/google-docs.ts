@@ -1,13 +1,10 @@
 // Source of truth: which Google Docs MCP tools are read-only vs write/mutating.
 //
-// The runbook references WRITE_TOOLS as the list of tools to UNCHECK on the
-// awesome-mcp-readonly connector's Tools panel in Claude Desktop. Keep these
-// arrays in sync with src/google-docs/server.ts (every `name:` in an addTool
-// call should appear here once).
-//
-// Tools marked NOT_IMPLEMENTED are listed in the WRITE column for safety but
-// CLAUDE.md notes they don't fully work — skip them when generating regression
-// cases.
+// Generated from src/google-docs/server.ts: every `addTool` call's `name:` appears
+// here exactly once, split on that tool's `annotations.readOnlyHint`. When a tool
+// is added or its hint flips, update this file in the same PR — the runbook tells
+// operators to uncheck exactly WRITE_TOOLS on the readonly connector, so drift here
+// silently widens what the readonly connector can mutate.
 
 export const READ_TOOLS = [
   'listGoogleDocs',
@@ -45,6 +42,8 @@ export const WRITE_TOOLS = [
   'importToGoogleDoc',
 ] as const;
 
+// Listed in WRITE_TOOLS for safety, but the server implementation is a stub —
+// skip these when generating regression cases.
 export const NOT_IMPLEMENTED = new Set<string>([
   'editTableCell',
   'fixListFormatting',

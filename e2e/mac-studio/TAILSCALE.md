@@ -147,8 +147,10 @@ automate — they are enumerated in [README.md §Manual steps](./README.md):
 1. Grant Accessibility permission to `$(which appium)`.
 2. Register the GitHub Actions runner as a **launch agent** (not daemon).
 3. Sign in to Claude Desktop and to ChatGPT in the warmed Chrome profile.
-   Register the dev Railway MCP URLs as `awesome-mcp-readonly` and
-   `awesome-mcp-full` connectors (see [runbook.md §Two-connector model](../runbook.md)).
+   Register the dev Railway MCP URLs as an `awesome-mcp-<service>-readonly` /
+   `awesome-mcp-<service>-full` connector pair for every service in `src/` —
+   18 in total (see [README.md §3](./README.md) for the name table and
+   [runbook.md §Two-connector model](../runbook.md) for the procedure).
 4. Pin Claude Desktop and disable auto-update.
 
 ## 5. Verify Appium and Chrome from your laptop

@@ -48,12 +48,33 @@ cd ~/actions-runner
 launchctl print gui/$(id -u)/actions.runner.*   # confirm it's a gui/ agent, not system/
 ```
 
-### 3. Account logins
+### 3. Account logins and connector registration
 
 - **Claude Desktop** — open the app, sign in as `mcp-e2e@…`. Block Sparkle auto-update.
 - **ChatGPT in Chrome** — open `https://chatgpt.com/` in the e2e Chrome profile, sign in. Pass any Cloudflare challenge manually so the profile gets warmed.
-- **Dev MCP connector** — register the dev Railway MCP URL on both Anthropic and OpenAI accounts. Set "Always allow" if available.
-- **Google OAuth on dev Railway** — re-authorize the dev MCP service against the e2e Google account; refresh `GOOGLE_TOKEN` env var.
+- **Provider authorization on dev Railway** — authorize the dev MCP service against each service's readonly and write identity (Google OAuth, ClickUp OAuth/token, Slack bot + user tokens).
+- **Connectors** — register **all 18**: a `-readonly` and a `-full` connector for every service in `src/`. Set "Always allow" on each.
+
+| Service (`src/<dir>`) | Readonly connector | Full connector |
+|---|---|---|
+| `google-docs` | `awesome-mcp-google-docs-readonly` | `awesome-mcp-google-docs-full` |
+| `google-drive` | `awesome-mcp-google-drive-readonly` | `awesome-mcp-google-drive-full` |
+| `google-gmail` | `awesome-mcp-google-gmail-readonly` | `awesome-mcp-google-gmail-full` |
+| `google-calendar` | `awesome-mcp-google-calendar-readonly` | `awesome-mcp-google-calendar-full` |
+| `google-sheets` | `awesome-mcp-google-sheets-readonly` | `awesome-mcp-google-sheets-full` |
+| `google-slides` | `awesome-mcp-google-slides-readonly` | `awesome-mcp-google-slides-full` |
+| `clickup` | `awesome-mcp-clickup-readonly` | `awesome-mcp-clickup-full` |
+| `slack` (slug `slack-bot`) | `awesome-mcp-slack-readonly` | `awesome-mcp-slack-full` |
+| `slack-user` (slug `slack`) | `awesome-mcp-slack-user-readonly` | `awesome-mcp-slack-user-full` |
+
+The names are not cosmetic — every prompt names its connector verbatim
+(`e2e/promptTemplates.ts`), so a mistyped name fails the smoke. Note the Slack
+directory/slug inversion: `src/slack/` registers under the catalog slug
+`slack-bot`, `src/slack-user/` under `slack`.
+
+Then uncheck each service's `WRITE_TOOLS` on its `-readonly` connector. Full
+procedure, including how to dump the current lists from code:
+[`e2e/runbook.md` § Two-connector model](../runbook.md).
 
 ### 4. Pin Claude Desktop
 
@@ -71,12 +92,16 @@ Record the pinned version somewhere durable; bump intentionally after re-validat
 curl -sS http://127.0.0.1:4723/status
 curl -sS http://127.0.0.1:9222/json/version
 
-# Run the smoke locally to validate AX selectors
+# Validate AX selectors against one service first — cheaper than the whole gate
 cd ~/awesome-mcp/e2e
 npm ci
 E2E_FIXTURE_DOC_ID="<your-fixture-doc-id>" \
 E2E_FIXTURE_DOC_NEEDLE="BANANA-PHONE-7714" \
-CLIENT=claude-desktop npm test
+CLIENT=claude-desktop node --import tsx --test tests/read/readGoogleDoc.smoke.ts
+
+# Then the full gate (1 read + 1 write per service; needs every env var from
+# e2e/runbook.md § Local smoke run)
+CLIENT=claude-desktop npm run test:gate
 ```
 
 Expect the first run to fail on at least one `SELECTOR-TODO` — fix selectors against the dumped AX tree, commit, repeat until green.
