@@ -18,7 +18,7 @@ describe('restCatalog', () => {
     it('every entry has the required fields', () => {
       for (const e of REST_CATALOG) {
         assert.ok(e.service, `service missing on ${e.path}`);
-        assert.equal(e.method, 'GET', `non-GET method on ${e.path}`);
+        assert.ok(['GET', 'POST'].includes(e.method), `unsupported method ${e.method} on ${e.path}`);
         assert.ok(e.path.startsWith('/api/v1/'), `bad path: ${e.path}`);
         assert.ok(e.summary.length > 0);
         assert.ok(e.mcpToolName.length > 0);

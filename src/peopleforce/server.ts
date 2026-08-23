@@ -185,6 +185,31 @@ export const createLeaveRequestSchema = z
     path: ['endsOn'],
   });
 
+/**
+ * Zod schema for `moveVacancyApplication`. Exported so the REST route can
+ * validate its body with exactly what the MCP tool validates.
+ */
+export const moveVacancyApplicationSchema = z.object({
+  vacancyId: z.union([z.string(), z.number()]).describe('The vacancy ID.'),
+  applicationId: z.union([z.string(), z.number()]).describe('The application ID (from listVacancyApplications).'),
+  pipelineStageId: z.union([z.string(), z.number()]).describe('The target pipeline stage ID.'),
+  performAutomations: z.boolean().optional().describe('Whether to run the stage\'s automations (PeopleForce defaults to true).'),
+});
+
+/** Zod schema for `disqualifyVacancyApplication`. See {@link moveVacancyApplicationSchema}. */
+export const disqualifyVacancyApplicationSchema = z.object({
+  vacancyId: z.union([z.string(), z.number()]).describe('The vacancy ID.'),
+  applicationId: z.union([z.string(), z.number()]).describe('The application ID (from listVacancyApplications).'),
+  disqualifyReasonId: z.union([z.string(), z.number()]).describe('The disqualify reason ID (from listDisqualifyReasons).'),
+  comment: z.string().optional().describe('Optional comment explaining the disqualification.'),
+});
+
+/** Zod schema for `addCandidateNote`. See {@link moveVacancyApplicationSchema}. */
+export const addCandidateNoteSchema = z.object({
+  candidateId: z.union([z.string(), z.number()]).describe('The candidate ID.'),
+  body: z.string().min(1).describe('The note text.'),
+});
+
 // === Employees ===
 
 peopleForceServer.addTool({
@@ -765,12 +790,7 @@ peopleForceServer.addTool({
   annotations: { readOnlyHint: false },
   description:
     'Moves a candidate\'s vacancy application to a different pipeline stage. Needs the vacancy ID, application ID, and target `pipelineStageId` (from listRecruitmentPipelines or getVacancy).',
-  parameters: z.object({
-    vacancyId: z.union([z.string(), z.number()]).describe('The vacancy ID.'),
-    applicationId: z.union([z.string(), z.number()]).describe('The application ID (from listVacancyApplications).'),
-    pipelineStageId: z.union([z.string(), z.number()]).describe('The target pipeline stage ID.'),
-    performAutomations: z.boolean().optional().describe('Whether to run the stage\'s automations (PeopleForce defaults to true).'),
-  }),
+  parameters: moveVacancyApplicationSchema,
   execute: (args, { log, session }) =>
     withPeopleForceClient('Failed to move vacancy application', session, log, async (client) => {
       log.info(`Moving application ${args.applicationId} on vacancy ${args.vacancyId} to stage ${args.pipelineStageId}`);
@@ -789,12 +809,7 @@ peopleForceServer.addTool({
   annotations: { readOnlyHint: false },
   description:
     'Disqualifies a vacancy application with a reason. Needs the vacancy ID, application ID (from listVacancyApplications), and a `disqualifyReasonId` (from listDisqualifyReasons); an optional comment is recorded.',
-  parameters: z.object({
-    vacancyId: z.union([z.string(), z.number()]).describe('The vacancy ID.'),
-    applicationId: z.union([z.string(), z.number()]).describe('The application ID (from listVacancyApplications).'),
-    disqualifyReasonId: z.union([z.string(), z.number()]).describe('The disqualify reason ID (from listDisqualifyReasons).'),
-    comment: z.string().optional().describe('Optional comment explaining the disqualification.'),
-  }),
+  parameters: disqualifyVacancyApplicationSchema,
   execute: (args, { log, session }) =>
     withPeopleForceClient('Failed to disqualify vacancy application', session, log, async (client) => {
       log.info(`Disqualifying application ${args.applicationId} on vacancy ${args.vacancyId} (reason ${args.disqualifyReasonId})`);
@@ -813,10 +828,7 @@ peopleForceServer.addTool({
   annotations: { readOnlyHint: false },
   description:
     'Adds a note to a candidate — e.g. to record the AI\'s assessment or interview feedback back into PeopleForce. The note appears on the candidate card.',
-  parameters: z.object({
-    candidateId: z.union([z.string(), z.number()]).describe('The candidate ID.'),
-    body: z.string().min(1).describe('The note text.'),
-  }),
+  parameters: addCandidateNoteSchema,
   execute: (args, { log, session }) =>
     withPeopleForceClient('Failed to add candidate note', session, log, async (client) => {
       log.info(`Adding note to candidate ${args.candidateId}`);

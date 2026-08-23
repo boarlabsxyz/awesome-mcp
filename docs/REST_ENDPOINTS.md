@@ -190,6 +190,10 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `listDisqualifyReasons` | `GET /api/v1/peopleforce/recruitment/disqualify-reasons` | live | List recruitment disqualify reasons with their IDs |
 | `listRecruitmentSources` | `GET /api/v1/peopleforce/recruitment/sources` | live | List recruitment sources with their IDs |
 | `getPublishedJobDescription` | `GET /api/v1/peopleforce/recruitment/published-vacancies/{vacancyId}` | live | Get the public careers-site job description for a vacancy — _Some tenants gate the Careers API behind a separate token - fall back to the vacancy description on a not-authorized error._ |
+| `createLeaveRequest` | `POST /api/v1/peopleforce/leave-requests` | live | Create a PeopleForce leave request — _Returns 201 with the created request. leaveTypeId comes from the leave-types endpoint, not the type name._ |
+| `addCandidateNote` | `POST /api/v1/peopleforce/recruitment/candidates/{candidateId}/notes` | live | Add a note to a recruitment candidate — _Returns 201. The note body is free text and can be long - this is the write the data plane most clearly earns._ |
+| `moveVacancyApplication` | `POST /api/v1/peopleforce/recruitment/vacancies/{vacancyId}/applications/{applicationId}/move` | live | Move a vacancy application to another pipeline stage — _Returns 200 with the application re-read after the move. performAutomations defaults to PeopleForce behaviour (true) when omitted._ |
+| `disqualifyVacancyApplication` | `POST /api/v1/peopleforce/recruitment/vacancies/{vacancyId}/applications/{applicationId}/disqualify` | live | Disqualify a vacancy application with a reason — _Returns 200 with the application re-read. Consequential and not idempotent - repeating it re-disqualifies. disqualifyReasonId comes from the disqualify-reasons endpoint._ |
 
 ### HubSpot (`hubspot`)
 
@@ -210,4 +214,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 120 endpoints.
+Catalog size: 124 endpoints.

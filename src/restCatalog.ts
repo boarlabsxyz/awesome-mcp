@@ -3,8 +3,14 @@
 // README translation table. Update one place when adding endpoints.
 //
 // Convention: every GET in this catalog is a passthrough for an MCP read tool.
-// Write tools (create*, update*, delete*, send*, move*, apply*, format*, set*,
-// batch*Update) stay MCP-only and are not listed here.
+//
+// POST entries are allowed but gated: a write earns a REST sibling only when its
+// request body is large (bulk rows, a long document body) or when it belongs in a
+// shell pipeline. A one-field update is cheaper and safer as an MCP tool call, and
+// every write endpoint widens what the permanent dashboard API key can mutate.
+// Scope is deliberately 'GET' | 'POST' — PATCH/DELETE are a separate decision, and
+// the legacy PATCH/DELETE routes in webServer.ts are ChatGPT Custom Actions compat
+// and are not catalogued.
 
 export type RestService =
   | 'docs'
@@ -21,7 +27,7 @@ export type RestService =
 
 export interface RestEndpoint {
   service: RestService;
-  method: 'GET';
+  method: 'GET' | 'POST';
   path: string;
   summary: string;
   mcpToolName: string;
@@ -171,6 +177,12 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/recruitment/disqualify-reasons', summary: 'List recruitment disqualify reasons with their IDs', mcpToolName: 'listDisqualifyReasons', openapiOperationId: 'listPeopleForceDisqualifyReasons', status: 'live' },
   { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/recruitment/sources', summary: 'List recruitment sources with their IDs', mcpToolName: 'listRecruitmentSources', openapiOperationId: 'listPeopleForceRecruitmentSources', status: 'live' },
   { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/recruitment/published-vacancies/{vacancyId}', summary: 'Get the public careers-site job description for a vacancy', mcpToolName: 'getPublishedJobDescription', openapiOperationId: 'getPeopleForcePublishedJobDescription', status: 'live', notes: 'Some tenants gate the Careers API behind a separate token - fall back to the vacancy description on a not-authorized error.' },
+  // Writes. Bodies are validated with the MCP tools own Zod schemas, so the two
+  // surfaces cannot drift. Path params win over the same key in the body.
+  { service: 'peopleforce', method: 'POST', path: '/api/v1/peopleforce/leave-requests', summary: 'Create a PeopleForce leave request', mcpToolName: 'createLeaveRequest', openapiOperationId: 'createPeopleForceLeaveRequest', status: 'live', notes: 'Returns 201 with the created request. leaveTypeId comes from the leave-types endpoint, not the type name.' },
+  { service: 'peopleforce', method: 'POST', path: '/api/v1/peopleforce/recruitment/candidates/{candidateId}/notes', summary: 'Add a note to a recruitment candidate', mcpToolName: 'addCandidateNote', openapiOperationId: 'addPeopleForceCandidateNote', status: 'live', notes: 'Returns 201. The note body is free text and can be long - this is the write the data plane most clearly earns.' },
+  { service: 'peopleforce', method: 'POST', path: '/api/v1/peopleforce/recruitment/vacancies/{vacancyId}/applications/{applicationId}/move', summary: 'Move a vacancy application to another pipeline stage', mcpToolName: 'moveVacancyApplication', openapiOperationId: 'movePeopleForceVacancyApplication', status: 'live', notes: 'Returns 200 with the application re-read after the move. performAutomations defaults to PeopleForce behaviour (true) when omitted.' },
+  { service: 'peopleforce', method: 'POST', path: '/api/v1/peopleforce/recruitment/vacancies/{vacancyId}/applications/{applicationId}/disqualify', summary: 'Disqualify a vacancy application with a reason', mcpToolName: 'disqualifyVacancyApplication', openapiOperationId: 'disqualifyPeopleForceVacancyApplication', status: 'live', notes: 'Returns 200 with the application re-read. Consequential and not idempotent - repeating it re-disqualifies. disqualifyReasonId comes from the disqualify-reasons endpoint.' },
 
   // HubSpot (read-only tools). All planned until the /api/v1/hubspot/* routes are wired in webServer.ts.
   { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/companies', summary: 'Get most recently active HubSpot companies', mcpToolName: 'getActiveCompanies', openapiOperationId: 'getHubSpotActiveCompanies', status: 'planned' },

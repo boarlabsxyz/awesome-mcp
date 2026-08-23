@@ -91,6 +91,17 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/peopleforce/recruitment/sources',
 ];
 
+// POST endpoints — same auth gate, exercised with the right verb. Bodies are
+// intentionally empty: the middleware rejects before any body parsing, so a 401
+// here proves the gate runs ahead of validation and an unauthenticated caller
+// can't probe the schema by watching 400s.
+const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
+  '/api/v1/peopleforce/leave-requests',
+  '/api/v1/peopleforce/recruitment/candidates/cand-123/notes',
+  '/api/v1/peopleforce/recruitment/vacancies/vac-123/applications/app-123/move',
+  '/api/v1/peopleforce/recruitment/vacancies/vac-123/applications/app-123/disqualify',
+];
+
 describe('REST data-plane: auth gate', () => {
   let app: ReturnType<typeof createWebApp>;
 
@@ -110,6 +121,20 @@ describe('REST data-plane: auth gate', () => {
 
     it(`GET ${path} → 401 when the bearer is unknown`, async () => {
       const res = await request(app).get(path).set('Authorization', 'Bearer not-a-real-token');
+      assert.equal(res.status, 401);
+      assert.ok(res.body.error);
+    });
+  }
+
+  for (const path of NEW_REST_WRITE_ENDPOINTS) {
+    it(`POST ${path} → 401 when Authorization is missing`, async () => {
+      const res = await request(app).post(path).send({});
+      assert.equal(res.status, 401);
+      assert.ok(res.body.error, 'expected an error body');
+    });
+
+    it(`POST ${path} → 401 when the bearer is unknown`, async () => {
+      const res = await request(app).post(path).set('Authorization', 'Bearer not-a-real-token').send({});
       assert.equal(res.status, 401);
       assert.ok(res.body.error);
     });
