@@ -26,6 +26,8 @@
 //   listSubscriptionsForUser(userId, channelId?)  — read side of "what am I watching"
 //   querySlackEvents(...)                         — read side of getChannelEventHistory
 //   countChannelEventsForSubscription(id)         — for the debug tool
+//   recordIngestDelivery(...) / readIngestHealth() — deployment-level "has
+//     Slack ever POSTed here, and how did it end" (see the debug tool)
 //   deleteSubscription(userId, teamId, channelId) — for unsubscribe
 //   pruneOldChannelEvents(retentionDays)          — periodic cleanup
 
@@ -296,6 +298,68 @@ export async function countChannelEventsForSubscription(subscriptionId: number):
     [subscriptionId],
   );
   return rows[0]?.c ?? 0;
+}
+
+/**
+ * One outcome branch of the ingest endpoint, with a running count and the last
+ * envelope that took it. See CREATE_SLACK_INGEST_HEALTH_TABLE in db.ts for why
+ * this is keyed by branch rather than appended to.
+ */
+export interface SlackIngestHealthRow {
+  branch: string;
+  deliveryCount: number;
+  lastAt: string;
+  lastTeamId: string | null;
+  lastChannelId: string | null;
+  lastEventType: string | null;
+}
+
+/**
+ * Record that a delivery reached this deployment and how it ended.
+ *
+ * Best-effort by contract: the caller must never let a failure here change the
+ * HTTP status Slack sees, because sustained non-2xx disables the Request URL
+ * for the whole workspace. Returns silently when Postgres isn't configured —
+ * the events feature already requires it, and a health write is not the place
+ * to start throwing.
+ */
+export async function recordIngestDelivery(input: {
+  branch: string;
+  teamId?: string | null;
+  channelId?: string | null;
+  eventType?: string | null;
+}): Promise<void> {
+  if (!isDatabaseAvailable()) return;
+  await getPool().query(
+    `INSERT INTO slack_ingest_health
+       (branch, delivery_count, last_at, last_team_id, last_channel_id, last_event_type)
+     VALUES ($1, 1, NOW(), $2, $3, $4)
+     ON CONFLICT (branch) DO UPDATE SET
+       delivery_count  = slack_ingest_health.delivery_count + 1,
+       last_at         = NOW(),
+       last_team_id    = COALESCE(EXCLUDED.last_team_id, slack_ingest_health.last_team_id),
+       last_channel_id = COALESCE(EXCLUDED.last_channel_id, slack_ingest_health.last_channel_id),
+       last_event_type = COALESCE(EXCLUDED.last_event_type, slack_ingest_health.last_event_type)`,
+    [input.branch, input.teamId ?? null, input.channelId ?? null, input.eventType ?? null],
+  );
+}
+
+/** Every branch this deployment has ever taken, most recent first. */
+export async function readIngestHealth(): Promise<SlackIngestHealthRow[]> {
+  requireDb();
+  const { rows } = await getPool().query(
+    `SELECT branch, delivery_count, last_at, last_team_id, last_channel_id, last_event_type
+     FROM slack_ingest_health
+     ORDER BY last_at DESC`,
+  );
+  return rows.map((row: any) => ({
+    branch: row.branch,
+    deliveryCount: typeof row.delivery_count === 'string' ? parseInt(row.delivery_count, 10) : Number(row.delivery_count),
+    lastAt: row.last_at instanceof Date ? row.last_at.toISOString() : String(row.last_at),
+    lastTeamId: row.last_team_id ?? null,
+    lastChannelId: row.last_channel_id ?? null,
+    lastEventType: row.last_event_type ?? null,
+  }));
 }
 
 export async function pruneOldChannelEvents(retentionDays: number): Promise<number> {

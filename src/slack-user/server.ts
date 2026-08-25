@@ -12,6 +12,8 @@ import {
   subscribeToChannelEventsFlow,
   querySlackEventsFlow,
   debugChannelEventSubscriptionFlow,
+  requiredMessageEventSubscription,
+  type SlackChannelShape,
 } from '../slack/eventHelpers.js';
 import { assertAccess, assertDmMemberAccess, fetchChannelMeta, filterChannelList, filterDmsByOrg, filterGroupDmsByRules } from './accessControl.js';
 import type { SlackAccessRules } from '../mcpConnectionStore.js';
@@ -394,7 +396,7 @@ function slackRequestUrl(): string {
 slackUserServer.addTool({
   name: 'subscribeToChannelEvents',
   annotations: { readOnlyHint: false },
-  description: 'Record interest in a Slack channel\'s events so they accrue in a durable store you can query later with getChannelEventHistory, instead of re-reading the channel and tracking your own watermark. IDEMPOTENT: re-calling for the same channel returns the existing subscription. Events are "message" (new messages and thread replies in channels and private channels; join/leave noise is excluded) and "reaction_added". Optionally set matchPattern to record only messages whose text contains it (case-insensitive substring). History accrues from this moment forward — for anything earlier use readChannelHistory. Requires the operator to have configured the Slack app\'s Event Subscriptions Request URL and SLACK_SIGNING_SECRET; run debugChannelEventSubscription if events do not arrive. Access rules are enforced.',
+  description: 'Record interest in a Slack channel\'s events so they accrue in a durable store you can query later with getChannelEventHistory, instead of re-reading the channel and tracking your own watermark. IDEMPOTENT: re-calling for the same channel returns the existing subscription. Events are "message" (new messages and thread replies in public channels, private channels, DMs, and group DMs; join/leave noise is excluded) and "reaction_added". Slack delivers each of those channel types through a SEPARATE app-level toggle (message.channels / message.groups / message.im / message.mpim), so a workspace with only message.channels enabled records nothing for a DM — this tool names the one your channel needs. Optionally set matchPattern to record only messages whose text contains it (case-insensitive substring). History accrues from this moment forward — for anything earlier use readChannelHistory. Requires the operator to have configured the Slack app\'s Event Subscriptions Request URL and SLACK_SIGNING_SECRET; run debugChannelEventSubscription if events do not arrive. Access rules are enforced.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID to watch (e.g., C01234ABCDE).'),
     events: z.array(z.enum(['message', 'reaction_added'])).optional().describe('Event types to capture. Defaults to both.'),
@@ -408,6 +410,16 @@ slackUserServer.addTool({
     await enforceAccess(client, session, args.channelId);
     const teamId = await requireTeamId(client, session);
     const store = await import('../slack/eventStore.js');
+
+    // enforceAccess already fetched (and cached) this, so it costs nothing —
+    // and it is what turns the generic "configure Event Subscriptions" advice
+    // into the one toggle this channel actually needs.
+    let channelShape: SlackChannelShape | null = null;
+    try {
+      const meta = await fetchChannelMeta(client, args.channelId, getTokenKey(session));
+      channelShape = { isIm: meta.is_im ?? null, isMpim: meta.is_mpim ?? null, isPrivate: meta.is_private ?? null };
+    } catch { /* fall back to the ID-prefix heuristic */ }
+    const required = requiredMessageEventSubscription(args.channelId, channelShape);
 
     const events = (args.events && args.events.length > 0) ? args.events : [...CAPTURED_SLACK_EVENTS];
     const result = await subscribeToChannelEventsFlow(
@@ -432,6 +444,7 @@ slackUserServer.addTool({
       lines.push(
         '',
         `Delivery depends on the Slack app being configured to POST events to ${url || '${BASE_URL}/webhooks/slack/inbound (BASE_URL is not set)'}.`,
+        `This channel is a ${required.kind}, so the app must have "${required.event}" enabled under Event Subscriptions — message.channels does not cover DMs, group DMs, or private channels.`,
         'If getChannelEventHistory stays empty, run debugChannelEventSubscription.',
       );
     }
@@ -533,7 +546,7 @@ slackUserServer.addTool({
 slackUserServer.addTool({
   name: 'debugChannelEventSubscription',
   annotations: { readOnlyHint: true },
-  description: 'Diagnose a channel-event subscription that reports success but is not accruing events. Reports the local record, whether SLACK_SIGNING_SECRET is configured, the Request URL the Slack app must be pointed at, whether you are actually a member of the channel (Slack does not deliver events for channels the installation is not in), and event-store counts — then lists the anomalies it found. Use when getChannelEventHistory stays empty.',
+  description: 'Diagnose a channel-event subscription that reports success but is not accruing events. Reports the local record, whether SLACK_SIGNING_SECRET is configured, the Request URL the Slack app must be pointed at, which per-channel-type event subscription (message.channels / message.groups / message.im / message.mpim) this channel needs enabled on the Slack app, whether you are a member of the channel, event-store counts, and — decisively — whether Slack has ever POSTed to this deployment at all and how those deliveries ended. That last part separates "the Request URL is not configured" from "deliveries arrive but nothing matched". Use when getChannelEventHistory stays empty.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID.'),
   }),
@@ -552,6 +565,7 @@ slackUserServer.addTool({
         countChannelEventsForSubscription: store.countChannelEventsForSubscription,
         querySlackEvents: store.querySlackEvents,
         getChannelInfo: async (channelId: string) => (await client.conversationsInfo(channelId)).channel,
+        readIngestHealth: store.readIngestHealth,
       },
       {
         userId: session.userId, teamId, channelId: args.channelId,
@@ -565,6 +579,7 @@ slackUserServer.addTool({
       `  Overall: ${report.kind}`,
       `  SLACK_SIGNING_SECRET configured: ${report.signingSecretConfigured ? 'yes' : 'NO'}`,
       `  Expected Request URL: ${report.expectedRequestUrl || '(BASE_URL not set)'}`,
+      `  Required Slack event subscription: ${report.requiredEventSubscription}`,
       '',
     ];
     if (report.local) {
@@ -596,6 +611,18 @@ slackUserServer.addTool({
         `  Most recent receivedAt: ${report.eventStore.mostRecentReceivedAt ?? '(none)'}`,
         '',
       );
+    }
+    if (report.ingestHealth) {
+      lines.push('Inbound deliveries seen by this deployment (all channels, all users):');
+      if (report.ingestHealth.length === 0) {
+        lines.push('  (none — Slack has never POSTed to this deployment)');
+      } else {
+        for (const h of report.ingestHealth) {
+          const where = h.lastChannelId ? ` last channel ${h.lastChannelId}` : '';
+          lines.push(`  ${h.branch}: ${h.deliveryCount} (last ${h.lastAt})${where}`);
+        }
+      }
+      lines.push('');
     }
     lines.push('Findings:');
     for (const f of report.findings) lines.push(`  - ${f}`);

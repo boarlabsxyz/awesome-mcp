@@ -205,6 +205,43 @@ export function parseSlackEventPayload(
   };
 }
 
+/**
+ * Which Slack *app-level* event subscription must be enabled for this channel.
+ *
+ * This is the gap that makes a perfectly healthy subscription accrue nothing:
+ * `message` is one event type here, but Slack splits its delivery across four
+ * separately-toggled subscriptions on the app's Event Subscriptions page, and
+ * enabling `message.channels` does nothing for a DM. A DM subscription with
+ * only message.channels enabled looks identical to a broken deployment.
+ *
+ * `is_im`/`is_mpim`/`is_private` from conversations.info decide it when
+ * available. The ID prefix is only a fallback: `D` is reliably a DM and `G` a
+ * legacy private channel or group DM, but modern private channels are handed
+ * out with `C` prefixes too, so the prefix alone cannot separate
+ * message.channels from message.groups — hence `certain`.
+ */
+export interface SlackChannelShape {
+  isIm?: boolean | null;
+  isMpim?: boolean | null;
+  isPrivate?: boolean | null;
+}
+
+export function requiredMessageEventSubscription(
+  channelId: string,
+  shape?: SlackChannelShape | null,
+): { event: string; kind: string; certain: boolean } {
+  if (shape) {
+    if (shape.isIm) return { event: 'message.im', kind: 'DM', certain: true };
+    if (shape.isMpim) return { event: 'message.mpim', kind: 'group DM', certain: true };
+    if (shape.isPrivate) return { event: 'message.groups', kind: 'private channel', certain: true };
+    if (shape.isPrivate === false) return { event: 'message.channels', kind: 'public channel', certain: true };
+  }
+  const prefix = (channelId || '').charAt(0).toUpperCase();
+  if (prefix === 'D') return { event: 'message.im', kind: 'DM', certain: true };
+  if (prefix === 'G') return { event: 'message.groups', kind: 'private channel or group DM', certain: false };
+  return { event: 'message.channels', kind: 'public channel', certain: false };
+}
+
 /** Does this subscription want this event? Event type first, then matchPattern. */
 export function matchesSubscription(sub: SlackEventSubscription, event: ParsedSlackEvent): boolean {
   if (!sub.events.includes(event.eventType)) return false;
@@ -224,6 +261,14 @@ export interface SlackIngestionStore {
   findSubscriptionsForChannel(teamId: string, channelId: string): Promise<SlackEventSubscription[]>;
   insertChannelEvents(events: SlackChannelEvent[]): Promise<number>;
   incrementFailCount(subscriptionId: number): Promise<void>;
+  /**
+   * Deployment-level breadcrumb: which branch this delivery took. Optional so
+   * the existing in-memory test fakes stay valid, and best-effort at the call
+   * site — see handleSlackEventIngest.
+   */
+  recordIngestDelivery?(input: {
+    branch: string; teamId?: string | null; channelId?: string | null; eventType?: string | null;
+  }): Promise<void>;
 }
 
 export interface SlackIngestHeaders {
@@ -294,7 +339,7 @@ export interface SlackIngestResult {
  *                     configured. Permanent and worth Slack surfacing.
  *   400             → unparseable JSON.
  */
-export async function handleSlackEventIngest(
+async function computeSlackIngest(
   rawBody: Buffer | string,
   headers: SlackIngestHeaders,
   store: SlackIngestionStore,
@@ -441,6 +486,43 @@ export async function handleSlackEventIngest(
   };
 }
 
+/**
+ * Ingest one delivery and leave a durable breadcrumb saying how it ended.
+ *
+ * The breadcrumb is the whole point of the wrapper: stderr is invisible to an
+ * MCP tool, so before this existed, "getChannelEventHistory is empty" looked
+ * identical whether Slack had never called this deployment, called it with a
+ * signature we rejected, or called it with an event nobody was subscribed to.
+ * debugChannelEventSubscription reads these rows back and says which.
+ *
+ * Recording is strictly best-effort. A failed health write must never change
+ * the status Slack sees: sustained non-2xx makes Slack disable the Request URL
+ * for every subscriber in the workspace, and losing event delivery to protect a
+ * diagnostic counter would be exactly backwards.
+ */
+export async function handleSlackEventIngest(
+  rawBody: Buffer | string,
+  headers: SlackIngestHeaders,
+  store: SlackIngestionStore,
+  signingSecret: string | undefined,
+  nowMs: number = Date.now(),
+): Promise<SlackIngestResult> {
+  const result = await computeSlackIngest(rawBody, headers, store, signingSecret, nowMs);
+  if (store.recordIngestDelivery) {
+    try {
+      await store.recordIngestDelivery({
+        branch: result.logContext.branch,
+        teamId: result.logContext.teamId,
+        channelId: result.logContext.channelId,
+        eventType: result.logContext.eventType,
+      });
+    } catch (err: any) {
+      console.error(`[slack-ingest] health write failed (non-fatal): ${err?.message || err}`);
+    }
+  }
+  return result;
+}
+
 // -----------------------------------------------------------------------------
 // Subscribe flow
 // -----------------------------------------------------------------------------
@@ -549,6 +631,10 @@ export interface SlackDebugReport {
   channelId: string;
   expectedRequestUrl: string;
   signingSecretConfigured: boolean;
+  /** The app-level event subscription this channel's messages ride on. */
+  requiredEventSubscription: string;
+  /** Every branch the ingest endpoint has taken on this deployment. */
+  ingestHealth?: SlackIngestHealthSummary[];
   local?: {
     id: number;
     events: string[];
@@ -562,12 +648,31 @@ export interface SlackDebugReport {
   findings: string[];
 }
 
+/** One row of slack_ingest_health, as the debug flow consumes it. */
+export interface SlackIngestHealthSummary {
+  branch: string;
+  deliveryCount: number;
+  lastAt: string;
+  lastTeamId?: string | null;
+  lastChannelId?: string | null;
+  lastEventType?: string | null;
+}
+
 export interface SlackDebugDeps {
   findSubscription(userId: number, teamId: string, channelId: string): Promise<SlackEventSubscription | null>;
   countChannelEventsForSubscription(subscriptionId: number): Promise<number>;
   querySlackEvents(input: { subscriptionId: number; limit?: number }): Promise<StoredSlackEvent[]>;
-  /** conversations.info, for the membership check. Optional so tests can omit it. */
-  getChannelInfo?(channelId: string): Promise<{ name?: string; is_member?: boolean }>;
+  /** conversations.info, for the membership and channel-type checks. Optional so tests can omit it. */
+  getChannelInfo?(channelId: string): Promise<{
+    name?: string; is_member?: boolean; is_im?: boolean; is_mpim?: boolean; is_private?: boolean;
+  }>;
+  /**
+   * Deployment-level ingest breadcrumbs. Optional because a caller without
+   * Postgres still gets every other check; when present it is the only thing
+   * that can distinguish "Slack never called us" from "Slack called us and we
+   * dropped it".
+   */
+  readIngestHealth?(): Promise<SlackIngestHealthSummary[]>;
 }
 
 /**
@@ -591,6 +696,7 @@ export async function debugChannelEventSubscriptionFlow(
     channelId: input.channelId,
     expectedRequestUrl: input.expectedRequestUrl,
     signingSecretConfigured: input.signingSecretConfigured,
+    requiredEventSubscription: requiredMessageEventSubscription(input.channelId).event,
     findings,
   };
 
@@ -631,6 +737,7 @@ export async function debugChannelEventSubscriptionFlow(
   // Membership: Slack does not deliver message events for a channel the
   // installation isn't in. This is the most common "subscription looks fine,
   // nothing arrives" cause that IS checkable from our side.
+  let channelShape: SlackChannelShape | null = null;
   if (deps.getChannelInfo) {
     try {
       const info = await deps.getChannelInfo(input.channelId);
@@ -638,13 +745,79 @@ export async function debugChannelEventSubscriptionFlow(
         name: info?.name ?? null,
         isMember: typeof info?.is_member === 'boolean' ? info.is_member : null,
       };
-      if (report.channel.isMember === false) {
+      channelShape = { isIm: info?.is_im ?? null, isMpim: info?.is_mpim ?? null, isPrivate: info?.is_private ?? null };
+      // A DM only delivers on message.im; a member check that passes tells you
+      // nothing if the app never subscribed to that event in the first place.
+      if (report.channel.isMember === false && !info?.is_im && !info?.is_mpim) {
         findings.push(
           `Not a member of #${report.channel.name || input.channelId}. Slack only delivers message events for channels the installation belongs to — join the channel, then events will start arriving.`,
         );
       }
     } catch (err: any) {
       findings.push(`Failed to fetch channel info: ${err?.message || err}. Skipping the membership check.`);
+    }
+  }
+
+  // Which app-level event subscription this channel's messages ride on. The
+  // most common cause of "subscription looks perfect, nothing arrives" on a DM
+  // is an app with message.channels enabled and message.im not.
+  const required = requiredMessageEventSubscription(input.channelId, channelShape);
+  report.requiredEventSubscription = required.event;
+  findings.push(
+    `This channel is a ${required.kind}${required.certain ? '' : ' (inferred from the ID prefix — conversations.info was unavailable)'}, so its messages are delivered only if "${required.event}" is enabled under Event Subscriptions → Subscribe to events on behalf of users in the Slack app. Enabling message.channels does NOT cover DMs, group DMs, or private channels — each is a separate toggle. reaction_added is a fifth, independent toggle.`,
+  );
+
+  // Deployment-level delivery evidence. This is the only check that can tell
+  // "Slack has never POSTed here" apart from "Slack POSTed and we dropped it",
+  // and the two have completely different fixes.
+  let health: SlackIngestHealthSummary[] | null = null;
+  if (deps.readIngestHealth) {
+    try {
+      health = await deps.readIngestHealth();
+      report.ingestHealth = health;
+    } catch (err: any) {
+      findings.push(`Failed to read ingest health: ${err?.message || err}. Skipping the delivery-evidence check.`);
+    }
+  }
+  if (health) {
+    const branchOf = (name: string) => health!.find(h => h.branch === name);
+    const total = health.reduce((sum, h) => sum + h.deliveryCount, 0);
+    const rejected = ['bad-signature', 'stale-timestamp', 'no-secret']
+      .map(branchOf).filter(Boolean) as SlackIngestHealthSummary[];
+    const verification = branchOf('url-verification');
+    const stored = branchOf('ok');
+    const unmatched = ['no-subscription', 'no-match', 'unparseable-event']
+      .map(branchOf).filter(Boolean) as SlackIngestHealthSummary[];
+
+    if (total === 0) {
+      findings.push(
+        'DELIVERY EVIDENCE: this deployment has never received a single POST from Slack — not even the url_verification handshake. The Request URL above is not saved in the Slack app, points at a different deployment, or Event Subscriptions is switched off entirely. Nothing on this side can be at fault yet.',
+      );
+    } else {
+      findings.push(
+        `DELIVERY EVIDENCE: ${total} inbound POST(s) have reached this deployment — ` +
+        health.map(h => `${h.branch}×${h.deliveryCount} (last ${h.lastAt})`).join(', ') + '.',
+      );
+      if (rejected.length > 0) {
+        findings.push(
+          `Slack deliveries are being REJECTED before storage: ${rejected.map(r => `${r.branch}×${r.deliveryCount}`).join(', ')}. A bad-signature count means SLACK_SIGNING_SECRET does not match the Slack app's Basic Information → Signing Secret (or a proxy is rewriting the body); a stale-timestamp count means clock skew beyond ±5 minutes.`,
+        );
+      }
+      if (verification && !stored && unmatched.length === 0) {
+        findings.push(
+          `Slack has only ever sent the url_verification handshake (×${verification.deliveryCount}) — no events at all. The Request URL is saved and verified, but no event types are subscribed on the app. Enable "${required.event}" (and reaction_added if wanted) under Event Subscriptions and reinstall.`,
+        );
+      }
+      if (!stored && unmatched.length > 0) {
+        findings.push(
+          `Events ARE arriving but none has ever been stored: ${unmatched.map(u => `${u.branch}×${u.deliveryCount}`).join(', ')}. "no-subscription" means the (workspace, channel) they arrived for has no active subscriber — check the channel IDs match; "no-match" means a subscription exists but matchPattern or the event-type list filtered it out.`,
+        );
+      }
+      if (stored && stored.lastChannelId && stored.lastChannelId !== input.channelId) {
+        findings.push(
+          `Events from other channels ARE being stored (most recently ${stored.lastChannelId} at ${stored.lastAt}), so the transport is working end to end. If this channel still gets nothing, the difference is almost always the per-channel-type toggle above ("${required.event}").`,
+        );
+      }
     }
   }
 
@@ -683,7 +856,7 @@ export async function debugChannelEventSubscriptionFlow(
       const created = Date.parse(localSub.createdAt);
       const ageMinutes = Number.isFinite(created) ? Math.round((Date.now() - created) / 60000) : NaN;
       findings.push(
-        `Zero events stored and zero local failures (subscription age: ${Number.isFinite(ageMinutes) ? ageMinutes + 'm' : 'unknown'}). If events have genuinely fired in that window, deliveries are not reaching this process at all — check the Request URL above, that Event Subscriptions is enabled for message.channels/message.groups/reaction_added, and that the matchPattern (${localSub.matchPattern ? `"${localSub.matchPattern}"` : 'none'}) isn't filtering everything out.`,
+        `Zero events stored and zero local failures (subscription age: ${Number.isFinite(ageMinutes) ? ageMinutes + 'm' : 'unknown'}). If events have genuinely fired in that window, check the Request URL above, that "${required.event}" is enabled under Event Subscriptions (plus reaction_added if wanted), and that the matchPattern (${localSub.matchPattern ? `"${localSub.matchPattern}"` : 'none'}) isn't filtering everything out.${health ? ' The DELIVERY EVIDENCE line says which of those it is.' : ' Delivery evidence was unavailable, so this cannot be narrowed further from here.'}`,
       );
     }
   }
