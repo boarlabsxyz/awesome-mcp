@@ -229,8 +229,15 @@ async function callSearch<T>(method: string, run: () => Promise<T>): Promise<T> 
   } catch (err: any) {
     const message = String(err?.message || '');
     if (message.includes('missing_scope')) {
+      // Slack's own `provided` list rides along on the client error (see
+      // formatScopeDetail in apiHelpers). Passing it through is the difference
+      // between "reconnect" as a guess and as a verified next step: if the list
+      // already contains search:read the problem is not consent at all.
+      const detail = message.slice(message.indexOf('missing_scope') + 'missing_scope'.length).trim();
       throw new UserError(
-        `Slack rejected ${method} for lack of the "search:read" scope. Reconnect Slack from the dashboard to re-consent.`,
+        `Slack rejected ${method} for lack of the "search:read" scope. ` +
+        'Reconnect Slack from the dashboard to re-consent — the scope is in the catalog, but a token minted before it was added does not carry it.' +
+        (detail ? ` Slack reported ${detail.replace(/^\(|\)$/g, '')}.` : ''),
       );
     }
     if (message.includes('not_allowed_token_type')) {

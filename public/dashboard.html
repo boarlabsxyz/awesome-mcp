@@ -1286,6 +1286,17 @@
         ? `<img src="${escapeAttr(safeIcon)}" alt="" width="24" height="24" loading="lazy">`
         : getIconForMcp({ slug: instance.mcpSlug });
       const showReconnect = needsReconnect(instance);
+      // Separate from needsReconnect on purpose. A Slack/ClickUp/HubSpot token
+      // never expires, so nothing here is ever "broken" — but the scopes it was
+      // minted with are frozen at connect time, and adding a scope to the
+      // catalog (search:read, files:read, reactions:read) only takes effect
+      // after the user re-consents. Without this button the tools' own
+      // "reconnect from the dashboard to re-consent" instruction pointed at an
+      // affordance that did not exist. Shown alongside Copy URL, not instead of
+      // it, since the connection still works.
+      const showReauthorize = !showReconnect
+        && !!instance.provider && instance.provider !== 'google'
+        && !!mcp?.oauthAuthorizationUrl;
       const tokenHtml = getTokenStatusHtml(instance);
       const eid = escapeAttr(instance.instanceId);
       const ename = escapeAttr(instance.instanceName);
@@ -1308,6 +1319,9 @@
             ${showReconnect
               ? `<button class="btn-reconnect" type="button" data-action="reconnect">Reconnect</button>`
               : `<button class="btn-copy" type="button" data-action="copy">Copy URL</button>`}
+            ${showReauthorize
+              ? `<button class="btn-reconnect" type="button" data-action="reconnect" title="Re-run the OAuth consent flow. Needed after new permissions are added — your settings and access rules are preserved.">Reconnect</button>`
+              : ''}
             ${instance.provider === 'slack' ? `<button class="btn-rename" type="button" data-action="access-rules">Access Rules</button>` : ''}
             <button class="btn-delete" type="button" data-action="delete">Delete</button>
           </div>

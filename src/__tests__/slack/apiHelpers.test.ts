@@ -63,6 +63,27 @@ describe('SlackClient', () => {
       );
     });
 
+    it('carries Slack\'s needed/provided scopes into a missing_scope error', async () => {
+      // The scope accounting is the only authoritative answer to "did the
+      // reconnect actually grant search:read?" — dropping it is what made the
+      // scope failures a guessing game.
+      mockFetch({ ok: false, error: 'missing_scope', needed: 'search:read', provided: 'channels:history,users:read' });
+      const client = new SlackClient('xoxp-test-token');
+      await assert.rejects(
+        () => client.authTest(),
+        { message: /missing_scope \(needed: search:read; token currently has: channels:history,users:read\)/ }
+      );
+    });
+
+    it('leaves non-scope errors untouched', async () => {
+      mockFetch({ ok: false, error: 'channel_not_found', needed: 'ignored', provided: 'ignored' });
+      const client = new SlackClient('xoxb-test-token');
+      await assert.rejects(
+        () => client.authTest(),
+        { message: /channel_not_found$/ }
+      );
+    });
+
     it('should throw UserError on HTTP error', async () => {
       mockFetch({ error: 'server_error' }, 500);
       const client = new SlackClient('xoxb-test-token');

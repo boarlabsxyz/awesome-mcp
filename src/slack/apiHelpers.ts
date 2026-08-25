@@ -121,6 +121,26 @@ function buildSearchBody(query: string, options?: SlackSearchOptions): Record<st
   };
 }
 
+/**
+ * Append Slack's own scope accounting to a missing_scope failure.
+ *
+ * Slack returns `needed` and `provided` alongside the error, and dropping them
+ * is what makes a scope failure undebuggable: "reconnect to re-consent" gives
+ * no way to tell a reconnect that never happened from one that happened and
+ * still did not grant the scope. `provided` is the authoritative list of what
+ * the stored token actually carries, so it answers both at once.
+ */
+function formatScopeDetail(data: any): string {
+  if (data?.error !== 'missing_scope') return '';
+  const needed = typeof data.needed === 'string' ? data.needed : '';
+  const provided = typeof data.provided === 'string' ? data.provided : '';
+  if (!needed && !provided) return '';
+  const parts: string[] = [];
+  if (needed) parts.push(`needed: ${needed}`);
+  if (provided) parts.push(`token currently has: ${provided}`);
+  return ` (${parts.join('; ')})`;
+}
+
 export class SlackClient {
   constructor(private botToken: string) {}
 
@@ -181,7 +201,7 @@ export class SlackClient {
       }
       const retryData = await retryRes.json() as any;
       if (!retryData.ok) {
-        throw new UserError(`Slack API error (${method}): ${retryData.error || 'unknown error'}`);
+        throw new UserError(`Slack API error (${method}): ${retryData.error || 'unknown error'}${formatScopeDetail(retryData)}`);
       }
       return retryData as T;
     }
@@ -194,7 +214,7 @@ export class SlackClient {
 
     // Slack returns 200 with ok:false for API errors
     if (!data.ok) {
-      throw new UserError(`Slack API error (${method}): ${data.error || 'unknown error'}`);
+      throw new UserError(`Slack API error (${method}): ${data.error || 'unknown error'}${formatScopeDetail(data)}`);
     }
 
     return data as T;
