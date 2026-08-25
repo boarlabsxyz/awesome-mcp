@@ -9,7 +9,12 @@ import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import * as SheetsHelpers from './apiHelpers.js';
 import { operationToRequest, createBatchState } from './formatHelpers.js';
 import { SharedDriveParameters, BatchUpdateOperationSchema } from '../types.js';
-import { buildSharedDriveParams } from '../google-drive/toolHandlers.js';
+import { describeDriveError } from '../google-drive/driveErrors.js';
+import {
+  listSpreadsheetFiles,
+  formatSpreadsheetList,
+  LIST_SPREADSHEETS_SCOPE,
+} from './listHandlers.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
@@ -316,7 +321,8 @@ sheetsServer.addTool({
   description: 'Lists Google Spreadsheets from your Google Drive and shared drives with optional filtering.',
   parameters: z.object({
     maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of spreadsheets to return (1-100).'),
-    query: z.string().optional().describe('Search query to filter spreadsheets by name or content.'),
+    query: z.string().optional().describe('Filter spreadsheets by name.'),
+    searchContent: z.boolean().optional().default(false).describe('Also match text inside the spreadsheets, not just their names. Slower, and unavailable on some Drive configurations.'),
     orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results.'),
   }).merge(SharedDriveParameters),
   execute: async (args, { log, session }) => {
@@ -324,46 +330,15 @@ sheetsServer.addTool({
     log.info(`Listing Google Sheets. Query: ${args.query || 'none'}, Max: ${args.maxResults}, Order: ${args.orderBy}`);
 
     try {
-      let queryString = "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false";
-      if (args.query) {
-        queryString += ` and (name contains '${args.query}' or fullText contains '${args.query}')`;
-      }
-
-      const sharedDriveParams = buildSharedDriveParams(args);
-      const response = await drive.files.list({
-        q: queryString,
-        pageSize: args.maxResults,
-        orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
-        fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress),driveId)',
-        ...sharedDriveParams,
-      });
-
-      const files = response.data.files || [];
-
-      if (files.length === 0) {
-        return "No Google Spreadsheets found matching your criteria.";
-      }
-
-      let result = `Found ${files.length} Google Spreadsheet(s):\n\n`;
-      files.forEach((file, index) => {
-        const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown';
-        const owner = file.owners?.[0]?.displayName || 'Unknown';
-        const driveInfo = file.driveId ? ` (Shared Drive)` : '';
-        result += `${index + 1}. **${file.name}**${driveInfo}\n`;
-        result += `   ID: ${file.id}\n`;
-        result += `   Modified: ${modifiedDate}\n`;
-        result += `   Owner: ${owner}\n`;
-        if (file.driveId) {
-          result += `   Drive ID: ${file.driveId}\n`;
-        }
-        result += `   Link: ${file.webViewLink}\n\n`;
-      });
-
-      return result;
+      // Shared with GET /api/v1/sheets — see listHandlers.ts. Do not inline a
+      // Drive query here; that divergence is the bug this replaced.
+      const files = await listSpreadsheetFiles(drive, args);
+      return formatSpreadsheetList(files);
     } catch (error: any) {
       log.error(`Error listing Google Sheets: ${error.message || error}`);
-      if (error.code === 403) throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
-      throw new UserError(`Failed to list spreadsheets: ${error.message || 'Unknown error'}`);
+      throw new UserError(
+        describeDriveError(error, 'list spreadsheets', LIST_SPREADSHEETS_SCOPE),
+      );
     }
   }
 });

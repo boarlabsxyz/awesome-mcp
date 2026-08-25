@@ -316,6 +316,12 @@ import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
 import { buildSimpleInstanceName, type ValidateResult } from '../util/pasteTokenValidation.js';
 import {
+  listSpreadsheetFiles,
+  LIST_SPREADSHEETS_SCOPE,
+  type SpreadsheetOrderBy,
+} from '../google-sheets/listHandlers.js';
+import { describeDriveError } from '../google-drive/driveErrors.js';
+import {
   connectMcp,
   getMcpConnection,
   getUserConnectedMcps,
@@ -3348,19 +3354,27 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/sheets', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const drive = req.userSession!.googleDrive;
-      const maxResults = parseInt(req.query.maxResults as string) || 20;
-      const query = req.query.query as string || '';
-      const q = query
-        ? `mimeType='application/vnd.google-apps.spreadsheet' and name contains '${query.replace(/'/g, "\\'")}'`
-        : "mimeType='application/vnd.google-apps.spreadsheet'";
-      const result = await drive.files.list({
-        q, pageSize: maxResults, orderBy: 'modifiedTime desc',
-        fields: 'files(id,name,modifiedTime,owners,webViewLink)',
-        supportsAllDrives: true, includeItemsFromAllDrives: true,
+      // Shared with the listGoogleSheets MCP tool — see
+      // src/google-sheets/listHandlers.ts. Do not inline a Drive query here.
+      const files = await listSpreadsheetFiles(drive, {
+        query: (req.query.query as string) || undefined,
+        maxResults: parseInt(req.query.maxResults as string) || 20,
+        orderBy: (req.query.orderBy as SpreadsheetOrderBy) || undefined,
+        searchContent: req.query.searchContent === 'true',
+        corpora: (req.query.corpora as any) || undefined,
+        driveId: (req.query.driveId as string) || undefined,
       });
-      res.json({ spreadsheets: result.data.files || [] });
+      res.json({ spreadsheets: files });
     } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to list spreadsheets' });
+      // 502, never Google's own status. On this endpoint 401/403 mean the
+      // caller's REST bearer was rejected by requireSheetsApiKey; reusing them
+      // for an upstream Google failure would tell a client to re-mint its
+      // bearer when the real fix is re-authorizing the Google connection.
+      // 502 says "your request was fine, the upstream wasn't" — and the
+      // message carries Google's actual reason.
+      res.status(502).json({
+        error: describeDriveError(err, 'list spreadsheets', LIST_SPREADSHEETS_SCOPE),
+      });
     }
   });
 
