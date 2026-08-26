@@ -1,8 +1,11 @@
 // Shared MCP tool: mintRestBearerForCurl
 //
 // Mints a 5-minute bearer for the REST data plane at $BASE_URL/api/v1/*.
-// Registered on every FastMCP server in this repo so any session can mint one
-// regardless of which service the LLM is currently talking to.
+// Registered on every FastMCP server that fronts live REST endpoints, so any
+// such session can mint one regardless of which service the LLM is currently
+// talking to. Which servers those are is enforced by
+// src/__tests__/sharedToolsRegistration.test.ts and reported by
+// docs/MCP_TOOLS.md — do not restate the list here, it drifts.
 //
 // Renamed from `getSecurityToken` because that name pattern-matched too easily
 // to "routine OAuth-style precondition" — clients (notably ChatGPT) were

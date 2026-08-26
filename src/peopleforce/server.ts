@@ -12,6 +12,8 @@ import { z } from 'zod';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 import {
   PeopleForceClient,
   PeopleForceListResponse,
@@ -57,6 +59,15 @@ export const peopleForceServer = new FastMCP<UserSession>({
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'peopleforce'),
 });
+
+// PeopleForce publishes 45 live REST endpoints (src/restCatalog.ts), and
+// public/openapi-peopleforce.json documents their auth as "a 5-minute bearer
+// from the mintRestBearerForCurl MCP tool". Without these two registrations a
+// client could not mint that bearer and had to fall back to the PERMANENT
+// dashboard API key — a strictly worse credential for the same access.
+// Enforced by src/__tests__/sharedToolsRegistration.test.ts.
+registerMintRestBearerForCurl(peopleForceServer);
+registerListRestEndpoints(peopleForceServer);
 
 // ---------------------------------------------------------------------------
 // Shared building blocks — every list tool has essentially the same body:

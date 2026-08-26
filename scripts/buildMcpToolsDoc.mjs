@@ -23,10 +23,11 @@ const outPath = join(outDir, 'MCP_TOOLS.md');
 // can cross-reference REST siblings. slack-user uses the same 'slack'
 // endpoints (which require a slack-bot connection), so it never shows a
 // REST sibling. Entries with autoRegistered=true are the shared tools that
-// every FastMCP server registers via the registerX helpers.
+// servers opt into via the registerX helpers — which servers those are is
+// DERIVED from source below, never asserted here (see sharedToolRegistrants).
 const SERVICES = [
-  ['src/sharedTools/mintRestBearerForCurl.ts', 'Shared (every server)', null, true],
-  ['src/sharedTools/listRestEndpoints.ts','Shared (every server)', null, true],
+  ['src/sharedTools/mintRestBearerForCurl.ts', 'Shared (opt-in per server)', null, true],
+  ['src/sharedTools/listRestEndpoints.ts','Shared (opt-in per server)', null, true],
   ['src/google-docs/server.ts',           'Google Docs',           'docs'],
   ['src/google-sheets/server.ts',         'Google Sheets',         'sheets'],
   ['src/google-calendar/server.ts',       'Google Calendar',       'calendar'],
@@ -40,6 +41,25 @@ const SERVICES = [
   ['src/peopleforce/server.ts',           'PeopleForce',           'peopleforce'],
   ['src/hubspot/server.ts',               'HubSpot',               'hubspot'],
 ];
+
+// ---------------------------------------------------------------------------
+// Which servers actually register the shared tools.
+//
+// This used to be a hardcoded claim that "every FastMCP server" registers them.
+// It was false: peopleforce, outline and hubspot did not, and the doc said
+// otherwise for months. Derive it instead, so the sentence cannot drift from
+// the code again — when a server starts or stops registering, the next
+// generator run tells the truth with no edit here.
+function sharedToolRegistrants() {
+  const registered = [];
+  const missing = [];
+  for (const [file, title, , autoRegistered] of SERVICES) {
+    if (autoRegistered) continue;
+    const src = readFileSync(join(root, file), 'utf8');
+    (src.includes('registerMintRestBearerForCurl(') ? registered : missing).push(title);
+  }
+  return { registered, missing };
+}
 
 // ---------------------------------------------------------------------------
 // REST catalog map: mcpToolName → "GET /api/v1/path"
@@ -289,6 +309,8 @@ for (const [file, title, serviceKey, autoRegistered] of SERVICES) {
   }
 }
 
+const REGISTRANTS = sharedToolRegistrants();
+
 const orderedSections = [...sections.values()];
 
 const out = [];
@@ -309,7 +331,8 @@ for (const s of orderedSections) {
   out.push('');
   const sourceLabel = s.files.length === 1 ? `\`${s.files[0]}\`` : s.files.map(f => `\`${f}\``).join(', ');
   const note = s.autoRegistered
-    ? ' (registered on every FastMCP server)'
+    ? ` (registered by ${REGISTRANTS.registered.length} of ${REGISTRANTS.registered.length + REGISTRANTS.missing.length} servers` +
+      (REGISTRANTS.missing.length ? `; not on ${REGISTRANTS.missing.join(', ')})` : ')')
     : '';
   out.push(`Source: ${sourceLabel} — ${s.tools.length} tools${note}.`);
   out.push('');
