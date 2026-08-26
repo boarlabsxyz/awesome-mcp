@@ -257,6 +257,30 @@ CREATE INDEX IF NOT EXISTS idx_slack_events_sub_time
   ON slack_channel_events(subscription_id, occurred_at DESC);
 `;
 
+// Deployment-level ingest health, one row per outcome branch.
+//
+// Exists because the single hardest Slack-events question — "is Slack calling
+// this deployment at all?" — was previously answerable only by grepping stderr,
+// which an MCP tool cannot do. Without it, "zero events stored" is identical
+// for a Request URL that was never configured, a signing-secret mismatch, an
+// app that has message.im disabled, and a matchPattern that filters everything.
+//
+// Keyed by branch (not append-only) on purpose: the endpoint is public and
+// unauthenticated, so an append-only log would be a free way for anyone to
+// grow the database. One row per IngestBranch bounds the table at ~13 rows
+// forever, with no pruner. No message text is stored — same rule as the
+// [slack-ingest] log lines (see eventHelpers' module header).
+const CREATE_SLACK_INGEST_HEALTH_TABLE = `
+CREATE TABLE IF NOT EXISTS slack_ingest_health (
+  branch           VARCHAR(32) PRIMARY KEY,
+  delivery_count   BIGINT NOT NULL DEFAULT 0,
+  last_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_team_id     VARCHAR(100),
+  last_channel_id  VARCHAR(100),
+  last_event_type  VARCHAR(50)
+);
+`;
+
 // Lookup path for ingestion: one POST arrives per event and must find every
 // subscription interested in that (team, channel).
 const CREATE_SLACK_SUBSCRIPTIONS_CHANNEL_INDEX = `
@@ -440,6 +464,8 @@ export async function initDatabase(): Promise<void> {
     await pool.query(CREATE_SLACK_EVENTS_SUBSCRIPTION_INDEX);
     await pool.query(CREATE_SLACK_SUBSCRIPTIONS_CHANNEL_INDEX);
     console.error('Slack channel events indexes ensured.');
+    await pool.query(CREATE_SLACK_INGEST_HEALTH_TABLE);
+    console.error('Slack ingest health table ensured.');
     await pool.query(CREATE_CLICKUP_DOC_IMAGES_TABLE);
     console.error('ClickUp doc images table ensured.');
     await pool.query(CREATE_IMAGE_BLOBS_TABLE);

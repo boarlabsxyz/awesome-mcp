@@ -441,6 +441,21 @@ describe('handleSearchMessages', () => {
     );
   });
 
+  it('passes through the scope list Slack reported, so "reconnect" is verifiable', async () => {
+    // Slack returns `needed`/`provided` on a missing_scope failure. Without
+    // them, a reconnect that happened and still did not grant search:read is
+    // indistinguishable from one that never happened.
+    const client = mockSlackClient({
+      searchMessages: async () => {
+        throw new Error('Slack API error (search.messages): missing_scope (needed: search:read; token currently has: channels:history,users:read)');
+      },
+    });
+    await assert.rejects(
+      () => handleSearchMessages(client, 'tok-scope-detail-' + Date.now(), { query: 'x', count: 20 }),
+      { message: /needed: search:read; token currently has: channels:history,users:read/ },
+    );
+  });
+
   it('explains that a bot token cannot search', async () => {
     const client = mockSlackClient({
       searchMessages: async () => { throw new Error('Slack API error (search.messages): not_allowed_token_type'); },
