@@ -142,6 +142,14 @@ Open Claude Desktop → Settings → Connectors → `awesome-mcp-<service>-reado
 Tools panel. Uncheck every tool in that service's `WRITE_TOOLS`, leave every
 tool in `READ_TOOLS` checked.
 
+> **`mintRestBearerForCurl` is the one that matters most.** It appears on every
+> connector (it is registered by a shared helper, not per-service), it is a
+> WRITE tool, and the bearer it mints is scoped to the **user** — not to a
+> service and not to reads. Leaving it checked on a `-readonly` connector lets
+> that connector reach write endpoints on *every* service the account has
+> connected, which defeats the entire two-connector split. If you audit only
+> one checkbox, audit this one.
+
 The canonical lists live in code, one file per service — read them from there,
 not from this doc:
 
