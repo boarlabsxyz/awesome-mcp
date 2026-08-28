@@ -355,22 +355,26 @@ export function opSearchDeals(client: HubSpotClient, args: SearchArgs): Promise<
 /**
  * Deals associated with a company, resolved to full records.
  *
- * Two calls on purpose: associations v4 returns IDs only, so the batch read is
- * what turns them into amounts/stages/close dates. The cap is reported rather
- * than applied silently — a truncated list that says "Found 10 deals" would
- * read as the company's complete pipeline.
+ * Two phases on purpose: associations v4 returns IDs only — and pages them, so
+ * the ID scan is itself a loop — while the batch read is what turns those IDs
+ * into amounts/stages/close dates. Every cap is reported rather than applied
+ * silently: a truncated list that says "Found 10 deals" would read as the
+ * company's complete pipeline.
  */
 export async function opGetCompanyDeals(
   client: HubSpotClient,
   args: { companyId: string; limit: number; properties?: string[] },
 ): Promise<string> {
-  const ids = await client.getCompanyDealIds(args.companyId);
+  const { ids, truncated } = await client.getCompanyDealIds(args.companyId);
   if (ids.length === 0) return 'No deals are associated with this company.';
   const properties = args.properties ?? DEAL_SEARCH_PROPERTIES;
   const shown = ids.slice(0, args.limit);
   const deals = await client.readDealsByIds(shown, properties);
-  const note = ids.length > shown.length
-    ? `\n\nShowing ${shown.length} of ${ids.length} associated deals — raise \`limit\` to see the rest.`
+  // `truncated` means the association scan stopped at its page bound, so the
+  // total is a floor, not a count — render "N+" rather than assert a wrong one.
+  const total = truncated ? `${ids.length}+` : `${ids.length}`;
+  const note = truncated || ids.length > shown.length
+    ? `\n\nShowing ${shown.length} of ${total} associated deals — raise \`limit\` to see the rest.`
     : '';
   return formatObjectList(deals, 'deals', properties) + note;
 }

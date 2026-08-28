@@ -212,6 +212,48 @@ test('opGetCompanyDeals reports a company with no deals instead of an empty list
   assert.match(await opGetCompanyDeals(client(), { companyId: 'c1', limit: 25 }), /No deals are associated/);
 });
 
+test('opGetCompanyDeals follows association paging across every page', async () => {
+  // Two association pages, then a third that closes the cursor.
+  const pages = [
+    { results: [{ toObjectId: 'd1' }, { toObjectId: 'd2' }], paging: { next: { after: 'cur1' } } },
+    { results: [{ toObjectId: 'd3' }], paging: { next: { after: 'cur2' } } },
+    { results: [{ toObjectId: 'd4' }] },
+  ];
+  let page = 0;
+  const calls = router((method, url) => {
+    if (url.includes('/associations/deals')) return { body: pages[page++] };
+    return { body: { results: [{ id: 'd1', properties: { dealname: 'One' } }] } };
+  });
+  const out = await opGetCompanyDeals(client(), { companyId: 'c1', limit: 100 });
+
+  const assocCalls = calls.filter(c => c.url.includes('/associations/deals'));
+  assert.equal(assocCalls.length, 3, 'follows paging.next.after until it is absent');
+  assert.match(assocCalls[0].url, /limit=500/);
+  assert.equal(assocCalls[0].url.includes('after='), false, 'first page sends no cursor');
+  assert.match(assocCalls[1].url, /after=cur1/);
+  assert.match(assocCalls[2].url, /after=cur2/);
+
+  // All four IDs from all three pages reach the batch read.
+  const batchCall = calls.find(c => c.url.endsWith('/deals/batch/read'))!;
+  assert.deepEqual(batchCall.body.inputs, [{ id: 'd1' }, { id: 'd2' }, { id: 'd3' }, { id: 'd4' }]);
+  // Under the limit and fully scanned — no cap note.
+  assert.doesNotMatch(out, /Showing/);
+});
+
+test('opGetCompanyDeals reports an exhausted page bound as a floor, not a total', async () => {
+  // Never stops advancing the cursor: the page bound (10) must stop the scan.
+  const calls = router((method, url) => {
+    if (url.includes('/associations/deals')) {
+      return { body: { results: [{ toObjectId: 'd' }], paging: { next: { after: 'more' } } } };
+    }
+    return { body: { results: [{ id: 'd', properties: { dealname: 'One' } }] } };
+  });
+  const out = await opGetCompanyDeals(client(), { companyId: 'c1', limit: 100 });
+  assert.equal(calls.filter(c => c.url.includes('/associations/deals')).length, 10, 'bounded at 10 pages');
+  // 10 IDs collected but the scan was cut short — the count must not read as a total.
+  assert.match(out, /Showing 10 of 10\+ associated deals/);
+});
+
 test('opGetCompanyDeals reports the cap rather than silently truncating', async () => {
   const ids = Array.from({ length: 5 }, (_, i) => ({ toObjectId: `d${i}` }));
   const calls = router((method, url) => {

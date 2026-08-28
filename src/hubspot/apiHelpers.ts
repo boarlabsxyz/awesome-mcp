@@ -18,6 +18,18 @@ const DEFAULT_BASE_URL = process.env.HUBSPOT_BASE_URL || 'https://api.hubapi.com
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/** Association reads page at 500; one request per page. */
+const ASSOCIATION_PAGE_SIZE = 500;
+/**
+ * Association pages followed before giving up (5,000 IDs).
+ *
+ * A bound, not a guess: without one a pathological company would issue an
+ * unbounded sequential chain of 30s-timeout requests inside a single tool
+ * call. Hitting it is reported as `truncated` rather than swallowed — the
+ * caller renders "of N+" so a partial scan is never presented as the total.
+ */
+const ASSOCIATION_MAX_PAGES = 10;
+
 /** A CRM object as returned by the v3 basic/search APIs. */
 export type HubSpotObject = {
   id?: string;
@@ -69,6 +81,8 @@ export type HubSpotPropertyOption = {
 /** A page of associations-v4 results (`toObjectId` is the associated record). */
 export type HubSpotAssociationPage = {
   results?: Array<{ toObjectId?: string | number; id?: string | number }>;
+  /** Present while more association pages remain; feed `after` back as a cursor. */
+  paging?: { next?: { after?: string } };
 };
 
 /** Legacy `/engagements/v1` detail shape. */
@@ -219,19 +233,28 @@ export class HubSpotClient {
    * one. Without this the by-ID deal tools are unreachable from a company and
    * the dead end reads as a permissions problem.
    */
-  async getCompanyDealIds(companyId: string): Promise<string[]> {
-    const res = await this.request<HubSpotAssociationPage>(
-      'GET',
-      `/crm/v4/objects/companies/${encodeURIComponent(companyId)}/associations/deals?limit=500`,
-    );
-    return (res.results ?? [])
-      .map(r => String(r.toObjectId ?? r.id ?? ''))
-      .filter(Boolean);
+  async getCompanyDealIds(companyId: string): Promise<{ ids: string[]; truncated: boolean }> {
+    const ids: string[] = [];
+    let after: string | undefined;
+    for (let page = 0; page < ASSOCIATION_MAX_PAGES; page++) {
+      const cursor = after ? `&after=${encodeURIComponent(after)}` : '';
+      const res = await this.request<HubSpotAssociationPage>(
+        'GET',
+        `/crm/v4/objects/companies/${encodeURIComponent(companyId)}/associations/deals?limit=${ASSOCIATION_PAGE_SIZE}${cursor}`,
+      );
+      for (const r of res.results ?? []) {
+        const id = String(r.toObjectId ?? r.id ?? '');
+        if (id) ids.push(id);
+      }
+      after = res.paging?.next?.after;
+      if (!after) return { ids, truncated: false };
+    }
+    return { ids, truncated: true };
   }
 
   /**
    * Read many deals in one round-trip. HubSpot caps a batch read at 100 inputs
-   * while the association read above returns up to 500, so callers must chunk —
+   * while the association read above pages at 500, so callers must chunk —
    * `readDealsByIds` does. Unknown IDs are omitted from `results` rather than
    * failing the batch.
    */
