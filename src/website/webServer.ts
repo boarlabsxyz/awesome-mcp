@@ -1533,6 +1533,16 @@ function registerSharedRoutes(app: express.Express): void {
           // produces every field it stores (access_token, plus baseUrl for
           // Outline). No refresh tokens and no access rules live here.
           await updateMcpInstanceProviderTokens(existing.instanceId, opts.providerTokens as any);
+
+          // Drop the cached session, or the replaced credential changes nothing
+          // that matters: buildMcpSession memoises by `${apiKey}:${instanceId}`
+          // in a plain Map with no TTL, so a session built from the token the
+          // user just replaced would otherwise be served for the life of the
+          // process — defeating the entire point of re-entering it. Same reason
+          // the access-rules endpoint clears it after writing.
+          const { clearMcpSessionCache } = await import('../userSession.js');
+          clearMcpSessionCache(user.apiKey, existing.instanceId);
+
           console.error(`User ${userId} re-authenticated ${opts.serviceLogName} MCP: ${existing.instanceId}`);
           res.json({
             success: true,

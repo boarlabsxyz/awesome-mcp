@@ -21,7 +21,7 @@ const webServerPath = path.join(repoRoot, 'src', 'website', 'webServer.ts');
 
 function loadUsesPastedToken(): (instance: any, mcp: any) => boolean {
   const html = fs.readFileSync(dashboardPath, 'utf8');
-  const match = html.match(/function usesPastedToken\(instance, mcp\) \{[\s\S]*?\n    \}/);
+  const match = html.match(/function usesPastedToken\(instance, mcp\) \{[\s\S]*?\n {4}\}/);
   assert.ok(match, 'usesPastedToken() not found in dashboard.html — was it renamed?');
   return new Function(`${match[0]}; return usesPastedToken;`)() as any;
 }
