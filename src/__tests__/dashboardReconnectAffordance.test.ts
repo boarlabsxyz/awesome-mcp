@@ -24,7 +24,7 @@ const dashboardPath = path.join(
 
 function loadCanReauthorize(): (instance: any, mcp: any) => boolean {
   const html = fs.readFileSync(dashboardPath, 'utf8');
-  const match = html.match(/function canReauthorize\(instance, mcp\) \{[\s\S]*?\n    \}/);
+  const match = html.match(/function canReauthorize\(instance, mcp\) \{[\s\S]*?\n {4}\}/);
   assert.ok(match, 'canReauthorize() not found in dashboard.html — was it renamed?');
   return new Function(`${match[0]}; return canReauthorize;`)() as any;
 }
