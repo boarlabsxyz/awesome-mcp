@@ -89,21 +89,38 @@ describe('createWebOnlyApp routes', () => {
 
   // --- Connect routes (no session → redirect) ---
 
-  it('GET /connect/:slug redirects to login when no session', async () => {
+  // These used to assert a `/?redirect=…` Location. That was pinning a bug:
+  // `/` never reads the parameter (it redirects straight to /dashboard), and
+  // the URL was hand-rebuilt from slug + name, so `?reconnect=` was dropped.
+  // The intent now rides in a signed, short-lived cookie instead.
+  const parkedIntent = (res: { headers: Record<string, any> }): string => {
+    const setCookie: string[] = [].concat(res.headers['set-cookie'] || []);
+    const parked = setCookie.find(c => c.startsWith('post_login_redirect='));
+    assert.ok(parked, 'no post_login_redirect cookie was set');
+    return decodeURIComponent(parked.split(';')[0].split('=').slice(1).join('='));
+  };
+
+  it('GET /connect/:slug sends an unauthenticated user to log in', async () => {
     const res = await request(app).get('/connect/google-docs');
     assert.equal(res.status, 302);
-    assert.match(res.headers.location, /redirect/);
+    assert.equal(res.headers.location, '/auth/google');
   });
 
-  it('GET /connect/:slug with name param redirects with name preserved', async () => {
+  it('GET /connect/:slug parks the name so the intent survives login', async () => {
     const res = await request(app).get('/connect/google-docs?name=Work');
     assert.equal(res.status, 302);
-    assert.match(res.headers.location, /name/);
+    assert.match(parkedIntent(res), /name=Work/);
   });
 
-  it('GET /connect/:slug with reconnect param redirects to login', async () => {
+  it('GET /connect/:slug parks the reconnect id — dropping it silently no-ops the reconnect', async () => {
+    // The regression this file previously missed: the old test asserted only
+    // that a 302 happened, never that `reconnect` survived. It did not, so a
+    // user with a lapsed session came back from Google without it, fell into
+    // the callback's "already connected" branch, and kept their stale token.
     const res = await request(app).get('/connect/google-docs?reconnect=inst-123');
     assert.equal(res.status, 302);
+    assert.equal(res.headers.location, '/auth/google');
+    assert.match(parkedIntent(res), /reconnect=inst-123/);
   });
 
   // --- Callback error paths ---
