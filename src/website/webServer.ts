@@ -1476,7 +1476,9 @@ function registerSharedRoutes(app: express.Express): void {
   // POST /api/connect-token - Connect an MCP via direct token (e.g., Slack bot token)
   app.post('/api/connect-token', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
     try {
-      const { mcpSlug, token, instanceName } = req.body as { mcpSlug?: string; token?: string; instanceName?: string };
+      const { mcpSlug, token, instanceName, instanceId } = req.body as {
+        mcpSlug?: string; token?: string; instanceName?: string; instanceId?: string;
+      };
       if (!mcpSlug || !token) {
         res.status(400).json({ error: 'mcpSlug and token are required' });
         return;
@@ -1494,6 +1496,61 @@ function registerSharedRoutes(app: express.Express): void {
       if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
       const userId = user.id;
 
+      /**
+       * Store a validated paste-token credential — updating the named instance
+       * when the caller is re-authenticating, creating one otherwise.
+       *
+       * Paste-token providers (slack-bot, peopleforce, hubspot-by-token, and
+       * Outline in paste mode) previously had no way to replace a rotated
+       * credential: every path here called createMcpInstance unconditionally,
+       * so re-pasting produced a DUPLICATE connection and left the dead one in
+       * place. Delete-and-re-add was the only real option, and it is not
+       * equivalent — the MCP URL embeds instanceId, so recreating hands the
+       * user a different URL and they have to re-add the connector in Claude.
+       * OAuth providers got this via /connect/:slug?reconnect=…; this is the
+       * paste-token counterpart.
+       *
+       * The stored name and email are deliberately left alone on re-auth. This
+       * rotates the credential of an account already connected; pasting a token
+       * for a DIFFERENT account is a new connection, not a repair, and silently
+       * relabelling the user's instance would hide that.
+       */
+      const persistPasteConnection = async (opts: {
+        provider: string;
+        serviceLogName: string;
+        name: string;
+        providerTokens: Record<string, any>;
+        providerEmail: string | null;
+      }): Promise<void> => {
+        if (instanceId) {
+          const existing = await getMcpConnectionByInstanceId(instanceId);
+          if (!existing || existing.userId !== userId || existing.mcpSlug !== mcpSlug) {
+            res.status(404).json({ error: 'Instance not found or access denied.' });
+            return;
+          }
+          // A straight replace, not a merge: unlike the OAuth reconnect path
+          // there is nothing partial to preserve, because the paste flow
+          // produces every field it stores (access_token, plus baseUrl for
+          // Outline). No refresh tokens and no access rules live here.
+          await updateMcpInstanceProviderTokens(existing.instanceId, opts.providerTokens as any);
+          console.error(`User ${userId} re-authenticated ${opts.serviceLogName} MCP: ${existing.instanceId}`);
+          res.json({
+            success: true,
+            instanceId: existing.instanceId,
+            instanceName: existing.instanceName,
+            reauthenticated: true,
+          });
+          return;
+        }
+        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const connection = await createMcpInstance(
+          userId, mcpSlug, opts.name, emptyGoogleTokens, null,
+          opts.provider, opts.providerTokens as any, opts.providerEmail,
+        );
+        console.error(`User ${userId} connected ${opts.serviceLogName} MCP: ${connection.instanceId}`);
+        res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
+      };
+
       // Shared paste-token connect flow for simple bearer/API-key providers:
       // validate the pasted credential, then store just { access_token }. Each
       // provider differs only in its validate() call, provider slug, and log label.
@@ -1508,18 +1565,16 @@ function registerSharedRoutes(app: express.Express): void {
           res.status(result.status).json({ error: result.userMessage });
           return;
         }
-        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
-        const providerTokens = { access_token: token };
-        const name = buildSimpleInstanceName({
-          serviceName: mcp.name.replace(' MCP', '').trim(),
-          providedInstanceName: instanceName,
+        await persistPasteConnection({
+          provider,
+          serviceLogName,
+          name: buildSimpleInstanceName({
+            serviceName: mcp.name.replace(' MCP', '').trim(),
+            providedInstanceName: instanceName,
+          }),
+          providerTokens: { access_token: token },
+          providerEmail: null,
         });
-        const connection = await createMcpInstance(
-          userId, mcpSlug, name, emptyGoogleTokens, null,
-          provider, providerTokens, null,
-        );
-        console.error(`User ${userId} connected ${serviceLogName} MCP: ${connection.instanceId}`);
-        res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
       };
 
       if (mcpSlug === 'slack-bot') {
@@ -1539,18 +1594,14 @@ function registerSharedRoutes(app: express.Express): void {
             return;
           }
 
-          const providerEmail = null; // Slack bot tokens don't have an associated email
-          const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
-          const providerTokens = { access_token: token };
           const botServiceName = mcp.name.replace(' MCP', '').trim();
-          const name = instanceName || `${botServiceName} (${data.team || 'workspace'})`;
-
-          const connection = await createMcpInstance(
-            user.id, mcpSlug, name, emptyGoogleTokens, null,
-            'slack-bot', providerTokens, providerEmail
-          );
-          console.error(`User ${user.id} connected Slack Bot MCP: ${connection.instanceId}`);
-          res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
+          await persistPasteConnection({
+            provider: 'slack-bot',
+            serviceLogName: 'Slack Bot',
+            name: instanceName || `${botServiceName} (${data.team || 'workspace'})`,
+            providerTokens: { access_token: token },
+            providerEmail: null, // Slack bot tokens have no associated email
+          });
         } catch (err: any) {
           clearTimeout(timeout);
           console.error('[connect-token] Slack token validation failed:', err);
@@ -1573,21 +1624,20 @@ function registerSharedRoutes(app: express.Express): void {
         }
 
         const providerEmail = validate.email;
-        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
-        const providerTokens = { access_token: token, baseUrl: validate.baseUrl };
-        const outlineInstanceName = buildOutlineInstanceNameFromToken({
-          serviceName: mcp.name.replace(' MCP', '').trim(),
-          providedInstanceName: instanceName,
-          teamName: validate.teamName,
-          email: providerEmail,
+        await persistPasteConnection({
+          provider: 'outline',
+          serviceLogName: `Outline (${validate.baseUrl})`,
+          name: buildOutlineInstanceNameFromToken({
+            serviceName: mcp.name.replace(' MCP', '').trim(),
+            providedInstanceName: instanceName,
+            teamName: validate.teamName,
+            email: providerEmail,
+          }),
+          // baseUrl rides along: a re-auth can legitimately move an instance to
+          // a different Outline host, and it is re-validated above either way.
+          providerTokens: { access_token: token, baseUrl: validate.baseUrl },
+          providerEmail,
         });
-
-        const connection = await createMcpInstance(
-          user.id, mcpSlug, outlineInstanceName, emptyGoogleTokens, null,
-          'outline', providerTokens, providerEmail
-        );
-        console.error(`User ${user.id} connected Outline MCP: ${connection.instanceId} (${validate.baseUrl})`);
-        res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
         return;
       }
 
