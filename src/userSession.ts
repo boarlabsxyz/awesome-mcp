@@ -200,7 +200,7 @@ export function createSlackBotSession(
   }
 
   const cacheKey = `${user.apiKey}:${connection.instanceId}`;
-  const cached = mcpSessionCache.get(cacheKey);
+  const cached = cachedSessionFor(cacheKey, botToken, s => s.slackBotToken);
   if (cached) return cached;
 
   const session: UserSession = {
@@ -290,7 +290,7 @@ export function createOutlineSession(
   const baseUrl = providerTokens?.baseUrl || process.env.OUTLINE_BASE_URL || undefined;
 
   const cacheKey = `${user.apiKey}:${connection.instanceId}`;
-  const cached = mcpSessionCache.get(cacheKey);
+  const cached = cachedSessionFor(cacheKey, accessToken, s => s.outlineAccessToken);
   if (cached) return cached;
 
   // OAuth client credentials live in env (same vars the catalog seed reads to
@@ -346,7 +346,7 @@ export function createPeopleForceSession(
   const baseUrl = providerTokens?.baseUrl || process.env.PEOPLEFORCE_BASE_URL || undefined;
 
   const cacheKey = `${user.apiKey}:${connection.instanceId}`;
-  const cached = mcpSessionCache.get(cacheKey);
+  const cached = cachedSessionFor(cacheKey, accessToken, s => s.peopleForceAccessToken);
   if (cached) return cached;
 
   const session: UserSession = {
@@ -394,7 +394,7 @@ export function createHubSpotSession(
   const baseUrl = providerTokens?.baseUrl || process.env.HUBSPOT_BASE_URL || undefined;
 
   const cacheKey = `${user.apiKey}:${connection.instanceId}`;
-  const cached = mcpSessionCache.get(cacheKey);
+  const cached = cachedSessionFor(cacheKey, accessToken, s => s.hubspotAccessToken);
   if (cached) return cached;
 
   // OAuth client credentials live in env (same vars the catalog seed reads to
@@ -439,6 +439,35 @@ export function clearSessionCache(apiKey: string): void {
       mcpSessionCache.delete(key);
     }
   }
+}
+
+/**
+ * Cached session, but only if it was built from the credential we just read.
+ *
+ * mcpSessionCache is a per-process Map with no TTL, so a session outlives any
+ * credential change made in another process — and the dashboard runs in a
+ * different process from the per-MCP subdomains, so clearMcpSessionCache()
+ * there cannot reach the cache that actually serves tool calls. Re-entering a
+ * rotated token would appear to work and change nothing.
+ *
+ * Redis is not a way out either: mcp_tokens:instance:* caches googleTokens
+ * only — provider_tokens are re-read from Postgres on every authenticate — so
+ * the fresh credential is already in hand here. Comparing against it costs one
+ * string compare, no I/O, and self-invalidates in every process without any
+ * pub/sub channel to build or keep alive.
+ */
+function cachedSessionFor(
+  cacheKey: string,
+  credential: string,
+  readCredential: (session: UserSession) => string | undefined,
+): UserSession | undefined {
+  const cached = mcpSessionCache.get(cacheKey);
+  if (!cached) return undefined;
+  if (readCredential(cached) !== credential) {
+    mcpSessionCache.delete(cacheKey);
+    return undefined;
+  }
+  return cached;
 }
 
 export function clearMcpSessionCache(apiKey: string, mcpSlugOrInstanceId: string): void {

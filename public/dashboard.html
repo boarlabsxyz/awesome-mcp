@@ -1297,6 +1297,11 @@
       const showReauthorize = !showReconnect
         && !!instance.provider && instance.provider !== 'google'
         && !!mcp?.oauthAuthorizationUrl;
+      // Paste-token connections have no OAuth flow to re-run, so they get the
+      // equivalent repair: paste a fresh credential onto the SAME instance.
+      // Delete-and-re-add is not a substitute — the MCP URL embeds instanceId,
+      // so recreating means re-adding the connector in Claude.
+      const showReenterToken = !showReauthorize && usesPastedToken(instance, mcp);
       const tokenHtml = getTokenStatusHtml(instance);
       const eid = escapeAttr(instance.instanceId);
       const ename = escapeAttr(instance.instanceName);
@@ -1322,6 +1327,9 @@
             ${showReauthorize
               ? `<button class="btn-reconnect" type="button" data-action="reconnect" title="Re-run the OAuth consent flow. Needed after new permissions are added — your settings and access rules are preserved.">Reconnect</button>`
               : ''}
+            ${showReenterToken
+              ? `<button class="btn-reconnect" type="button" data-action="reenter-token" title="Paste a fresh API key or token for this connection. Replaces the credential in place, so the MCP URL you already configured keeps working.">Re-enter token</button>`
+              : ''}
             ${instance.provider === 'slack' ? `<button class="btn-rename" type="button" data-action="access-rules">Access Rules</button>` : ''}
             <button class="btn-delete" type="button" data-action="delete">Delete</button>
           </div>
@@ -1342,8 +1350,44 @@
       }
     }
 
+    // Set while the token form is repairing an existing paste-token connection
+    // rather than creating a new one. Sent to /api/connect-token as instanceId,
+    // which updates that instance in place instead of adding a duplicate.
+    let reauthInstanceId = null;
+
+    // Paste-token connections re-authenticate by pasting a fresh credential —
+    // there is no OAuth round-trip to send them through, so the Reconnect
+    // button deliberately excludes them and this is their equivalent. Mirrors
+    // the isTokenProvider test in selectMcpType().
+    function usesPastedToken(instance, mcp) {
+      if (!mcp) return false;
+      const provider = instance.provider;
+      const pasteCapable =
+        provider === 'slack-bot' || provider === 'outline' ||
+        provider === 'peopleforce' || provider === 'hubspot';
+      return pasteCapable && !mcp.oauthAuthorizationUrl;
+    }
+
+    // Open the token form pointed at an existing instance. Same form as the
+    // add flow; the instanceId is what turns it from "create" into "replace".
+    function reenterToken(instanceId) {
+      const instance = instances.find(i => i.instanceId === instanceId);
+      if (!instance) return;
+      openAddToolModal();
+      reauthInstanceId = instanceId;
+      selectMcpType(instance.mcpSlug);
+      document.getElementById('addToolModalTitle').textContent = 'Re-enter token';
+      const btn = document.getElementById('connectTokenBtn');
+      if (btn) btn.textContent = 'Save token';
+      // The name belongs to the existing instance and is not editable here:
+      // this repairs a credential, it does not rename or re-point anything.
+      const nameSection = document.getElementById('nameInputSection');
+      if (nameSection) nameSection.style.display = 'none';
+    }
+
     function openAddToolModal() {
       selectedMcpType = null;
+      reauthInstanceId = null;
       document.getElementById('step1').classList.add('active');
       document.getElementById('step2').classList.remove('active');
       document.getElementById('addToolModalTitle').textContent = 'Add Tool';
@@ -1379,6 +1423,12 @@
 
     function closeAddToolModal() {
       closeModal(document.getElementById('addToolModal'));
+      // Undo the re-auth framing so the next Add Tool opens as a create.
+      reauthInstanceId = null;
+      const btn = document.getElementById('connectTokenBtn');
+      if (btn) btn.textContent = 'Connect';
+      const nameSection = document.getElementById('nameInputSection');
+      if (nameSection) nameSection.style.display = '';
     }
 
     function selectMcpType(slug) {
@@ -1537,6 +1587,10 @@
 
       try {
         const body = { mcpSlug: selectedMcpType.slug, token };
+        // Presence of instanceId is what makes the backend replace rather than
+        // create — without it a rotated credential would add a duplicate
+        // connection and leave the dead one in place.
+        if (reauthInstanceId) body.instanceId = reauthInstanceId;
         // Only send instanceName when the user entered one — the backend
         // auto-generates a name from upstream metadata when it's omitted.
         if (name) body.instanceName = name;
@@ -2074,6 +2128,7 @@
       const id = row.dataset.instanceId;
       switch (btn.dataset.action) {
         case 'reconnect':    reconnectInstance(id, row.dataset.mcpSlug); break;
+        case 'reenter-token': reenterToken(id); break;
         case 'copy':         copyUrl(id, btn); break;
         case 'access-rules': openAccessRules(id); break;
         case 'delete':       deleteInstance(id, row.dataset.instanceName); break;
