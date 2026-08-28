@@ -416,6 +416,53 @@ export function computeTokenStatus(
  * Merges new OAuth tokens with existing ones, preserving refresh_token if not provided.
  * Used during reconnect flow.
  */
+/**
+ * Keys that must survive a re-consent when the new exchange omits them.
+ *
+ * Every one of these has burned someone:
+ *  - refresh_token: Outline rotates its refresh token and HubSpot can omit it;
+ *    overwriting with undefined leaves a connection that works for an hour and
+ *    then dies. Same failure mergeReconnectTokens exists to prevent for Google.
+ *  - accessRules: Slack's per-channel allowlist lives inside providerTokens.
+ *    Dropping it on reconnect would silently WIDEN access, which is the one
+ *    direction a reconnect must never move.
+ *  - baseUrl: Outline's instance URL. It is derived from env at exchange time,
+ *    so a deploy that lost the env var would otherwise blank it on the next
+ *    reconnect and point the connector at the default tenant.
+ *
+ * The merge only fills in values the fresh exchange left EMPTY. That is why the
+ * Slack branch keeps its own reconnect path instead of routing through here: it
+ * builds providerTokens with a freshly-defaulted accessRules object, which is
+ * non-empty, so the merge would happily keep those defaults and reset the
+ * user's channel allowlist. Any future provider that pre-seeds a default for
+ * one of these keys has the same trap — omit the key on the reconnect path and
+ * let the stored value win.
+ */
+const PRESERVED_ON_RECONNECT = ['refresh_token', 'accessRules', 'baseUrl'] as const;
+
+/**
+ * Non-Google sibling of mergeReconnectTokens: carry forward anything the fresh
+ * exchange did not supply, so re-consenting can only ever add information.
+ */
+export function mergeProviderReconnectTokens<T extends Record<string, any>>(
+  newTokens: T,
+  existingTokens: Record<string, any> | null | undefined,
+): T & Partial<Record<typeof PRESERVED_ON_RECONNECT[number], any>> {
+  // The return type is T *plus* the preserved keys: the merge can reinstate a
+  // key the fresh exchange never had (a Slack allowlist on a token payload
+  // that is only { access_token }), so claiming plain T would be a lie.
+  if (!existingTokens) return { ...newTokens };
+  const merged: Record<string, any> = { ...newTokens };
+  for (const key of PRESERVED_ON_RECONNECT) {
+    const incoming = merged[key];
+    const isEmpty = incoming === undefined || incoming === null || incoming === '';
+    if (isEmpty && existingTokens[key] !== undefined && existingTokens[key] !== null) {
+      merged[key] = existingTokens[key];
+    }
+  }
+  return merged as T & Partial<Record<typeof PRESERVED_ON_RECONNECT[number], any>>;
+}
+
 export function mergeReconnectTokens(
   newTokens: { access_token: string; refresh_token: string; scope: string; token_type: string; expiry_date: number },
   existingRefreshToken: string | undefined
@@ -1086,6 +1133,35 @@ function registerSharedRoutes(app: express.Express): void {
       let connection;
       const provider = stateData.provider || mcp.provider || 'google';
 
+      /**
+       * Apply a re-consent to the instance the user clicked Reconnect on.
+       *
+       * Every non-Google branch below used to skip straight to its
+       * "already connected?" check, which matches on the regenerated instance
+       * name — and that name is derived from the workspace/portal, so on a
+       * reconnect it ALWAYS matches. The result was a guaranteed no-op:
+       * the user re-consented, got redirected to `already_exists`, and the
+       * stale token was never replaced. That is the "it says ClickUp (S&F) is
+       * already connected when I try to reconnect" dead end. Only the Slack and
+       * Google branches ever handled it.
+       *
+       * Returns null when it has already answered the request.
+       */
+      const applyProviderReconnect = async <T extends Parameters<typeof updateMcpInstanceProviderTokens>[1]>(
+        freshTokens: T,
+        label: string,
+      ): Promise<any | null> => {
+        const existing = await getMcpConnectionByInstanceId(stateData.reconnectInstanceId);
+        if (!existing || existing.userId !== user.id || existing.mcpSlug !== mcpSlug) {
+          res.status(404).send('Instance not found or access denied.');
+          return null;
+        }
+        const merged = mergeProviderReconnectTokens(freshTokens, existing.providerTokens as any);
+        await updateMcpInstanceProviderTokens(existing.instanceId, merged);
+        console.error(`User ${user.id} reconnected ${label} MCP: ${existing.instanceId}`);
+        return { ...existing, providerTokens: merged };
+      };
+
       if (provider === 'slack') {
         // Slack V2 OAuth: exchange code for user access_token
         const tokenUrl = mcp.oauthTokenUrl || 'https://slack.com/api/oauth.v2.access';
@@ -1271,6 +1347,13 @@ function registerSharedRoutes(app: express.Express): void {
           clickUpInstanceName = providerEmail ? `${clickUpServiceName} (${providerEmail})` : clickUpServiceName;
         }
 
+        if (stateData.reconnectInstanceId) {
+          const reconnected = await applyProviderReconnect(providerTokens, 'ClickUp');
+          if (!reconnected) return;
+          res.redirect(`/dashboard?reconnected=${encodeURIComponent(reconnected.instanceName || mcpSlug)}`);
+          return;
+        }
+
         // Check if user already has this mcpSlug + same ClickUp account — reconnect instead
         const clickUpConnections = await getUserConnectedMcps(user.id);
         // Match by instance name (contains workspace name) to allow same email across different workspaces
@@ -1326,6 +1409,13 @@ function registerSharedRoutes(app: express.Express): void {
           email: exchange.email,
         });
 
+        if (stateData.reconnectInstanceId) {
+          const reconnected = await applyProviderReconnect(outlineProviderTokens, 'Outline');
+          if (!reconnected) return;
+          res.redirect(`/dashboard?reconnected=${encodeURIComponent(reconnected.instanceName || mcpSlug)}`);
+          return;
+        }
+
         const outlineConnections = await getUserConnectedMcps(user.id);
         const existingOutline = outlineConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === outlineInstanceName);
 
@@ -1369,6 +1459,13 @@ function registerSharedRoutes(app: express.Express): void {
           hubDomain: exchange.hubDomain,
           email: exchange.email,
         });
+
+        if (stateData.reconnectInstanceId) {
+          const reconnected = await applyProviderReconnect(hubspotProviderTokens, 'HubSpot');
+          if (!reconnected) return;
+          res.redirect(`/dashboard?reconnected=${encodeURIComponent(reconnected.instanceName || mcpSlug)}`);
+          return;
+        }
 
         const hubspotConnections = await getUserConnectedMcps(user.id);
         const existingHubSpot = hubspotConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === hubspotInstanceName);
