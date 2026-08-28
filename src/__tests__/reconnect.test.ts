@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { computeTokenStatus, mergeReconnectTokens } from '../website/webServer.js';
+import { computeTokenStatus, mergeReconnectTokens, mergeProviderReconnectTokens } from '../website/webServer.js';
 
 // ---------- computeTokenStatus ----------
 
@@ -136,5 +136,85 @@ describe('mergeReconnectTokens', () => {
     };
     mergeReconnectTokens(tokens, 'preserved');
     assert.equal(tokens.refresh_token, '', 'original should not be mutated');
+  });
+});
+
+// ---------- mergeProviderReconnectTokens ----------
+//
+// The non-Google providers (ClickUp, Outline, HubSpot) used to ignore
+// reconnectInstanceId entirely: the callback fell through to an
+// "already connected?" check that matches on the regenerated instance name,
+// and since that name is derived from the workspace/portal it ALWAYS matches
+// on a reconnect. So re-consenting redirected to `already_exists` and the
+// stale token was never replaced — a guaranteed no-op, reported in the field
+// as "it says ClickUp (S&F) is already connected when I try to reconnect".
+// These pin the merge that reconnect now runs.
+
+describe('mergeProviderReconnectTokens', () => {
+  it('keeps the refresh_token when the fresh exchange omitted it', () => {
+    // Outline rotates its refresh token and HubSpot can omit it. Overwriting
+    // with undefined yields a connection that works for an hour, then dies.
+    const merged = mergeProviderReconnectTokens(
+      { access_token: 'new-access', refresh_token: undefined },
+      { access_token: 'old-access', refresh_token: 'stored-refresh' },
+    );
+    assert.equal(merged.access_token, 'new-access');
+    assert.equal(merged.refresh_token, 'stored-refresh');
+  });
+
+  it('prefers a freshly-issued refresh_token over the stored one', () => {
+    const merged = mergeProviderReconnectTokens(
+      { access_token: 'new-access', refresh_token: 'rotated' },
+      { access_token: 'old-access', refresh_token: 'stored-refresh' },
+    );
+    assert.equal(merged.refresh_token, 'rotated');
+  });
+
+  it('preserves a Slack channel allowlist rather than widening access', () => {
+    // A reconnect must never move access outward.
+    const rules = { allowedOrgs: ['T1'], whitelistChannels: ['C-allowed'], blacklistChannels: [] };
+    const merged = mergeProviderReconnectTokens(
+      { access_token: 'new-access' },
+      { access_token: 'old-access', accessRules: rules },
+    );
+    assert.deepEqual(merged.accessRules, rules);
+  });
+
+  it('preserves Outline baseUrl when the env var is no longer set', () => {
+    const merged = mergeProviderReconnectTokens(
+      { access_token: 'new-access', baseUrl: '' },
+      { access_token: 'old', baseUrl: 'https://wiki.example.test' },
+    );
+    assert.equal(merged.baseUrl, 'https://wiki.example.test');
+  });
+
+  it('does not invent keys the stored record never had', () => {
+    const merged = mergeProviderReconnectTokens(
+      { access_token: 'new-access' },
+      { access_token: 'old-access' },
+    );
+    assert.deepEqual(Object.keys(merged), ['access_token']);
+  });
+
+  it('carries nothing over on a first connect (no stored record)', () => {
+    const merged = mergeProviderReconnectTokens({ access_token: 'a', refresh_token: undefined }, null);
+    assert.equal(merged.access_token, 'a');
+    assert.equal(merged.refresh_token, undefined);
+  });
+
+  it('never mutates either input', () => {
+    const fresh = { access_token: 'new' };
+    const stored = { access_token: 'old', refresh_token: 'r' };
+    mergeProviderReconnectTokens(fresh, stored);
+    assert.deepEqual(fresh, { access_token: 'new' });
+    assert.deepEqual(stored, { access_token: 'old', refresh_token: 'r' });
+  });
+
+  it('only carries the allowlisted keys, not arbitrary stored state', () => {
+    const merged = mergeProviderReconnectTokens(
+      { access_token: 'new' },
+      { access_token: 'old', someLegacyField: 'should-not-survive' },
+    );
+    assert.equal((merged as any).someLegacyField, undefined);
   });
 });
