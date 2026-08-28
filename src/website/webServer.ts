@@ -5793,6 +5793,16 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
     mapJwtToUser,
   });
 
+  // RFC 9728 §5.1 / MCP authorization: a 401 from the MCP endpoint MUST carry
+  // this header. It is how a client discovers *which* authorization server to
+  // use, and it is what turns an expired token into a re-authorization prompt.
+  // Without it a client has nothing to act on and surfaces the 401 as an opaque
+  // transport failure instead — which reads to the user as "reconnecting did
+  // not help". Built from mcpBaseUrl, not BASE_URL: each MCP runs on its own
+  // subdomain (gmail.awesome-mcp.xyz), and pointing at the main site's metadata
+  // would send the client to the wrong resource.
+  const mcpWwwAuth = `Bearer resource_metadata="${mcpBaseUrl}/.well-known/oauth-protected-resource"`;
+
   const mcpOnlyMiddleware = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     // Try JWT/Auth0 auth first
     const origEnd = res.end;
@@ -5815,8 +5825,10 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
     // JWT/Auth0 failed — try apiKey from Bearer header (issued by our OAuth /token endpoint)
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
-      const baseUrl = process.env.BASE_URL || 'http://localhost:8080';
-      res.status(401).json({ error: 'unauthorized', message: 'Missing Authorization header.' });
+      res.status(401).setHeader('WWW-Authenticate', mcpWwwAuth).json({
+        error: 'unauthorized',
+        message: 'Missing Authorization header.',
+      });
       return;
     }
 
@@ -5832,7 +5844,10 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
       }
       const user = await getUserByApiKey(apiKey);
       if (!user || !user.id) {
-        res.status(401).json({ error: 'invalid_token', message: 'Invalid API key.' });
+        res.status(401).setHeader('WWW-Authenticate', mcpWwwAuth).json({
+          error: 'invalid_token',
+          message: 'Invalid API key.',
+        });
         return;
       }
       // Set trusted headers so FastMCP can identify the user
@@ -5842,7 +5857,10 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
       next();
     } catch (err: any) {
       console.error('[mcp-only-auth] API key lookup failed:', err.message);
-      res.status(401).json({ error: 'invalid_token', message: 'Authentication failed.' });
+      res.status(401).setHeader('WWW-Authenticate', mcpWwwAuth).json({
+        error: 'invalid_token',
+        message: 'Authentication failed.',
+      });
     }
   };
 
