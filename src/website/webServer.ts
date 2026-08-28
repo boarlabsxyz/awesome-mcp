@@ -370,6 +370,33 @@ export function computeEffectiveScopes(
 const BASE_URL = stripTrailingSlashes(process.env.BASE_URL || 'http://localhost:8080');
 const COOKIE_SECRET = process.env.COOKIE_SECRET || 'dev-secret-change-me';
 const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+/** How long a pending "finish this after you log in" intent stays valid. */
+const POST_LOGIN_REDIRECT_MAX_AGE = 10 * 60 * 1000; // 10 minutes
+const POST_LOGIN_REDIRECT_COOKIE = 'post_login_redirect';
+
+/**
+ * Validate a post-login return path.
+ *
+ * This value is reflected into res.redirect() after a session is established,
+ * so it is an open-redirect sink and is treated as untrusted even though we
+ * set it ourselves — a signed cookie proves integrity, not that the contents
+ * are still a path we want to send a freshly-authenticated user to.
+ *
+ * Rejects anything that isn't a same-origin absolute path: "//evil.test" is a
+ * protocol-relative URL that browsers follow off-site, and a backslash is
+ * normalised to a forward slash by some clients, so "/\evil.test" is the same
+ * trick. The prefix allowlist is the real guard — only the flows that actually
+ * need resuming are resumable.
+ */
+export function sanitizePostLoginRedirect(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 512) return null;
+  if (!value.startsWith('/')) return null;
+  if (value.startsWith('//') || value.includes('\\')) return null;
+  const path = value.split('?')[0];
+  const allowed = path === '/dashboard' || path.startsWith('/connect/');
+  return allowed ? value : null;
+}
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
 
 // Extend Express Request to include session
@@ -848,7 +875,16 @@ function registerSharedRoutes(app: express.Express): void {
         sameSite: 'lax',
         maxAge: SESSION_MAX_AGE,
       });
-      res.redirect('/dashboard');
+
+      // Resume whatever the user was trying to do before we bounced them to
+      // log in. Sanitized rather than trusted: this lands in res.redirect(),
+      // and a signed cookie only proves we wrote it, not that it is still a
+      // path worth sending a freshly-authenticated user to.
+      const parked = sanitizePostLoginRedirect(req.signedCookies?.[POST_LOGIN_REDIRECT_COOKIE]);
+      if (req.signedCookies?.[POST_LOGIN_REDIRECT_COOKIE]) {
+        res.clearCookie(POST_LOGIN_REDIRECT_COOKIE);
+      }
+      res.redirect(parked || '/dashboard');
     } catch (err: any) {
       console.error('OAuth callback error:', err);
       res.status(500).send('Authentication failed. Please try again.');
@@ -910,20 +946,41 @@ function registerSharedRoutes(app: express.Express): void {
     const instanceName = req.query.name as string | undefined;
     const sessionId = req.signedCookies?.session;
 
+    // Park the whole intent — path AND query — then send the user to log in.
+    //
+    // This used to hand-rebuild the return URL from `mcpSlug` + `name`, which
+    // silently dropped `?reconnect=<instanceId>`: the one parameter that tells
+    // the callback to refresh an existing instance instead of treating the
+    // consent as a brand-new connection. A user whose session had lapsed
+    // therefore came back from Google without it, fell into the callback's
+    // "already connected" branch, and watched their stale token survive
+    // untouched — the intermittent half of "reconnect sometimes doesn't work",
+    // and provider-agnostic, so Gmail was affected exactly like the rest.
+    //
+    // It also pointed at `/?redirect=…`, and `/` unconditionally redirects to
+    // /dashboard without ever reading that parameter, so the return-to-intent
+    // was dead on arrival regardless. A signed, short-lived cookie consumed by
+    // /auth/callback replaces it; going straight to /auth/google also drops a
+    // pointless hop.
+    const parkIntentAndLogin = () => {
+      res.cookie(POST_LOGIN_REDIRECT_COOKIE, req.originalUrl, {
+        signed: true,
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: POST_LOGIN_REDIRECT_MAX_AGE,
+      });
+      res.redirect('/auth/google');
+    };
+
     if (!sessionId) {
-      const redirectUrl = instanceName
-        ? `/connect/${mcpSlug}?name=${encodeURIComponent(instanceName)}`
-        : `/connect/${mcpSlug}`;
-      res.redirect(`/?redirect=${encodeURIComponent(redirectUrl)}`);
+      parkIntentAndLogin();
       return;
     }
     const session = await getSession(sessionId);
     if (!session || session.expiresAt < Date.now()) {
       res.clearCookie('session');
-      const redirectUrl = instanceName
-        ? `/connect/${mcpSlug}?name=${encodeURIComponent(instanceName)}`
-        : `/connect/${mcpSlug}`;
-      res.redirect(`/?redirect=${encodeURIComponent(redirectUrl)}`);
+      parkIntentAndLogin();
       return;
     }
 
