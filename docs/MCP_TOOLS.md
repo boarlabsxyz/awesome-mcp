@@ -6,7 +6,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 
 ## Index
 
-- [Shared (every server)](#shared-every-server-) (2)
+- [Shared (opt-in per server)](#shared-opt-in-per-server-) (2)
 - [Google Docs](#google-docs) (30)
 - [Google Sheets](#google-sheets) (12)
 - [Google Calendar](#google-calendar) (6)
@@ -20,9 +20,9 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [PeopleForce](#peopleforce) (45)
 - [HubSpot](#hubspot) (22)
 
-## Shared (every server)
+## Shared (opt-in per server)
 
-Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered on every FastMCP server).
+Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 10 of 12 servers; not on Outline, HubSpot).
 
 | Tool | Description | REST |
 |---|---|---|

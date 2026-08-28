@@ -30,6 +30,31 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
 
+  docs-fresh:
+    # docs/MCP_TOOLS.md and docs/REST_ENDPOINTS.md are generated, and the
+    # generators are run by hand. That is how the doc came to claim the shared
+    # tools were "registered on every FastMCP server" while three servers did
+    # not register them. Regenerate and fail if the committed copy differs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Regenerate generated docs
+        run: |
+          node scripts/buildMcpToolsDoc.mjs
+          node scripts/buildRestEndpointsDoc.mjs
+      - name: Fail if generated docs are stale
+        run: |
+          if ! git diff --exit-code -- docs/MCP_TOOLS.md docs/REST_ENDPOINTS.md; then
+            echo "::error::Generated docs are stale. Run the generators and commit the result:"
+            echo "::error::  node scripts/buildMcpToolsDoc.mjs && node scripts/buildRestEndpointsDoc.mjs"
+            exit 1
+          fi
+
   test:
     runs-on: ubuntu-latest
     steps:
