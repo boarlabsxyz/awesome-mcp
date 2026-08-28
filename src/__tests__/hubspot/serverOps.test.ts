@@ -17,6 +17,8 @@ import {
   opGetContact,
   opUpdateContact,
   opGetActiveDeals,
+  opSearchDeals,
+  opGetCompanyDeals,
   opGetDeal,
   opCreateDeal,
   opUpdateDeal,
@@ -167,6 +169,81 @@ test('opGetContact; opUpdateContact re-reads (PATCH then GET)', async () => {
   assert.match(out, /firstname: Ada/, 're-read surfaces populated fields the PATCH echo omits');
   assert.equal(calls[0].method, 'PATCH');
   assert.equal(calls[1].method, 'GET');
+});
+
+test('opSearchDeals resolves a deal by name through the deals search endpoint', async () => {
+  const calls = router(() => ({ body: { results: [{ id: 'd1', properties: { dealname: 'Level Education', amount: '5000' } }] } }));
+  const out = await opSearchDeals(client(), { query: 'Level Education', limit: 10 });
+  assert.match(out, /Found 1 deals:/);
+  assert.match(out, /ID: d1/);
+  assert.match(out, /amount: 5000/);
+  const searchCall = calls.find(c => c.url.endsWith('/deals/search'))!;
+  assert.equal(searchCall.method, 'POST');
+  assert.equal(searchCall.body.query, 'Level Education');
+  // Deal defaults, not company/contact ones.
+  assert.deepEqual(searchCall.body.properties, ['dealname', 'amount', 'dealstage', 'pipeline', 'closedate', 'hs_lastmodifieddate']);
+});
+
+test('opGetCompanyDeals resolves company -> deal IDs -> full deal records', async () => {
+  const calls = router((method, url) => {
+    if (url.includes('/associations/deals')) {
+      return { body: { results: [{ toObjectId: 'd1' }, { toObjectId: 'd2' }] } };
+    }
+    return { body: { results: [
+      { id: 'd1', properties: { dealname: 'Renewal', amount: '5000', dealstage: 'contractsent' } },
+      { id: 'd2', properties: { dealname: 'Expansion', amount: '9000', dealstage: 'qualifiedtobuy' } },
+    ] } };
+  });
+  const out = await opGetCompanyDeals(client(), { companyId: 'c1', limit: 25 });
+  assert.match(out, /Found 2 deals:/);
+  assert.match(out, /amount: 5000/);
+  assert.match(out, /dealstage: qualifiedtobuy/);
+
+  const assocCall = calls.find(c => c.url.includes('/associations/deals'))!;
+  assert.equal(assocCall.method, 'GET');
+  assert.match(assocCall.url, /\/crm\/v4\/objects\/companies\/c1\/associations\/deals/);
+  const batchCall = calls.find(c => c.url.endsWith('/deals/batch/read'))!;
+  assert.equal(batchCall.method, 'POST');
+  assert.deepEqual(batchCall.body.inputs, [{ id: 'd1' }, { id: 'd2' }]);
+});
+
+test('opGetCompanyDeals reports a company with no deals instead of an empty list', async () => {
+  router(() => ({ body: { results: [] } }));
+  assert.match(await opGetCompanyDeals(client(), { companyId: 'c1', limit: 25 }), /No deals are associated/);
+});
+
+test('opGetCompanyDeals reports the cap rather than silently truncating', async () => {
+  const ids = Array.from({ length: 5 }, (_, i) => ({ toObjectId: `d${i}` }));
+  const calls = router((method, url) => {
+    if (url.includes('/associations/deals')) return { body: { results: ids } };
+    return { body: { results: [{ id: 'd0', properties: { dealname: 'One' } }] } };
+  });
+  const out = await opGetCompanyDeals(client(), { companyId: 'c1', limit: 2 });
+  assert.match(out, /Showing 2 of 5 associated deals/);
+  const batchCall = calls.find(c => c.url.endsWith('/deals/batch/read'))!;
+  assert.equal(batchCall.body.inputs.length, 2, 'only the capped IDs are fetched');
+});
+
+test('opGetCompanyDeals chunks the batch read at HubSpot\'s 100-input cap', async () => {
+  const ids = Array.from({ length: 150 }, (_, i) => ({ toObjectId: `d${i}` }));
+  const calls = router((method, url) => {
+    if (url.includes('/associations/deals')) return { body: { results: ids } };
+    return { body: { results: [] } };
+  });
+  await opGetCompanyDeals(client(), { companyId: 'c1', limit: 100 });
+  const batchCalls = calls.filter(c => c.url.endsWith('/deals/batch/read'));
+  assert.equal(batchCalls.length, 1, '100 IDs fit one batch');
+
+  const calls2 = router((method, url) => {
+    if (url.includes('/associations/deals')) return { body: { results: ids } };
+    return { body: { results: [] } };
+  });
+  // limit is capped at 100 by the Zod schema, so drive the client directly for >100.
+  await client().readDealsByIds(ids.map(i => String(i.toObjectId)), ['dealname']);
+  const batchCalls2 = calls2.filter(c => c.url.endsWith('/deals/batch/read'));
+  assert.equal(batchCalls2.length, 2, '150 IDs split into 100 + 50');
+  assert.equal(batchCalls2[0].body.inputs.length, 100);
+  assert.equal(batchCalls2[1].body.inputs.length, 50);
 });
 
 test('opGetActiveDeals lists deals by dealname and surfaces amount/stage', async () => {

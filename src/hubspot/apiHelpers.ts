@@ -12,7 +12,7 @@
 
 import { UserError } from 'fastmcp';
 import { UserSession } from '../userSession.js';
-import { refreshHubSpotToken, HUBSPOT_TOKEN_URL } from './oauthCallback.js';
+import { fetchHubSpotGrantedScopes, refreshHubSpotToken, HUBSPOT_TOKEN_URL } from './oauthCallback.js';
 
 const DEFAULT_BASE_URL = process.env.HUBSPOT_BASE_URL || 'https://api.hubapi.com';
 
@@ -208,6 +208,48 @@ export class HubSpotClient {
 
   updateDeal(dealId: string, properties: Record<string, unknown>): Promise<HubSpotObject> {
     return this.request('PATCH', `/crm/v3/objects/deals/${encodeURIComponent(dealId)}`, { properties });
+  }
+
+  /**
+   * IDs of the deals associated with a company (associations v4).
+   *
+   * This is the missing link between a company and `getDeal`: a company record
+   * carries `num_associated_deals` (a plain company property, no deals scope
+   * needed), so a caller can see *that* deals exist while having no way to name
+   * one. Without this the by-ID deal tools are unreachable from a company and
+   * the dead end reads as a permissions problem.
+   */
+  async getCompanyDealIds(companyId: string): Promise<string[]> {
+    const res = await this.request<HubSpotAssociationPage>(
+      'GET',
+      `/crm/v4/objects/companies/${encodeURIComponent(companyId)}/associations/deals?limit=500`,
+    );
+    return (res.results ?? [])
+      .map(r => String(r.toObjectId ?? r.id ?? ''))
+      .filter(Boolean);
+  }
+
+  /**
+   * Read many deals in one round-trip. HubSpot caps a batch read at 100 inputs
+   * while the association read above returns up to 500, so callers must chunk —
+   * `readDealsByIds` does. Unknown IDs are omitted from `results` rather than
+   * failing the batch.
+   */
+  batchReadDeals(dealIds: string[], properties: string[]): Promise<{ results?: HubSpotObject[] }> {
+    return this.request('POST', '/crm/v3/objects/deals/batch/read', {
+      properties,
+      inputs: dealIds.map(id => ({ id })),
+    });
+  }
+
+  /** `batchReadDeals` with HubSpot's 100-per-batch cap handled. */
+  async readDealsByIds(dealIds: string[], properties: string[]): Promise<HubSpotObject[]> {
+    const out: HubSpotObject[] = [];
+    for (let i = 0; i < dealIds.length; i += 100) {
+      const page = await this.batchReadDeals(dealIds.slice(i, i + 100), properties);
+      out.push(...(page.results ?? []));
+    }
+    return out;
   }
 
   /** All deal pipelines, each with its ordered stages. */
@@ -630,11 +672,88 @@ export function getHubSpotClient(session?: UserSession): HubSpotClient {
   return new HubSpotClient(session.hubspotAccessToken, session.hubspotBaseUrl);
 }
 
+/**
+ * Scopes HubSpot named as required by the call that just 403'd, or null if this
+ * was not a missing-scope failure.
+ *
+ * HubSpot signals it two ways and neither is guaranteed: a `MISSING_SCOPES`
+ * discriminator (`category` on newer endpoints, `errorType` on older ones) and
+ * the scope list, which arrives either as `context.requiredScopes` or only
+ * inside the prose message ("...requires any of [crm.objects.deals.read]").
+ * Both are parsed, because with neither the user is told "permissions" and
+ * nothing about which permission.
+ */
+export function parseHubSpotMissingScopes(error: any): string[] | null {
+  if (error?.status !== 403) return null;
+  let body: any;
+  try {
+    body = typeof error.body === 'string' ? JSON.parse(error.body) : error.body;
+  } catch {
+    // Non-JSON body (HTML error page, empty string) — fall back to the message.
+  }
+  const marker = body?.category ?? body?.errorType;
+  const message = typeof body?.message === 'string' ? body.message : String(error?.message ?? '');
+  if (marker !== 'MISSING_SCOPES' && !/does not have proper permissions/i.test(message)) {
+    return null;
+  }
+  const fromContext = body?.context?.requiredScopes;
+  if (Array.isArray(fromContext)) {
+    const scopes = fromContext.filter((s: unknown): s is string => typeof s === 'string');
+    if (scopes.length) return scopes;
+  }
+  const bracketed = /requires? any of \[([^\]]*)\]/i.exec(message);
+  if (bracketed) {
+    const scopes = bracketed[1].split(',').map(s => s.trim()).filter(Boolean);
+    if (scopes.length) return scopes;
+  }
+  return [];
+}
+
+/**
+ * Build the user-facing missing-scope message.
+ *
+ * Mirrors Slack's `formatScopeDetail`: name what was needed AND what the token
+ * actually holds, then point at the one affordance that fixes it. HubSpot
+ * access tokens do not expire in a way the dashboard flags, so a connection
+ * made before a scope was added to the catalog looks perfectly healthy while
+ * failing every call that needs the new scope — "check that your token has the
+ * required scopes" is a dead end for a user who has no way to check.
+ */
+export function formatHubSpotScopeError(
+  prefix: string,
+  required: string[],
+  granted: string[] | null,
+): string {
+  const parts = [`${prefix}: your HubSpot connection is missing the required scopes.`];
+  if (required.length) parts.push(`Needed: ${required.join(', ')}.`);
+  if (granted) {
+    const missing = required.filter(s => !granted.includes(s));
+    parts.push(`Token currently has: ${granted.join(', ') || '(none)'}.`);
+    if (required.length && missing.length === 0) {
+      // Re-consenting again will not help; the app or the portal is the problem.
+      parts.push(
+        'The token reports these scopes, so re-consenting will not change anything — ' +
+        'check that the HubSpot app has them enabled and that the portal grants them.',
+      );
+      return parts.join(' ');
+    }
+  }
+  parts.push('Open the dashboard and click Reconnect on this HubSpot connection to re-consent.');
+  return parts.join(' ');
+}
+
 /** Translate an API/network error into a `UserError` with the given prefix. */
 export function mapHubSpotError(prefix: string, error: any, log: HubSpotToolLog): never {
   log.error(`${prefix}: ${error?.message ?? error}`);
+  const required = parseHubSpotMissingScopes(error);
+  if (required) {
+    throw new UserError(formatHubSpotScopeError(prefix, required, null));
+  }
   if (error?.status === 401 || error?.status === 403) {
-    throw new UserError(`${prefix}: not authorized. Check that your HubSpot token has the required scopes.`);
+    throw new UserError(
+      `${prefix}: not authorized. Your HubSpot token was rejected — open the dashboard and ` +
+      `click Reconnect on this HubSpot connection.`,
+    );
   }
   if (error?.status === 404) {
     throw new UserError(`${prefix}: not found.`);
@@ -750,6 +869,14 @@ export async function withHubSpotClient<T>(
   try {
     return await fn(client);
   } catch (error: any) {
+    // Only a missing-scope 403 earns the extra round-trip: it is the one
+    // failure where the token itself holds the answer the user needs.
+    const required = parseHubSpotMissingScopes(error);
+    if (required && session?.hubspotAccessToken) {
+      log.error(`${prefix}: ${error?.message ?? error}`);
+      const granted = await fetchHubSpotGrantedScopes(session.hubspotAccessToken);
+      throw new UserError(formatHubSpotScopeError(prefix, required, granted));
+    }
     mapHubSpotError(prefix, error, log);
   }
 }

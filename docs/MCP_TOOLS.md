@@ -18,7 +18,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Slack (user)](#slack-user-) (15)
 - [Outline](#outline) (27)
 - [PeopleForce](#peopleforce) (45)
-- [HubSpot](#hubspot) (22)
+- [HubSpot](#hubspot) (23)
 
 ## Shared (opt-in per server)
 
@@ -331,7 +331,7 @@ Source: `src/peopleforce/server.ts` — 45 tools.
 
 ## HubSpot
 
-Source: `src/hubspot/server.ts` — 22 tools.
+Source: `src/hubspot/server.ts` — 23 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -342,6 +342,7 @@ Source: `src/hubspot/server.ts` — 22 tools.
 | `createContact` | Create a new contact in HubSpot (skips creation if a matching contact already exists). | — |
 | `getContact` | Get a specific contact by ID from HubSpot. | — |
 | `updateContact` | Update an existing contact record in HubSpot. | — |
+| `getCompanyDeals` | List the deals associated with a company, with amount, stage, pipeline, and close date. Use this to go from a company ID to its deal IDs — getDeal needs an ID no other tool returns. | — |
 | `getDeal` | Get a specific deal by ID from HubSpot. | — |
 | `createDeal` | Create a new deal in HubSpot. Set dealstage/pipeline via properties (use listPipelines to resolve stage IDs). | — |
 | `updateDeal` | Update an existing deal record in HubSpot (e.g. move stage, change amount). | — |
@@ -360,4 +361,4 @@ Source: `src/hubspot/server.ts` — 22 tools.
 
 ---
 
-**Grand total: 247 tools across 13 sections.**
+**Grand total: 248 tools across 13 sections.**
