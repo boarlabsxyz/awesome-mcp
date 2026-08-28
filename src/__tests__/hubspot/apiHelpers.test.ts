@@ -25,6 +25,8 @@ import {
   textSearch,
   getHubSpotClient,
   mapHubSpotError,
+  parseHubSpotMissingScopes,
+  formatHubSpotScopeError,
   withHubSpotClient,
   maybeRefreshHubSpotToken,
   epochToIso,
@@ -488,6 +490,92 @@ test('withHubSpotClient maps a thrown API error, but surfaces not-connected verb
   await assert.rejects(
     () => withHubSpotClient('Op', undefined, noopLog, async () => 'never'),
     /not connected/i,
+  );
+});
+
+// --- Missing-scope diagnosis (the deals-scope reconnect path) ---
+
+// Shape of a real HubSpot 403 for a deal read on a token minted before the
+// crm.objects.deals.* scopes were added to the catalog.
+const MISSING_SCOPES_BODY = {
+  status: 'error',
+  message: 'This oauth-token (CJ...) does not have proper permissions! (requires any of [crm.objects.deals.read])',
+  correlationId: 'abc',
+  category: 'MISSING_SCOPES',
+};
+
+test('parseHubSpotMissingScopes reads the scope list from message, context, or neither', () => {
+  assert.deepEqual(
+    parseHubSpotMissingScopes({ status: 403, body: JSON.stringify(MISSING_SCOPES_BODY) }),
+    ['crm.objects.deals.read'],
+  );
+  // Older endpoints use errorType + context.requiredScopes instead.
+  assert.deepEqual(
+    parseHubSpotMissingScopes({
+      status: 403,
+      body: { errorType: 'MISSING_SCOPES', context: { requiredScopes: ['tickets', 'sales-email-read'] } },
+    }),
+    ['tickets', 'sales-email-read'],
+  );
+  // Flagged as missing-scopes but naming none: still a scope failure ([] not null).
+  assert.deepEqual(parseHubSpotMissingScopes({ status: 403, body: { category: 'MISSING_SCOPES' } }), []);
+  // Not a scope failure — must fall through to the generic branches.
+  assert.equal(parseHubSpotMissingScopes({ status: 403 }), null);
+  assert.equal(parseHubSpotMissingScopes({ status: 403, body: 'not json' }), null);
+  assert.equal(parseHubSpotMissingScopes({ status: 401, body: JSON.stringify(MISSING_SCOPES_BODY) }), null);
+});
+
+test('formatHubSpotScopeError names needed + granted and points at Reconnect', () => {
+  const msg = formatHubSpotScopeError('Failed to get deal', ['crm.objects.deals.read'], [
+    'crm.objects.companies.read',
+  ]);
+  assert.match(msg, /Needed: crm\.objects\.deals\.read/);
+  assert.match(msg, /Token currently has: crm\.objects\.companies\.read/);
+  assert.match(msg, /Reconnect/);
+});
+
+test('formatHubSpotScopeError does not tell the user to reconnect when the token already has the scope', () => {
+  const msg = formatHubSpotScopeError('Failed to get deal', ['crm.objects.deals.read'], [
+    'crm.objects.deals.read',
+  ]);
+  assert.match(msg, /re-consenting will not change anything/i);
+  assert.doesNotMatch(msg, /click Reconnect/);
+});
+
+test('mapHubSpotError turns a missing-scope 403 into a reconnect instruction', () => {
+  assert.throws(
+    () => mapHubSpotError('Failed to get deal', { status: 403, body: JSON.stringify(MISSING_SCOPES_BODY) }, noopLog),
+    /missing the required scopes.*crm\.objects\.deals\.read.*Reconnect/s,
+  );
+});
+
+test('withHubSpotClient enriches a missing-scope 403 with the scopes the token actually holds', async () => {
+  globalThis.fetch = mock.fn(async (url: any) => {
+    assert.match(String(url), /\/oauth\/v1\/access-tokens\/tok$/);
+    return jsonResponse({ scopes: ['crm.objects.companies.read', 'crm.objects.contacts.read'] });
+  }) as any;
+
+  await assert.rejects(
+    () => withHubSpotClient('Failed to get deal', { hubspotAccessToken: 'tok' } as any, noopLog, async () => {
+      throw { status: 403, body: JSON.stringify(MISSING_SCOPES_BODY) };
+    }),
+    (err: any) => {
+      assert.ok(err instanceof UserError);
+      assert.match(err.message, /Needed: crm\.objects\.deals\.read/);
+      assert.match(err.message, /Token currently has: crm\.objects\.companies\.read, crm\.objects\.contacts\.read/);
+      assert.match(err.message, /Reconnect/);
+      return true;
+    },
+  );
+});
+
+test('withHubSpotClient still reports the scope failure when the token lookup fails', async () => {
+  globalThis.fetch = mock.fn(async () => jsonResponse({ status: 'error' }, 401)) as any;
+  await assert.rejects(
+    () => withHubSpotClient('Failed to get deal', { hubspotAccessToken: 'tok' } as any, noopLog, async () => {
+      throw { status: 403, body: JSON.stringify(MISSING_SCOPES_BODY) };
+    }),
+    /missing the required scopes.*Reconnect/s,
   );
 });
 
