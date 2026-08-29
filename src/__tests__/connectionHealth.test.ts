@@ -174,3 +174,37 @@ describe('checkConnectionHealth — a refreshable connection is not a broken one
     assert.equal(health.state, 'reauth');
   });
 });
+
+describe('checkConnectionHealth — config problems are not credential problems', () => {
+  it('reports unknown when no Outline base URL is configured, without probing', async () => {
+    // validateOutlineToken returns 400 for a missing base URL — the same status
+    // it uses for a rejected credential — so this reached the user as an amber
+    // Reconnect button that could not possibly fix a missing base URL.
+    const previous = process.env.OUTLINE_BASE_URL;
+    delete process.env.OUTLINE_BASE_URL;
+    let called = false;
+    try {
+      const health = await checkConnectionHealth(
+        { instanceId: 'i', mcpSlug: 'outline', userId: 1, provider: 'outline',
+          providerTokens: { access_token: 'tok' } } as any,
+        NO_CREDS,
+        { fetchImpl: (async () => { called = true; return { ok: true, status: 200, json: async () => ({}) }; }) as any },
+      );
+      assert.equal(health.state, 'unknown');
+      assert.equal(called, false, 'should not probe at all without a base URL');
+    } finally {
+      if (previous === undefined) delete process.env.OUTLINE_BASE_URL;
+      else process.env.OUTLINE_BASE_URL = previous;
+    }
+  });
+
+  it('still probes when the base URL comes from the connection record', async () => {
+    const health = await checkConnectionHealth(
+      { instanceId: 'i', mcpSlug: 'outline', userId: 1, provider: 'outline',
+        providerTokens: { access_token: 'tok', baseUrl: 'https://wiki.example.test' } } as any,
+      NO_CREDS,
+      { fetchImpl: respond(200, { data: { user: {} } }) },
+    );
+    assert.equal(health.state, 'healthy');
+  });
+});

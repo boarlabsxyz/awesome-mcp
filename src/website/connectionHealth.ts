@@ -105,6 +105,15 @@ async function defaultProbeGoogle(
 /**
  * Map a shared ValidateResult onto health, keeping 5xx/timeouts out of 'reauth'.
  *
+ * KNOWN RESIDUAL: status alone cannot fully separate "credential rejected" from
+ * "we sent a bad request". validatePasteToken folds 401/403 INTO 400, and 400
+ * is also what a blank token, a bad base URL and a blocked redirect return. The
+ * callers guard the token and base URL before probing, which removes the input
+ * cases, but a redirect blocked by `redirect: 'error'` still lands here as 400
+ * and reads as a credential rejection. Fixing that properly means giving
+ * ValidateErr a reason code rather than inferring intent from a status; it is
+ * not done here because it touches the shared connect-time validators.
+ *
  * `canSelfHeal` says a refresh token is stored, and it changes what a rejection
  * MEANS. Outline (~1h) and HubSpot (~30min) OAuth access tokens are routinely
  * expired at rest and are refreshed at tool-call time, so probing with the
@@ -226,8 +235,18 @@ export async function checkConnectionHealth(
 
       case 'outline': {
         if (!accessToken) return { state: 'reauth', reason: 'No Outline token stored.' };
+        // Guarded before probing, because validateOutlineToken reports a missing
+        // or malformed base URL as status 400 — the same status it uses for a
+        // rejected credential — so it would otherwise surface as a Reconnect
+        // button that cannot possibly fix a missing base URL. Same reasoning as
+        // the invalid_client branch in the Google probe: our configuration is
+        // not the user's credential.
+        const outlineBaseUrl = providerTokens.baseUrl || process.env.OUTLINE_BASE_URL || '';
+        if (!outlineBaseUrl) {
+          return { state: 'unknown', reason: 'No Outline base URL configured for this connection.' };
+        }
         return fromValidateResult(await validateOutlineToken({
-          baseUrl: providerTokens.baseUrl || process.env.OUTLINE_BASE_URL || '',
+          baseUrl: outlineBaseUrl,
           token: accessToken,
           fetchImpl,
         } as any), !!providerTokens.refresh_token);
