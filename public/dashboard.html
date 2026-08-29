@@ -1275,6 +1275,95 @@
       return isGoogleProvider || !!(mcp && mcp.oauthAuthorizationUrl);
     }
 
+    // Health verdicts by instanceId, filled in after render. 'reauth' is the
+    // only value that shows the button.
+    //
+    // Whether re-consent is POSSIBLE (canReauthorize) and whether it is NEEDED
+    // are different questions, and the row must answer the second. Answering
+    // the first put a permanent amber warning on every healthy connector; going
+    // back to guessing from token fields is what hid the button on a revoked
+    // Gmail grant, because a revoked refresh token is indistinguishable from a
+    // live one until you actually use it. So the row waits for a probe.
+    const connectionHealth = new Map();
+    // Bumped per sweep so a slow probe from a superseded sweep cannot overwrite
+    // a newer verdict.
+    let healthSweepGeneration = 0;
+
+    // Absent or 'unknown' both mean no button: an unreachable provider is not
+    // evidence that the user needs to reconnect, and prompting on every blip
+    // would train them to ignore it.
+    function healthSaysReauth(instance) {
+      return connectionHealth.get(instance.instanceId) === 'reauth';
+    }
+
+    function needsReauthNow(instance, mcp) {
+      if (!canReauthorize(instance, mcp)) return false;
+      return healthSaysReauth(instance);
+    }
+
+    /**
+     * Which repair this row is offering, if any.
+     *
+     * Both affordances are gated on the same probe verdict. Paste-token rows
+     * were previously ungated, so PeopleForce and Slack-bot connections kept
+     * the permanent amber button this change removes everywhere else — the same
+     * bug, just wearing a different label. Their verdict was already being
+     * computed and thrown away: checkConnectionHealth handles peopleforce
+     * conclusively (no refresh token, so a rejection is final) and slack-bot via
+     * auth.test.
+     *
+     * Also the single value the health sweep compares against, so a re-render
+     * happens only when the row would actually look different.
+     */
+    function reauthAffordance(instance, mcp) {
+      if (needsReauthNow(instance, mcp)) return 'reconnect';
+      if (usesPastedToken(instance, mcp) && healthSaysReauth(instance)) return 'reenter';
+      return 'none';
+    }
+
+    // Probe each connection after the rows are on screen, then re-render only
+    // if a verdict actually changed something. Deliberately not part of the
+    // initial load: these are live calls to third parties and the dashboard
+    // must not wait on the slowest one.
+    async function refreshConnectionHealth() {
+      // Sweeps can overlap: replacing a credential starts a new one while the
+      // page-load sweep may still be in flight, and a probe can take up to the
+      // full 8s timeout. Without this, a stale 'reauth' from the old sweep can
+      // land after the new 'healthy' and put the button back — which is exactly
+      // the "still there after reconnecting" symptom, reintroduced by a race.
+      const generation = ++healthSweepGeneration;
+
+      // Each verdict is applied as it settles rather than at the end: probes
+      // run in parallel but a single slow provider would otherwise hold every
+      // other row's answer hostage. The aggregate await is kept only so callers
+      // can tell when the sweep is done.
+      const checks = (instances || []).map(async (instance) => {
+        try {
+          const res = await fetch(
+            `/api/me/connections/${encodeURIComponent(instance.instanceId)}/health`,
+            { credentials: 'include' },
+          );
+          if (generation !== healthSweepGeneration) return;
+          if (!res.ok) return;
+          const data = await res.json();
+          if (generation !== healthSweepGeneration) return;
+
+          // Compare the RENDERED decision, not the raw state. renderInstances()
+          // rebuilds the whole list via innerHTML, and 'healthy', 'unknown' and
+          // undefined all draw the same row — so keying off the state string
+          // meant N healthy connections triggered N full rebuilds producing
+          // byte-identical HTML, discarding any focus or transient DOM state.
+          const mcp = catalogs.find(c => c.slug === instance.mcpSlug);
+          const before = reauthAffordance(instance, mcp);
+          connectionHealth.set(instance.instanceId, data.state);
+          if (before !== reauthAffordance(instance, mcp)) renderInstances();
+        } catch {
+          // Network trouble on our side is not the user's problem.
+        }
+      });
+      await Promise.all(checks);
+    }
+
     function needsReconnect(instance) {
       const ts = instance.tokenStatus;
       // Non-Google providers (e.g. ClickUp) use long-lived tokens — no reconnect needed
@@ -1318,7 +1407,7 @@
       // Shown alongside Copy URL, not instead of it: the connection may well
       // still work, and re-consent is a repair the user should be able to
       // reach without first proving something is broken. See canReauthorize.
-      const showReauthorize = !showReconnect && canReauthorize(instance, mcp);
+      const showReauthorize = !showReconnect && needsReauthNow(instance, mcp);
       // Paste-token connections have no OAuth flow to re-run, so they get the
       // equivalent repair: paste a fresh credential onto the SAME instance.
       // Delete-and-re-add is not a substitute — the MCP URL embeds instanceId,
@@ -1327,7 +1416,7 @@
       // Stays mutually exclusive with Reconnect after canReauthorize widened:
       // a paste provider is neither Google nor OAuth-capable, so canReauthorize
       // returns false for exactly the rows this covers.
-      const showReenterToken = !showReauthorize && usesPastedToken(instance, mcp);
+      const showReenterToken = !showReauthorize && reauthAffordance(instance, mcp) === 'reenter';
       const tokenHtml = getTokenStatusHtml(instance);
       const eid = escapeAttr(instance.instanceId);
       const ename = escapeAttr(instance.instanceName);
@@ -1639,6 +1728,10 @@
           currentUser = user;
           instances = user.connections || [];
           renderInstances();
+          // The credential just changed, and the server dropped its cached
+          // verdict — re-probe so a successful re-auth clears the button now
+          // rather than looking like it did nothing.
+          void refreshConnectionHealth();
         }
       } catch (err) {
         alert('Connection failed: ' + err.message);
@@ -2090,6 +2183,11 @@
         document.getElementById('userInfo').textContent = user.email;
 
         renderInstances();
+
+        // Probe after the rows are up, never before: the dashboard must not
+        // block on third parties. Rows render with no Reconnect button and one
+        // appears only where a provider actually rejected the credential.
+        void refreshConnectionHealth();
 
         // Show success/error message based on redirect params
         if (connectedInstance) {
