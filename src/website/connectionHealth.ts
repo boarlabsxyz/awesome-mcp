@@ -80,7 +80,14 @@ function classifyGoogleError(err: any): ConnectionHealth {
 async function defaultProbeGoogle(
   refreshToken: string, clientId: string, clientSecret: string,
 ): Promise<ConnectionHealth> {
-  const client = new OAuth2Client(clientId, clientSecret);
+  // Bounded like every other probe here: without transporterOptions the refresh
+  // request inherits no timeout, so a hung token endpoint would hold the
+  // dashboard's per-row fetch open far longer than the 8s the others cap at.
+  const client = new OAuth2Client({
+    clientId,
+    clientSecret,
+    transporterOptions: { timeout: PROBE_TIMEOUT_MS },
+  });
   client.setCredentials({ refresh_token: refreshToken });
   try {
     // Forces a refresh round-trip, which is exactly where a revoked grant
@@ -95,17 +102,40 @@ async function defaultProbeGoogle(
   }
 }
 
-/** Map a shared ValidateResult onto health, keeping 5xx/timeouts out of 'reauth'. */
-function fromValidateResult(result: { ok: boolean; status?: number; userMessage?: string }): ConnectionHealth {
+/**
+ * Map a shared ValidateResult onto health, keeping 5xx/timeouts out of 'reauth'.
+ *
+ * `canSelfHeal` says a refresh token is stored, and it changes what a rejection
+ * MEANS. Outline (~1h) and HubSpot (~30min) OAuth access tokens are routinely
+ * expired at rest and are refreshed at tool-call time, so probing with the
+ * stored access token and reading 401 as "reconnect" would put the button on
+ * healthy connections constantly — the exact false alarm this whole change
+ * exists to remove. When the connection can renew itself, a rejected access
+ * token is not evidence about the grant, so we report 'unknown' and stay quiet.
+ *
+ * Deliberately NOT solved by refreshing here first: Outline ROTATES its refresh
+ * token on every use (hence the single-flight machinery in
+ * maybeRefreshOutlineToken), so a probe that refreshed without persisting would
+ * invalidate the stored token and break the very connection it was checking.
+ * The cost of this choice is a false negative — a genuinely revoked Outline or
+ * HubSpot grant shows no button — which is the safe direction, and Google, the
+ * case that motivated all this, probes its refresh grant directly.
+ */
+function fromValidateResult(
+  result: { ok: boolean; status?: number; userMessage?: string },
+  canSelfHeal: boolean,
+): ConnectionHealth {
   if (result.ok) return { state: 'healthy' };
   const status = result.status ?? 0;
-  if (status === 401 || status === 403) {
+  const rejected = status === 400 || status === 401 || status === 403;
+  if (rejected) {
+    if (canSelfHeal) {
+      return {
+        state: 'unknown',
+        reason: 'Stored access token was rejected, but a refresh token is present — the connection renews itself at call time.',
+      };
+    }
     return { state: 'reauth', reason: result.userMessage || 'The stored credential was rejected.' };
-  }
-  // 400 from these validators means a malformed credential, which a reconnect
-  // does fix; 5xx/0 means the provider could not answer and must not prompt.
-  if (status === 400) {
-    return { state: 'reauth', reason: result.userMessage || 'The stored credential is not valid.' };
   }
   return { state: 'unknown', reason: result.userMessage || `Provider unreachable (status ${status}).` };
 }
@@ -200,21 +230,23 @@ export async function checkConnectionHealth(
           baseUrl: providerTokens.baseUrl || process.env.OUTLINE_BASE_URL || '',
           token: accessToken,
           fetchImpl,
-        } as any));
+        } as any), !!providerTokens.refresh_token);
       }
 
       case 'peopleforce': {
         if (!accessToken) return { state: 'reauth', reason: 'No PeopleForce API key stored.' };
+        // PeopleForce is paste-token only: no refresh token exists, so a
+        // rejection is always conclusive.
         return fromValidateResult(await validatePeopleForceToken({
           token: accessToken, baseUrl: providerTokens.baseUrl, fetchImpl,
-        } as any));
+        } as any), !!providerTokens.refresh_token);
       }
 
       case 'hubspot': {
         if (!accessToken) return { state: 'reauth', reason: 'No HubSpot token stored.' };
         return fromValidateResult(await validateHubSpotToken({
           token: accessToken, baseUrl: providerTokens.baseUrl, fetchImpl,
-        } as any));
+        } as any), !!providerTokens.refresh_token);
       }
 
       default:

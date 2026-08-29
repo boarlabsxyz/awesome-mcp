@@ -1299,23 +1299,27 @@
     // initial load: these are live calls to third parties and the dashboard
     // must not wait on the slowest one.
     async function refreshConnectionHealth() {
+      // Each verdict is applied as it settles rather than at the end: probes
+      // run in parallel but a single slow provider would otherwise hold every
+      // other row's answer hostage for up to the full probe timeout. The
+      // aggregate await is kept only so callers can tell when the sweep is done.
       const checks = (instances || []).map(async (instance) => {
         try {
           const res = await fetch(
             `/api/me/connections/${encodeURIComponent(instance.instanceId)}/health`,
             { credentials: 'include' },
           );
-          if (!res.ok) return false;
+          if (!res.ok) return;
           const data = await res.json();
           const previous = connectionHealth.get(instance.instanceId);
+          if (previous === data.state) return;
           connectionHealth.set(instance.instanceId, data.state);
-          return previous !== data.state;
+          renderInstances();
         } catch {
-          return false; // Network trouble on our side is not the user's problem.
+          // Network trouble on our side is not the user's problem.
         }
       });
-      const results = await Promise.all(checks);
-      if (results.some(Boolean)) renderInstances();
+      await Promise.all(checks);
     }
 
     function needsReconnect(instance) {

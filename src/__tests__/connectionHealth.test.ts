@@ -129,3 +129,48 @@ describe('checkConnectionHealth — unknown providers never prompt', () => {
     assert.equal(health.state, 'unknown');
   });
 });
+
+describe('checkConnectionHealth — a refreshable connection is not a broken one', () => {
+  // Outline (~1h) and HubSpot (~30min) OAuth access tokens are routinely
+  // expired at rest and refreshed at tool-call time. Reading that 401 as
+  // "reconnect" would put the button back on healthy connections permanently,
+  // which is the complaint this whole change exists to answer.
+  const withRefresh = (provider: string) => ({
+    instanceId: 'i', mcpSlug: provider, userId: 1, provider,
+    providerTokens: { access_token: 'expired', refresh_token: 'r', baseUrl: 'https://x.test' },
+  } as any);
+  const withoutRefresh = (provider: string) => ({
+    instanceId: 'i', mcpSlug: provider, userId: 1, provider,
+    providerTokens: { access_token: 'bad', baseUrl: 'https://x.test' },
+  } as any);
+
+  for (const provider of ['outline', 'hubspot']) {
+    it(`${provider}: 401 with a refresh token stored is unknown, not reauth`, async () => {
+      const health = await checkConnectionHealth(withRefresh(provider), NO_CREDS, {
+        fetchImpl: respond(401, {}),
+      });
+      assert.equal(health.state, 'unknown');
+    });
+
+    it(`${provider}: 401 with no refresh token is conclusive`, async () => {
+      const health = await checkConnectionHealth(withoutRefresh(provider), NO_CREDS, {
+        fetchImpl: respond(401, {}),
+      });
+      assert.equal(health.state, 'reauth');
+    });
+
+    it(`${provider}: a working token is healthy either way`, async () => {
+      const ok = await checkConnectionHealth(withRefresh(provider), NO_CREDS, {
+        fetchImpl: respond(200, { data: [] }),
+      });
+      assert.equal(ok.state, 'healthy');
+    });
+  }
+
+  it('peopleforce has no refresh token, so a rejection still prompts', async () => {
+    const health = await checkConnectionHealth(withoutRefresh('peopleforce'), NO_CREDS, {
+      fetchImpl: respond(401, {}),
+    });
+    assert.equal(health.state, 'reauth');
+  });
+});
