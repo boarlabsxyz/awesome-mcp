@@ -314,6 +314,7 @@ import { exchangeHubSpotOauthCode, buildHubSpotOauthInstanceName, HUBSPOT_TOKEN_
 import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceNameFromToken } from '../outline/connectToken.js';
 import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
+import { checkConnectionHealth, type ConnectionHealth } from './connectionHealth.js';
 import { buildSimpleInstanceName, type ValidateResult } from '../util/pasteTokenValidation.js';
 import {
   listSpreadsheetFiles,
@@ -374,6 +375,49 @@ const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 /** How long a pending "finish this after you log in" intent stays valid. */
 const POST_LOGIN_REDIRECT_MAX_AGE = 10 * 60 * 1000; // 10 minutes
 const POST_LOGIN_REDIRECT_COOKIE = 'post_login_redirect';
+
+// Health probes hit a third party, so results are cached briefly — a dashboard
+// render, a second tab and an F5 should not re-probe every provider. Short
+// enough that a credential dying mid-session surfaces quickly; the cache is
+// dropped outright on any credential replacement so a successful reconnect
+// hides the button at once rather than after the TTL.
+const CONNECTION_HEALTH_TTL_SECONDS = 300;
+
+async function readConnectionHealthCache(instanceId: string): Promise<ConnectionHealth | null> {
+  try {
+    const { isDatabaseAvailable, getRedis } = await import('../db.js');
+    if (!isDatabaseAvailable()) return null;
+    const raw = await getRedis().get(`conn_health:${instanceId}`);
+    return raw ? JSON.parse(raw) as ConnectionHealth : null;
+  } catch {
+    return null; // A cache miss is always safe; a cache error must not 500.
+  }
+}
+
+async function writeConnectionHealthCache(instanceId: string, health: ConnectionHealth): Promise<void> {
+  try {
+    const { isDatabaseAvailable, getRedis } = await import('../db.js');
+    if (!isDatabaseAvailable()) return;
+    await getRedis().set(
+      `conn_health:${instanceId}`, JSON.stringify(health), 'EX', CONNECTION_HEALTH_TTL_SECONDS,
+    );
+  } catch { /* best-effort */ }
+}
+
+/**
+ * Forget what we knew about a connection's health.
+ *
+ * Called wherever a credential is replaced. Without it, reconnecting would
+ * leave the Reconnect button up for the remainder of the TTL, which reads
+ * exactly like the reconnect having failed.
+ */
+export async function clearConnectionHealthCache(instanceId: string): Promise<void> {
+  try {
+    const { isDatabaseAvailable, getRedis } = await import('../db.js');
+    if (!isDatabaseAvailable()) return;
+    await getRedis().del(`conn_health:${instanceId}`);
+  } catch { /* best-effort */ }
+}
 
 /**
  * Validate a post-login return path.
@@ -1215,6 +1259,10 @@ function registerSharedRoutes(app: express.Express): void {
         }
         const merged = mergeProviderReconnectTokens(freshTokens, existing.providerTokens as any);
         await updateMcpInstanceProviderTokens(existing.instanceId, merged);
+        // Credentials changed, so any cached health verdict is stale — drop it
+        // or the Reconnect button lingers for the rest of the TTL and reads as
+        // "reconnecting did nothing".
+        await clearConnectionHealthCache(existing.instanceId);
         console.error(`User ${user.id} reconnected ${label} MCP: ${existing.instanceId}`);
         return { ...existing, providerTokens: merged };
       };
@@ -1288,6 +1336,10 @@ function registerSharedRoutes(app: express.Express): void {
             providerTokens.accessRules = existingRules;
           }
           await updateMcpInstanceProviderTokens(existing.instanceId, providerTokens);
+          // Credentials changed, so any cached health verdict is stale — drop it
+          // or the Reconnect button lingers for the rest of the TTL and reads as
+          // "reconnecting did nothing".
+          await clearConnectionHealthCache(existing.instanceId);
           connection = existing;
           console.error(`User ${user.id} reconnected Slack User MCP: ${connection.instanceId}`);
         } else {
@@ -1580,6 +1632,10 @@ function registerSharedRoutes(app: express.Express): void {
           const mergedTokens = mergeReconnectTokens(googleTokens, existing.googleTokens.refresh_token);
           Object.assign(googleTokens, mergedTokens);
           await updateMcpInstanceTokens(existing.instanceId, googleTokens);
+          // Credentials changed, so any cached health verdict is stale — drop it
+          // or the Reconnect button lingers for the rest of the TTL and reads as
+          // "reconnecting did nothing".
+          await clearConnectionHealthCache(existing.instanceId);
           // Persist google email if it changed
           if (googleEmail && googleEmail !== existing.googleEmail) {
             await updateMcpInstanceGoogleEmail(existing.instanceId, googleEmail);
@@ -1696,6 +1752,7 @@ function registerSharedRoutes(app: express.Express): void {
           // the access-rules endpoint clears it after writing.
           const { clearMcpSessionCache } = await import('../userSession.js');
           clearMcpSessionCache(user.apiKey, existing.instanceId);
+          await clearConnectionHealthCache(existing.instanceId);
 
           console.error(`User ${userId} re-authenticated ${opts.serviceLogName} MCP: ${existing.instanceId}`);
           res.json({
@@ -2263,6 +2320,65 @@ function registerSharedRoutes(app: express.Express): void {
     } catch (err: any) {
       console.error('Error fetching connections:', err);
       res.status(500).json({ error: 'Failed to fetch connections' });
+    }
+  });
+
+  /**
+   * Does this connection's credential still work?
+   *
+   * The dashboard asks per row and offers Reconnect only on 'reauth'. It is a
+   * separate call rather than a field on /api/me on purpose: this makes a live
+   * request to the provider, and folding it into the page load would make the
+   * whole dashboard wait on the slowest third party.
+   *
+   * Cached briefly so re-rendering, a second tab, or an F5 does not re-probe
+   * every provider. The cache is dropped whenever credentials are replaced, so
+   * a successful reconnect hides the button immediately instead of leaving it
+   * up for the rest of the TTL — which is the whole complaint this answers.
+   */
+  app.get('/api/me/connections/:instanceId/health', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const googleId = req.session!.googleId;
+      const user = googleId ? await getUserByGoogleId(googleId) : null;
+      if (!user?.id) {
+        res.status(401).json({ error: 'Not authenticated' });
+        return;
+      }
+
+      const instanceId = String(req.params.instanceId);
+      const connection = await getMcpConnectionByInstanceId(instanceId);
+      if (!connection || connection.userId !== user.id) {
+        res.status(404).json({ error: 'Instance not found' });
+        return;
+      }
+
+      const cached = await readConnectionHealthCache(instanceId);
+      if (cached) {
+        res.json({ ...cached, cached: true });
+        return;
+      }
+
+      const mcp = await getMcpCatalog(connection.mcpSlug);
+      let clientId: string | null = mcp?.googleClientId || null;
+      let clientSecret: string | null = mcp?.googleClientSecret || null;
+      if ((connection.provider || 'google') === 'google' && (!clientId || !clientSecret)) {
+        try {
+          const global = await loadClientCredentials();
+          clientId = clientId || global.client_id;
+          clientSecret = clientSecret || global.client_secret;
+        } catch {
+          // Leave them null; the probe reports 'unknown' rather than guessing.
+        }
+      }
+
+      const health = await checkConnectionHealth(connection, { clientId, clientSecret });
+      await writeConnectionHealthCache(instanceId, health);
+      res.json({ ...health, cached: false });
+    } catch (err: any) {
+      console.error('[connection-health] error:', err);
+      // Never a 500 into the dashboard's per-row fetch: an error here must read
+      // as "could not tell", not as a broken connection.
+      res.json({ state: 'unknown', reason: 'Health check failed.' });
     }
   });
 

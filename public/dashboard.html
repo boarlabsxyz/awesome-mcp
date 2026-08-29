@@ -1275,6 +1275,49 @@
       return isGoogleProvider || !!(mcp && mcp.oauthAuthorizationUrl);
     }
 
+    // Health verdicts by instanceId, filled in after render. 'reauth' is the
+    // only value that shows the button.
+    //
+    // Whether re-consent is POSSIBLE (canReauthorize) and whether it is NEEDED
+    // are different questions, and the row must answer the second. Answering
+    // the first put a permanent amber warning on every healthy connector; going
+    // back to guessing from token fields is what hid the button on a revoked
+    // Gmail grant, because a revoked refresh token is indistinguishable from a
+    // live one until you actually use it. So the row waits for a probe.
+    const connectionHealth = new Map();
+
+    // Absent or 'unknown' both mean no button: an unreachable provider is not
+    // evidence that the user needs to reconnect, and prompting on every blip
+    // would train them to ignore it.
+    function needsReauthNow(instance, mcp) {
+      if (!canReauthorize(instance, mcp)) return false;
+      return connectionHealth.get(instance.instanceId) === 'reauth';
+    }
+
+    // Probe each connection after the rows are on screen, then re-render only
+    // if a verdict actually changed something. Deliberately not part of the
+    // initial load: these are live calls to third parties and the dashboard
+    // must not wait on the slowest one.
+    async function refreshConnectionHealth() {
+      const checks = (instances || []).map(async (instance) => {
+        try {
+          const res = await fetch(
+            `/api/me/connections/${encodeURIComponent(instance.instanceId)}/health`,
+            { credentials: 'include' },
+          );
+          if (!res.ok) return false;
+          const data = await res.json();
+          const previous = connectionHealth.get(instance.instanceId);
+          connectionHealth.set(instance.instanceId, data.state);
+          return previous !== data.state;
+        } catch {
+          return false; // Network trouble on our side is not the user's problem.
+        }
+      });
+      const results = await Promise.all(checks);
+      if (results.some(Boolean)) renderInstances();
+    }
+
     function needsReconnect(instance) {
       const ts = instance.tokenStatus;
       // Non-Google providers (e.g. ClickUp) use long-lived tokens — no reconnect needed
@@ -1318,7 +1361,7 @@
       // Shown alongside Copy URL, not instead of it: the connection may well
       // still work, and re-consent is a repair the user should be able to
       // reach without first proving something is broken. See canReauthorize.
-      const showReauthorize = !showReconnect && canReauthorize(instance, mcp);
+      const showReauthorize = !showReconnect && needsReauthNow(instance, mcp);
       // Paste-token connections have no OAuth flow to re-run, so they get the
       // equivalent repair: paste a fresh credential onto the SAME instance.
       // Delete-and-re-add is not a substitute — the MCP URL embeds instanceId,
@@ -1639,6 +1682,10 @@
           currentUser = user;
           instances = user.connections || [];
           renderInstances();
+          // The credential just changed, and the server dropped its cached
+          // verdict — re-probe so a successful re-auth clears the button now
+          // rather than looking like it did nothing.
+          void refreshConnectionHealth();
         }
       } catch (err) {
         alert('Connection failed: ' + err.message);
@@ -2090,6 +2137,11 @@
         document.getElementById('userInfo').textContent = user.email;
 
         renderInstances();
+
+        // Probe after the rows are up, never before: the dashboard must not
+        // block on third parties. Rows render with no Reconnect button and one
+        // appears only where a provider actually rejected the credential.
+        void refreshConnectionHealth();
 
         // Show success/error message based on redirect params
         if (connectedInstance) {
