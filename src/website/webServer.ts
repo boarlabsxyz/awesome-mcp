@@ -314,6 +314,7 @@ import { exchangeHubSpotOauthCode, buildHubSpotOauthInstanceName, HUBSPOT_TOKEN_
 import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceNameFromToken } from '../outline/connectToken.js';
 import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
+import { checkConnectionHealth, type ConnectionHealth } from './connectionHealth.js';
 import { buildSimpleInstanceName, type ValidateResult } from '../util/pasteTokenValidation.js';
 import {
   listSpreadsheetFiles,
@@ -370,6 +371,76 @@ export function computeEffectiveScopes(
 const BASE_URL = stripTrailingSlashes(process.env.BASE_URL || 'http://localhost:8080');
 const COOKIE_SECRET = process.env.COOKIE_SECRET || 'dev-secret-change-me';
 const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+/** How long a pending "finish this after you log in" intent stays valid. */
+const POST_LOGIN_REDIRECT_MAX_AGE = 10 * 60 * 1000; // 10 minutes
+const POST_LOGIN_REDIRECT_COOKIE = 'post_login_redirect';
+
+// Health probes hit a third party, so results are cached briefly — a dashboard
+// render, a second tab and an F5 should not re-probe every provider. Short
+// enough that a credential dying mid-session surfaces quickly; the cache is
+// dropped outright on any credential replacement so a successful reconnect
+// hides the button at once rather than after the TTL.
+const CONNECTION_HEALTH_TTL_SECONDS = 300;
+
+async function readConnectionHealthCache(instanceId: string): Promise<ConnectionHealth | null> {
+  try {
+    const { isDatabaseAvailable, getRedis } = await import('../db.js');
+    if (!isDatabaseAvailable()) return null;
+    const raw = await getRedis().get(`conn_health:${instanceId}`);
+    return raw ? JSON.parse(raw) as ConnectionHealth : null;
+  } catch {
+    return null; // A cache miss is always safe; a cache error must not 500.
+  }
+}
+
+async function writeConnectionHealthCache(instanceId: string, health: ConnectionHealth): Promise<void> {
+  try {
+    const { isDatabaseAvailable, getRedis } = await import('../db.js');
+    if (!isDatabaseAvailable()) return;
+    await getRedis().set(
+      `conn_health:${instanceId}`, JSON.stringify(health), 'EX', CONNECTION_HEALTH_TTL_SECONDS,
+    );
+  } catch { /* best-effort */ }
+}
+
+/**
+ * Forget what we knew about a connection's health.
+ *
+ * Called wherever a credential is replaced. Without it, reconnecting would
+ * leave the Reconnect button up for the remainder of the TTL, which reads
+ * exactly like the reconnect having failed.
+ */
+export async function clearConnectionHealthCache(instanceId: string): Promise<void> {
+  try {
+    const { isDatabaseAvailable, getRedis } = await import('../db.js');
+    if (!isDatabaseAvailable()) return;
+    await getRedis().del(`conn_health:${instanceId}`);
+  } catch { /* best-effort */ }
+}
+
+/**
+ * Validate a post-login return path.
+ *
+ * This value is reflected into res.redirect() after a session is established,
+ * so it is an open-redirect sink and is treated as untrusted even though we
+ * set it ourselves — a signed cookie proves integrity, not that the contents
+ * are still a path we want to send a freshly-authenticated user to.
+ *
+ * Rejects anything that isn't a same-origin absolute path: "//evil.test" is a
+ * protocol-relative URL that browsers follow off-site, and a backslash is
+ * normalised to a forward slash by some clients, so "/\evil.test" is the same
+ * trick. The prefix allowlist is the real guard — only the flows that actually
+ * need resuming are resumable.
+ */
+export function sanitizePostLoginRedirect(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 512) return null;
+  if (!value.startsWith('/')) return null;
+  if (value.startsWith('//') || value.includes('\\')) return null;
+  const path = value.split('?')[0];
+  const allowed = path === '/dashboard' || path.startsWith('/connect/');
+  return allowed ? value : null;
+}
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
 
 // Extend Express Request to include session
@@ -416,6 +487,53 @@ export function computeTokenStatus(
  * Merges new OAuth tokens with existing ones, preserving refresh_token if not provided.
  * Used during reconnect flow.
  */
+/**
+ * Keys that must survive a re-consent when the new exchange omits them.
+ *
+ * Every one of these has burned someone:
+ *  - refresh_token: Outline rotates its refresh token and HubSpot can omit it;
+ *    overwriting with undefined leaves a connection that works for an hour and
+ *    then dies. Same failure mergeReconnectTokens exists to prevent for Google.
+ *  - accessRules: Slack's per-channel allowlist lives inside providerTokens.
+ *    Dropping it on reconnect would silently WIDEN access, which is the one
+ *    direction a reconnect must never move.
+ *  - baseUrl: Outline's instance URL. It is derived from env at exchange time,
+ *    so a deploy that lost the env var would otherwise blank it on the next
+ *    reconnect and point the connector at the default tenant.
+ *
+ * The merge only fills in values the fresh exchange left EMPTY. That is why the
+ * Slack branch keeps its own reconnect path instead of routing through here: it
+ * builds providerTokens with a freshly-defaulted accessRules object, which is
+ * non-empty, so the merge would happily keep those defaults and reset the
+ * user's channel allowlist. Any future provider that pre-seeds a default for
+ * one of these keys has the same trap — omit the key on the reconnect path and
+ * let the stored value win.
+ */
+const PRESERVED_ON_RECONNECT = ['refresh_token', 'accessRules', 'baseUrl'] as const;
+
+/**
+ * Non-Google sibling of mergeReconnectTokens: carry forward anything the fresh
+ * exchange did not supply, so re-consenting can only ever add information.
+ */
+export function mergeProviderReconnectTokens<T extends Record<string, any>>(
+  newTokens: T,
+  existingTokens: Record<string, any> | null | undefined,
+): T & Partial<Record<typeof PRESERVED_ON_RECONNECT[number], any>> {
+  // The return type is T *plus* the preserved keys: the merge can reinstate a
+  // key the fresh exchange never had (a Slack allowlist on a token payload
+  // that is only { access_token }), so claiming plain T would be a lie.
+  if (!existingTokens) return { ...newTokens };
+  const merged: Record<string, any> = { ...newTokens };
+  for (const key of PRESERVED_ON_RECONNECT) {
+    const incoming = merged[key];
+    const isEmpty = incoming === undefined || incoming === null || incoming === '';
+    if (isEmpty && existingTokens[key] !== undefined && existingTokens[key] !== null) {
+      merged[key] = existingTokens[key];
+    }
+  }
+  return merged as T & Partial<Record<typeof PRESERVED_ON_RECONNECT[number], any>>;
+}
+
 export function mergeReconnectTokens(
   newTokens: { access_token: string; refresh_token: string; scope: string; token_type: string; expiry_date: number },
   existingRefreshToken: string | undefined
@@ -848,7 +966,16 @@ function registerSharedRoutes(app: express.Express): void {
         sameSite: 'lax',
         maxAge: SESSION_MAX_AGE,
       });
-      res.redirect('/dashboard');
+
+      // Resume whatever the user was trying to do before we bounced them to
+      // log in. Sanitized rather than trusted: this lands in res.redirect(),
+      // and a signed cookie only proves we wrote it, not that it is still a
+      // path worth sending a freshly-authenticated user to.
+      const parked = sanitizePostLoginRedirect(req.signedCookies?.[POST_LOGIN_REDIRECT_COOKIE]);
+      if (req.signedCookies?.[POST_LOGIN_REDIRECT_COOKIE]) {
+        res.clearCookie(POST_LOGIN_REDIRECT_COOKIE);
+      }
+      res.redirect(parked || '/dashboard');
     } catch (err: any) {
       console.error('OAuth callback error:', err);
       res.status(500).send('Authentication failed. Please try again.');
@@ -910,20 +1037,41 @@ function registerSharedRoutes(app: express.Express): void {
     const instanceName = req.query.name as string | undefined;
     const sessionId = req.signedCookies?.session;
 
+    // Park the whole intent — path AND query — then send the user to log in.
+    //
+    // This used to hand-rebuild the return URL from `mcpSlug` + `name`, which
+    // silently dropped `?reconnect=<instanceId>`: the one parameter that tells
+    // the callback to refresh an existing instance instead of treating the
+    // consent as a brand-new connection. A user whose session had lapsed
+    // therefore came back from Google without it, fell into the callback's
+    // "already connected" branch, and watched their stale token survive
+    // untouched — the intermittent half of "reconnect sometimes doesn't work",
+    // and provider-agnostic, so Gmail was affected exactly like the rest.
+    //
+    // It also pointed at `/?redirect=…`, and `/` unconditionally redirects to
+    // /dashboard without ever reading that parameter, so the return-to-intent
+    // was dead on arrival regardless. A signed, short-lived cookie consumed by
+    // /auth/callback replaces it; going straight to /auth/google also drops a
+    // pointless hop.
+    const parkIntentAndLogin = () => {
+      res.cookie(POST_LOGIN_REDIRECT_COOKIE, req.originalUrl, {
+        signed: true,
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: POST_LOGIN_REDIRECT_MAX_AGE,
+      });
+      res.redirect('/auth/google');
+    };
+
     if (!sessionId) {
-      const redirectUrl = instanceName
-        ? `/connect/${mcpSlug}?name=${encodeURIComponent(instanceName)}`
-        : `/connect/${mcpSlug}`;
-      res.redirect(`/?redirect=${encodeURIComponent(redirectUrl)}`);
+      parkIntentAndLogin();
       return;
     }
     const session = await getSession(sessionId);
     if (!session || session.expiresAt < Date.now()) {
       res.clearCookie('session');
-      const redirectUrl = instanceName
-        ? `/connect/${mcpSlug}?name=${encodeURIComponent(instanceName)}`
-        : `/connect/${mcpSlug}`;
-      res.redirect(`/?redirect=${encodeURIComponent(redirectUrl)}`);
+      parkIntentAndLogin();
       return;
     }
 
@@ -1086,6 +1234,39 @@ function registerSharedRoutes(app: express.Express): void {
       let connection;
       const provider = stateData.provider || mcp.provider || 'google';
 
+      /**
+       * Apply a re-consent to the instance the user clicked Reconnect on.
+       *
+       * Every non-Google branch below used to skip straight to its
+       * "already connected?" check, which matches on the regenerated instance
+       * name — and that name is derived from the workspace/portal, so on a
+       * reconnect it ALWAYS matches. The result was a guaranteed no-op:
+       * the user re-consented, got redirected to `already_exists`, and the
+       * stale token was never replaced. That is the "it says ClickUp (S&F) is
+       * already connected when I try to reconnect" dead end. Only the Slack and
+       * Google branches ever handled it.
+       *
+       * Returns null when it has already answered the request.
+       */
+      const applyProviderReconnect = async <T extends Parameters<typeof updateMcpInstanceProviderTokens>[1]>(
+        freshTokens: T,
+        label: string,
+      ): Promise<any | null> => {
+        const existing = await getMcpConnectionByInstanceId(stateData.reconnectInstanceId);
+        if (!existing || existing.userId !== user.id || existing.mcpSlug !== mcpSlug) {
+          res.status(404).send('Instance not found or access denied.');
+          return null;
+        }
+        const merged = mergeProviderReconnectTokens(freshTokens, existing.providerTokens as any);
+        await updateMcpInstanceProviderTokens(existing.instanceId, merged);
+        // Credentials changed, so any cached health verdict is stale — drop it
+        // or the Reconnect button lingers for the rest of the TTL and reads as
+        // "reconnecting did nothing".
+        await clearConnectionHealthCache(existing.instanceId);
+        console.error(`User ${user.id} reconnected ${label} MCP: ${existing.instanceId}`);
+        return { ...existing, providerTokens: merged };
+      };
+
       if (provider === 'slack') {
         // Slack V2 OAuth: exchange code for user access_token
         const tokenUrl = mcp.oauthTokenUrl || 'https://slack.com/api/oauth.v2.access';
@@ -1155,6 +1336,10 @@ function registerSharedRoutes(app: express.Express): void {
             providerTokens.accessRules = existingRules;
           }
           await updateMcpInstanceProviderTokens(existing.instanceId, providerTokens);
+          // Credentials changed, so any cached health verdict is stale — drop it
+          // or the Reconnect button lingers for the rest of the TTL and reads as
+          // "reconnecting did nothing".
+          await clearConnectionHealthCache(existing.instanceId);
           connection = existing;
           console.error(`User ${user.id} reconnected Slack User MCP: ${connection.instanceId}`);
         } else {
@@ -1271,6 +1456,13 @@ function registerSharedRoutes(app: express.Express): void {
           clickUpInstanceName = providerEmail ? `${clickUpServiceName} (${providerEmail})` : clickUpServiceName;
         }
 
+        if (stateData.reconnectInstanceId) {
+          const reconnected = await applyProviderReconnect(providerTokens, 'ClickUp');
+          if (!reconnected) return;
+          res.redirect(`/dashboard?reconnected=${encodeURIComponent(reconnected.instanceName || mcpSlug)}`);
+          return;
+        }
+
         // Check if user already has this mcpSlug + same ClickUp account — reconnect instead
         const clickUpConnections = await getUserConnectedMcps(user.id);
         // Match by instance name (contains workspace name) to allow same email across different workspaces
@@ -1326,6 +1518,13 @@ function registerSharedRoutes(app: express.Express): void {
           email: exchange.email,
         });
 
+        if (stateData.reconnectInstanceId) {
+          const reconnected = await applyProviderReconnect(outlineProviderTokens, 'Outline');
+          if (!reconnected) return;
+          res.redirect(`/dashboard?reconnected=${encodeURIComponent(reconnected.instanceName || mcpSlug)}`);
+          return;
+        }
+
         const outlineConnections = await getUserConnectedMcps(user.id);
         const existingOutline = outlineConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === outlineInstanceName);
 
@@ -1369,6 +1568,13 @@ function registerSharedRoutes(app: express.Express): void {
           hubDomain: exchange.hubDomain,
           email: exchange.email,
         });
+
+        if (stateData.reconnectInstanceId) {
+          const reconnected = await applyProviderReconnect(hubspotProviderTokens, 'HubSpot');
+          if (!reconnected) return;
+          res.redirect(`/dashboard?reconnected=${encodeURIComponent(reconnected.instanceName || mcpSlug)}`);
+          return;
+        }
 
         const hubspotConnections = await getUserConnectedMcps(user.id);
         const existingHubSpot = hubspotConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === hubspotInstanceName);
@@ -1426,6 +1632,10 @@ function registerSharedRoutes(app: express.Express): void {
           const mergedTokens = mergeReconnectTokens(googleTokens, existing.googleTokens.refresh_token);
           Object.assign(googleTokens, mergedTokens);
           await updateMcpInstanceTokens(existing.instanceId, googleTokens);
+          // Credentials changed, so any cached health verdict is stale — drop it
+          // or the Reconnect button lingers for the rest of the TTL and reads as
+          // "reconnecting did nothing".
+          await clearConnectionHealthCache(existing.instanceId);
           // Persist google email if it changed
           if (googleEmail && googleEmail !== existing.googleEmail) {
             await updateMcpInstanceGoogleEmail(existing.instanceId, googleEmail);
@@ -1476,7 +1686,9 @@ function registerSharedRoutes(app: express.Express): void {
   // POST /api/connect-token - Connect an MCP via direct token (e.g., Slack bot token)
   app.post('/api/connect-token', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
     try {
-      const { mcpSlug, token, instanceName } = req.body as { mcpSlug?: string; token?: string; instanceName?: string };
+      const { mcpSlug, token, instanceName, instanceId } = req.body as {
+        mcpSlug?: string; token?: string; instanceName?: string; instanceId?: string;
+      };
       if (!mcpSlug || !token) {
         res.status(400).json({ error: 'mcpSlug and token are required' });
         return;
@@ -1494,6 +1706,72 @@ function registerSharedRoutes(app: express.Express): void {
       if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
       const userId = user.id;
 
+      /**
+       * Store a validated paste-token credential — updating the named instance
+       * when the caller is re-authenticating, creating one otherwise.
+       *
+       * Paste-token providers (slack-bot, peopleforce, hubspot-by-token, and
+       * Outline in paste mode) previously had no way to replace a rotated
+       * credential: every path here called createMcpInstance unconditionally,
+       * so re-pasting produced a DUPLICATE connection and left the dead one in
+       * place. Delete-and-re-add was the only real option, and it is not
+       * equivalent — the MCP URL embeds instanceId, so recreating hands the
+       * user a different URL and they have to re-add the connector in Claude.
+       * OAuth providers got this via /connect/:slug?reconnect=…; this is the
+       * paste-token counterpart.
+       *
+       * The stored name and email are deliberately left alone on re-auth. This
+       * rotates the credential of an account already connected; pasting a token
+       * for a DIFFERENT account is a new connection, not a repair, and silently
+       * relabelling the user's instance would hide that.
+       */
+      const persistPasteConnection = async (opts: {
+        provider: string;
+        serviceLogName: string;
+        name: string;
+        providerTokens: Record<string, any>;
+        providerEmail: string | null;
+      }): Promise<void> => {
+        if (instanceId) {
+          const existing = await getMcpConnectionByInstanceId(instanceId);
+          if (!existing || existing.userId !== userId || existing.mcpSlug !== mcpSlug) {
+            res.status(404).json({ error: 'Instance not found or access denied.' });
+            return;
+          }
+          // A straight replace, not a merge: unlike the OAuth reconnect path
+          // there is nothing partial to preserve, because the paste flow
+          // produces every field it stores (access_token, plus baseUrl for
+          // Outline). No refresh tokens and no access rules live here.
+          await updateMcpInstanceProviderTokens(existing.instanceId, opts.providerTokens as any);
+
+          // Drop the cached session, or the replaced credential changes nothing
+          // that matters: buildMcpSession memoises by `${apiKey}:${instanceId}`
+          // in a plain Map with no TTL, so a session built from the token the
+          // user just replaced would otherwise be served for the life of the
+          // process — defeating the entire point of re-entering it. Same reason
+          // the access-rules endpoint clears it after writing.
+          const { clearMcpSessionCache } = await import('../userSession.js');
+          clearMcpSessionCache(user.apiKey, existing.instanceId);
+          await clearConnectionHealthCache(existing.instanceId);
+
+          console.error(`User ${userId} re-authenticated ${opts.serviceLogName} MCP: ${existing.instanceId}`);
+          res.json({
+            success: true,
+            instanceId: existing.instanceId,
+            instanceName: existing.instanceName,
+            reauthenticated: true,
+          });
+          return;
+        }
+        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const connection = await createMcpInstance(
+          userId, mcpSlug, opts.name, emptyGoogleTokens, null,
+          opts.provider, opts.providerTokens as any, opts.providerEmail,
+        );
+        console.error(`User ${userId} connected ${opts.serviceLogName} MCP: ${connection.instanceId}`);
+        res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
+      };
+
       // Shared paste-token connect flow for simple bearer/API-key providers:
       // validate the pasted credential, then store just { access_token }. Each
       // provider differs only in its validate() call, provider slug, and log label.
@@ -1508,18 +1786,16 @@ function registerSharedRoutes(app: express.Express): void {
           res.status(result.status).json({ error: result.userMessage });
           return;
         }
-        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
-        const providerTokens = { access_token: token };
-        const name = buildSimpleInstanceName({
-          serviceName: mcp.name.replace(' MCP', '').trim(),
-          providedInstanceName: instanceName,
+        await persistPasteConnection({
+          provider,
+          serviceLogName,
+          name: buildSimpleInstanceName({
+            serviceName: mcp.name.replace(' MCP', '').trim(),
+            providedInstanceName: instanceName,
+          }),
+          providerTokens: { access_token: token },
+          providerEmail: null,
         });
-        const connection = await createMcpInstance(
-          userId, mcpSlug, name, emptyGoogleTokens, null,
-          provider, providerTokens, null,
-        );
-        console.error(`User ${userId} connected ${serviceLogName} MCP: ${connection.instanceId}`);
-        res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
       };
 
       if (mcpSlug === 'slack-bot') {
@@ -1539,18 +1815,14 @@ function registerSharedRoutes(app: express.Express): void {
             return;
           }
 
-          const providerEmail = null; // Slack bot tokens don't have an associated email
-          const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
-          const providerTokens = { access_token: token };
           const botServiceName = mcp.name.replace(' MCP', '').trim();
-          const name = instanceName || `${botServiceName} (${data.team || 'workspace'})`;
-
-          const connection = await createMcpInstance(
-            user.id, mcpSlug, name, emptyGoogleTokens, null,
-            'slack-bot', providerTokens, providerEmail
-          );
-          console.error(`User ${user.id} connected Slack Bot MCP: ${connection.instanceId}`);
-          res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
+          await persistPasteConnection({
+            provider: 'slack-bot',
+            serviceLogName: 'Slack Bot',
+            name: instanceName || `${botServiceName} (${data.team || 'workspace'})`,
+            providerTokens: { access_token: token },
+            providerEmail: null, // Slack bot tokens have no associated email
+          });
         } catch (err: any) {
           clearTimeout(timeout);
           console.error('[connect-token] Slack token validation failed:', err);
@@ -1573,21 +1845,20 @@ function registerSharedRoutes(app: express.Express): void {
         }
 
         const providerEmail = validate.email;
-        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
-        const providerTokens = { access_token: token, baseUrl: validate.baseUrl };
-        const outlineInstanceName = buildOutlineInstanceNameFromToken({
-          serviceName: mcp.name.replace(' MCP', '').trim(),
-          providedInstanceName: instanceName,
-          teamName: validate.teamName,
-          email: providerEmail,
+        await persistPasteConnection({
+          provider: 'outline',
+          serviceLogName: `Outline (${validate.baseUrl})`,
+          name: buildOutlineInstanceNameFromToken({
+            serviceName: mcp.name.replace(' MCP', '').trim(),
+            providedInstanceName: instanceName,
+            teamName: validate.teamName,
+            email: providerEmail,
+          }),
+          // baseUrl rides along: a re-auth can legitimately move an instance to
+          // a different Outline host, and it is re-validated above either way.
+          providerTokens: { access_token: token, baseUrl: validate.baseUrl },
+          providerEmail,
         });
-
-        const connection = await createMcpInstance(
-          user.id, mcpSlug, outlineInstanceName, emptyGoogleTokens, null,
-          'outline', providerTokens, providerEmail
-        );
-        console.error(`User ${user.id} connected Outline MCP: ${connection.instanceId} (${validate.baseUrl})`);
-        res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
         return;
       }
 
@@ -2049,6 +2320,65 @@ function registerSharedRoutes(app: express.Express): void {
     } catch (err: any) {
       console.error('Error fetching connections:', err);
       res.status(500).json({ error: 'Failed to fetch connections' });
+    }
+  });
+
+  /**
+   * Does this connection's credential still work?
+   *
+   * The dashboard asks per row and offers Reconnect only on 'reauth'. It is a
+   * separate call rather than a field on /api/me on purpose: this makes a live
+   * request to the provider, and folding it into the page load would make the
+   * whole dashboard wait on the slowest third party.
+   *
+   * Cached briefly so re-rendering, a second tab, or an F5 does not re-probe
+   * every provider. The cache is dropped whenever credentials are replaced, so
+   * a successful reconnect hides the button immediately instead of leaving it
+   * up for the rest of the TTL — which is the whole complaint this answers.
+   */
+  app.get('/api/me/connections/:instanceId/health', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const googleId = req.session!.googleId;
+      const user = googleId ? await getUserByGoogleId(googleId) : null;
+      if (!user?.id) {
+        res.status(401).json({ error: 'Not authenticated' });
+        return;
+      }
+
+      const instanceId = String(req.params.instanceId);
+      const connection = await getMcpConnectionByInstanceId(instanceId);
+      if (!connection || connection.userId !== user.id) {
+        res.status(404).json({ error: 'Instance not found' });
+        return;
+      }
+
+      const cached = await readConnectionHealthCache(instanceId);
+      if (cached) {
+        res.json({ ...cached, cached: true });
+        return;
+      }
+
+      const mcp = await getMcpCatalog(connection.mcpSlug);
+      let clientId: string | null = mcp?.googleClientId || null;
+      let clientSecret: string | null = mcp?.googleClientSecret || null;
+      if ((connection.provider || 'google') === 'google' && (!clientId || !clientSecret)) {
+        try {
+          const global = await loadClientCredentials();
+          clientId = clientId || global.client_id;
+          clientSecret = clientSecret || global.client_secret;
+        } catch {
+          // Leave them null; the probe reports 'unknown' rather than guessing.
+        }
+      }
+
+      const health = await checkConnectionHealth(connection, { clientId, clientSecret });
+      await writeConnectionHealthCache(instanceId, health);
+      res.json({ ...health, cached: false });
+    } catch (err: any) {
+      console.error('[connection-health] error:', err);
+      // Never a 500 into the dashboard's per-row fetch: an error here must read
+      // as "could not tell", not as a broken connection.
+      res.json({ state: 'unknown', reason: 'Health check failed.' });
     }
   });
 
@@ -5793,6 +6123,16 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
     mapJwtToUser,
   });
 
+  // RFC 9728 §5.1 / MCP authorization: a 401 from the MCP endpoint MUST carry
+  // this header. It is how a client discovers *which* authorization server to
+  // use, and it is what turns an expired token into a re-authorization prompt.
+  // Without it a client has nothing to act on and surfaces the 401 as an opaque
+  // transport failure instead — which reads to the user as "reconnecting did
+  // not help". Built from mcpBaseUrl, not BASE_URL: each MCP runs on its own
+  // subdomain (gmail.awesome-mcp.xyz), and pointing at the main site's metadata
+  // would send the client to the wrong resource.
+  const mcpWwwAuth = `Bearer resource_metadata="${mcpBaseUrl}/.well-known/oauth-protected-resource"`;
+
   const mcpOnlyMiddleware = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     // Try JWT/Auth0 auth first
     const origEnd = res.end;
@@ -5815,8 +6155,10 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
     // JWT/Auth0 failed — try apiKey from Bearer header (issued by our OAuth /token endpoint)
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
-      const baseUrl = process.env.BASE_URL || 'http://localhost:8080';
-      res.status(401).json({ error: 'unauthorized', message: 'Missing Authorization header.' });
+      res.status(401).setHeader('WWW-Authenticate', mcpWwwAuth).json({
+        error: 'unauthorized',
+        message: 'Missing Authorization header.',
+      });
       return;
     }
 
@@ -5832,7 +6174,10 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
       }
       const user = await getUserByApiKey(apiKey);
       if (!user || !user.id) {
-        res.status(401).json({ error: 'invalid_token', message: 'Invalid API key.' });
+        res.status(401).setHeader('WWW-Authenticate', mcpWwwAuth).json({
+          error: 'invalid_token',
+          message: 'Invalid API key.',
+        });
         return;
       }
       // Set trusted headers so FastMCP can identify the user
@@ -5842,7 +6187,10 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
       next();
     } catch (err: any) {
       console.error('[mcp-only-auth] API key lookup failed:', err.message);
-      res.status(401).json({ error: 'invalid_token', message: 'Authentication failed.' });
+      res.status(401).setHeader('WWW-Authenticate', mcpWwwAuth).json({
+        error: 'invalid_token',
+        message: 'Authentication failed.',
+      });
     }
   };
 

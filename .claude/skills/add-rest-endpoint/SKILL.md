@@ -53,7 +53,16 @@ Hard rules (violations fail silently — the entry just vanishes from every gene
 - `path` uses `{braces}` for params (OpenAPI style), not Express `:colons`. Query templates go in the path string for documentation (`?q={query}`); the builders strip everything after `?` when emitting OpenAPI paths.
 - `status: 'live'` only once the Express route exists — `planned` entries are excluded from `public/openapi.json` and from the REST column of `docs/MCP_TOOLS.md` precisely so the docs never advertise a 404.
 
-If the service is new to the union, add it to `RestService`, to `SERVICE_VALUES` in `src/sharedTools/listRestEndpoints.ts` (a service missing there is silently rejected by the `z.enum` — `restCatalog.test.ts` guards this drift), to `SERVICE_TITLE`/`SERVICE_ORDER` in `scripts/buildRestEndpointsDoc.mjs`, and to `SERVICES` in `scripts/buildMcpToolsDoc.mjs`.
+If the service is new to the union, add it to `RestService`, to `SERVICE_SERVER_PATH` in `src/restCatalog.ts` (a total `Record<RestService, string>`, so this one is a *compile* error rather than silent drift), to `SERVICE_VALUES` in `src/sharedTools/listRestEndpoints.ts` (a service missing there is silently rejected by the `z.enum` — `restCatalog.test.ts` guards this drift), to `SERVICE_TITLE`/`SERVICE_ORDER` in `scripts/buildRestEndpointsDoc.mjs`, and to `SERVICES` in `scripts/buildMcpToolsDoc.mjs`.
+
+The first time you flip any of a service's entries to `status: 'live'`, its MCP server must also register the two shared tools:
+
+```ts
+registerMintRestBearerForCurl(<service>Server);
+registerListRestEndpoints(<service>Server);
+```
+
+`src/__tests__/sharedToolsRegistration.test.ts` enforces this and will fail the moment an entry goes live without them — a live REST surface that no MCP client can mint a bearer for, or discover, forces users onto the permanent dashboard API key instead of a 5-minute one.
 
 ### 3. Make sure the service has auth middleware — and a session branch
 

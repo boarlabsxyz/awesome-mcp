@@ -202,6 +202,40 @@ export async function fetchHubSpotTokenInfo(
 }
 
 /**
+ * The scopes HubSpot says this access token actually holds.
+ *
+ * This is the authoritative answer to "did the user re-consent yet?" — the
+ * catalog's `oauthScopes` only says what we *ask* for, and a token minted
+ * before a scope was added keeps working for everything else, so a 403 alone
+ * cannot distinguish "reconnect never happened" from "reconnect happened and
+ * still did not grant it". Best-effort: returns null on any failure so an
+ * error message degrades to "we could not read the granted scopes" rather
+ * than turning a diagnostic into a second failure.
+ */
+export async function fetchHubSpotGrantedScopes(
+  accessToken: string,
+  fetchImpl: FetchImpl = fetch,
+): Promise<string[] | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TOKENINFO_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(`${TOKENINFO_URL}/${encodeURIComponent(accessToken)}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const data = await response.json().catch(() => null) as { scopes?: unknown } | null;
+    if (!Array.isArray(data?.scopes)) return null;
+    return data.scopes.filter((s): s is string => typeof s === 'string');
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
  * Compose the instance display name. Priority:
  *   1. Explicit `providedInstanceName` (dashboard form)
  *   2. `<Service Name> (<portal domain>)`

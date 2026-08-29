@@ -85,7 +85,7 @@ const searchFilter = z.object({
  */
 function addSearchTool(opts: {
   name: string;
-  label: 'companies' | 'contacts';
+  label: 'companies' | 'contacts' | 'deals';
   singular: string;
   /** How the tool description says a record can be looked up, e.g. "name or domain". */
   resolveBy: string;
@@ -223,11 +223,24 @@ export type SearchArgs = { query?: string; filters?: HubSpotSearchFilter[]; prop
 // Companies and contacts search identically — same request body, same output
 // shape — so both search ops run through here, differing only in the endpoint
 // and the default property set.
-async function opSearchObjects(client: HubSpotClient, label: 'companies' | 'contacts', args: SearchArgs): Promise<string> {
-  const companies = label === 'companies';
-  const properties = args.properties ?? (companies ? COMPANY_SEARCH_PROPERTIES : CONTACT_SEARCH_PROPERTIES);
+async function opSearchObjects(
+  client: HubSpotClient,
+  label: 'companies' | 'contacts' | 'deals',
+  args: SearchArgs,
+): Promise<string> {
+  const defaults = {
+    companies: COMPANY_SEARCH_PROPERTIES,
+    contacts: CONTACT_SEARCH_PROPERTIES,
+    deals: DEAL_SEARCH_PROPERTIES,
+  }[label];
+  const properties = args.properties ?? defaults;
   const body = textSearch({ query: args.query, filters: args.filters, properties, limit: args.limit });
-  const res = companies ? await client.searchCompanies(body) : await client.searchContacts(body);
+  const search = {
+    companies: () => client.searchCompanies(body),
+    contacts: () => client.searchContacts(body),
+    deals: () => client.searchDeals(body),
+  }[label];
+  const res = await search();
   return formatObjectList(res.results ?? [], label, properties);
 }
 
@@ -331,6 +344,39 @@ export async function opGetActiveDeals(client: HubSpotClient, args: { limit: num
   const res = await client.searchDeals(recentDealsSearch(args.limit));
   // Surface amount / dealstage / closedate so pipeline questions are answerable from the list.
   return formatObjectList(res.results ?? [], 'deals', DEAL_SEARCH_PROPERTIES);
+}
+
+// Search deals by free-text query and/or property filters — the by-name route
+// to a deal ID, mirroring opSearchCompanies/opSearchContacts.
+export function opSearchDeals(client: HubSpotClient, args: SearchArgs): Promise<string> {
+  return opSearchObjects(client, 'deals', args);
+}
+
+/**
+ * Deals associated with a company, resolved to full records.
+ *
+ * Two phases on purpose: associations v4 returns IDs only — and pages them, so
+ * the ID scan is itself a loop — while the batch read is what turns those IDs
+ * into amounts/stages/close dates. Every cap is reported rather than applied
+ * silently: a truncated list that says "Found 10 deals" would read as the
+ * company's complete pipeline.
+ */
+export async function opGetCompanyDeals(
+  client: HubSpotClient,
+  args: { companyId: string; limit: number; properties?: string[] },
+): Promise<string> {
+  const { ids, truncated } = await client.getCompanyDealIds(args.companyId);
+  if (ids.length === 0) return 'No deals are associated with this company.';
+  const properties = args.properties ?? DEAL_SEARCH_PROPERTIES;
+  const shown = ids.slice(0, args.limit);
+  const deals = await client.readDealsByIds(shown, properties);
+  // `truncated` means the association scan stopped at its page bound, so the
+  // total is a floor, not a count — render "N+" rather than assert a wrong one.
+  const total = truncated ? `${ids.length}+` : `${ids.length}`;
+  const note = truncated || ids.length > shown.length
+    ? `\n\nShowing ${shown.length} of ${total} associated deals — raise \`limit\` to see the rest.`
+    : '';
+  return formatObjectList(deals, 'deals', properties) + note;
 }
 
 export async function opGetDeal(client: HubSpotClient, args: { dealId: string; properties?: string[] }): Promise<string> {
@@ -707,6 +753,37 @@ addRecentListTool({
   label: 'deals',
   extra: ', including amount, stage, pipeline, and close date',
   op: opGetActiveDeals,
+});
+
+addSearchTool({
+  name: 'searchDeals',
+  label: 'deals',
+  singular: 'deal',
+  resolveBy: 'name',
+  queryExamples: 'dealname',
+  defaultProperties: 'dealname, amount, dealstage, pipeline, closedate',
+});
+
+hubspotServer.addTool({
+  name: 'getCompanyDeals',
+  annotations: { readOnlyHint: true },
+  description:
+    "List the deals associated with a company, with amount, stage, pipeline, and close date. " +
+    'Use this to go from a company ID to its deal IDs — getDeal needs an ID no other tool returns.',
+  parameters: z.object({
+    companyId: z.string().describe('HubSpot company ID (resolve a name with searchCompanies).'),
+    properties: z
+      .array(z.string())
+      .optional()
+      .describe('Deal properties to return (defaults to dealname, amount, dealstage, pipeline, closedate).'),
+    limit: z.number().int().min(1).max(100).optional().default(25)
+      .describe('Maximum deals to return (default 25, max 100). The total found is always reported.'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to get company deals', session, log, (client) => {
+      log.info(`getCompanyDeals companyId=${args.companyId}`);
+      return opGetCompanyDeals(client, args);
+    }),
 });
 
 hubspotServer.addTool({

@@ -25,6 +25,31 @@ export type RestService =
   | 'peopleforce'
   | 'hubspot';
 
+/**
+ * Which `src/<dir>/server.ts` implements each service's MCP tools.
+ *
+ * The catalog's service keys are short ('docs', 'sheets') while the source
+ * directories are not ('src/google-docs', 'src/google-sheets'), so anything
+ * reasoning from a catalog entry back to a server needs this bridge.
+ *
+ * Typed as a total Record on purpose: adding a service to RestService fails
+ * typecheck here until it is mapped, rather than being silently skipped by the
+ * checks that walk it (see src/__tests__/sharedToolsRegistration.test.ts).
+ */
+export const SERVICE_SERVER_PATH: Record<RestService, string> = {
+  docs: 'src/google-docs/server.ts',
+  sheets: 'src/google-sheets/server.ts',
+  calendar: 'src/google-calendar/server.ts',
+  drive: 'src/google-drive/server.ts',
+  gmail: 'src/google-gmail/server.ts',
+  slides: 'src/google-slides/server.ts',
+  clickup: 'src/clickup/server.ts',
+  slack: 'src/slack/server.ts',
+  outline: 'src/outline/server.ts',
+  peopleforce: 'src/peopleforce/server.ts',
+  hubspot: 'src/hubspot/server.ts',
+};
+
 export interface RestEndpoint {
   service: RestService;
   method: 'GET' | 'POST';
