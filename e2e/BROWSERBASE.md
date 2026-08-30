@@ -73,8 +73,12 @@ Re-run the same command whenever ChatGPT expires the session. Pass an existing
 ```bash
 cd e2e
 E2E_BROWSER=browserbase CLIENT=chatgpt-web \
-  node --import tsx --test tests/read/readGoogleDoc.smoke.ts
+  node --import tsx --test tests/readGoogleDoc.smoke.ts
 ```
+
+On `main` there is exactly one smoke test, at that path. The 18-test suite under
+`tests/read/` and `tests/write/` arrives with PR #45 — until that merges, the
+paths in the Cost section below describe the future state, not this branch.
 
 Each run logs a session id and a replay URL. The replay is a full video of the
 run — considerably better than the local harness's screenshot when a selector

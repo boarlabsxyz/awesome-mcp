@@ -90,7 +90,7 @@ async function main(): Promise<void> {
   console.error('');
   console.error('Then run a test against it:');
   console.error('    E2E_BROWSER=browserbase CLIENT=chatgpt-web \\');
-  console.error('      node --import tsx --test tests/read/readGoogleDoc.smoke.ts');
+  console.error('      node --import tsx --test tests/readGoogleDoc.smoke.ts');
 }
 
 main().catch((err) => {
