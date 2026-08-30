@@ -68,22 +68,23 @@ function mask(value: string): string {
 
 async function main(): Promise<void> {
   const apiKey = envValue('BROWSERBASE_API_KEY');
-  const projectId = envValue('BROWSERBASE_PROJECT_ID');
-  if (!apiKey || !projectId) {
-    console.error('Set BROWSERBASE_API_KEY and BROWSERBASE_PROJECT_ID first. See e2e/BROWSERBASE.md.');
+  let projectId = envValue('BROWSERBASE_PROJECT_ID');
+  if (!apiKey) {
+    console.error('Set BROWSERBASE_API_KEY first. See e2e/BROWSERBASE.md.');
     process.exit(1);
   }
-  // Write the cleaned values back so the SDK and createBrowserbaseSession()
-  // both see the trimmed form rather than the raw paste.
+  // Write the cleaned key back so the SDK sees the trimmed form rather than the
+  // raw paste. The project id is written back after it has been validated.
   process.env.BROWSERBASE_API_KEY = apiKey;
-  process.env.BROWSERBASE_PROJECT_ID = projectId;
 
   const bb = browserbaseClient();
 
-  // Cheapest authenticated call there is. Failing here means the credentials
-  // are wrong, and saying so beats a stack trace out of contexts.create().
+  // Cheapest authenticated call there is, and it doubles as the project check.
+  // Failing here means the credentials are wrong, and saying so beats a stack
+  // trace out of contexts.create().
+  let projects: Array<{ id: string; name: string }>;
   try {
-    await bb.projects.list();
+    projects = await bb.projects.list();
   } catch (err: any) {
     if (err?.status === 401) {
       explainAuthFailure(apiKey, projectId);
@@ -91,6 +92,33 @@ async function main(): Promise<void> {
     }
     throw err;
   }
+
+  // A key that authenticates fine will still 401 on contexts.create() when the
+  // projectId belongs to someone else — the error says "Unauthorized" and
+  // names nothing, which is indistinguishable from a bad key. Since we already
+  // know every project this key owns, check it here and say which is wrong.
+  const owned = projects.map((p) => p.id);
+  if (projectId && !owned.includes(projectId)) {
+    console.error('');
+    console.error(`[seed] BROWSERBASE_PROJECT_ID (${mask(projectId)}) is not a project this API key owns.`);
+    console.error('[seed] That is what produces a 401 from contexts.create() even though the key is valid.');
+    console.error('');
+    console.error('  Projects this key can use:');
+    for (const p of projects) console.error(`    ${p.id}  ${p.name}`);
+    console.error('');
+    process.exit(1);
+  }
+  if (!projectId) {
+    if (projects.length === 1) {
+      projectId = projects[0].id;
+      console.error(`[seed] BROWSERBASE_PROJECT_ID not set — using the only project: ${projectId} (${projects[0].name})`);
+    } else {
+      console.error('[seed] BROWSERBASE_PROJECT_ID is not set and this key owns several projects:');
+      for (const p of projects) console.error(`    ${p.id}  ${p.name}`);
+      process.exit(1);
+    }
+  }
+  process.env.BROWSERBASE_PROJECT_ID = projectId;
 
   let contextId = envValue('BROWSERBASE_CONTEXT_ID') || undefined;
   if (contextId) {
