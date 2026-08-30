@@ -16,13 +16,24 @@
 
 import { chromium, type Browser, type Page } from 'playwright';
 import type { Driver } from './driver.ts';
+import { createBrowserbaseSession, usingBrowserbase } from './browserbase.ts';
 
 const CDP_ENDPOINT = process.env.CHATGPT_CDP_ENDPOINT ?? 'http://127.0.0.1:9222';
 const CHATGPT_URL = process.env.CHATGPT_URL ?? 'https://chatgpt.com/';
 const RESPONSE_TIMEOUT_MS = Number(process.env.RESPONSE_TIMEOUT_MS ?? 120_000);
 
 export async function createChatGptWebDriver(): Promise<Driver> {
-  const browser: Browser = await chromium.connectOverCDP(CDP_ENDPOINT);
+  // Only the TRANSPORT differs between local Chrome and a Browserbase cloud
+  // browser — everything below is shared, so the selectors that change most
+  // often live in exactly one place. E2E_BROWSER=browserbase picks the cloud
+  // path; anything else keeps the local warmed-profile behaviour that is the
+  // default on the Mac Studio.
+  const remote = usingBrowserbase() ? await createBrowserbaseSession() : null;
+  if (remote) {
+    console.error(`[e2e] browserbase session ${remote.sessionId} — replay: ${remote.replayUrl}`);
+  }
+
+  const browser: Browser = await chromium.connectOverCDP(remote ? remote.connectUrl : CDP_ENDPOINT);
   const context = browser.contexts()[0] ?? (await browser.newContext());
   let page: Page = context.pages()[0] ?? (await context.newPage());
 
@@ -64,13 +75,19 @@ export async function createChatGptWebDriver(): Promise<Driver> {
 
     async appVersion() {
       const ua = await page.evaluate(() => navigator.userAgent);
-      return `chatgpt-web userAgent=${ua}`;
+      const where = remote ? `browserbase session=${remote.sessionId}` : 'local-cdp';
+      return `chatgpt-web ${where} userAgent=${ua}`;
     },
 
     async dispose() {
-      // Chrome is a long-lived process started outside Playwright. Disconnect
-      // without closing the underlying browser so the next run reuses the
-      // warmed profile.
+      // The same call means two different things, which is worth stating
+      // rather than inferring:
+      //  - local: Chrome is a long-lived process started outside Playwright,
+      //    so this only DISCONNECTS and the warmed profile survives for the
+      //    next run.
+      //  - browserbase: this ENDS the cloud session, which is what stops it
+      //    billing. Leaving it open would burn browser-minutes until the
+      //    session timeout expires.
       await browser.close();
     },
   };
