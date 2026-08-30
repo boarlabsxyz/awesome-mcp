@@ -20,19 +20,83 @@ import { browserbaseClient, createBrowserbaseSession, liveViewUrl } from '../dri
 
 const CHATGPT_URL = process.env.CHATGPT_URL ?? 'https://chatgpt.com/';
 
+/**
+ * Strip quotes and whitespace off an env value.
+ *
+ * `export KEY="bb_live_…"` in some shells, or a copy-paste that grabs a
+ * trailing newline, leaves the quotes/whitespace IN the value. The API then
+ * returns a bare 401 that looks like a bad key rather than a bad paste.
+ */
+function envValue(name: string): string {
+  return (process.env[name] ?? '').trim().replace(/^['"]|['"]$/g, '');
+}
+
+/** Turn a 401 into something that says what to check. */
+function explainAuthFailure(apiKey: string, projectId: string): void {
+  console.error('');
+  console.error('[seed] Browserbase rejected the credentials (HTTP 401).');
+  console.error('');
+  console.error(`  BROWSERBASE_API_KEY    = ${mask(apiKey)}`);
+  console.error(`  BROWSERBASE_PROJECT_ID = ${mask(projectId)}`);
+  console.error('');
+  // Both live next to each other on the Settings page and neither is labelled
+  // in a way that survives a hurried copy-paste, so this is the usual cause.
+  if (projectId.startsWith('bb_') && !apiKey.startsWith('bb_')) {
+    console.error('  These look SWAPPED — the project id starts with "bb_", which is the');
+    console.error('  API key prefix. Try exchanging the two values.');
+  } else if (!apiKey.startsWith('bb_')) {
+    console.error('  The API key does not start with "bb_", so this may be the project id');
+    console.error('  (a UUID) pasted into the key. Both are on the same Settings page.');
+  } else {
+    console.error('  The key looks well-formed, so check it has not been revoked or');
+    console.error('  regenerated, and that it belongs to this project.');
+  }
+  console.error('');
+  console.error('  Verify the key on its own:');
+  console.error(`    curl -s -o /dev/null -w '%{http_code}\\n' \\`);
+  console.error(`      -H "X-BB-API-Key: $BROWSERBASE_API_KEY" \\`);
+  console.error('      https://api.browserbase.com/v1/projects');
+  console.error('  200 = key is good; 401 = the key itself is the problem.');
+  console.error('');
+}
+
+function mask(value: string): string {
+  if (!value) return '(unset)';
+  if (value.length <= 8) return `${value.slice(0, 2)}… (${value.length} chars)`;
+  return `${value.slice(0, 6)}…${value.slice(-4)} (${value.length} chars)`;
+}
+
 async function main(): Promise<void> {
-  if (!process.env.BROWSERBASE_API_KEY || !process.env.BROWSERBASE_PROJECT_ID) {
+  const apiKey = envValue('BROWSERBASE_API_KEY');
+  const projectId = envValue('BROWSERBASE_PROJECT_ID');
+  if (!apiKey || !projectId) {
     console.error('Set BROWSERBASE_API_KEY and BROWSERBASE_PROJECT_ID first. See e2e/BROWSERBASE.md.');
     process.exit(1);
   }
+  // Write the cleaned values back so the SDK and createBrowserbaseSession()
+  // both see the trimmed form rather than the raw paste.
+  process.env.BROWSERBASE_API_KEY = apiKey;
+  process.env.BROWSERBASE_PROJECT_ID = projectId;
 
   const bb = browserbaseClient();
 
-  let contextId = process.env.BROWSERBASE_CONTEXT_ID;
+  // Cheapest authenticated call there is. Failing here means the credentials
+  // are wrong, and saying so beats a stack trace out of contexts.create().
+  try {
+    await bb.projects.list();
+  } catch (err: any) {
+    if (err?.status === 401) {
+      explainAuthFailure(apiKey, projectId);
+      process.exit(1);
+    }
+    throw err;
+  }
+
+  let contextId = envValue('BROWSERBASE_CONTEXT_ID') || undefined;
   if (contextId) {
     console.error(`[seed] refreshing existing context ${contextId}`);
   } else {
-    const context = await bb.contexts.create({ projectId: process.env.BROWSERBASE_PROJECT_ID! });
+    const context = await bb.contexts.create({ projectId });
     contextId = context.id;
     console.error(`[seed] created context ${contextId}`);
   }
