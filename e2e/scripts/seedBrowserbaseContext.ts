@@ -18,7 +18,14 @@ import { stdin, stdout } from 'node:process';
 import { chromium } from 'playwright';
 import { browserbaseClient, createBrowserbaseSession, liveViewUrl } from '../drivers/browserbase.ts';
 
-const CHATGPT_URL = process.env.CHATGPT_URL ?? 'https://chatgpt.com/';
+// Which site's login this context is for. One context per client — cookies for
+// claude.ai and chatgpt.com are unrelated, and mixing them in one context would
+// mean re-seeding both whenever either expires.
+const CLIENT = process.env.CLIENT ?? 'claude-web';
+const SEED_TARGETS: Record<string, { url: string; label: string }> = {
+  'claude-web': { url: process.env.CLAUDE_URL ?? 'https://claude.ai/new', label: 'Claude' },
+  'chatgpt-web': { url: process.env.CHATGPT_URL ?? 'https://chatgpt.com/', label: 'ChatGPT' },
+};
 
 /**
  * Strip quotes and whitespace off an env value.
@@ -76,6 +83,15 @@ async function main(): Promise<void> {
   // Write the cleaned key back so the SDK sees the trimmed form rather than the
   // raw paste. The project id is written back after it has been validated.
   process.env.BROWSERBASE_API_KEY = apiKey;
+
+  const target = SEED_TARGETS[CLIENT];
+  if (!target) {
+    console.error(`[seed] CLIENT=${CLIENT} has no browser login to seed.`);
+    console.error(`[seed] Expected one of: ${Object.keys(SEED_TARGETS).join(', ')}.`);
+    console.error('[seed] (claude-desktop authenticates in the app itself, not in a browser context.)');
+    process.exit(1);
+  }
+  console.error(`[seed] seeding a ${target.label} login (CLIENT=${CLIENT})`);
 
   const bb = browserbaseClient();
 
@@ -143,15 +159,15 @@ async function main(): Promise<void> {
   const browser = await chromium.connectOverCDP(session.connectUrl);
   const ctx = browser.contexts()[0] ?? (await browser.newContext());
   const page = ctx.pages()[0] ?? (await ctx.newPage());
-  await page.goto(CHATGPT_URL, { waitUntil: 'domcontentloaded' });
+  await page.goto(target.url, { waitUntil: 'domcontentloaded' });
 
   const live = await liveViewUrl(session.sessionId);
   console.error('');
-  console.error('  Open this and log into ChatGPT:');
+  console.error(`  Open this and log into ${target.label}:`);
   console.error(`    ${live}`);
   console.error('');
-  console.error('  Confirm the MCP connector is configured on the account too —');
-  console.error('  connectors are account-side, so once it is set there is nothing');
+  console.error(`  Confirm the MCP connector is configured on the ${target.label} account`);
+  console.error('  too — connectors are account-side, so once set there is nothing');
   console.error('  per-session to redo.');
   console.error('');
 
@@ -181,7 +197,7 @@ async function main(): Promise<void> {
   console.error(`    BROWSERBASE_CONTEXT_ID=${contextId}`);
   console.error('');
   console.error('Then run a test against it:');
-  console.error('    E2E_BROWSER=browserbase CLIENT=chatgpt-web \\');
+  console.error(`    E2E_BROWSER=browserbase CLIENT=${CLIENT} \\`);
   console.error('      node --import tsx --test tests/readGoogleDoc.smoke.ts');
 }
 

@@ -1,8 +1,14 @@
-# Running the ChatGPT smokes on Browserbase
+# Running the web-client smokes on Browserbase
 
-Optional transport for the `chatgpt-web` client. Instead of attaching to a real
-Chrome on the Mac Studio, the driver connects to a cloud browser — which lets
-that CI job leave the self-hosted runner.
+Optional transport for the browser-based clients — **`claude-web`** (default)
+and `chatgpt-web`. Instead of attaching to a real Chrome on the Mac Studio, the
+driver connects to a cloud browser, which lets that CI job leave the self-hosted
+runner.
+
+`claude-web` drives claude.ai. It is the browser sibling of `claude-desktop`,
+which drives the signed Electron app through Appium and macOS Accessibility
+(CDP is fused off) and therefore cannot run anywhere but the Mac Studio. Same
+product, two clients, only one of which is portable.
 
 **Read the caveat at the bottom before investing time.** Whether this works at
 all is decided by Cloudflare, not by us.
@@ -13,9 +19,9 @@ Only the transport. `runSmokeTest.ts`, all 18 smoke tests, the gate manifest,
 fixtures, prompt templates and the whole `setup/` scratch layer are untouched —
 `setup/` talks to Google/Slack/ClickUp APIs and never opens a browser.
 
-`chatgpt-web.ts` branches on one line for the connection and shares everything
-below it, so the ChatGPT selectors (the parts that break most often) stay in
-exactly one place.
+Transport lives in `connect.ts` and is shared by both web drivers, so adding a
+third web client is a selectors-only job and a transport fix lands for every
+client at once. Only the site-specific selectors live in each driver.
 
 `claude-desktop` **cannot** move here, ever. It drives a signed Electron app
 through Appium and macOS Accessibility because CDP is fused off; Browserbase
@@ -40,7 +46,14 @@ export BROWSERBASE_API_KEY=bb_live_…
 export BROWSERBASE_PROJECT_ID=…
 ```
 
-### 2. Seed a Context with a logged-in ChatGPT session
+### 2. Seed a Context with a logged-in session
+
+Pick the client first — one context per client, since claude.ai and chatgpt.com
+cookies are unrelated:
+
+```bash
+export CLIENT=claude-web     # default; use chatgpt-web for the other
+```
 
 A Context is Browserbase's persistent cookie jar. This replaces the warmed
 `$HOME/e2e-chrome-profile` the local transport relies on.
@@ -51,9 +64,8 @@ npm install
 npm run seed:browserbase
 ```
 
-The script prints a **Live View URL**. Open it, log into ChatGPT by hand — 2FA
-included, since you are driving a real browser — then press Enter in the
-terminal. It verifies a composer is present before saving, so an incomplete
+The script prints a **Live View URL**. Open it, log in by hand — 2FA included,
+since you are driving a real browser — then press Enter in the terminal. It verifies a composer is present before saving, so an incomplete
 login is reported rather than silently stored.
 
 It prints the context id to keep:
@@ -62,8 +74,8 @@ It prints the context id to keep:
 export BROWSERBASE_CONTEXT_ID=ctx_…
 ```
 
-Confirm the MCP connector is configured **on the ChatGPT account** while you are
-in there. Connectors are account-side, not browser-side, so this is once only.
+Confirm the MCP connector is configured **on that account** while you are in
+there. Connectors are account-side, not browser-side, so this is once only.
 
 Re-run the same command whenever ChatGPT expires the session. Pass an existing
 `BROWSERBASE_CONTEXT_ID` to refresh in place instead of creating a new one.
@@ -72,9 +84,11 @@ Re-run the same command whenever ChatGPT expires the session. Pass an existing
 
 ```bash
 cd e2e
-E2E_BROWSER=browserbase CLIENT=chatgpt-web \
+E2E_BROWSER=browserbase CLIENT=claude-web \
   node --import tsx --test tests/readGoogleDoc.smoke.ts
 ```
+
+`CLIENT` selects the driver; the tests themselves are client-agnostic.
 
 On `main` there is exactly one smoke test, at that path. The 18-test suite under
 `tests/read/` and `tests/write/` arrives with PR #45 — until that merges, the
@@ -94,6 +108,7 @@ In `.github/workflows/e2e-smoke.yml`, the `chatgpt-web` job becomes:
 ```yaml
 runs-on: ubuntu-latest        # was: [self-hosted, macOS, mac-studio]
 env:
+  CLIENT: claude-web
   E2E_BROWSER: browserbase
   BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
   BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
@@ -131,6 +146,18 @@ Developer covers ~165 gate runs/month and its 25 concurrent sessions clear the
 18 a parallel gate needs. Free cannot run a gate — 3 concurrent — but is fine
 for a single test.
 
+## Selector status
+
+**Every selector in `claude-web.ts` is unverified against a live claude.ai
+session.** They are written with ordered fallbacks, and completion is detected
+by watching the reply text stop changing rather than by a stop-button selector —
+so a DOM rename produces a named error listing what was tried, not a silent
+wrong answer. Watch the first run; the replay URL logged at session start is
+exactly the tool for it.
+
+`chatgpt-web.ts`'s selectors carry the same SELECTOR-TODO caveat and predate
+this work.
+
 ## The caveat that decides this
 
 `chatgpt-web.ts` opens with:
@@ -139,7 +166,9 @@ for a single test.
 > Cloudflare doesn't see Playwright's bundled Chromium fingerprint or a
 > webdriver flag set by Playwright.
 
-That is exactly the fight a cloud browser re-opens. Browserbase's advanced
+That is exactly the fight a cloud browser re-opens — for ChatGPT. Whether
+claude.ai is as aggressive is unknown and worth measuring separately; it is a
+different site with different protections. Browserbase's advanced
 anti-detection ("Verified" identity) is **Scale plan only**; Developer and
 Startup get basic identity plus automatic captcha solving.
 

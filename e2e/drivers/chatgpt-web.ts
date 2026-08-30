@@ -14,9 +14,9 @@
 // app refresh; surface failures clearly in forensics rather than silently
 // matching the wrong element.
 
-import { chromium, type Browser, type Page } from 'playwright';
+import { type Page } from 'playwright';
 import type { Driver } from './driver.ts';
-import { createBrowserbaseSession, usingBrowserbase } from './browserbase.ts';
+import { connectBrowser } from './connect.ts';
 
 const CDP_ENDPOINT = process.env.CHATGPT_CDP_ENDPOINT ?? 'http://127.0.0.1:9222';
 const CHATGPT_URL = process.env.CHATGPT_URL ?? 'https://chatgpt.com/';
@@ -28,13 +28,8 @@ export async function createChatGptWebDriver(): Promise<Driver> {
   // often live in exactly one place. E2E_BROWSER=browserbase picks the cloud
   // path; anything else keeps the local warmed-profile behaviour that is the
   // default on the Mac Studio.
-  const remote = usingBrowserbase() ? await createBrowserbaseSession() : null;
-  if (remote) {
-    console.error(`[e2e] browserbase session ${remote.sessionId} — replay: ${remote.replayUrl}`);
-  }
-
-  const browser: Browser = await chromium.connectOverCDP(remote ? remote.connectUrl : CDP_ENDPOINT);
-  const context = browser.contexts()[0] ?? (await browser.newContext());
+  const conn = await connectBrowser(CDP_ENDPOINT);
+  const context = conn.browser.contexts()[0] ?? (await conn.browser.newContext());
   let page: Page = context.pages()[0] ?? (await context.newPage());
 
   if (!page.url().includes('chatgpt.com')) {
@@ -75,8 +70,7 @@ export async function createChatGptWebDriver(): Promise<Driver> {
 
     async appVersion() {
       const ua = await page.evaluate(() => navigator.userAgent);
-      const where = remote ? `browserbase session=${remote.sessionId}` : 'local-cdp';
-      return `chatgpt-web ${where} userAgent=${ua}`;
+      return `chatgpt-web ${conn.describe()} userAgent=${ua}`;
     },
 
     async dispose() {
@@ -88,7 +82,7 @@ export async function createChatGptWebDriver(): Promise<Driver> {
       //  - browserbase: this ENDS the cloud session, which is what stops it
       //    billing. Leaving it open would burn browser-minutes until the
       //    session timeout expires.
-      await browser.close();
+      await conn.browser.close();
     },
   };
 }
