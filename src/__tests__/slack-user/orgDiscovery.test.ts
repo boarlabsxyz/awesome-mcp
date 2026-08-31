@@ -73,6 +73,36 @@ describe('discoverConnectedOrgs — shared channels', () => {
     assert.equal(infoCalls, 0, 'no conversations.info needed when the list payload already names the org');
   });
 
+  it('still enriches a shared channel whose payload carries only context_team_id', async () => {
+    // context_team_id is the *viewing* workspace, so this payload names no
+    // partner. Counting it as resolved skipped the conversations.info call and
+    // lost the external org.
+    const client = mockClient({
+      conversationsListAll: async () => ({
+        channels: [{ id: 'C1', is_ext_shared: true, context_team_id: 'T_HOME' }],
+      }),
+      conversationsInfo: async (id: string) => ({
+        channel: { id, connected_team_ids: ['T_PARTNER'] },
+      }),
+    });
+
+    const result = await discoverConnectedOrgs(client, { currentOrgId: 'T_HOME' });
+
+    assert.deepEqual(ids(result), ['T_PARTNER']);
+  });
+
+  it('reads pending_shared alongside pending_connected_team_ids', async () => {
+    const client = mockClient({
+      conversationsListAll: async () => ({
+        channels: [{ id: 'C1', is_pending_ext_shared: true, pending_shared: ['T_INVITED'] }],
+      }),
+    });
+
+    const result = await discoverConnectedOrgs(client, { currentOrgId: 'T_HOME' });
+
+    assert.deepEqual(ids(result), ['T_INVITED']);
+  });
+
   it('reads connected_team_ids and pending_connected_team_ids, not just shared_team_ids', async () => {
     const client = mockClient({
       conversationsListAll: async () => ({

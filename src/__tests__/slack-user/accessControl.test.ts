@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import { matchGlob, assertAccess, filterChannelList, filterDmsByOrg, filterGroupDmsByRules, fetchChannelMeta } from '../../slack-user/accessControl.js';
 import type { SlackAccessRules } from '../../mcpConnectionStore.js';
 import type { ChannelMeta } from '../../slack-user/accessControl.js';
+import { channelSharedTeamIds, channelTeamIds } from '../../slack/apiHelpers.js';
 
 // === fetchChannelMeta ===
 
@@ -453,5 +454,25 @@ describe('filterGroupDmsByRules', () => {
     const channels = [{ id: 'C1', name: 'general', is_private: false }];
     const result = await filterGroupDmsByRules(mockClient({}), rules, channels);
     assert.equal(result.length, 1);
+  });
+});
+
+// === channelSharedTeamIds / channelTeamIds ===
+
+describe('channelSharedTeamIds', () => {
+  it('excludes context_team_id — it names the viewer, not a partner org', () => {
+    assert.deepEqual(channelSharedTeamIds({ context_team_id: 'T_HOME' }), []);
+    assert.deepEqual(channelTeamIds({ context_team_id: 'T_HOME' }), ['T_HOME']);
+  });
+
+  it('unions the shared lists', () => {
+    const channel = { shared_team_ids: ['T1'], internal_team_ids: ['T1'], connected_team_ids: ['T2'] };
+    assert.deepEqual(channelSharedTeamIds(channel).sort(), ['T1', 'T2']);
+  });
+
+  it('includes pending_shared and pending_connected_team_ids only when asked', () => {
+    const channel = { pending_shared: ['T_A'], pending_connected_team_ids: ['T_B'] };
+    assert.deepEqual(channelSharedTeamIds(channel), []);
+    assert.deepEqual(channelSharedTeamIds(channel, { includePending: true }).sort(), ['T_A', 'T_B']);
   });
 });

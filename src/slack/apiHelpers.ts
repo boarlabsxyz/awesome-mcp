@@ -78,11 +78,42 @@ export interface SlackChannelTeamFields {
   internal_team_ids?: string[];
   connected_team_ids?: string[];
   pending_connected_team_ids?: string[];
+  /** Older sibling of `pending_connected_team_ids`; Slack still sends it. */
+  pending_shared?: string[];
+  /**
+   * The team whose *view* the payload was rendered for — normally the caller's
+   * own workspace. It says nothing about who the channel is shared with, which
+   * is why `channelSharedTeamIds` excludes it.
+   */
   context_team_id?: string;
 }
 
 /**
- * Every team ID a channel payload mentions, de-duplicated.
+ * The orgs a channel is actually shared with, from Slack's team-ID *lists*.
+ *
+ * Deliberately excludes `context_team_id`: that is the viewing workspace, so a
+ * Slack Connect payload carrying nothing but `context_team_id` names no partner
+ * at all. Discovery gates its `conversations.info` enrichment on this — gating
+ * on `channelTeamIds` treated such a payload as already resolved and dropped
+ * the external org.
+ */
+export function channelSharedTeamIds(
+  channel: SlackChannelTeamFields | undefined | null,
+  options?: { includePending?: boolean },
+): string[] {
+  if (!channel) return [];
+  const ids = new Set<string>();
+  const lists = [channel.shared_team_ids, channel.internal_team_ids, channel.connected_team_ids];
+  if (options?.includePending) lists.push(channel.pending_connected_team_ids, channel.pending_shared);
+  for (const list of lists) {
+    for (const id of list || []) if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
+/**
+ * Every team ID a channel payload mentions, de-duplicated — the shared lists
+ * plus `context_team_id`.
  *
  * `includePending` covers orgs that have been *invited* to the channel but have
  * not accepted. Discovery wants them (so the org is tickable before the invite
@@ -94,12 +125,7 @@ export function channelTeamIds(
   options?: { includePending?: boolean },
 ): string[] {
   if (!channel) return [];
-  const ids = new Set<string>();
-  const lists = [channel.shared_team_ids, channel.internal_team_ids, channel.connected_team_ids];
-  if (options?.includePending) lists.push(channel.pending_connected_team_ids);
-  for (const list of lists) {
-    for (const id of list || []) if (id) ids.add(id);
-  }
+  const ids = new Set<string>(channelSharedTeamIds(channel, options));
   if (channel.context_team_id) ids.add(channel.context_team_id);
   return [...ids];
 }

@@ -13,6 +13,7 @@
 // on the first 10 externally-shared channels — and missed orgs reachable only
 // through channel 11+, through a DM, or through Slack's other team-ID fields.
 import {
+  channelSharedTeamIds,
   channelTeamIds,
   isSharedChannel,
   type SlackChannelTeamFields,
@@ -134,9 +135,13 @@ export async function discoverConnectedOrgs(
     do {
       const result = await client.conversationsListAll(cursor, 'public_channel,private_channel');
       for (const ch of result.channels) {
-        const teamIds = channelTeamIds(ch, { includePending: true });
-        for (const tid of teamIds) add(acc, tid, 'channel');
-        if (isSharedChannel(ch) && teamIds.length === 0) needsInfo.push(ch.id);
+        for (const tid of channelTeamIds(ch, { includePending: true })) add(acc, tid, 'channel');
+        // Gate enrichment on the shared lists alone. `context_team_id` is the
+        // viewing workspace, so a payload carrying only that names no partner —
+        // counting it as resolved silently dropped the external org.
+        if (isSharedChannel(ch) && channelSharedTeamIds(ch, { includePending: true }).length === 0) {
+          needsInfo.push(ch.id);
+        }
       }
       cursor = result.response_metadata?.next_cursor || undefined;
       pages++;

@@ -1888,9 +1888,34 @@ function registerSharedRoutes(app: express.Express): void {
 
   // Org discovery sweeps several paged Slack endpoints, so a modal open/close
   // cycle should not re-run it. Keyed by instance *and* saved allowlist, since
-  // a saved org that discovery misses is injected into the result.
+  // a saved org that discovery misses is injected into the result — which also
+  // means a rules change mints a new key, so entries must be evicted rather
+  // than left to accumulate one per allowlist the user ever saved.
   const orgDiscoveryCache = new Map<string, { result: OrgDiscoveryResult; expiresAt: number }>();
   const ORG_DISCOVERY_TTL_MS = 5 * 60 * 1000;
+  const ORG_DISCOVERY_CACHE_MAX = 500;
+
+  /** Drop expired entries, then the oldest ones until the cache is under its cap. */
+  function pruneOrgDiscoveryCache(): void {
+    const now = Date.now();
+    for (const [key, entry] of [...orgDiscoveryCache]) {
+      if (entry.expiresAt <= now) orgDiscoveryCache.delete(key);
+    }
+    // Map iterates in insertion order, so the first keys are the oldest writes.
+    while (orgDiscoveryCache.size > ORG_DISCOVERY_CACHE_MAX) {
+      const oldest = orgDiscoveryCache.keys().next();
+      if (oldest.done) break;
+      orgDiscoveryCache.delete(oldest.value);
+    }
+  }
+
+  /** Forget every cached sweep for one instance. Its rules just changed. */
+  function invalidateOrgDiscoveryCache(instanceId: string): void {
+    const prefix = `${instanceId}:`;
+    for (const key of [...orgDiscoveryCache.keys()]) {
+      if (key.startsWith(prefix)) orgDiscoveryCache.delete(key);
+    }
+  }
 
   // GET /api/instances/:instanceId/access-rules - Get current access rules + org info
   app.get('/api/instances/:instanceId/access-rules', requireAuth, async (req: AuthenticatedRequest, res) => {
@@ -1936,8 +1961,10 @@ function registerSharedRoutes(app: express.Express): void {
       if (cached && cached.expiresAt > Date.now()) {
         discovery = cached.result;
       } else {
+        if (cached) orgDiscoveryCache.delete(cacheKey);
         discovery = await discoverConnectedOrgs(client, { currentOrgId: currentOrg.id, savedOrgIds });
         orgDiscoveryCache.set(cacheKey, { result: discovery, expiresAt: Date.now() + ORG_DISCOVERY_TTL_MS });
+        pruneOrgDiscoveryCache();
       }
       const connectedOrgs = discovery.orgs;
       if (discovery.truncated) {
@@ -2023,6 +2050,9 @@ function registerSharedRoutes(app: express.Express): void {
       // Clear session cache so new rules take effect
       const { clearMcpSessionCache } = await import('../userSession.js');
       clearMcpSessionCache(user.apiKey, instanceId);
+      // Saved orgs are baked into a cached sweep, so a stale entry would show
+      // the previous allowlist's rows on the next modal open.
+      invalidateOrgDiscoveryCache(instanceId);
 
       console.error(`User ${user.id} updated Slack access rules for ${instanceId}: ${updatedTokens.accessRules.whitelistChannels.length} whitelist, ${updatedTokens.accessRules.blacklistChannels.length} blacklist, ${updatedTokens.accessRules.blacklistUsers.length} blocked users, ${updatedTokens.accessRules.allowedOrgs.length} orgs`);
       res.json({ success: true });
