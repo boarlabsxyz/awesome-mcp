@@ -17,14 +17,16 @@ describe('fetchChannelMeta', () => {
     const client = mockClient({
       id: 'C_META_1', name: 'test-channel', is_private: false,
       is_shared: false, is_ext_shared: false, is_org_shared: false,
-      is_im: false, is_mpim: false, user: undefined, shared_team_ids: ['T1'],
+      is_im: false, is_mpim: false, user: undefined,
+      shared_team_ids: ['T1'], connected_team_ids: ['T2'],
     });
     const meta = await fetchChannelMeta(client, 'C_META_1', 'meta-test-token-' + Date.now());
     assert.equal(meta.id, 'C_META_1');
     assert.equal(meta.name, 'test-channel');
     assert.equal(meta.is_private, false);
     assert.equal(meta.is_shared, false);
-    assert.deepEqual(meta.shared_team_ids, ['T1']);
+    // The union of Slack's team-ID fields, not the raw shared_team_ids array.
+    assert.deepEqual(meta.shared_team_ids, ['T1', 'T2']);
   });
 
   it('should detect shared channels from is_ext_shared', async () => {
@@ -219,12 +221,25 @@ describe('assertAccess', () => {
     );
   });
 
-  it('should allow shared channel from allowed org', () => {
+  it('should allow shared channel when every org on it is allowed', () => {
     assert.doesNotThrow(() => assertAccess(defaultRules, makeMeta({
       name: 'shared-channel',
       is_shared: true,
-      shared_team_ids: ['T_BOARLABS', 'T_OTHER'],
+      shared_team_ids: ['T_BOARLABS'],
     })));
+  });
+
+  it('should block a shared channel that mixes an allowed org with a non-allowed one', () => {
+    // The old rule was `some`, so a channel shared with your own workspace
+    // (always in allowedOrgs) plus an unapproved partner passed the check.
+    assert.throws(
+      () => assertAccess(defaultRules, makeMeta({
+        name: 'shared-channel',
+        is_shared: true,
+        shared_team_ids: ['T_BOARLABS', 'T_OTHER'],
+      })),
+      { message: /T_OTHER/ }
+    );
   });
 
   it('should block shared channel when org cannot be verified', () => {
@@ -311,6 +326,32 @@ describe('filterChannelList', () => {
   it('should allow shared channels when org is in allowedOrgs', () => {
     const sharedChannels = [
       { id: 'CS1', name: 'awesome-shared', is_private: false, is_ext_shared: true, shared_team_ids: ['T_BOARLABS'] },
+    ];
+    const result = filterChannelList(rules, sharedChannels);
+    assert.equal(result.length, 1);
+  });
+
+  it('should block a shared channel whose external org is in connected_team_ids', () => {
+    // Slack Connect puts the partner org here, not in shared_team_ids. Reading
+    // only shared_team_ids made this channel look purely internal.
+    const sharedChannels = [
+      {
+        id: 'CS1', name: 'awesome-shared', is_private: false, is_ext_shared: true,
+        shared_team_ids: ['T_BOARLABS'], connected_team_ids: ['T_OTHER'],
+      },
+    ];
+    const result = filterChannelList(rules, sharedChannels);
+    assert.equal(result.length, 0);
+  });
+
+  it('should ignore a pending invite when enforcing access', () => {
+    // An org that was invited but has not joined cannot read the channel, so it
+    // must not retroactively deny one. Discovery still lists it as tickable.
+    const sharedChannels = [
+      {
+        id: 'CS1', name: 'awesome-shared', is_private: false, is_ext_shared: true,
+        shared_team_ids: ['T_BOARLABS'], pending_connected_team_ids: ['T_INVITED'],
+      },
     ];
     const result = filterChannelList(rules, sharedChannels);
     assert.equal(result.length, 1);
