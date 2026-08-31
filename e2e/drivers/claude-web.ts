@@ -123,11 +123,22 @@ async function firstMatching(
     }
     await page.waitForTimeout(POLL_MS);
   }
-  throw new Error(
-    `claude-web: no ${label} found after ${timeoutMs}ms. Tried: ${candidates.join(', ')}. ` +
-      'These are SELECTOR-TODO guesses — inspect the live DOM (Browserbase Live View ' +
-      'or the replay URL logged at session start) and update claude-web.ts.',
-  );
+  // Naming the page is what separates "the selector is wrong" from "this is a
+  // sign-in page and no composer exists" — the first run hit the latter and the
+  // error blamed the selectors.
+  const url = page.url();
+  const title = await page.title().catch(() => '(unknown)');
+  const signedOut = /sign in|log in|sign up/i.test(title);
+
+  const detail = signedOut
+    ? `The page is "${title}" (${url}) — this session is NOT LOGGED IN, so no ${label} exists. ` +
+      'The selectors are probably fine. Re-run `npm run seed:browserbase` to save a working ' +
+      'login into the Browserbase context, and note it now verifies the context afterwards.'
+    : `The page is "${title}" (${url}). Tried: ${candidates.join(', ')}. These are ` +
+      'SELECTOR-TODO guesses — inspect the live DOM (Browserbase Live View or the replay ' +
+      'URL logged at session start) and update claude-web.ts.';
+
+  throw new Error(`claude-web: no ${label} found after ${timeoutMs}ms. ${detail}`);
 }
 
 /**

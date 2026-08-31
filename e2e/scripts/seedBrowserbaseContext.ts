@@ -153,7 +153,11 @@ async function main(): Promise<void> {
     persist: true,
     // Generous: a human is logging in, possibly hunting for a 2FA code.
     timeoutSeconds: 1800,
-    keepAlive: true,
+    // NOT keepAlive. `persist` writes the cookie jar back when the SESSION
+    // ends, and keepAlive's whole purpose is to keep it running after the
+    // client disconnects — so browser.close() would detach without ending
+    // anything and the login would never be saved. That produced a context
+    // that looked seeded and yielded "Sign in - Claude" on the first test run.
   });
 
   const browser = await chromium.connectOverCDP(session.connectUrl);
@@ -183,8 +187,22 @@ async function main(): Promise<void> {
     .isVisible()
     .catch(() => false);
 
-  await browser.close(); // ends the session, which is what flushes the context
+  // Disconnect, then ask Browserbase to END the session explicitly. Closing the
+  // CDP connection alone is not a guarantee the session completed, and `persist`
+  // only writes on completion — so this is the step that actually saves the
+  // login. REQUEST_RELEASE is also what stops it billing until the timeout.
+  await browser.close();
+  try {
+    await bb.sessions.update(session.sessionId, { status: 'REQUEST_RELEASE', projectId });
+  } catch (err: any) {
+    console.error(`[seed] could not release the session: ${err?.message ?? err}`);
+    console.error('[seed] the context may not have been written — re-run and check.');
+  }
   await new Promise((r) => setTimeout(r, 5_000)); // docs: allow a few seconds to sync
+
+  // Prove the cookies actually landed, rather than trusting the write. This is
+  // the check whose absence let a silently-empty context reach a test run.
+  await verifyContextPersisted(contextId, target.url);
 
   if (!loggedIn) {
     console.error('');
@@ -199,6 +217,47 @@ async function main(): Promise<void> {
   console.error('Then run a test against it:');
   console.error(`    E2E_BROWSER=browserbase CLIENT=${CLIENT} \\`);
   console.error('      node --import tsx --test tests/readGoogleDoc.smoke.ts');
+}
+
+/**
+ * Re-open the context in a fresh session and confirm the login survived.
+ *
+ * Without this the script's "done" only means "we asked it to save". The first
+ * evidence of failure was otherwise a smoke test landing on a sign-in page,
+ * which reads as a broken selector rather than a broken context.
+ */
+async function verifyContextPersisted(contextId: string, url: string): Promise<void> {
+  console.error('[seed] verifying the saved login by reopening the context…');
+  process.env.BROWSERBASE_CONTEXT_ID = contextId;
+  const check = await createBrowserbaseSession({ persist: false, timeoutSeconds: 120 });
+  const browser = await chromium.connectOverCDP(check.connectUrl);
+  try {
+    const ctx = browser.contexts()[0] ?? (await browser.newContext());
+    const page = ctx.pages()[0] ?? (await ctx.newPage());
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(4_000); // let any client-side redirect settle
+
+    const title = await page.title().catch(() => '');
+    const signedOut = /sign in|log in/i.test(title);
+    if (signedOut) {
+      console.error('');
+      console.error(`[seed] FAILED: the reopened context lands on "${title}".`);
+      console.error('[seed] The login did not persist. Re-run and make sure you are fully');
+      console.error('[seed] signed in — the chat UI loaded, not just the password submitted —');
+      console.error('[seed] before pressing Enter.');
+      console.error(`[seed] Replay of this check: ${check.replayUrl}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.error(`[seed] verified — reopened context loads "${title}".`);
+  } finally {
+    await browser.close();
+    try {
+      // Release rather than letting it idle to timeout — an unreleased check
+      // session bills for its full duration.
+      browserbaseClient().sessions.update(check.sessionId, { status: 'REQUEST_RELEASE' });
+    } catch { /* best-effort */ }
+  }
 }
 
 main().catch((err) => {
