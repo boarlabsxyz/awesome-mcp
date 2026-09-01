@@ -1,7 +1,8 @@
 // src/slack-user/accessControl.ts
 // Rule-based access control engine for Slack user OAuth MCP.
 import { UserError } from 'fastmcp';
-import { SlackClient } from '../slack/apiHelpers.js';
+import { SlackClient, channelTeamIds, isSharedChannel } from '../slack/apiHelpers.js';
+import type { SlackChannelTeamFields } from '../slack/apiHelpers.js';
 import type { SlackAccessRules } from '../mcpConnectionStore.js';
 
 // --- Glob matching ---
@@ -25,7 +26,15 @@ export interface ChannelMeta {
   is_im: boolean;
   is_mpim: boolean;
   user?: string;              // DM counterpart user ID
-  shared_team_ids?: string[]; // Orgs this channel is shared with
+  /**
+   * Every org this channel touches — the union of Slack's `shared_team_ids`,
+   * `internal_team_ids`, `connected_team_ids` and `context_team_id`, via
+   * `channelTeamIds`. It is deliberately not the raw `shared_team_ids` field:
+   * a Slack Connect channel routinely reports its external orgs in
+   * `connected_team_ids` and leaves `shared_team_ids` internal-only, which used
+   * to read here as "organisation could not be verified".
+   */
+  shared_team_ids?: string[];
 }
 
 const channelMetaCache = new Map<string, { meta: ChannelMeta; expiresAt: number }>();
@@ -46,11 +55,11 @@ export async function fetchChannelMeta(
     id: channel.id,
     name: channel.name,
     is_private: channel.is_private,
-    is_shared: channel.is_shared || channel.is_ext_shared || channel.is_org_shared,
+    is_shared: isSharedChannel(channel),
     is_im: channel.is_im,
     is_mpim: channel.is_mpim,
     user: channel.user,
-    shared_team_ids: channel.shared_team_ids,
+    shared_team_ids: channelTeamIds(channel),
   };
   channelMetaCache.set(cacheKey, { meta, expiresAt: Date.now() + CHANNEL_META_TTL_MS });
   return meta;
@@ -88,14 +97,17 @@ export function assertAccess(rules: SlackAccessRules, meta: ChannelMeta): void {
     throw new UserError('Access denied: only public channels are allowed (allowPublicOnly is enabled).');
   }
 
-  // 2. Org check for shared/external channels — block unless org is explicitly allowed
+  // 2. Org check for shared/external channels — every org on the channel must be
+  //    allowed. `some` was the old test, which let a channel through as soon as
+  //    *one* of its orgs was ticked: a channel shared with your own workspace
+  //    (always in allowedOrgs) plus an unapproved partner passed every time.
   if (meta.is_shared && rules.allowedOrgs.length > 0) {
     if (!meta.shared_team_ids || meta.shared_team_ids.length === 0) {
       throw new UserError('Access denied: this shared channel\'s organisation could not be verified.');
     }
-    const hasAllowedOrg = meta.shared_team_ids.some(tid => rules.allowedOrgs.includes(tid));
-    if (!hasAllowedOrg) {
-      throw new UserError('Access denied: this shared channel belongs to an organisation not in your allowed list.');
+    const disallowed = meta.shared_team_ids.filter(tid => !rules.allowedOrgs.includes(tid));
+    if (disallowed.length > 0) {
+      throw new UserError(`Access denied: this shared channel belongs to an organisation not in your allowed list (${disallowed.join(', ')}). Tick it under Access Rules → Organizations if it should be readable.`);
     }
   }
 
@@ -245,12 +257,12 @@ export async function filterGroupDmsByRules(
  */
 export function filterChannelList(
   rules: SlackAccessRules,
-  channels: Array<{
+  channels: Array<SlackChannelTeamFields & {
     id: string; name: string; is_private: boolean;
-    is_ext_shared?: boolean; is_org_shared?: boolean;
+    is_shared?: boolean; is_ext_shared?: boolean; is_org_shared?: boolean;
+    is_pending_ext_shared?: boolean;
     is_im?: boolean; is_mpim?: boolean;
     user?: string;
-    shared_team_ids?: string[];
   }>,
 ): typeof channels {
   return channels.filter(ch => {
@@ -267,12 +279,14 @@ export function filterChannelList(
     // Channel checks
     if (rules.allowPublicOnly && ch.is_private) return false;
 
-    // Org filter: external/shared channels — check if org is allowed when data available
-    const isShared = !!(ch.is_ext_shared || ch.is_org_shared);
-    if (isShared && rules.allowedOrgs.length > 0 && ch.shared_team_ids && ch.shared_team_ids.length > 0) {
+    // Org filter: external/shared channels — check if org is allowed when data available.
+    // Same all-orgs-must-be-allowed rule as assertAccess, over the same union of
+    // team-ID fields, so the list and a direct read cannot disagree.
+    const isShared = isSharedChannel(ch);
+    const teamIds = channelTeamIds(ch);
+    if (isShared && rules.allowedOrgs.length > 0 && teamIds.length > 0) {
       // We have org data — enforce it
-      const hasAllowedOrg = ch.shared_team_ids.some(tid => rules.allowedOrgs.includes(tid));
-      if (!hasAllowedOrg) return false;
+      if (teamIds.some(tid => !rules.allowedOrgs.includes(tid))) return false;
     }
     // If shared but no shared_team_ids available (conversations.list limitation),
     // let it through to whitelist/blacklist check. Org is enforced at read time

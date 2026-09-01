@@ -1746,6 +1746,8 @@
     let rulesState = { allowedOrgs: [], blacklistUsers: [], whitelistChannels: [], blacklistChannels: [], allowPublicOnly: false };
     let rulesBlacklistUserDetails = []; // { id, name } for display
     let rulesCurrentOrgId = null; // Always included in allowedOrgs
+    // Whether the server could enumerate every reachable org, plus why not.
+    let rulesOrgDiscovery = { truncated: false, notes: [] };
     let searchDebounce = null;
 
     async function openAccessRules(instanceId) {
@@ -1766,6 +1768,8 @@
         rulesBlacklistUserDetails = data.blacklistUserDetails || [];
         rulesCurrentOrgId = data.currentOrg?.id || null;
 
+        rulesOrgDiscovery = data.orgDiscovery || { truncated: false, notes: [] };
+
         renderAccessRulesForm(data.currentOrg, data.connectedOrgs);
       } catch (err) {
         document.getElementById('accessRulesContent').innerHTML = `<p style="color: #dc3545;" role="alert">Error: ${escapeHtml(err.message)}</p>`;
@@ -1778,13 +1782,31 @@
           <input type="checkbox" checked disabled style="width: 16px; height: 16px; accent-color: #4f8df7;" />
           <span>${escapeHtml(currentOrg.name)} <span style="color: #666; font-size: 11px;">(current)</span></span>
         </label>`,
-        ...connectedOrgs.map(org => `
+        ...connectedOrgs.map(org => {
+          // An unnamed org is normal, not an error: team.info on a foreign
+          // workspace fails even with team:read, so the ID is the only label
+          // Slack will give us. Say that rather than printing a bare T0… .
+          const label = org.nameResolved
+            ? escapeHtml(org.name)
+            : `${escapeHtml(org.id)} <span style="color: #666; font-size: 11px;">(external workspace)</span>`;
+          const savedNote = org.saved
+            ? ' <span style="color: #666; font-size: 11px;">(saved — not seen in this scan)</span>'
+            : '';
+          return `
           <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer;">
             <input type="checkbox" data-org-id="${escapeAttr(org.id)}" ${rulesState.allowedOrgs.includes(org.id) ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #4f8df7;" />
-            <span>${escapeHtml(org.name !== org.id ? org.name : org.id)}</span>
+            <span>${label}${savedNote}</span>
           </label>
-        `)
+        `;
+        })
       ].join('');
+
+      const orgWarningHtml = rulesOrgDiscovery.truncated
+        ? `<p role="status" style="color: #fbbf24; font-size: 11px; margin: 6px 0 0;">
+             Some organisations may be missing from this list:
+             <br />${rulesOrgDiscovery.notes.map(n => escapeHtml(n)).join('<br />')}
+           </p>`
+        : '';
 
       const blacklistHtml = rulesBlacklistUserDetails.map(u => `
         <span class="chip">
@@ -1818,6 +1840,7 @@
           <div class="rules-section">
             <div class="rules-section-label" style="color: #a78bfa;">Allowed Organisations</div>
             ${orgsHtml}
+            ${orgWarningHtml}
           </div>
 
           <div class="rules-section">
@@ -1992,6 +2015,17 @@
       const selectedOrgs = Array.from(orgCheckboxes).map(cb => cb.getAttribute('data-org-id'));
       if (rulesCurrentOrgId && !selectedOrgs.includes(rulesCurrentOrgId)) {
         selectedOrgs.unshift(rulesCurrentOrgId);
+      }
+      // Preserve orgs that are allowed but have no checkbox in this render.
+      // Rebuilding allowedOrgs from the DOM alone silently deleted any org the
+      // discovery pass happened to miss — opening the modal and pressing Save
+      // was enough to revoke access nobody asked to revoke.
+      const renderedOrgIds = new Set(
+        Array.from(document.querySelectorAll('#accessRulesContent input[data-org-id]'))
+          .map(cb => cb.getAttribute('data-org-id'))
+      );
+      for (const orgId of (rulesState.allowedOrgs || [])) {
+        if (!renderedOrgIds.has(orgId) && !selectedOrgs.includes(orgId)) selectedOrgs.push(orgId);
       }
       rulesState.allowedOrgs = selectedOrgs;
       rulesState.allowPublicOnly = document.getElementById('allowPublicOnly')?.checked || false;

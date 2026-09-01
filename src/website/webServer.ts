@@ -315,6 +315,7 @@ import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceN
 import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
 import { checkConnectionHealth, type ConnectionHealth } from './connectionHealth.js';
+import { discoverConnectedOrgs, type OrgDiscoveryResult } from '../slack-user/orgDiscovery.js';
 import { buildSimpleInstanceName, type ValidateResult } from '../util/pasteTokenValidation.js';
 import {
   listSpreadsheetFiles,
@@ -1885,6 +1886,37 @@ function registerSharedRoutes(app: express.Express): void {
     }
   });
 
+  // Org discovery sweeps several paged Slack endpoints, so a modal open/close
+  // cycle should not re-run it. Keyed by instance *and* saved allowlist, since
+  // a saved org that discovery misses is injected into the result — which also
+  // means a rules change mints a new key, so entries must be evicted rather
+  // than left to accumulate one per allowlist the user ever saved.
+  const orgDiscoveryCache = new Map<string, { result: OrgDiscoveryResult; expiresAt: number }>();
+  const ORG_DISCOVERY_TTL_MS = 5 * 60 * 1000;
+  const ORG_DISCOVERY_CACHE_MAX = 500;
+
+  /** Drop expired entries, then the oldest ones until the cache is under its cap. */
+  function pruneOrgDiscoveryCache(): void {
+    const now = Date.now();
+    for (const [key, entry] of [...orgDiscoveryCache]) {
+      if (entry.expiresAt <= now) orgDiscoveryCache.delete(key);
+    }
+    // Map iterates in insertion order, so the first keys are the oldest writes.
+    while (orgDiscoveryCache.size > ORG_DISCOVERY_CACHE_MAX) {
+      const oldest = orgDiscoveryCache.keys().next();
+      if (oldest.done) break;
+      orgDiscoveryCache.delete(oldest.value);
+    }
+  }
+
+  /** Forget every cached sweep for one instance. Its rules just changed. */
+  function invalidateOrgDiscoveryCache(instanceId: string): void {
+    const prefix = `${instanceId}:`;
+    for (const key of [...orgDiscoveryCache.keys()]) {
+      if (key.startsWith(prefix)) orgDiscoveryCache.delete(key);
+    }
+  }
+
   // GET /api/instances/:instanceId/access-rules - Get current access rules + org info
   app.get('/api/instances/:instanceId/access-rules', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
@@ -1913,53 +1945,34 @@ function registerSharedRoutes(app: express.Express): void {
         currentOrg = { id: team.id, name: team.name };
       } catch { /* skip */ }
 
-      // Discover connected orgs from shared channels
-      const connectedOrgs: Array<{ id: string; name: string }> = [];
-      const seenOrgIds = new Set<string>([currentOrg.id]);
-
-      // Find shared channels first
-      const sharedChannelIds: string[] = [];
-      let cursor: string | undefined;
-      do {
-        const result = await client.conversationsListAll(cursor, 'public_channel,private_channel');
-        for (const ch of result.channels) {
-          if (ch.is_ext_shared || ch.is_org_shared) {
-            sharedChannelIds.push(ch.id);
-          }
-        }
-        cursor = result.response_metadata?.next_cursor || undefined;
-      } while (cursor);
-
-      // Get shared_team_ids from conversations.info (limited to first 10 shared channels, sequential to avoid rate limits)
-      for (const chId of sharedChannelIds.slice(0, 10)) {
-        try {
-          const { channel: info } = await client.conversationsInfo(chId);
-          if (info.shared_team_ids) {
-            for (const tid of info.shared_team_ids) {
-              if (!seenOrgIds.has(tid)) {
-                seenOrgIds.add(tid);
-                connectedOrgs.push({ id: tid, name: tid });
-              }
-            }
-          }
-        } catch { /* skip — rate limit or other error */ }
-      }
-
-      // Resolve org names: try team.info for each external org, fall back to user names
-      for (const org of connectedOrgs) {
-        if (org.name === org.id) {
-          try {
-            const { team } = await client.teamInfo(org.id);
-            org.name = team.name;
-          } catch {
-            // team.info failed for external org — keep ID as fallback
-          }
-        }
-      }
-
       // Migrate old format
       const { migrateSlackTokens } = await import('../mcpConnectionStore.js');
       const tokens = migrateSlackTokens(connection.providerTokens);
+
+      // Discover every org this connection can reach: shared channels, Slack
+      // Connect DMs, external users, plus anything already saved. See
+      // src/slack-user/orgDiscovery.ts for why each source is needed — an org
+      // missing here has no checkbox, and without a checkbox it can never be
+      // allowed, so its conversations stay invisible.
+      const savedOrgIds = (tokens.accessRules?.allowedOrgs || []).filter(id => id && id !== currentOrg.id);
+      // Sorted so the key is canonical regardless of the order the allowlist
+      // was stored in. Explicit comparator — a bare sort() is implementation-defined.
+      const sortedSavedOrgIds = [...savedOrgIds].sort((a, b) => a.localeCompare(b));
+      const cacheKey = `${instanceId}:${sortedSavedOrgIds.join(',')}`;
+      const cached = orgDiscoveryCache.get(cacheKey);
+      let discovery: OrgDiscoveryResult;
+      if (cached && cached.expiresAt > Date.now()) {
+        discovery = cached.result;
+      } else {
+        if (cached) orgDiscoveryCache.delete(cacheKey);
+        discovery = await discoverConnectedOrgs(client, { currentOrgId: currentOrg.id, savedOrgIds });
+        orgDiscoveryCache.set(cacheKey, { result: discovery, expiresAt: Date.now() + ORG_DISCOVERY_TTL_MS });
+        pruneOrgDiscoveryCache();
+      }
+      const connectedOrgs = discovery.orgs;
+      if (discovery.truncated) {
+        console.error(`[access-rules] org discovery incomplete for ${instanceId}: ${discovery.notes.join(' | ')}`);
+      }
 
       // Get blacklisted user names for display (sequential to avoid rate limits)
       const blacklistUserDetails: Array<{ id: string; name: string }> = [];
@@ -1978,6 +1991,10 @@ function registerSharedRoutes(app: express.Express): void {
         currentRules: tokens.accessRules,
         currentOrg,
         connectedOrgs,
+        // The UI warns when the org list may be short. A silently truncated
+        // list reads as "that org isn't connected", which is the bug this
+        // endpoint used to have.
+        orgDiscovery: { truncated: discovery.truncated, notes: discovery.notes },
         blacklistUserDetails,
       });
     } catch (err) {
@@ -2036,6 +2053,9 @@ function registerSharedRoutes(app: express.Express): void {
       // Clear session cache so new rules take effect
       const { clearMcpSessionCache } = await import('../userSession.js');
       clearMcpSessionCache(user.apiKey, instanceId);
+      // Saved orgs are baked into a cached sweep, so a stale entry would show
+      // the previous allowlist's rows on the next modal open.
+      invalidateOrgDiscoveryCache(instanceId);
 
       console.error(`User ${user.id} updated Slack access rules for ${instanceId}: ${updatedTokens.accessRules.whitelistChannels.length} whitelist, ${updatedTokens.accessRules.blacklistChannels.length} blacklist, ${updatedTokens.accessRules.blacklistUsers.length} blocked users, ${updatedTokens.accessRules.allowedOrgs.length} orgs`);
       res.json({ success: true });
