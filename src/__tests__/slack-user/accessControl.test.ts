@@ -467,12 +467,15 @@ describe('channelSharedTeamIds', () => {
 
   it('unions the shared lists', () => {
     const channel = { shared_team_ids: ['T1'], internal_team_ids: ['T1'], connected_team_ids: ['T2'] };
-    assert.deepEqual(channelSharedTeamIds(channel).sort(), ['T1', 'T2']);
+    assert.deepEqual(channelSharedTeamIds(channel).sort((a, b) => a.localeCompare(b)), ['T1', 'T2']);
   });
 
   it('includes pending_shared and pending_connected_team_ids only when asked', () => {
     const channel = { pending_shared: ['T_A'], pending_connected_team_ids: ['T_B'] };
     assert.deepEqual(channelSharedTeamIds(channel), []);
-    assert.deepEqual(channelSharedTeamIds(channel, { includePending: true }).sort(), ['T_A', 'T_B']);
+    assert.deepEqual(
+      channelSharedTeamIds(channel, { includePending: true }).sort((a, b) => a.localeCompare(b)),
+      ['T_A', 'T_B'],
+    );
   });
 });

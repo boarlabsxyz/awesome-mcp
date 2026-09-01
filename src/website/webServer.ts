@@ -1955,7 +1955,10 @@ function registerSharedRoutes(app: express.Express): void {
       // missing here has no checkbox, and without a checkbox it can never be
       // allowed, so its conversations stay invisible.
       const savedOrgIds = (tokens.accessRules?.allowedOrgs || []).filter(id => id && id !== currentOrg.id);
-      const cacheKey = `${instanceId}:${[...savedOrgIds].sort().join(',')}`;
+      // Sorted so the key is canonical regardless of the order the allowlist
+      // was stored in. Explicit comparator — a bare sort() is implementation-defined.
+      const sortedSavedOrgIds = [...savedOrgIds].sort((a, b) => a.localeCompare(b));
+      const cacheKey = `${instanceId}:${sortedSavedOrgIds.join(',')}`;
       const cached = orgDiscoveryCache.get(cacheKey);
       let discovery: OrgDiscoveryResult;
       if (cached && cached.expiresAt > Date.now()) {

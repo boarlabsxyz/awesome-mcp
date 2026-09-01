@@ -19,7 +19,7 @@ function mockClient(overrides: Record<string, any> = {}): any {
 }
 
 function ids(result: { orgs: Array<{ id: string }> }): string[] {
-  return result.orgs.map(o => o.id).sort();
+  return result.orgs.map(o => o.id).sort((a, b) => a.localeCompare(b));
 }
 
 describe('discoverConnectedOrgs — shared channels', () => {
