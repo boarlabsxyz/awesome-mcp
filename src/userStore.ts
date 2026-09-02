@@ -27,8 +27,21 @@ export interface UserTokens {
   expiry_date: number;
 }
 
+/**
+ * Thrown when a create would collide with an existing account's email.
+ * Callers map this to a 409 — it is an expected outcome of a race, not a bug.
+ */
+export class DuplicateEmailError extends Error {
+  constructor(email: string) {
+    super(`An account already exists for ${email}`);
+    this.name = 'DuplicateEmailError';
+  }
+}
+
 export interface UserRecord extends UserProfile {
   tokens?: UserTokens;
+  /** Only ever populated by getPasswordHashByEmail's file-store sibling. */
+  passwordHash?: string;
 }
 
 // ---------- File-based storage (fallback) ----------
@@ -92,10 +105,21 @@ async function fileCreateOrUpdateUser(
   tokens: UserTokens
 ): Promise<UserRecord> {
   await fileLoadUsers();
-  const existing = fileGetUserByGoogleId(profile.googleId);
+  // Match on googleId first, then on email — the email fallback is what links
+  // Google to an account that was created with a password. Without it this
+  // path inserts a SECOND record for an address that already has one, and
+  // since email is the login key, password sign-in and Google sign-in would
+  // then resolve to two different accounts with two different API keys. The
+  // DB path gets this from its ON CONFLICT (email) clause.
+  const existing = fileGetUserByGoogleId(profile.googleId) ?? fileGetUserByEmail(profile.email);
   if (existing) {
     existing.email = profile.email;
+    existing.googleId = profile.googleId;
     existing.name = profile.name;
+    // Do not relabel an account that still has a working password.
+    if (!existing.passwordHash) {
+      existing.authMethod = 'google';
+    }
     existing.tokens = tokens;
     existing.updatedAt = new Date().toISOString();
     await saveUsers();
@@ -217,7 +241,12 @@ async function dbCreateOrUpdateUser(
      ON CONFLICT (email) DO UPDATE SET
        google_id = EXCLUDED.google_id,
        name = EXCLUDED.name,
-       auth_method = 'google',
+       -- Linking Google to an account that already has a password must not
+       -- relabel it 'google': the password still works (this UPDATE never
+       -- touches password_hash), and the dashboard renders auth_method
+       -- verbatim, so relabelling would tell the user a credential they can
+       -- still sign in with no longer exists.
+       auth_method = CASE WHEN users.password_hash IS NOT NULL THEN users.auth_method ELSE 'google' END,
        updated_at = EXCLUDED.updated_at
      RETURNING id, api_key, email, google_id, name, auth_method, created_at, updated_at`,
     [apiKey, profile.email, profile.googleId, profile.name, now]
@@ -255,7 +284,8 @@ async function dbUpdateTokens(apiKey: string, tokens: Partial<UserTokens>): Prom
 // ---------- Get All Users ----------
 
 function fileGetAllUsers(): UserProfile[] {
-  return Object.values(users).map(({ tokens, ...profile }) => profile);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  return Object.values(users).map(({ tokens, passwordHash, ...profile }) => profile);
 }
 
 async function dbGetAllUsers(): Promise<UserProfile[]> {
@@ -415,57 +445,154 @@ export async function createUser(profile: { email: string; name: string; auth0Su
   return fileCreateUser(profile);
 }
 
-// ---------- Regenerate API Key ----------
+// ---------- Email + Password Auth ----------
+//
+// password_hash is deliberately absent from DB_USER_COLUMNS and from
+// UserProfile: nothing that serializes a user (/api/me, /api/admin/users, the
+// file-store JSON dump) can leak a hash it never selected. The hash is read
+// only here, by the one function that needs to compare it.
 
-async function fileRegenerateApiKey(googleId: string): Promise<UserRecord | null> {
+async function dbGetPasswordHashByEmail(email: string): Promise<string | null> {
+  const pool = getPool();
+  const { rows } = await pool.query('SELECT password_hash FROM users WHERE email = $1', [email]);
+  return rows.length > 0 ? (rows[0].password_hash ?? null) : null;
+}
+
+function fileGetPasswordHashByEmail(email: string): string | null {
+  const user = Object.values(users).find(u => u.email === email);
+  return user?.passwordHash ?? null;
+}
+
+/**
+ * The stored bcrypt hash for an email, or null when there is no account or the
+ * account has no password (a Google-only user). Callers must feed null
+ * straight to verifyPassword rather than short-circuiting on it — see the
+ * timing note in auth/password.ts.
+ */
+export async function getPasswordHashByEmail(email: string): Promise<string | null> {
+  if (isDatabaseAvailable()) {
+    return dbGetPasswordHashByEmail(email);
+  }
   await fileLoadUsers();
-  const existing = fileGetUserByGoogleId(googleId);
+  return fileGetPasswordHashByEmail(email);
+}
+
+async function dbCreatePasswordUser(profile: {
+  email: string;
+  name: string;
+  passwordHash: string;
+}): Promise<UserRecord> {
+  const pool = getPool();
+  const apiKey = generateApiKey();
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO users (api_key, email, google_id, name, password_hash, auth_method, created_at, updated_at)
+       VALUES ($1, $2, NULL, $3, $4, 'password', NOW(), NOW())
+       RETURNING ${DB_USER_COLUMNS}`,
+      [apiKey, profile.email, profile.name, profile.passwordHash]
+    );
+    return rowToUserRecord(rows[0]);
+  } catch (err: any) {
+    // 23505 = unique_violation. The route pre-checks the email, but two
+    // concurrent registrations can both pass that check and race to INSERT;
+    // the UNIQUE(email) constraint is what actually decides. Surfacing it as
+    // the typed error turns a 500 into the 409 the loser deserves.
+    if (err?.code === '23505') throw new DuplicateEmailError(profile.email);
+    throw err;
+  }
+}
+
+async function fileCreatePasswordUser(profile: {
+  email: string;
+  name: string;
+  passwordHash: string;
+}): Promise<UserRecord> {
+  await fileLoadUsers();
+
+  // Check and insert with no await between them. The file store has no UNIQUE
+  // constraint to fall back on, and Node runs this stretch to completion
+  // before another request can observe `users` — so this is the critical
+  // section. An upstream pre-check is not enough on its own: two concurrent
+  // registrations can both pass it and both insert, leaving one account
+  // permanently unreachable, since lookup by email returns only the first.
+  if (fileGetUserByEmail(profile.email)) {
+    throw new DuplicateEmailError(profile.email);
+  }
+
+  const apiKey = generateApiKey();
+  const user: UserRecord = {
+    id: nextFileUserId++,
+    apiKey,
+    email: profile.email,
+    googleId: null,
+    name: profile.name,
+    authMethod: 'password',
+    passwordHash: profile.passwordHash,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  users[apiKey] = user;
+  await saveUsers();
+  return user;
+}
+
+/**
+ * Create an account that has no Google identity. Rejects a duplicate email
+ * rather than upserting: an existing row here means either a live password
+ * account or a Google account, and silently rewriting either one turns
+ * registration into account takeover.
+ */
+export async function createPasswordUser(profile: {
+  email: string;
+  name: string;
+  passwordHash: string;
+}): Promise<UserRecord> {
+  if (isDatabaseAvailable()) {
+    return dbCreatePasswordUser(profile);
+  }
+  return fileCreatePasswordUser(profile);
+}
+
+// ---------- Regenerate API Key ----------
+//
+// Keyed on user id only. The googleId-keyed version this replaced could not
+// serve an email+password account — google_id is NULL for those rows, so its
+// UPDATE matched nothing and the caller reported "user not found" on a valid
+// account. Keeping it around as an unused sibling would just be a trap for
+// the next caller.
+
+async function fileRegenerateApiKeyByUserId(userId: number): Promise<UserRecord | null> {
+  await fileLoadUsers();
+  const existing = Object.values(users).find(u => u.id === userId);
   if (!existing) return null;
 
-  // Remove old entry
   delete users[existing.apiKey];
-
-  // Generate new key and update user
-  const newApiKey = generateApiKey();
-  existing.apiKey = newApiKey;
+  existing.apiKey = generateApiKey();
   existing.updatedAt = new Date().toISOString();
-
-  // Store under new key
-  users[newApiKey] = existing;
+  users[existing.apiKey] = existing;
   await saveUsers();
-
   return existing;
 }
 
-async function dbRegenerateApiKey(googleId: string): Promise<UserRecord | null> {
+async function dbRegenerateApiKeyByUserId(userId: number): Promise<UserRecord | null> {
   const pool = getPool();
-  const redis = getRedis();
-
-  // Check if user exists
-  const { rows: existingRows } = await pool.query(
-    'SELECT google_id FROM users WHERE google_id = $1',
-    [googleId]
-  );
-  if (existingRows.length === 0) return null;
-
-  // Generate new key and update
-  const newApiKey = generateApiKey();
   const { rows } = await pool.query(
     `UPDATE users SET api_key = $1, updated_at = NOW()
-     WHERE google_id = $2
-     RETURNING id, api_key, email, google_id, name, auth_method, created_at, updated_at`,
-    [newApiKey, googleId]
+     WHERE id = $2
+     RETURNING ${DB_USER_COLUMNS}`,
+    [generateApiKey(), userId]
   );
-
-  const row = rows[0];
-  const tokens = await loadTokensFromRedis(row.google_id);
-
-  return rowToUserRecord(row, tokens);
+  if (rows.length === 0) return null;
+  const tokens = await loadTokensFromRedis(rows[0].google_id);
+  return rowToUserRecord(rows[0], tokens);
 }
 
-export async function regenerateApiKey(googleId: string): Promise<UserRecord | null> {
+/**
+ * Rotate an account's API key by user id.
+ */
+export async function regenerateApiKeyByUserId(userId: number): Promise<UserRecord | null> {
   if (isDatabaseAvailable()) {
-    return dbRegenerateApiKey(googleId);
+    return dbRegenerateApiKeyByUserId(userId);
   }
-  return fileRegenerateApiKey(googleId);
+  return fileRegenerateApiKeyByUserId(userId);
 }
