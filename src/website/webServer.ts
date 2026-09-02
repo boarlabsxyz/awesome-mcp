@@ -296,10 +296,12 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
 }
 import crypto from 'crypto';
 import cookieParser from 'cookie-parser';
-import { loadUsers, createOrUpdateUser, getUserByGoogleId, getUserByApiKey, getUserById, regenerateApiKey, getAllUsers, UserRecord } from '../userStore.js';
+import { loadUsers, createOrUpdateUser, getUserByGoogleId, getUserByApiKey, getUserById, getUserByEmail, createPasswordUser, getPasswordHashByEmail, regenerateApiKeyByUserId, getAllUsers, UserRecord, DuplicateEmailError } from '../userStore.js';
+import { normalizeEmail, isValidEmail, validatePassword, hashPassword, verifyPassword } from '../auth/password.js';
 import { loadClientCredentials } from '../auth.js';
 import { getOAuthState, deleteOAuthState, storeAuthCode, storeClient, getClient, exchangeAuthCode } from './oauthServer.js';
 import { createSession, getSession, deleteSession, Session } from './sessionStore.js';
+import { consumeLoginAttempt, resetLoginAttempts, RateLimitVerdict, LOGIN_RATE_LIMIT } from './loginRateLimit.js';
 import { lookupRestToken } from './restTokenStore.js';
 import { mapSlackErrorToHttpStatus } from './slackErrorMapper.js';
 import { negotiateFormat, respondNegotiated } from './restContent.js';
@@ -784,6 +786,84 @@ export function registerImageBlobRoutes(app: express.Express): void {
 }
 
 /**
+ * Resolve the account behind a dashboard session.
+ *
+ * Every session-backed route used to do this inline as
+ * `getUserByGoogleId(req.session.googleId)`, which made the whole dashboard
+ * Google-only by construction: an email+password account has google_id NULL,
+ * so the lookup missed and the route answered 401 on a valid session.
+ *
+ * `userId` is the identity now. The googleId fallback is for sessions minted
+ * before that change — they are still live in Redis for up to their 7-day
+ * TTL and must keep working rather than logging everyone out on deploy.
+ */
+async function resolveSessionUser(session: Session | undefined): Promise<UserRecord | undefined> {
+  if (!session) return undefined;
+  if (typeof session.userId === 'number') {
+    return getUserById(session.userId);
+  }
+  if (session.googleId) {
+    return getUserByGoogleId(session.googleId);
+  }
+  return undefined;
+}
+
+/**
+ * Best available client address for rate-limiting purposes.
+ *
+ * Deliberately not `req.ip`. The app sets `trust proxy: true`, which makes
+ * Express believe the whole X-Forwarded-For chain, and a client controls
+ * everything it sends — so `req.ip` is whatever the caller claims. Each proxy
+ * *appends* the peer it actually saw, so the RIGHTMOST entry is the one
+ * written by the hop closest to us and is the only part a client cannot
+ * forge; anything injected lands to its left.
+ *
+ * This is exactly as trustworthy as "there is one proxy in front of us",
+ * which is true on Railway. It is a local hardening, not a fix for the
+ * repo-wide `trust proxy: true` — that setting deserves its own change, since
+ * narrowing it affects every consumer of req.ip.
+ */
+function rateLimitClientAddress(req: Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  const chain = Array.isArray(forwarded) ? forwarded.join(',') : forwarded;
+  if (chain) {
+    const hops = chain.split(',');
+    const nearest = hops[hops.length - 1]?.trim();
+    if (nearest) return nearest;
+  }
+  return req.socket.remoteAddress || 'unknown';
+}
+
+/**
+ * Buckets a credential attempt counts against, each with its own ceiling.
+ *
+ * Per-IP and per-email so neither dimension alone is a bypass: one address
+ * spraying many emails and many addresses hammering one email both accumulate.
+ *
+ * The global bucket exists because the other two are caller-influenced — the
+ * email is chosen outright and the address is only as trustworthy as the
+ * proxy assumption above — so an attacker who can rotate both would otherwise
+ * mint unlimited fresh buckets and spend ~190ms of bcrypt CPU per request
+ * forever. It is the only ceiling here that an attacker cannot route around.
+ */
+function attemptKeys(req: Request, email: string): Array<{ key: string; limit: number }> {
+  return [
+    { key: `ip:${rateLimitClientAddress(req)}`, limit: LOGIN_RATE_LIMIT.MAX_ATTEMPTS },
+    { key: `email:${email}`, limit: LOGIN_RATE_LIMIT.MAX_ATTEMPTS },
+    { key: 'global:credentials', limit: LOGIN_RATE_LIMIT.GLOBAL_MAX_ATTEMPTS },
+  ];
+}
+
+/** Consume one attempt on every bucket; returns a verdict for the caller. */
+async function guardAttempt(req: Request, email: string): Promise<RateLimitVerdict> {
+  const verdicts = await Promise.all(
+    attemptKeys(req, email).map(({ key, limit }) => consumeLoginAttempt(key, limit)),
+  );
+  const blocked = verdicts.find(v => !v.allowed);
+  return blocked ?? { allowed: true, retryAfter: 0 };
+}
+
+/**
  * Registers all shared routes used by both single-service and multi-service modes.
  * Includes: auth, dashboard, connect/reconnect OAuth, API endpoints, admin, catalogs.
  */
@@ -798,9 +878,11 @@ function registerSharedRoutes(app: express.Express): void {
     res.redirect('/dashboard');
   });
 
-  // Login shortcut - redirect to Google OAuth
+  // Login page — offers Google OAuth and email+password side by side.
+  // This used to redirect straight to /auth/google, which is no longer a
+  // correct default now that an account can exist without a Google identity.
   app.get('/login', (_req, res) => {
-    res.redirect('/auth/google');
+    res.sendFile(path.join(publicDir, 'login.html'));
   });
 
   // Dashboard - always serve the page (JS handles auth via /api/me)
@@ -958,8 +1040,10 @@ function registerSharedRoutes(app: express.Express): void {
         }
       }
 
-      // Direct registration flow — create session and redirect to dashboard
-      const sessionId = await createSession(profile.id);
+      // Direct registration flow — create session and redirect to dashboard.
+      // googleId rides along so a session minted here still resolves if the
+      // user row is ever looked up the old way.
+      const sessionId = await createSession({ userId: user.id, googleId: profile.id });
       res.cookie('session', sessionId, {
         signed: true,
         httpOnly: true,
@@ -983,6 +1067,138 @@ function registerSharedRoutes(app: express.Express): void {
     }
   });
 
+  // === Email + password authentication ===
+
+  const AUTH_COOKIE_OPTIONS = {
+    signed: true as const,
+    httpOnly: true as const,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax' as const,
+    maxAge: SESSION_MAX_AGE,
+  };
+
+  /**
+   * Finish a successful sign-in: mint the session cookie and hand back the
+   * post-login destination the user was parked at, if any.
+   */
+  async function completeSignIn(req: Request, res: Response, user: UserRecord): Promise<string> {
+    const sessionId = await createSession({ userId: user.id, googleId: user.googleId ?? undefined });
+    res.cookie('session', sessionId, AUTH_COOKIE_OPTIONS);
+
+    const parked = sanitizePostLoginRedirect(req.signedCookies?.[POST_LOGIN_REDIRECT_COOKIE]);
+    if (req.signedCookies?.[POST_LOGIN_REDIRECT_COOKIE]) {
+      res.clearCookie(POST_LOGIN_REDIRECT_COOKIE);
+    }
+    return parked || '/dashboard';
+  }
+
+  app.post('/api/auth/register', express.json(), async (req: Request, res: Response) => {
+    try {
+      const email = normalizeEmail(String(req.body?.email ?? ''));
+      const password = String(req.body?.password ?? '');
+      const name = String(req.body?.name ?? '').trim();
+
+      if (!isValidEmail(email)) {
+        res.status(400).json({ error: 'Enter a valid email address.' });
+        return;
+      }
+      const policyError = validatePassword(password);
+      if (policyError) {
+        res.status(400).json({ error: policyError });
+        return;
+      }
+
+      const gate = await guardAttempt(req, email);
+      if (!gate.allowed) {
+        res.set('Retry-After', String(gate.retryAfter));
+        res.status(429).json({ error: 'Too many attempts. Try again later.' });
+        return;
+      }
+
+      await loadUsers();
+      if (await getUserByEmail(email)) {
+        // Deliberately explicit rather than a generic error. Registration is
+        // already an existence oracle — any wording that let a real duplicate
+        // through would be worse than the disclosure, because the user would
+        // be stuck with no way to tell "taken" from "broken".
+        res.status(409).json({
+          error: 'An account with that email already exists. Sign in instead.',
+        });
+        return;
+      }
+
+      const user = await createPasswordUser({
+        email,
+        name: name || email,
+        passwordHash: await hashPassword(password),
+      });
+
+      // Email only — no API-key prefix. A key fragment in logs is a fragment
+      // of a live credential, and it buys nothing an account id doesn't.
+      console.error(`User registered via password: ${user.email}`);
+      await Promise.all(attemptKeys(req, email).map(({ key }) => resetLoginAttempts(key)));
+
+      const redirectTo = await completeSignIn(req, res, user);
+      res.status(201).json({ email: user.email, name: user.name, redirectTo });
+    } catch (err: any) {
+      // Two concurrent registrations can both clear the pre-check above; the
+      // store's uniqueness rule decides, and the loser gets the same 409 it
+      // would have got had it arrived a moment later.
+      if (err instanceof DuplicateEmailError) {
+        res.status(409).json({
+          error: 'An account with that email already exists. Sign in instead.',
+        });
+        return;
+      }
+      console.error('Registration error:', err);
+      res.status(500).json({ error: 'Registration failed. Please try again.' });
+    }
+  });
+
+  app.post('/api/auth/login', express.json(), async (req: Request, res: Response) => {
+    try {
+      const email = normalizeEmail(String(req.body?.email ?? ''));
+      const password = String(req.body?.password ?? '');
+
+      if (!email || !password) {
+        res.status(400).json({ error: 'Email and password are required.' });
+        return;
+      }
+
+      const gate = await guardAttempt(req, email);
+      if (!gate.allowed) {
+        res.set('Retry-After', String(gate.retryAfter));
+        res.status(429).json({ error: 'Too many attempts. Try again later.' });
+        return;
+      }
+
+      await loadUsers();
+      const storedHash = await getPasswordHashByEmail(email);
+
+      // Run the compare unconditionally — including when there is no account
+      // and when the account is Google-only (hash null). verifyPassword burns
+      // the same bcrypt cost either way, so response time does not reveal
+      // which emails are registered. See auth/password.ts.
+      const passwordOk = await verifyPassword(password, storedHash);
+      const user = passwordOk ? await getUserByEmail(email) : undefined;
+
+      if (!passwordOk || !user?.id) {
+        res.status(401).json({ error: 'Incorrect email or password.' });
+        return;
+      }
+
+      await Promise.all(attemptKeys(req, email).map(({ key }) => resetLoginAttempts(key)));
+      clearSessionCache(user.apiKey);
+
+      console.error(`User signed in via password: ${user.email}`);
+      const redirectTo = await completeSignIn(req, res, user);
+      res.json({ email: user.email, name: user.name, redirectTo });
+    } catch (err: any) {
+      console.error('Login error:', err);
+      res.status(500).json({ error: 'Sign-in failed. Please try again.' });
+    }
+  });
+
   // Authentication middleware for protected routes
   async function requireAuth(
     req: AuthenticatedRequest,
@@ -997,7 +1213,7 @@ function registerSharedRoutes(app: express.Express): void {
       return;
     }
     const session = await getSession(sessionId);
-    console.error(`[requireAuth] session found=${!!session}, googleId=${session?.googleId || 'none'}`);
+    console.error(`[requireAuth] session found=${!!session}, userId=${session?.userId ?? 'none'}, googleId=${session?.googleId || 'none'}`);
     if (!session || session.expiresAt < Date.now()) {
       console.error(`[requireAuth] Session expired or not found`);
       res.clearCookie('session');
@@ -1062,7 +1278,9 @@ function registerSharedRoutes(app: express.Express): void {
         sameSite: 'lax',
         maxAge: POST_LOGIN_REDIRECT_MAX_AGE,
       });
-      res.redirect('/auth/google');
+      // /login, not /auth/google: with two sign-in methods, hard-redirecting
+      // to Google would deny the page to every email+password account.
+      res.redirect('/login');
     };
 
     if (!sessionId) {
@@ -1071,6 +1289,13 @@ function registerSharedRoutes(app: express.Express): void {
     }
     const session = await getSession(sessionId);
     if (!session || session.expiresAt < Date.now()) {
+      res.clearCookie('session');
+      parkIntentAndLogin();
+      return;
+    }
+
+    const connectingUser = await resolveSessionUser(session);
+    if (!connectingUser?.id) {
       res.clearCookie('session');
       parkIntentAndLogin();
       return;
@@ -1105,6 +1330,11 @@ function registerSharedRoutes(app: express.Express): void {
       const stateData = JSON.stringify({
         sessionId,
         mcpSlug,
+        // userId is what the callback resolves on. googleId used to be the
+        // only identity here, which meant an email+password user could start
+        // a connect flow and get "User not found" on the way back — after
+        // consenting at the provider.
+        userId: connectingUser.id,
         googleId: session.googleId,
         instanceName: instanceName || null, // null means legacy single-instance mode
         reconnectInstanceId: reconnectInstanceId || null,
@@ -1225,8 +1455,15 @@ function registerSharedRoutes(app: express.Express): void {
 
       const redirectUri = `${BASE_URL}/connect/${mcpSlug}/callback`;
 
-      // Get user from session
-      const user = await getUserByGoogleId(stateData.googleId);
+      // Get user from the state we stored when the flow started. Prefer
+      // userId; fall back to googleId for flows started before that field
+      // existed and still inside their 10-minute state TTL.
+      const user = await resolveSessionUser({
+        userId: stateData.userId,
+        googleId: stateData.googleId,
+        createdAt: 0,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      });
       if (!user?.id) {
         res.status(401).send('User not found. Please log in again.');
         return;
@@ -1701,10 +1938,8 @@ function registerSharedRoutes(app: express.Express): void {
         return;
       }
 
-      const googleId = (req as any).session?.googleId;
-      if (!googleId) { res.status(401).json({ error: 'Not authenticated' }); return; }
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
+      const user = await resolveSessionUser((req as any).session);
+      if (!user?.id) { res.status(401).json({ error: 'Not authenticated' }); return; }
       const userId = user.id;
 
       /**
@@ -1921,10 +2156,8 @@ function registerSharedRoutes(app: express.Express): void {
   app.get('/api/instances/:instanceId/access-rules', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const instanceId = req.params.instanceId as string;
-      const googleId = (req as any).session?.googleId;
-      if (!googleId) { res.status(401).json({ error: 'Not authenticated' }); return; }
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
+      const user = await resolveSessionUser((req as any).session);
+      if (!user?.id) { res.status(401).json({ error: 'Not authenticated' }); return; }
 
       const connection = await getMcpConnectionByInstanceId(instanceId);
       if (!connection || connection.userId !== user.id || connection.provider !== 'slack') {
@@ -2026,10 +2259,8 @@ function registerSharedRoutes(app: express.Express): void {
         }
       }
 
-      const googleId = (req as any).session?.googleId;
-      if (!googleId) { res.status(401).json({ error: 'Not authenticated' }); return; }
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
+      const user = await resolveSessionUser((req as any).session);
+      if (!user?.id) { res.status(401).json({ error: 'Not authenticated' }); return; }
 
       const connection = await getMcpConnectionByInstanceId(instanceId);
       if (!connection || connection.userId !== user.id || connection.provider !== 'slack') {
@@ -2074,10 +2305,8 @@ function registerSharedRoutes(app: express.Express): void {
       const query = ((req.query.q as string) || '').toLowerCase().trim();
       if (!query) { res.json({ users: [] }); return; }
 
-      const googleId = (req as any).session?.googleId;
-      if (!googleId) { res.status(401).json({ error: 'Not authenticated' }); return; }
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
+      const user = await resolveSessionUser((req as any).session);
+      if (!user?.id) { res.status(401).json({ error: 'Not authenticated' }); return; }
 
       const connection = await getMcpConnectionByInstanceId(instanceId);
       if (!connection || connection.userId !== user.id || connection.provider !== 'slack') {
@@ -2219,16 +2448,10 @@ function registerSharedRoutes(app: express.Express): void {
       const mcpSlug = req.params.mcpSlug as string;
 
       // Get user from session
-      const googleId = req.session!.googleId;
-      if (!googleId) {
+      const user = await resolveSessionUser(req.session);
+      if (!user?.id) {
         res.clearCookie('session');
         res.status(401).json({ error: 'Session invalid' });
-        return;
-      }
-
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) {
-        res.status(401).json({ error: 'User not found' });
         return;
       }
 
@@ -2252,18 +2475,11 @@ function registerSharedRoutes(app: express.Express): void {
       await loadUsers();
 
       // Get user from session - handle old sessions that might not have googleId
-      const googleId = req.session!.googleId;
-      if (!googleId) {
-        console.error('/api/me: Session missing googleId, clearing session');
+      const user = await resolveSessionUser(req.session);
+      if (!user) {
+        console.error('/api/me: session resolved to no account, clearing session');
         res.clearCookie('session');
         res.status(401).json({ error: 'Session invalid, please sign in again' });
-        return;
-      }
-
-      const user = await getUserByGoogleId(googleId);
-      if (!user) {
-        console.error(`/api/me: User not found for googleId=${googleId}`);
-        res.status(404).json({ error: 'User not found' });
         return;
       }
 
@@ -2316,16 +2532,10 @@ function registerSharedRoutes(app: express.Express): void {
   app.get('/api/me/connections', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       // Get user from session
-      const googleId = req.session!.googleId;
-      if (!googleId) {
+      const user = await resolveSessionUser(req.session);
+      if (!user?.id) {
         res.clearCookie('session');
         res.status(401).json({ error: 'Session invalid' });
-        return;
-      }
-
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) {
-        res.status(404).json({ error: 'User not found' });
         return;
       }
 
@@ -2358,8 +2568,7 @@ function registerSharedRoutes(app: express.Express): void {
    */
   app.get('/api/me/connections/:instanceId/health', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const googleId = req.session!.googleId;
-      const user = googleId ? await getUserByGoogleId(googleId) : null;
+      const user = await resolveSessionUser(req.session);
       if (!user?.id) {
         res.status(401).json({ error: 'Not authenticated' });
         return;
@@ -2405,16 +2614,10 @@ function registerSharedRoutes(app: express.Express): void {
   // API endpoint to get user's MCP instances (new multi-instance API)
   app.get('/api/me/instances', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const googleId = req.session!.googleId;
-      if (!googleId) {
+      const user = await resolveSessionUser(req.session);
+      if (!user?.id) {
         res.clearCookie('session');
         res.status(401).json({ error: 'Session invalid' });
-        return;
-      }
-
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) {
-        res.status(404).json({ error: 'User not found' });
         return;
       }
 
@@ -2446,16 +2649,10 @@ function registerSharedRoutes(app: express.Express): void {
         return;
       }
 
-      const googleId = req.session!.googleId;
-      if (!googleId) {
+      const user = await resolveSessionUser(req.session);
+      if (!user?.id) {
         res.clearCookie('session');
         res.status(401).json({ error: 'Session invalid' });
-        return;
-      }
-
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) {
-        res.status(401).json({ error: 'User not found' });
         return;
       }
 
@@ -2489,16 +2686,10 @@ function registerSharedRoutes(app: express.Express): void {
     try {
       const instanceId = req.params.instanceId as string;
 
-      const googleId = req.session!.googleId;
-      if (!googleId) {
+      const user = await resolveSessionUser(req.session);
+      if (!user?.id) {
         res.clearCookie('session');
         res.status(401).json({ error: 'Session invalid' });
-        return;
-      }
-
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) {
-        res.status(401).json({ error: 'User not found' });
         return;
       }
 
@@ -2530,14 +2721,17 @@ function registerSharedRoutes(app: express.Express): void {
   // Regenerate API key endpoint (protected)
   app.post('/api/regenerate-key', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const googleId = req.session!.googleId;
-      if (!googleId) {
+      const current = await resolveSessionUser(req.session);
+      if (!current?.id) {
         res.clearCookie('session');
         res.status(401).json({ error: 'Session invalid' });
         return;
       }
 
-      const user = await regenerateApiKey(googleId);
+      // Rotate by user id, not google_id: that column is NULL for
+      // email+password accounts, so the googleId-keyed rotation matched zero
+      // rows and reported "user not found" on a perfectly valid account.
+      const user = await regenerateApiKeyByUserId(current.id);
       if (!user) {
         res.status(404).json({ error: 'User not found' });
         return;
@@ -2572,13 +2766,12 @@ function registerSharedRoutes(app: express.Express): void {
     });
     if (res.headersSent) return;
 
-    const googleId = req.session?.googleId;
-    if (!googleId) {
+    const user = await resolveSessionUser(req.session);
+    if (!user) {
       res.status(401).json({ error: 'Not authenticated' });
       return;
     }
-    const user = await getUserByGoogleId(googleId);
-    if (!user || !ADMIN_EMAILS.includes(user.email.toLowerCase())) {
+    if (!ADMIN_EMAILS.includes(user.email.toLowerCase())) {
       res.status(403).json({ error: 'Access denied' });
       return;
     }

@@ -6,20 +6,43 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days in seconds
 
 export interface Session {
+  /**
+   * The account this session belongs to (users.id).
+   *
+   * Sessions used to be keyed by `googleId` alone, which made every
+   * session-backed route Google-only by construction: an email+password
+   * account has no Google identity, so the `getUserByGoogleId` lookup behind
+   * each of them was a guaranteed miss. `userId` is now the identity; see
+   * `resolveSessionUser` in webServer.ts.
+   *
+   * Optional because sessions minted before this change are still in Redis
+   * with only a googleId, and they keep working until they expire.
+   */
+  userId?: number;
   googleId?: string;
   createdAt: number;
   expiresAt: number;
+}
+
+/**
+ * Who a session is for. A bare string is the legacy googleId form, kept so
+ * existing callers (and tests) read unchanged.
+ */
+export type SessionIdentity = string | { userId?: number; googleId?: string };
+
+function toIdentity(identity: SessionIdentity): { userId?: number; googleId?: string } {
+  return typeof identity === 'string' ? { googleId: identity } : identity;
 }
 
 // ---------- In-memory storage (fallback) ----------
 
 const sessions: Map<string, Session> = new Map();
 
-function memoryCreateSession(googleId: string): string {
+function memoryCreateSession(identity: SessionIdentity): string {
   const sessionId = crypto.randomBytes(32).toString('hex');
   const now = Date.now();
   sessions.set(sessionId, {
-    googleId,
+    ...toIdentity(identity),
     createdAt: now,
     expiresAt: now + SESSION_TTL_MS,
   });
@@ -42,12 +65,12 @@ function memoryDeleteSession(sessionId: string): void {
 
 // ---------- Redis-backed storage ----------
 
-async function redisCreateSession(googleId: string): Promise<string> {
+async function redisCreateSession(identity: SessionIdentity): Promise<string> {
   const redis = getRedis();
   const sessionId = crypto.randomBytes(32).toString('hex');
   const now = Date.now();
   const session: Session = {
-    googleId,
+    ...toIdentity(identity),
     createdAt: now,
     expiresAt: now + SESSION_TTL_MS,
   };
@@ -74,11 +97,11 @@ async function redisDeleteSession(sessionId: string): Promise<void> {
 
 // ---------- Public API ----------
 
-export async function createSession(googleId: string): Promise<string> {
+export async function createSession(identity: SessionIdentity): Promise<string> {
   if (isDatabaseAvailable()) {
-    return redisCreateSession(googleId);
+    return redisCreateSession(identity);
   }
-  return memoryCreateSession(googleId);
+  return memoryCreateSession(identity);
 }
 
 export async function getSession(sessionId: string): Promise<Session | null> {
