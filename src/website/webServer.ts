@@ -1096,7 +1096,6 @@ function registerSharedRoutes(app: express.Express): void {
     try {
       const email = normalizeEmail(String(req.body?.email ?? ''));
       const password = String(req.body?.password ?? '');
-      const name = String(req.body?.name ?? '').trim();
 
       if (!isValidEmail(email)) {
         res.status(400).json({ error: 'Enter a valid email address.' });
@@ -1128,8 +1127,12 @@ function registerSharedRoutes(app: express.Express): void {
       }
 
       const user = await createPasswordUser({
+        // Sign-up collects no display name — the account is identified by its
+        // email, and asking for a name at the door buys nothing the address
+        // does not already give us. A `name` in the request body is ignored
+        // rather than trusted, so it cannot be used to spoof a display name.
         email,
-        name: name || email,
+        name: email,
         passwordHash: await hashPassword(password),
       });
 
