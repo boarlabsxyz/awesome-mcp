@@ -186,11 +186,6 @@
     <div id="formError" class="form-error hidden" role="alert" aria-live="assertive"></div>
 
     <form id="authForm" novalidate>
-      <div class="field hidden" id="nameField">
-        <label for="name">Name</label>
-        <input type="text" id="name" name="name" autocomplete="name" placeholder="Your name">
-      </div>
-
       <div class="field">
         <label for="email">Email</label>
         <input type="email" id="email" name="email" autocomplete="email" required placeholder="you@company.com">
@@ -225,7 +220,6 @@
       var form = document.getElementById('authForm');
       var errorBox = document.getElementById('formError');
       var submitBtn = document.getElementById('submitBtn');
-      var nameField = document.getElementById('nameField');
       var passwordHint = document.getElementById('passwordHint');
       var passwordInput = document.getElementById('password');
       var title = document.getElementById('authTitle');
@@ -256,7 +250,6 @@
         toggleText.textContent = registering ? 'Already have an account?' : "Don't have an account?";
         toggleBtn.textContent = registering ? 'Sign in' : 'Create one';
 
-        nameField.classList.toggle('hidden', !registering);
         passwordHint.classList.toggle('hidden', !registering);
         passwordInput.setAttribute('autocomplete', registering ? 'new-password' : 'current-password');
         passwordInput.setAttribute('placeholder', registering ? 'At least 10 characters' : 'Your password');
@@ -277,7 +270,6 @@
 
         var email = document.getElementById('email').value.trim();
         var password = passwordInput.value;
-        var name = document.getElementById('name').value.trim();
 
         if (!email || !password) {
           showError('Email and password are required.');
@@ -294,15 +286,11 @@
         submitBtn.textContent = mode === 'register' ? 'Creating account…' : 'Signing in…';
 
         try {
-          var body = mode === 'register'
-            ? { email: email, password: password, name: name }
-            : { email: email, password: password };
-
           var res = await fetch('/api/auth/' + (mode === 'register' ? 'register' : 'login'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify(body),
+            body: JSON.stringify({ email: email, password: password }),
           });
 
           var data = await res.json().catch(function () { return {}; });
