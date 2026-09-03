@@ -24,7 +24,8 @@ const { __resetLoginRateLimitForTests, LOGIN_RATE_LIMIT } = await import('../web
 const { getUserByEmail, getPasswordHashByEmail, createOrUpdateUser } = await import('../userStore.js');
 const { isValidEmail, verifyPassword, hashPassword, MAX_PASSWORD_BYTES } = await import('../auth/password.js');
 const { createPasswordUser, DuplicateEmailError } = await import('../userStore.js');
-const { __memoryKeyCountForTests } = await import('../website/loginRateLimit.js');
+const { __memoryKeyCountForTests, consumeLoginAttempt } = await import('../website/loginRateLimit.js');
+const { validatePassword } = await import('../auth/password.js');
 
 const app = createWebOnlyApp();
 
@@ -55,11 +56,10 @@ describe('Email + password authentication', () => {
       const email = freshEmail();
       const res = await request(app)
         .post('/api/auth/register')
-        .send({ email, password: GOOD_PASSWORD, name: 'Test Person' });
+        .send({ email, password: GOOD_PASSWORD });
 
       assert.equal(res.status, 201);
       assert.equal(res.body.email, email);
-      assert.equal(res.body.name, 'Test Person');
       assert.equal(res.body.redirectTo, '/dashboard');
       assert.ok(sessionCookie(res), 'should set a session cookie');
     });
@@ -85,10 +85,25 @@ describe('Email + password authentication', () => {
       assert.ok(user!.apiKey, 'should be issued an API key like a Google user');
     });
 
-    it('defaults the display name to the email when none is given', async () => {
+    it('names the account after its email', async () => {
       const email = freshEmail();
       const res = await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
       assert.equal(res.body.name, email);
+    });
+
+    it('ignores a name in the request body rather than trusting it', async () => {
+      // Sign-up has no name field. A caller can still put one in the JSON, and
+      // it must not reach the account: the display name is rendered on the
+      // dashboard, so accepting an unvalidated one is a free spoofing surface.
+      const email = freshEmail();
+      const res = await request(app)
+        .post('/api/auth/register')
+        .send({ email, password: GOOD_PASSWORD, name: 'Administrator' });
+
+      assert.equal(res.status, 201);
+      assert.equal(res.body.name, email, 'supplied name must be ignored');
+      const stored = await getUserByEmail(email);
+      assert.equal(stored!.name, email);
     });
 
     it('rejects a malformed email', async () => {
@@ -153,7 +168,7 @@ describe('Email + password authentication', () => {
   describe('POST /api/auth/login', () => {
     it('signs in with the right password and sets a session', async () => {
       const email = freshEmail();
-      await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD, name: 'Sign In' });
+      await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
 
       const res = await request(app).post('/api/auth/login').send({ email, password: GOOD_PASSWORD });
       assert.equal(res.status, 200);
@@ -221,14 +236,14 @@ describe('Email + password authentication', () => {
       const email = freshEmail();
       const reg = await request(app)
         .post('/api/auth/register')
-        .send({ email, password: GOOD_PASSWORD, name: 'Dashboard User' });
+        .send({ email, password: GOOD_PASSWORD });
       const cookie = sessionCookie(reg)!;
 
       const res = await request(app).get('/api/me').set('Cookie', cookie);
 
       assert.equal(res.status, 200, 'a googleId-keyed session lookup would 401 here');
       assert.equal(res.body.email, email);
-      assert.equal(res.body.name, 'Dashboard User');
+      assert.equal(res.body.name, email);
       assert.equal(res.body.authMethod, 'password');
       assert.ok(res.body.apiKey);
       assert.ok(Array.isArray(res.body.connections));
@@ -433,6 +448,50 @@ describe('Email + password authentication', () => {
     });
   });
 
+  describe('limiter and policy edges', () => {
+    it('reports a missing password distinctly from a too-short one', async () => {
+      assert.match(validatePassword('') ?? '', /required/);
+      assert.match(validatePassword(undefined as unknown as string) ?? '', /required/);
+      assert.match(validatePassword('short') ?? '', /at least/);
+
+      const res = await request(app)
+        .post('/api/auth/register')
+        .send({ email: freshEmail(), password: '' });
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /required/i);
+    });
+
+    it('evicts once the fallback map hits its cap, instead of growing forever', async () => {
+      // Drive the store directly: reaching the cap through HTTP would need
+      // 10k requests, and the behaviour under test is the map, not the route.
+      const cap = LOGIN_RATE_LIMIT.MAX_MEMORY_KEYS;
+      for (let i = 0; i <= cap + 50; i++) {
+        await consumeLoginAttempt(`prune-probe:${i}`, LOGIN_RATE_LIMIT.MAX_ATTEMPTS);
+      }
+      const size = __memoryKeyCountForTests();
+      assert.ok(size <= cap, `map holds ${size}, past the ${cap} cap`);
+      // Eviction targets 90% of the cap, so a full sweep must have run.
+      assert.ok(size < cap, 'expected eviction to have reclaimed space');
+    });
+
+    it('still limits when the client forges a different X-Forwarded-For each time', async () => {
+      const email = freshEmail();
+      await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+      __resetLoginRateLimitForTests();
+
+      let last: request.Response | undefined;
+      for (let i = 0; i < LOGIN_RATE_LIMIT.MAX_ATTEMPTS + 3; i++) {
+        last = await request(app)
+          .post('/api/auth/login')
+          .set('X-Forwarded-For', `203.0.113.${i}, 198.51.100.7`)
+          .send({ email, password: 'bad-password-x' });
+      }
+      // req.ip would read the leftmost (caller-supplied) hop and mint a fresh
+      // bucket per request; the email bucket holds regardless.
+      assert.equal(last!.status, 429);
+    });
+  });
+
   describe('GET /login', () => {
     it('serves a page instead of bouncing straight to Google', async () => {
       const res = await request(app).get('/login');
@@ -453,6 +512,7 @@ describe('Email + password authentication', () => {
       assert.match(html, /'\/api\/auth\/' \+/, 'posts to the password endpoints');
       assert.match(html, /'register'/);
       assert.match(html, /id="authForm"/);
+      assert.doesNotMatch(html, /id="name"/, 'sign-up must not collect a display name');
     });
   });
 });
