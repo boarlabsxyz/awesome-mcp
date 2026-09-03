@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <title>Slack &middot; Docs &middot; Awesome MCP</title>
+  <meta name="description" content="Two Slack connectors — your own account with per-channel access rules, or a bot token.">
+  <link rel="canonical" href="https://app.awesome-mcp.xyz/docs/slack">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body class="docs-body">
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  <header class="header">
+    <div class="header-inner">
+      <button class="docs-menu-toggle" type="button" aria-expanded="false" aria-controls="docs-sidebar">
+        <span class="sr-only">Toggle documentation menu</span>
+        <span aria-hidden="true">&#9776;</span>
+      </button>
+      <h1><a href="/docs" translate="no">Awesome MCP <span class="docs-brand-tag">Docs</span></a></h1>
+      <div class="header-right">
+        <a href="/integrations" class="nav-link">Integrations</a>
+        <a href="/dashboard" class="btn-primary">Dashboard</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" id="docs-sidebar">
+      <nav aria-label="Documentation">
+        <p class="docs-nav-group">Getting started</p>
+        <ul>
+          <li><a href="/docs" class="docs-nav-link">Overview &amp; quickstart</a></li>
+          <li><a href="/docs/connect-a-connector" class="docs-nav-link">Connect a connector</a></li>
+          <li><a href="/docs/add-to-claude" class="docs-nav-link">Add to Claude</a></li>
+          <li><a href="/docs/images" class="docs-nav-link">Images</a></li>
+        </ul>
+        <p class="docs-nav-group">Connectors</p>
+        <ul>
+          <li><a href="/docs/google" class="docs-nav-link">Google Workspace</a></li>
+          <li><a href="/docs/clickup" class="docs-nav-link">ClickUp</a></li>
+          <li><a href="/docs/slack" class="docs-nav-link active" aria-current="page">Slack</a></li>
+          <li><a href="/docs/outline" class="docs-nav-link">Outline Wiki</a></li>
+          <li><a href="/docs/peopleforce" class="docs-nav-link">PeopleForce</a></li>
+          <li><a href="/docs/hubspot" class="docs-nav-link">HubSpot</a></li>
+        </ul>
+        <p class="docs-nav-group">Reference</p>
+        <ul>
+          <li><a href="/docs/rest-api" class="docs-nav-link">REST API</a></li>
+          <li><a href="/docs/troubleshooting" class="docs-nav-link">Troubleshooting</a></li>
+        </ul>
+      </nav>
+    </aside>
+
+    <main id="main" class="docs-content">
+  <p class="docs-eyebrow">Connectors</p>
+  <h1>Slack</h1>
+  <p class="docs-lede">There are two Slack connectors. One acts as you, one acts as a bot, and choosing the right one is most of the setup.</p>
+
+
+  <p>Slack appears twice in the catalog, and the difference matters more than the names suggest.</p>
+
+  <h2 id="which-one">Which one to use</h2>
+  <div class="docs-table-wrap">
+  <table>
+    <thead><tr><th></th><th>Slack MCP</th><th>Slack Bot MCP</th></tr></thead>
+    <tbody>
+      <tr><td>Acts as</td><td>You</td><td>A bot user</td></tr>
+      <tr><td>Setup</td><td>One click, approve in Slack</td><td>Create a Slack app yourself, paste a token</td></tr>
+      <tr><td>Sees</td><td>Everything you can see, including DMs</td><td>Only channels the bot was invited to</td></tr>
+      <tr><td>Per-channel access rules</td><td>Yes</td><td>No</td></tr>
+      <tr><td>Search</td><td>Yes</td><td>No &mdash; Slack does not allow bots to search</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Use <strong>Slack MCP</strong> for personal assistance over your own workspace. Use
+  <strong>Slack Bot MCP</strong> when you want a clearly-identified bot posting to specific channels
+  and nothing else.</p>
+
+  <h2 id="connecting-user">Connecting Slack MCP</h2>
+  <ol class="docs-steps">
+    <li>Click <strong>+ Add Tool</strong> and pick <strong>Slack MCP</strong>.</li>
+    <li>Approve in Slack.</li>
+    <li>The access-rules dialog opens automatically. Set it up before you use the connector.</li>
+  </ol>
+
+  <h3 id="access-rules">Access rules</h3>
+  <p>Because this connector acts as you, it can reach every channel and DM you can. Access rules
+  narrow that: allow only certain channels, or block specific ones.</p>
+  <p>The rules are re-read on every call, so tightening them takes effect immediately &mdash; including
+  for message history that was already captured. They also apply to search: results from channels
+  you have excluded are dropped before you see them, and the response tells you how many were
+  hidden rather than pretending Slack found nothing.</p>
+
+  <h2 id="connecting-bot">Connecting Slack Bot MCP</h2>
+  <ol class="docs-steps">
+    <li>Create a Slack app in your workspace.</li>
+    <li>Add these bot scopes: <code>channels:history</code>, <code>channels:read</code>,
+    <code>groups:history</code>, <code>groups:read</code>, <code>chat:write</code>,
+    <code>users:read</code>, <code>files:read</code>.</li>
+    <li>Install the app to the workspace and copy the Bot User OAuth Token (it starts with
+    <code>xoxb-</code>).</li>
+    <li>Paste it into the dashboard.</li>
+    <li><strong>Invite the bot to each channel</strong> you want it to work in, with
+    <code>/invite</code>. A bot that has not been invited sees nothing, and this is the single most
+    common reason a freshly-connected bot appears to do nothing.</li>
+  </ol>
+
+  <h2 id="files">Files and images</h2>
+  <p>Attachments appear under each message with a file id, and Claude can fetch them &mdash; either to
+  look at, or as a public URL to hand to another connector. See the
+  <a href="/docs/images">images page</a>.</p>
+  <div class="docs-note docs-note--warn">
+    <span class="docs-note-label">Connected before file support? Reconnect.</span>
+    <p>If files come back as &ldquo;file hidden&rdquo;, or search does not work, your connection was made
+    before those permissions were added. Press <strong>Reconnect</strong> on the dashboard and
+    approve again. Nothing else is lost &mdash; your access rules and your MCP URL survive.</p>
+  </div>
+
+  <h2 id="events">Watching channels</h2>
+  <p>You can subscribe to events in a channel &mdash; new messages, reactions &mdash; and read back what
+  happened since. As with ClickUp, this is a record you ask about rather than something that
+  arrives on its own.</p>
+  <p>Delivery depends on how the Slack app is configured for the whole workspace, which is an
+  administrator setting. If a subscription looks healthy but never captures anything, there is a
+  diagnostic tool that can tell you whether Slack has ever delivered an event, whether it was
+  rejected, or whether it arrived and simply did not match &mdash; ask Claude to debug the subscription.</p>
+
+  <h2 id="prompts">Try asking</h2>
+  <ul>
+    <li>&ldquo;Summarize what I missed in #eng-platform today&rdquo;</li>
+    <li>&ldquo;Send a release note to #announcements&rdquo;</li>
+    <li>&ldquo;Find the thread where we agreed on the API shape&rdquo;</li>
+  </ul>
+
+
+
+  <nav class="docs-prevnext" aria-label="Pagination">
+    <a href="/docs/clickup" class="docs-prevnext-prev"><span class="docs-prevnext-dir">Previous</span><span class="docs-prevnext-title">ClickUp</span></a>
+    <a href="/docs/outline" class="docs-prevnext-next"><span class="docs-prevnext-dir">Next</span><span class="docs-prevnext-title">Outline Wiki</span></a>
+  </nav>
+    </main>
+
+    <aside class="docs-toc" id="docs-toc" aria-labelledby="toc-heading" hidden>
+      <p id="toc-heading" class="docs-toc-title">On this page</p>
+      <nav aria-label="On this page"></nav>
+    </aside>
+  </div>
+
+  <footer class="docs-footer">
+    <p><a href="/dashboard">Dashboard</a> &middot; <a href="/integrations">Integrations</a> &middot; <a href="/updates">Updates</a></p>
+  </footer>
+
+  <script src="/docs/docs.js" defer></script>
+</body>
+</html>

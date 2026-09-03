@@ -348,6 +348,17 @@ function titleCase(str: string): string {
 }
 const publicDir = path.resolve(__dirname, '..', 'public');
 
+/**
+ * 404 inside the docs tree: the styled docs 404 page if it exists, plain text
+ * otherwise. Under tsx `publicDir` resolves to a non-existent `src/public`, so
+ * both sendFile calls fail and this still terminates with a deterministic 404.
+ */
+function sendDocs404(res: express.Response): void {
+  res.status(404).sendFile(path.join(publicDir, 'docs', '404.html'), (err) => {
+    if (err && !res.headersSent) res.status(404).type('text/plain').send('Not found');
+  });
+}
+
 // Base scopes for registration/login (only profile info, no MCP permissions)
 const BASE_SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email',
@@ -900,8 +911,33 @@ function registerSharedRoutes(app: express.Express): void {
     res.sendFile(path.join(publicDir, 'integrations.html'));
   });
 
+  // Public documentation site - no auth, mirrors /integrations.
+  // Registered before express.static so `/docs` resolves directly rather than
+  // being 301'd to `/docs/` by serve-static's directory-index handling.
+  app.get('/docs', (_req, res) => {
+    res.sendFile(path.join(publicDir, 'docs', 'index.html'));
+  });
+
   // Serve static files
   app.use(express.static(publicDir));
+
+  // Extensionless docs URLs: /docs/quickstart -> public/docs/quickstart.html.
+  // MUST be registered AFTER express.static, so real assets (docs.css, docs.js,
+  // media/*.mp4) are served by serve-static - including Range requests, which
+  // video seeking needs - and only misses fall through to here. A `:page` param
+  // never spans a `/`, so /docs/media/x.mp4 can never reach this handler.
+  app.get('/docs/:page', (req, res) => {
+    const page = req.params.page;
+    // Express has already percent-decoded the param, so this allowlist also
+    // rejects `..%2F..%2Fpackage.json` and anything containing a dot or slash.
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(page)) {
+      sendDocs404(res);
+      return;
+    }
+    res.sendFile(path.join(publicDir, 'docs', `${page}.html`), (err) => {
+      if (err && !res.headersSent) sendDocs404(res);
+    });
+  });
 
   // Start OAuth flow - only requests basic profile scopes
   // MCP-specific scopes are requested when user connects each MCP

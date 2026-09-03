@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
+    "dev:docs": "node --import tsx scripts/dev-docs.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "snapshot:peopleforce": "node --import tsx src/peopleforce/snapshot/collect.ts",
