@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <title>Connect a connector &middot; Docs &middot; Awesome MCP</title>
+  <meta name="description" content="Sign in, add a connector via OAuth or an API token, and understand every button on a connection.">
+  <link rel="canonical" href="https://app.awesome-mcp.xyz/docs/connect-a-connector">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body class="docs-body">
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  <header class="header">
+    <div class="header-inner">
+      <button class="docs-menu-toggle" type="button" aria-expanded="false" aria-controls="docs-sidebar">
+        <span class="sr-only">Toggle documentation menu</span>
+        <span aria-hidden="true">&#9776;</span>
+      </button>
+      <h1><a href="/docs" translate="no">Awesome MCP <span class="docs-brand-tag">Docs</span></a></h1>
+      <div class="header-right">
+        <a href="/integrations" class="nav-link">Integrations</a>
+        <a href="/dashboard" class="btn-primary">Dashboard</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" id="docs-sidebar">
+      <nav aria-label="Documentation">
+        <p class="docs-nav-group">Getting started</p>
+        <ul>
+          <li><a href="/docs" class="docs-nav-link">Overview &amp; quickstart</a></li>
+          <li><a href="/docs/connect-a-connector" class="docs-nav-link active" aria-current="page">Connect a connector</a></li>
+          <li><a href="/docs/add-to-claude" class="docs-nav-link">Add to Claude</a></li>
+          <li><a href="/docs/images" class="docs-nav-link">Images</a></li>
+        </ul>
+        <p class="docs-nav-group">Connectors</p>
+        <ul>
+          <li><a href="/docs/google" class="docs-nav-link">Google Workspace</a></li>
+          <li><a href="/docs/clickup" class="docs-nav-link">ClickUp</a></li>
+          <li><a href="/docs/slack" class="docs-nav-link">Slack</a></li>
+          <li><a href="/docs/outline" class="docs-nav-link">Outline Wiki</a></li>
+          <li><a href="/docs/peopleforce" class="docs-nav-link">PeopleForce</a></li>
+          <li><a href="/docs/hubspot" class="docs-nav-link">HubSpot</a></li>
+        </ul>
+        <p class="docs-nav-group">Reference</p>
+        <ul>
+          <li><a href="/docs/rest-api" class="docs-nav-link">REST API</a></li>
+          <li><a href="/docs/troubleshooting" class="docs-nav-link">Troubleshooting</a></li>
+        </ul>
+      </nav>
+    </aside>
+
+    <main id="main" class="docs-content">
+  <p class="docs-eyebrow">Getting started</p>
+  <h1>Connect a connector</h1>
+  <p class="docs-lede">How to get from a signed-out browser to a working MCP URL &mdash; and what each control on the dashboard actually does.</p>
+
+
+  <h2 id="sign-in">Sign in</h2>
+  <p>Open the <a href="/dashboard">dashboard</a>. If you are not signed in you will see a
+  <strong>Sign in to continue</strong> dialog.</p>
+  <p>There are two ways in, and they reach the same account either way:</p>
+  <ul>
+    <li><strong>Google</strong> &mdash; one click, no password to choose. Signing in this way for the
+    first time creates your account.</li>
+    <li><strong>Email and password</strong> &mdash; use <a href="/login">the sign-in page</a>, or
+    <a href="/login?mode=register">create an account</a> there. Passwords must be at least
+    10 characters.</li>
+  </ul>
+  <p>Either way, an API key is minted for you automatically the first time; you never have to
+  create one.</p>
+  <p>This first sign-in asks for almost nothing: only your email address and basic profile. The
+  permissions each connector actually needs are requested later, when you connect that
+  connector &mdash; so you are never asked to approve access to a service you have not chosen yet.</p>
+
+  <h2 id="add-a-tool">Add a tool</h2>
+  <figure class="docs-media docs-media--pending">
+    <div class="docs-media-placeholder" role="img" aria-label="Screencast pending: the Add Tool modal, picking a service and connecting it">
+      <span class="docs-media-badge">Screencast</span>
+      <p>The Add Tool modal, start to finish &mdash; recording pending.</p>
+    </div>
+    <figcaption>Adding a connector from the dashboard.</figcaption>
+  </figure>
+
+  <ol class="docs-steps">
+    <li>Click <strong>+ Add Tool</strong>. (On an empty dashboard the button reads
+    <strong>+ Add Your First Tool</strong>.)</li>
+    <li>Pick the service you want. The list is the same catalog you can browse on the
+    <a href="/integrations">integrations page</a>.</li>
+    <li>What happens next depends on the service &mdash; see the two flows below.</li>
+    <li>You land back on the dashboard with a new row for the connection.</li>
+    <li>Press <strong>Copy URL</strong> on that row.</li>
+    <li>In Claude, add the URL as a custom connector
+    (<a href="/docs/add-to-claude">full instructions</a>).</li>
+    <li>Ask Claude to do something with it.</li>
+  </ol>
+
+  <h2 id="two-flows">Two ways to connect</h2>
+  <p>Every connector uses one of two flows. You do not choose &mdash; the dashboard picks based on
+  what the service supports.</p>
+
+  <h3 id="oauth-flow">OAuth: you approve on the provider&rsquo;s site</h3>
+  <p>Picking one of these sends you straight to the provider&rsquo;s consent screen. There is no form to
+  fill in and no name to choose &mdash; the instance is named for you.</p>
+  <div class="docs-table-wrap">
+  <table>
+    <thead><tr><th>Connector</th><th>You approve at</th></tr></thead>
+    <tbody>
+      <tr><td>Google Docs, Sheets, Slides, Drive, Gmail, Calendar</td><td>Google</td></tr>
+      <tr><td>ClickUp</td><td>ClickUp</td></tr>
+      <tr><td>Slack (your own account)</td><td>Slack</td></tr>
+      <tr><td>HubSpot</td><td>HubSpot</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Approve the request and you are redirected back to the dashboard. For Slack, the access-rules
+  dialog opens automatically so you can decide which channels the connector may touch before you
+  use it.</p>
+
+  <h3 id="token-flow">Paste a token: you create the credential yourself</h3>
+  <p>These services have no OAuth app for us to send you to, so you create an API token in the
+  service and paste it into the dashboard. The form shows you exactly where to click in that
+  service.</p>
+  <div class="docs-table-wrap">
+  <table>
+    <thead><tr><th>Connector</th><th>Where to create the token</th></tr></thead>
+    <tbody>
+      <tr><td><a href="/docs/slack">Slack Bot</a></td><td>Create a Slack app, add bot scopes, install it to the workspace, copy the <code>xoxb-</code> token</td></tr>
+      <tr><td><a href="/docs/outline">Outline Wiki</a></td><td>Preferences &rarr; API and Access &rarr; New API Key</td></tr>
+      <tr><td><a href="/docs/peopleforce">PeopleForce</a></td><td>Settings &rarr; Integrations &rarr; API</td></tr>
+      <tr><td><a href="/docs/hubspot">HubSpot</a> (fallback only)</td><td>Settings &rarr; Integrations &rarr; Private Apps</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Outline additionally asks for the URL of your wiki, since it is self-hosted &mdash; for example
+  <code>https://wiki.example.com</code>, with no trailing slash.</p>
+  <div class="docs-note docs-note--info">
+    <span class="docs-note-label">HubSpot normally uses OAuth</span>
+    <p>The dashboard shows <strong>Connect with HubSpot</strong>, not a paste-token form. The
+    private-app token path still exists as a fallback for deployments where the HubSpot OAuth app
+    has not been configured. If you see a token form for HubSpot, that is why.</p>
+  </div>
+
+  <h2 id="instance-row">What the buttons on a connection do</h2>
+  <div class="docs-table-wrap">
+  <table>
+    <thead><tr><th>Button</th><th>What it does</th><th>When it appears</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Copy URL</strong></td><td>Copies this connection&rsquo;s MCP URL to your clipboard. The label flips to &ldquo;Copied!&rdquo; for a moment.</td><td>Normally</td></tr>
+      <tr><td><strong>Reconnect</strong></td><td>Re-runs the OAuth consent flow. Your settings and access rules are preserved. Needed when a token has expired, or when the connector has started requesting a permission you never approved.</td><td>When the connection needs re-consent &mdash; it replaces Copy URL if the connection is broken, or sits next to it if it still works but needs new permissions</td></tr>
+      <tr><td><strong>Re-enter token</strong></td><td>Replaces the stored API key in place. The MCP URL you already gave Claude keeps working &mdash; you do not have to re-add the connector.</td><td>Paste-token connectors only</td></tr>
+      <tr><td><strong>Access Rules</strong></td><td>Chooses which channels this connection may read and write.</td><td>Slack only</td></tr>
+      <tr><td><strong>Delete</strong></td><td>Removes the connection. The MCP URL stops working immediately.</td><td>Always</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>You can connect the same service more than once &mdash; two Google accounts, say. Each connection
+  gets its own row and its own URL.</p>
+
+  <h2 id="scopes-change">When a connector asks for new permissions</h2>
+  <p>Tokens are frozen at the permissions they were minted with. When a connector gains a feature
+  that needs a permission you did not originally grant, your existing connection keeps working for
+  everything else and fails only on the new feature &mdash; and it will still look perfectly healthy
+  on the dashboard.</p>
+  <p>The fix is always the same: press <strong>Reconnect</strong> and approve again. See
+  <a href="/docs/troubleshooting">Troubleshooting</a> for the specific cases.</p>
+
+
+  <nav class="docs-prevnext" aria-label="Pagination">
+    <a href="/docs" class="docs-prevnext-prev"><span class="docs-prevnext-dir">Previous</span><span class="docs-prevnext-title">Overview &amp; quickstart</span></a>
+    <a href="/docs/add-to-claude" class="docs-prevnext-next"><span class="docs-prevnext-dir">Next</span><span class="docs-prevnext-title">Add to Claude</span></a>
+  </nav>
+    </main>
+
+    <aside class="docs-toc" id="docs-toc" aria-labelledby="toc-heading" hidden>
+      <p id="toc-heading" class="docs-toc-title">On this page</p>
+      <nav aria-label="On this page"></nav>
+    </aside>
+  </div>
+
+  <footer class="docs-footer">
+    <p><a href="/dashboard">Dashboard</a> &middot; <a href="/integrations">Integrations</a> &middot; <a href="/updates">Updates</a></p>
+  </footer>
+
+  <script src="/docs/docs.js" defer></script>
+</body>
+</html>
