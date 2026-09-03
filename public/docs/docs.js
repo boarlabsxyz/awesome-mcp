@@ -145,10 +145,10 @@
         ta.style.left = '-9999px';
         document.body.appendChild(ta);
         ta.select();
-        var ok = false;
-        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        var ok;
+        try { ok = document.execCommand('copy'); } catch { ok = false; }
         document.body.removeChild(ta);
-        ok ? resolve() : reject(new Error('copy failed'));
+        if (ok) { resolve(); } else { reject(new Error('copy failed')); }
       });
     }
   }
