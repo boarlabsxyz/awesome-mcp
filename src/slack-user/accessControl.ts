@@ -1,9 +1,10 @@
 // src/slack-user/accessControl.ts
 // Rule-based access control engine for Slack user OAuth MCP.
 import { UserError } from 'fastmcp';
-import { SlackClient, channelTeamIds, isSharedChannel } from '../slack/apiHelpers.js';
-import type { SlackChannelSharedFlags } from '../slack/apiHelpers.js';
-import type { SlackChannelTeamFields } from '../slack/apiHelpers.js';
+import {
+  SlackClient, channelTeamIds, isSharedChannel,
+  type SlackChannelSharedFlags, type SlackChannelTeamFields,
+} from '../slack/apiHelpers.js';
 import type { SlackAccessRules } from '../mcpConnectionStore.js';
 
 // --- Typed denials ---
@@ -440,11 +441,11 @@ export function classifyChannelList<T extends ListedChannel>(
         try {
           assertNonOrgAccess(rules, meta);
           return { ch, allowed: true, needsOrgBackfill: true };
-        } catch (inner) {
+        } catch (error_) {
           return {
             ch,
             allowed: false,
-            denial: inner instanceof SlackAccessDenied ? inner : undefined,
+            denial: error_ instanceof SlackAccessDenied ? error_ : undefined,
             needsOrgBackfill: false,
           };
         }

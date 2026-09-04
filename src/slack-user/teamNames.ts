@@ -76,47 +76,66 @@ function pruneTeamNameCache(now: number): void {
  * bare team-ID key would serve one workspace's names to another, since whether
  * `team.info` succeeds depends on the calling token, not the team.
  */
+/**
+ * Split the requested IDs into names already cached and IDs still to look up.
+ * Without a `tokenKey` nothing is cached, so everything is pending.
+ */
+function partitionCached(
+  teamIds: string[],
+  tokenKey: string | undefined,
+  now: number,
+): { cached: Map<string, string>; pending: string[] } {
+  const cached = new Map<string, string>();
+  const pending: string[] = [];
+  for (const id of new Set(teamIds.filter(Boolean))) {
+    const hit = tokenKey ? teamNameCache.get(`${tokenKey}:${id}`) : undefined;
+    if (hit && hit.expiresAt > now) {
+      if (hit.name) cached.set(id, hit.name);
+    } else {
+      pending.push(id);
+    }
+  }
+  return { cached, pending };
+}
+
+/** One best-effort `team.info`. Never throws; caches the failure too. */
+async function lookupOne(
+  client: TeamNameClient,
+  id: string,
+  tokenKey: string | undefined,
+): Promise<string | null> {
+  let name: string | null = null;
+  try {
+    const { team } = await client.teamInfo(id);
+    if (team?.name) name = team.name;
+  } catch { /* foreign org — the ID is the fallback label */ }
+  if (tokenKey) {
+    teamNameCache.set(`${tokenKey}:${id}`, {
+      name,
+      expiresAt: Date.now() + (name ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS),
+    });
+  }
+  return name;
+}
+
 export async function resolveTeamNames(
   client: TeamNameClient,
   teamIds: string[],
   options?: { tokenKey?: string; max?: number },
 ): Promise<TeamNameResult> {
-  const names = new Map<string, string>();
   const max = options?.max ?? 40;
   const tokenKey = options?.tokenKey;
-  const now = Date.now();
+  const { cached, pending } = partitionCached(teamIds, tokenKey, Date.now());
 
-  const unique = [...new Set(teamIds.filter(Boolean))];
-  const pending: string[] = [];
-
-  for (const id of unique) {
-    if (!tokenKey) { pending.push(id); continue; }
-    const cached = teamNameCache.get(`${tokenKey}:${id}`);
-    if (cached && cached.expiresAt > now) {
-      if (cached.name) names.set(id, cached.name);
-    } else {
-      pending.push(id);
-    }
-  }
-
-  const truncated = pending.length > max;
+  const names = new Map(cached);
   // Sequential: team.info is rate-limited and this runs while a user waits.
   for (const id of pending.slice(0, max)) {
-    let name: string | null = null;
-    try {
-      const { team } = await client.teamInfo(id);
-      if (team?.name) name = team.name;
-    } catch { /* foreign org — the ID is the fallback label */ }
-    if (tokenKey) {
-      teamNameCache.set(`${tokenKey}:${id}`, {
-        name,
-        expiresAt: Date.now() + (name ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS),
-      });
-    }
+    const name = await lookupOne(client, id, tokenKey);
     if (name) names.set(id, name);
   }
   if (tokenKey) pruneTeamNameCache(Date.now());
 
+  const truncated = pending.length > max;
   return {
     names,
     truncated,

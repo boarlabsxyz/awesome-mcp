@@ -20,6 +20,9 @@ import { UserError } from 'fastmcp';
 // what `assertTransportSafe` exists to turn into an error naming the offending
 // character instead.
 
+/** A single high-surrogate code unit, for the split test in `sliceSafe`. */
+const HIGH_SURROGATE_CHAR = /^[\uD800-\uDBFF]$/;
+
 /** Unpaired high or low surrogate — what a naive slice creates. */
 const LONE_HIGH_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
 const LONE_LOW_SURROGATE = /(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
@@ -47,10 +50,11 @@ const PUA_GLOBAL = /[\uE000-\uF8FF]/g;
 export function sliceSafe(text: string, max: number): string {
   if (max <= 0) return '';
   if (text.length <= max) return text;
-  const code = text.charCodeAt(max - 1);
   // A high surrogate in the last kept position has its partner as the first
-  // dropped one, so drop both.
-  const end = code >= 0xd800 && code <= 0xdbff ? max - 1 : max;
+  // dropped one, so drop both. Tested on the character rather than via
+  // codePointAt, which returns the *astral* code point when the pair is still
+  // intact and so cannot distinguish this case.
+  const end = HIGH_SURROGATE_CHAR.test(text[max - 1]) ? max - 1 : max;
   return text.slice(0, end);
 }
 
@@ -69,24 +73,27 @@ export function sliceSafe(text: string, max: number): string {
 export function sanitizeDocText(text: string): string {
   return text
     // eslint-disable-next-line no-control-regex -- U+000B is Docs' soft line break
-    .replace(/\u000B/g, '\n')
+    .replaceAll(/\u000B/g, '\n')
     // eslint-disable-next-line no-control-regex -- stripping control characters is the point
-    .replace(/[\u0000-\u0008\u000C\u000E-\u001F\u007F]/g, '')
-    .replace(PUA_GLOBAL, '')
-    .replace(new RegExp(LONE_HIGH_SURROGATE.source, 'g'), '�')
-    .replace(new RegExp(LONE_LOW_SURROGATE.source, 'g'), '�');
+    .replaceAll(/[\u0000-\u0008\u000C\u000E-\u001F\u007F]/g, '')
+    .replaceAll(PUA_GLOBAL, '')
+    .replaceAll(new RegExp(LONE_HIGH_SURROGATE.source, 'g'), '�')
+    .replaceAll(new RegExp(LONE_LOW_SURROGATE.source, 'g'), '�');
 }
 
 /** Where and what the first unencodable character is, or null if clean. */
 export function findUnencodable(text: string): { offset: number; codePoint: number } | null {
-  const candidates = [
+  const offsets = [
     LONE_HIGH_SURROGATE.exec(text),
     LONE_LOW_SURROGATE.exec(text),
     BAD_CONTROL.exec(text),
-  ].filter((m): m is RegExpExecArray => m !== null);
-  if (candidates.length === 0) return null;
-  const first = candidates.reduce((a, b) => (a.index <= b.index ? a : b));
-  return { offset: first.index, codePoint: text.charCodeAt(first.index) };
+  ].filter((m): m is RegExpExecArray => m !== null).map(m => m.index);
+  if (offsets.length === 0) return null;
+  const offset = Math.min(...offsets);
+  // codePointAt is safe here: the matched character is either a *lone*
+  // surrogate or a C0 control, never the leading half of an intact pair, so it
+  // returns the single unit rather than an astral code point.
+  return { offset, codePoint: text.codePointAt(offset)! };
 }
 
 /** `U+000B` style label for an error message. */

@@ -174,3 +174,208 @@ describe('renderListSummary', () => {
     assert.match(out, /Note: 5 shared channel\(s\) were not checked/);
   });
 });
+
+// === diagnoseChannelAccess helpers ===
+
+import { lookupChannelByName, explainDenial, describeChannel } from '../../slack-user/server.js';
+import { assertAccess, SlackAccessDenied } from '../../slack-user/accessControl.js';
+import type { ChannelMeta } from '../../slack-user/accessControl.js';
+
+function lookupClient(mine: any[], workspacePages: any[][] = []) {
+  let page = 0;
+  return {
+    conversationsList: async () => ({ channels: mine }),
+    conversationsListAll: async () => {
+      const channels = workspacePages[page] ?? [];
+      const more = page < workspacePages.length - 1;
+      page++;
+      return { channels, response_metadata: more ? { next_cursor: `c${page}` } : {} };
+    },
+  } as any;
+}
+
+describe('lookupChannelByName', () => {
+  it('finds a channel the user is a member of without scanning the workspace', async () => {
+    const client = lookupClient([{ id: 'C1', name: 'awesome-mcp-support' }]);
+    assert.deepEqual(await lookupChannelByName(client, 'awesome-mcp-support'), {
+      kind: 'found', channelId: 'C1',
+    });
+  });
+
+  it('tolerates a leading # and differing case', async () => {
+    const client = lookupClient([{ id: 'C1', name: 'awesome-mcp-support' }]);
+    const res = await lookupChannelByName(client, '#AWESOME-MCP-Support');
+    assert.equal((res as any).channelId, 'C1');
+  });
+
+  it('falls back to the workspace list when not a member', async () => {
+    const client = lookupClient([], [[{ id: 'C9', name: 'eng-general' }]]);
+    assert.deepEqual(await lookupChannelByName(client, 'eng-general'), {
+      kind: 'found', channelId: 'C9',
+    });
+  });
+
+  it('reports a bounded scan rather than claiming the channel does not exist', async () => {
+    // 12 pages of misses, all with a next_cursor: the scan stops at its bound.
+    const pages = Array.from({ length: 12 }, (_, i) => [{ id: `C${i}`, name: `other-${i}` }]);
+    const client = lookupClient([], pages);
+    const res = await lookupChannelByName(client, 'missing');
+    assert.equal(res.kind, 'scanBounded');
+    assert.equal((res as any).pages, 10);
+  });
+
+  it('reports a genuine absence when the scan reached the end', async () => {
+    const client = lookupClient([], [[{ id: 'C1', name: 'other' }]]);
+    assert.deepEqual(await lookupChannelByName(client, 'missing'), { kind: 'none' });
+  });
+
+  it('reports ambiguity instead of picking one', async () => {
+    const client = lookupClient([{ id: 'C1', name: 'dup' }, { id: 'C2', name: 'dup' }]);
+    const res = await lookupChannelByName(client, 'dup');
+    assert.equal(res.kind, 'ambiguous');
+    assert.deepEqual((res as any).ids, ['C1', 'C2']);
+  });
+});
+
+describe('explainDenial', () => {
+  function denial(r: SlackAccessRules, meta: ChannelMeta): SlackAccessDenied {
+    try { assertAccess(r, meta); } catch (e) { return e as SlackAccessDenied; }
+    throw new Error('expected a denial');
+  }
+  const base: ChannelMeta = {
+    id: 'C1', name: 'eng-general', is_private: false,
+    is_shared: false, is_im: false, is_mpim: false,
+  };
+
+  it('names the org and the dashboard control', () => {
+    const d = denial(rules, { ...base, name: 'eng-x', is_shared: true, shared_team_ids: ['T_OTHER'] });
+    const out = explainDenial(d, rules, 'eng-x', new Map([['T_OTHER', 'Acme Corp']])).join('\n');
+    assert.match(out, /Acme Corp \(T_OTHER\)/);
+    assert.match(out, /Access Rules → Organizations/);
+    assert.match(out, /Your allowed organisations: T_MINE/);
+  });
+
+  it('quotes the user\'s own patterns and the exact channel to add', () => {
+    const d = denial(rules, { ...base, name: 'marketing' });
+    const out = explainDenial(d, rules, 'marketing').join('\n');
+    assert.match(out, /Denied by: whitelist/);
+    assert.match(out, /\["eng-\*","general"\]/);
+    assert.match(out, /add "marketing"/);
+  });
+
+  it('tells the blacklist case to remove rather than add', () => {
+    const d = denial(rules, { ...base, name: 'eng-secret-plans' });
+    const out = explainDenial(d, rules, 'eng-secret-plans').join('\n');
+    assert.match(out, /Denied by: blacklist/);
+    assert.match(out, /Fix: remove the pattern/);
+  });
+
+  it('handles the empty-whitelist case, whose fix is different', () => {
+    const empty = { ...rules, whitelistChannels: [] };
+    const out = explainDenial(denial(empty, base), empty, 'eng-general').join('\n');
+    assert.match(out, /whitelist is empty/);
+    assert.match(out, /use "\*" to allow all/);
+  });
+
+  it('handles allowPublicOnly and blocked users', () => {
+    const pub = { ...rules, allowPublicOnly: true };
+    assert.match(
+      explainDenial(denial(pub, { ...base, is_private: true }), pub, 'eng-general').join('\n'),
+      /allowPublicOnly is enabled/,
+    );
+    const blocked = { ...rules, blacklistUsers: ['U_BAD'] };
+    assert.match(
+      explainDenial(denial(blocked, { ...base, is_im: true, user: 'U_BAD' }), blocked, '').join('\n'),
+      /blocked-users list/,
+    );
+  });
+
+  it('explains an unverifiable org without blaming the user\'s config', () => {
+    const d = denial(rules, { ...base, is_shared: true, shared_team_ids: [] });
+    const out = explainDenial(d, rules, 'eng-general').join('\n');
+    assert.match(out, /no organisation for this shared channel/);
+  });
+
+  it('never leaks channel content — only rule names and the user\'s own config', () => {
+    const d = denial(rules, { ...base, name: 'marketing' });
+    const out = explainDenial(d, rules, 'marketing').join('\n');
+    assert.doesNotMatch(out, /Topic|Purpose|message/i);
+  });
+});
+
+describe('describeChannel', () => {
+  const base: ChannelMeta = {
+    id: 'C1', name: 'eng', is_private: false, is_shared: false, is_im: false, is_mpim: false,
+  };
+
+  it('renders each conversation kind', () => {
+    assert.match(describeChannel(base, 'C1'), /^#eng \(C1\) — public$/);
+    assert.match(describeChannel({ ...base, is_private: true }, 'C1'), /— private$/);
+    assert.match(describeChannel({ ...base, is_im: true, name: 'alice' }, 'D1'), /^alice \(D1\) — DM$/);
+    assert.match(describeChannel({ ...base, is_mpim: true, name: 'grp' }, 'G1'), /— group DM$/);
+  });
+
+  it('flags a shared channel and falls back to the ID when a DM has no name', () => {
+    assert.match(describeChannel({ ...base, is_shared: true }, 'C1'), /shared with another organisation/);
+    assert.match(describeChannel({ ...base, is_im: true, name: '' }, 'D9'), /^D9 \(D9\) — DM$/);
+  });
+});
+
+// === renderChannelLines ===
+
+import { renderChannelLines } from '../../slack-user/server.js';
+
+describe('renderChannelLines', () => {
+  const noNames = new Map<string, string>();
+
+  it('renders a readable channel with its topic, purpose and member count', () => {
+    const [line] = renderChannelLines([{
+      ch: { id: 'C1', name: 'eng-general', is_private: false,
+            topic: { value: 'Roadmap' }, purpose: { value: 'Eng chat' }, num_members: 12 } as any,
+    }], noNames);
+    assert.match(line, /^#eng-general \(C1\)/);
+    assert.match(line, /Type: public/);
+    assert.match(line, /Topic: Roadmap/);
+    assert.match(line, /Purpose: Eng chat/);
+    assert.match(line, /Members: 12/);
+  });
+
+  it('withholds topic and purpose on a flagged row but keeps structural facts', () => {
+    // A flagged row is a channel the rules refuse to read. Its free text must
+    // not be handed to the model just because the row is visible.
+    const [line] = renderChannelLines([{
+      ch: { id: 'C9', name: 'partner-eng', is_private: true,
+            topic: { value: 'Secret partner roadmap' },
+            purpose: { value: 'Confidential' }, num_members: 14 } as any,
+      warning: 'Not readable: shared with Acme Corp (TBM997HJR), which is not ticked under Access Rules → Organizations.',
+    }], noNames);
+    assert.doesNotMatch(line, /Secret partner roadmap/);
+    assert.doesNotMatch(line, /Confidential/);
+    assert.doesNotMatch(line, /Topic:|Purpose:/);
+    assert.match(line, /Type: private/);
+    assert.match(line, /Members: 14/);
+    assert.match(line, /⚠ Not readable: shared with Acme Corp \(TBM997HJR\)/);
+  });
+
+  it('resolves a DM to the counterpart name and drops the # prefix', () => {
+    const [line] = renderChannelLines(
+      [{ ch: { id: 'D1', name: 'U_ALICE', is_im: true, user: 'U_ALICE', is_private: true } as any }],
+      new Map([['U_ALICE', 'Alice Smith']]),
+    );
+    assert.match(line, /^Alice Smith \(D1\)/);
+    assert.match(line, /Type: im/);
+  });
+
+  it('labels group DMs without a prefix', () => {
+    const [line] = renderChannelLines(
+      [{ ch: { id: 'G1', name: 'mpdm-a--b', is_mpim: true, is_private: true } as any }], noNames,
+    );
+    assert.match(line, /^mpdm-a--b \(G1\)/);
+    assert.match(line, /Type: mpim/);
+  });
+
+  it('omits optional fields that Slack did not return', () => {
+    const [line] = renderChannelLines([{ ch: { id: 'C2', name: 'bare', is_private: false } as any }], noNames);
+    assert.equal(line, '#bare (C2)\n  Type: public');
+  });
+});
