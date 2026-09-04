@@ -362,4 +362,4 @@ Source: `src/hubspot/server.ts` — 23 tools.
 
 ---
 
-**Grand total: 248 tools across 13 sections.**
+**Grand total: 249 tools across 13 sections.**
