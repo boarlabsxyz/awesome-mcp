@@ -3,6 +3,7 @@ import { google, docs_v1 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { UserError } from 'fastmcp';
 import { TextStyleArgs, ParagraphStyleArgs, hexToRgbColor, NotImplementedError, BatchOperation } from '../types.js';
+import { sliceSafe, sanitizeDocText } from './textSafety.js';
 
 type Docs = docs_v1.Docs; // Alias for convenience
 
@@ -1093,9 +1094,12 @@ export function parseDocStructure(
                             textPreview += pe.textRun.content;
                         }
                     }
-                    textPreview = textPreview.trim();
+                    // sanitize before slicing: a preview is JSON.stringify'd into
+                    // the response, and sliceSafe keeps the 100-char cut off the
+                    // seam of a surrogate pair.
+                    textPreview = sanitizeDocText(textPreview).trim();
                     if (textPreview.length > 100) {
-                        textPreview = textPreview.substring(0, 100) + '...';
+                        textPreview = sliceSafe(textPreview, 100) + '...';
                     }
                     elements.push({
                         type: 'paragraph',

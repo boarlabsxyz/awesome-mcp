@@ -15,7 +15,12 @@ import {
   requiredMessageEventSubscription,
   type SlackChannelShape,
 } from '../slack/eventHelpers.js';
-import { assertAccess, assertDmMemberAccess, fetchChannelMeta, filterChannelList, filterDmsByOrg, filterGroupDmsByRules } from './accessControl.js';
+import {
+  assertAccess, assertDmMemberAccess, fetchChannelMeta,
+  filterDmsByOrg, filterGroupDmsByRules, classifyChannelList, toChannelMeta, assertNonOrgAccess,
+  SlackAccessDenied, type ListedChannel,
+} from './accessControl.js';
+import { resolveTeamNames, formatTeamLabel } from './teamNames.js';
 import type { SlackAccessRules } from '../mcpConnectionStore.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
@@ -60,11 +65,57 @@ async function getRules(session: UserSession): Promise<SlackAccessRules> {
   return rules;
 }
 
+/**
+ * How many orgs a denial will spend `team.info` calls naming. A channel shared
+ * with more orgs than this is already unusual, and the message stays readable.
+ */
+const DENIAL_ORG_NAME_MAX = 3;
+
+/**
+ * Rewrite an org denial so it names the organisation instead of only its ID.
+ *
+ * The raw `TBM997HJR` is unresolvable from the Slack UI without digging, which
+ * made the error un-actionable. Note that `team.info` on a *foreign* org
+ * usually fails even with `team:read`, and every org in a denial is by
+ * definition foreign — so the name often cannot be had. The ID is therefore
+ * kept in every case, because it is exactly what the dashboard labels the
+ * Organizations checkbox with when it could not resolve a name either, and
+ * matching the two is how the user actually applies the fix.
+ *
+ * Best-effort throughout: if enrichment fails we rethrow the original denial
+ * rather than degrade it into a lookup error.
+ */
+async function enrichOrgDenial(
+  client: SlackClient,
+  session: UserSession,
+  denial: SlackAccessDenied,
+): Promise<SlackAccessDenied> {
+  const orgIds = denial.orgIds ?? [];
+  if (denial.reason !== 'org-not-allowed' || orgIds.length === 0) return denial;
+  if (orgIds.length > DENIAL_ORG_NAME_MAX) return denial;
+  try {
+    const { names } = await resolveTeamNames(client, orgIds, { tokenKey: getTokenKey(session) });
+    if (names.size === 0) return denial;
+    const labels = orgIds.map(id => formatTeamLabel(id, names)).join(', ');
+    return new SlackAccessDenied(
+      `Access denied: this shared channel belongs to an organisation not in your allowed list (${labels}). Tick it under Access Rules → Organizations if it should be readable.`,
+      { reason: denial.reason, orgIds, channelName: denial.channelName },
+    );
+  } catch {
+    return denial;
+  }
+}
+
 /** Enforce access rules for a channel, fetching metadata as needed. */
 async function enforceAccess(client: SlackClient, session: UserSession, channelId: string): Promise<void> {
   const rules = await getRules(session);
   const meta = await fetchChannelMeta(client, channelId, getTokenKey(session));
-  assertAccess(rules, meta);
+  try {
+    assertAccess(rules, meta);
+  } catch (err) {
+    if (err instanceof SlackAccessDenied) throw await enrichOrgDenial(client, session, err);
+    throw err;
+  }
 
   try {
     await assertDmMemberAccess(client, rules, meta, channelId);
@@ -116,10 +167,155 @@ async function buildChannelFilter(client: SlackClient, session: UserSession): Pr
 
 // === Tools ===
 
+/**
+ * How many shared channels one listChannels call will resolve via
+ * conversations.info.
+ *
+ * conversations.list omits team IDs for many Slack Connect channels, so without
+ * this the only way to learn a channel is unreadable is to try reading it.
+ * conversations.info is tier-3 (~50/min) and SlackClient retries a 429 once
+ * before throwing, and this handler already spends calls on DM and group-DM
+ * member lookups — so the budget is deliberately half the per-minute
+ * allowance. Channels past the cap are reported, never silently unchecked.
+ */
+const CHANNEL_INFO_BACKFILL_MAX = 25;
+
+/** Human label for each denial reason, used in the hidden-channel summary. */
+const DENIAL_LABELS: Record<string, string> = {
+  'whitelist-empty': 'no whitelist configured',
+  'whitelist-miss': 'whitelist',
+  'blacklist-channel': 'blacklist',
+  'blacklist-user': 'blocked user',
+  'public-only': 'private (allowPublicOnly)',
+  'org-not-allowed': 'organisation',
+  'org-unverified': 'organisation unverified',
+};
+
+export interface ListRow {
+  ch: ListedChannel;
+  /** Set when the channel is listed but cannot be read. */
+  warning?: string;
+}
+
+/**
+ * Decide what a page of listed channels looks like to the caller.
+ *
+ * Rows fall into three buckets, and the split is the whole point of this
+ * function: readable rows render normally; rows blocked by an *organisation*
+ * are still listed but flagged, because the user cannot fix what they cannot
+ * see — the org has to be named for them to tick it; rows blocked by the
+ * user's own channel patterns are hidden and only counted, since listing them
+ * would dump the names of channels they deliberately excluded.
+ */
+export async function buildChannelRows(
+  client: SlackClient,
+  session: UserSession,
+  rules: SlackAccessRules,
+  channels: ListedChannel[],
+): Promise<{ rows: ListRow[]; hidden: Map<string, number>; notes: string[] }> {
+  const classified = classifyChannelList(rules, channels);
+  const rows: ListRow[] = [];
+  const hidden = new Map<string, number>();
+  const notes: string[] = [];
+
+  const bump = (reason: string) => hidden.set(reason, (hidden.get(reason) ?? 0) + 1);
+
+  const backfillQueue = classified.filter(c => c.allowed && c.needsOrgBackfill);
+  const resolvable = new Set(backfillQueue.slice(0, CHANNEL_INFO_BACKFILL_MAX).map(c => c.ch.id));
+  if (backfillQueue.length > resolvable.size) {
+    notes.push(
+      `${backfillQueue.length - resolvable.size} shared channel(s) beyond the first ${CHANNEL_INFO_BACKFILL_MAX} were not checked — their organisation is unverified and reading them may still be denied.`,
+    );
+  }
+
+  const orgIdsToName: string[] = [];
+  const pending: Array<{ ch: ListedChannel; denial?: SlackAccessDenied }> = [];
+
+  for (const entry of classified) {
+    if (!entry.allowed) {
+      bump(entry.denial?.reason ?? 'unknown');
+      continue;
+    }
+    if (!resolvable.has(entry.ch.id)) {
+      pending.push({ ch: entry.ch });
+      continue;
+    }
+    // Resolve the org via conversations.info and re-run the full rules. This
+    // also warms fetchChannelMeta's cache, so a follow-up read of the same
+    // channel costs no extra call.
+    try {
+      const meta = await fetchChannelMeta(client, entry.ch.id, getTokenKey(session));
+      assertAccess(rules, meta);
+      pending.push({ ch: entry.ch });
+    } catch (err) {
+      if (!(err instanceof SlackAccessDenied)) {
+        // Fail closed on anything unexpected — an API blip must not turn into
+        // a visible row that later refuses to read.
+        bump('unavailable');
+        continue;
+      }
+      if (err.reason !== 'org-not-allowed') {
+        bump(err.reason);
+        continue;
+      }
+      // Org-blocked. Only surface it if the user's own channel rules would
+      // have allowed it; otherwise this would leak a channel their whitelist
+      // excludes on an org technicality. Report the rule that actually
+      // excluded it, not the org rule that happened to be checked first.
+      try {
+        assertNonOrgAccess(rules, toChannelMeta(entry.ch));
+      } catch (inner) {
+        bump(inner instanceof SlackAccessDenied ? inner.reason : 'unknown');
+        continue;
+      }
+      orgIdsToName.push(...(err.orgIds ?? []));
+      pending.push({ ch: entry.ch, denial: err });
+    }
+  }
+
+  const { names } = orgIdsToName.length > 0
+    ? await resolveTeamNames(client, orgIdsToName, { tokenKey: getTokenKey(session) })
+    : { names: new Map<string, string>() };
+
+  for (const { ch, denial } of pending) {
+    if (!denial) { rows.push({ ch }); continue; }
+    const labels = (denial.orgIds ?? []).map(id => formatTeamLabel(id, names)).join(', ');
+    rows.push({
+      ch,
+      warning: `Not readable: shared with ${labels}, which is not ticked under Access Rules → Organizations.`,
+    });
+  }
+
+  return { rows, hidden, notes };
+}
+
+/** Render the trailing summary. Counts are never omitted — a silently short
+ *  list is what made a missing channel look like a channel that doesn't exist. */
+export function renderListSummary(rows: ListRow[], hidden: Map<string, number>, notes: string[]): string {
+  const readable = rows.filter(r => !r.warning).length;
+  const flagged = rows.length - readable;
+  const hiddenTotal = [...hidden.values()].reduce((a, b) => a + b, 0);
+
+  const parts = [`${readable} channel(s) shown`];
+  if (flagged > 0) parts.push(`${flagged} listed but not readable`);
+  if (hiddenTotal > 0) {
+    const breakdown = [...hidden.entries()]
+      .map(([reason, n]) => `${DENIAL_LABELS[reason] ?? reason}: ${n}`)
+      .join(', ');
+    parts.push(`${hiddenTotal} hidden by your access rules (${breakdown})`);
+  }
+  let out = parts.join(', ') + '.';
+  if (hiddenTotal > 0 || flagged > 0) {
+    out += ' Use diagnoseChannelAccess to see why a specific channel is missing or blocked.';
+  }
+  for (const note of notes) out += `\nNote: ${note}`;
+  return out;
+}
+
 slackUserServer.addTool({
   name: 'listChannels',
   annotations: { readOnlyHint: true },
-  description: 'List Slack channels and DMs you have access to, filtered by your access rules. Use the "search" parameter to find a specific channel by name without paginating.',
+  description: 'List Slack channels and DMs you have access to, filtered by your access rules. Channels blocked by an organisation rule are still listed, marked "Not readable" with the organisation named, so you know not to plan work against them. Channels hidden by your channel patterns are counted in the summary — use diagnoseChannelAccess to find out why a specific one is missing. Use the "search" parameter to find a specific channel by name without paginating.',
   parameters: z.object({
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
     search: z.string().optional().describe('Search for channels by name (case-insensitive substring match). When provided, paginates through all channels internally and returns only matches.'),
@@ -128,56 +324,65 @@ slackUserServer.addTool({
     const client = getSlackUserClient(session);
     const rules = await getRules(session!);
 
-    let allChannels: any[];
+    let allChannels: ListedChannel[];
     let nextCursor: string | undefined;
 
     if (args.search) {
       // Search mode: paginate through all channels internally to find matches
       const searchLower = args.search.toLowerCase();
-      const matches: any[] = [];
+      const matches: ListedChannel[] = [];
       let cursor: string | undefined;
       let pages = 0;
       const MAX_PAGES = 30; // safety limit
 
       do {
         const result = await client.conversationsListAll(cursor, 'public_channel,private_channel');
-        const filtered = filterChannelList(rules, result.channels);
-        for (const ch of filtered) {
-          if (ch.name?.toLowerCase().includes(searchLower)) {
-            matches.push(ch);
-          }
+        for (const ch of result.channels as ListedChannel[]) {
+          if (ch.name?.toLowerCase().includes(searchLower)) matches.push(ch);
         }
         cursor = result.response_metadata?.next_cursor || undefined;
         pages++;
       } while (cursor && pages < MAX_PAGES && matches.length < 50);
 
+      // Note the ordering: matching happens on the raw page and the access
+      // rules are applied afterwards, over the capped match set. Filtering
+      // first would mean an org-blocked channel could never be *found* by name,
+      // which is exactly the "why is it invisible" complaint this tool answers.
       allChannels = matches;
       nextCursor = undefined;
     } else {
       // Normal paginated mode
       const result = await client.conversationsListAll(args.cursor, 'public_channel,private_channel');
       const dmResult = !args.cursor ? await client.conversationsList(undefined, 'im,mpim') : { channels: [] };
-      const allConvos = [...result.channels, ...dmResult.channels];
-      const channels = filterChannelList(rules, allConvos);
-      const filteredByOrg = await filterDmsByOrg(client, rules, channels as any);
-      const filteredByRules = await filterGroupDmsByRules(client, rules, filteredByOrg as any);
-      allChannels = filteredByRules;
+      allChannels = [...result.channels, ...dmResult.channels] as ListedChannel[];
       nextCursor = result.response_metadata?.next_cursor || undefined;
     }
 
-    if (allChannels.length === 0) {
+    const { rows, hidden, notes } = await buildChannelRows(client, session!, rules, allChannels);
+
+    // DM/group-DM rules need async lookups, so they run over the survivors.
+    const visibleChannels = rows.map(r => r.ch);
+    const afterDmOrg = await filterDmsByOrg(client, rules, visibleChannels as any);
+    const afterGroupDm = await filterGroupDmsByRules(client, rules, afterDmOrg as any);
+    const survivingIds = new Set(afterGroupDm.map((ch: any) => ch.id));
+    const dmDropped = rows.length - survivingIds.size;
+    if (dmDropped > 0) hidden.set('blacklist-user', (hidden.get('blacklist-user') ?? 0) + dmDropped);
+    const finalRows = rows.filter(r => survivingIds.has(r.ch.id));
+
+    if (finalRows.length === 0) {
+      const summary = renderListSummary(finalRows, hidden, notes);
       return args.search
-        ? `No channels matching "${args.search}" found within your access rules.`
-        : 'No channels match your access rules. Check your configuration in the dashboard.';
+        ? `No channels matching "${args.search}" found within your access rules.\n\n${summary}`
+        : `No channels match your access rules. Check your configuration in the dashboard.\n\n${summary}`;
     }
 
     // Resolve DM user names
-    const dmUserIds = allChannels.filter(ch => (ch as any).is_im && ch.user).map(ch => ch.user!);
+    const dmUserIds = finalRows.filter(r => r.ch.is_im && r.ch.user).map(r => r.ch.user!);
     const userNames = dmUserIds.length > 0 ? await resolveUsers(client, dmUserIds, getTokenKey(session!)) : new Map<string, string>();
 
-    const lines = allChannels.map(ch => {
-      const isDm = !!(ch as any).is_im;
-      const isMpim = !!(ch as any).is_mpim;
+    const lines = finalRows.map(({ ch, warning }) => {
+      const isDm = !!ch.is_im;
+      const isMpim = !!ch.is_mpim;
       const type = isDm ? 'im' : isMpim ? 'mpim' : ch.is_private ? 'private' : 'public';
       let displayName = ch.name;
       if (isDm && ch.user && userNames.has(ch.user)) {
@@ -188,15 +393,20 @@ slackUserServer.addTool({
         `${prefix}${displayName} (${ch.id})`,
         `  Type: ${type}`,
       ];
-      if (ch.topic?.value) parts.push(`  Topic: ${ch.topic.value}`);
-      if (ch.purpose?.value) parts.push(`  Purpose: ${ch.purpose.value}`);
-      if (ch.num_members !== undefined) parts.push(`  Members: ${ch.num_members}`);
+      const anyCh = ch as any;
+      // Topic and purpose are free text from a channel the access rules refuse
+      // to let us read. Structural facts stay; content does not.
+      if (!warning && anyCh.topic?.value) parts.push(`  Topic: ${anyCh.topic.value}`);
+      if (!warning && anyCh.purpose?.value) parts.push(`  Purpose: ${anyCh.purpose.value}`);
+      if (anyCh.num_members !== undefined) parts.push(`  Members: ${anyCh.num_members}`);
+      if (warning) parts.push(`  ⚠ ${warning}`);
       return parts.join('\n');
     });
 
     let output = lines.join('\n\n');
+    output += `\n\n---\n${renderListSummary(finalRows, hidden, notes)}`;
     if (nextCursor) {
-      output += `\n\n---\nMore channels available. Use cursor: "${nextCursor}"`;
+      output += `\nMore channels available. Use cursor: "${nextCursor}"`;
     }
     return output;
   },
@@ -681,5 +891,139 @@ slackUserServer.addTool({
       '',
       'Call subscribeToChannelEvents again to start accruing from that moment forward.',
     ].join('\n');
+  },
+});
+
+/**
+ * Slack channel IDs: C (public/private), D (DM), G (legacy group). Used to skip
+ * the name scan entirely when the caller already has an ID.
+ */
+const CHANNEL_ID_RE = /^[CDG][A-Z0-9]{6,}$/i;
+
+/** How many conversations.list pages the name fallback will scan. */
+const DIAGNOSE_MAX_PAGES = 10;
+
+slackUserServer.addTool({
+  name: 'diagnoseChannelAccess',
+  annotations: { readOnlyHint: true },
+  description: 'Explain why a Slack channel is or is not readable under your access rules. Use this when a channel you expect is missing from listChannels, or when a read is denied and you want to know which rule caused it and how to fix it. Pass channelId when you have it (fastest); otherwise pass name. Returns the deciding rule and your current configuration — never message content.',
+  parameters: z.object({
+    channelId: z.string().optional().describe('The Slack channel ID (e.g., C01234ABCDE). Preferred — resolves in a single call.'),
+    name: z.string().optional().describe('Channel name to look up when you do not have the ID (e.g., "awesome-mcp-support"). Case-insensitive.'),
+  }),
+  execute: async (args, { session }) => {
+    if (!args.channelId && !args.name) {
+      throw new UserError('Pass either channelId or name.');
+    }
+    const client = getSlackUserClient(session);
+    const rules = await getRules(session!);
+    const tokenKey = getTokenKey(session!);
+
+    // --- Resolve the channel -------------------------------------------------
+    // An ID passed in the name slot is a common caller mistake; treat it as an
+    // ID rather than scanning the workspace for a channel literally so named.
+    let channelId = args.channelId
+      ?? (args.name && CHANNEL_ID_RE.test(args.name) ? args.name : undefined);
+
+    if (!channelId && args.name) {
+      const wanted = args.name.replace(/^#/, '').toLowerCase();
+      // users.conversations first: it is member-scoped, so it returns tens of
+      // rows rather than thousands, and it is the only source that covers DMs.
+      // Essentially every real "why can't I read #x" is about a channel you are
+      // already in.
+      const mine = await client.conversationsList(undefined, 'public_channel,private_channel,mpim,im');
+      let hits = (mine.channels as ListedChannel[]).filter(ch => ch.name?.toLowerCase() === wanted);
+
+      if (hits.length === 0) {
+        // Fall back to the workspace-wide list, bounded.
+        let cursor: string | undefined;
+        let pages = 0;
+        do {
+          const page = await client.conversationsListAll(cursor, 'public_channel,private_channel');
+          hits = hits.concat((page.channels as ListedChannel[]).filter(ch => ch.name?.toLowerCase() === wanted));
+          cursor = page.response_metadata?.next_cursor || undefined;
+          pages++;
+        } while (cursor && pages < DIAGNOSE_MAX_PAGES && hits.length === 0);
+        if (hits.length === 0 && cursor) {
+          // A bounded scan is a floor, not a verdict — saying "no such channel"
+          // here would read as a rules problem when it is a paging one.
+          return [
+            `No channel named "${args.name}" found in the first ${pages} page(s) of the workspace channel list.`,
+            'The scan stopped at its page limit, so the channel may still exist further in. Pass channelId to check it directly.',
+          ].join('\n');
+        }
+      }
+
+      if (hits.length === 0) {
+        return `No channel named "${args.name}" is visible to your Slack account. Slack itself does not return it, so this is not an access-rules problem — you are most likely not a member of it.`;
+      }
+      if (hits.length > 1) {
+        return [
+          `${hits.length} channels are named "${args.name}". Re-run with one of these IDs:`,
+          ...hits.map(h => `  ${h.id}`),
+        ].join('\n');
+      }
+      channelId = hits[0].id;
+    }
+
+    // --- Evaluate ------------------------------------------------------------
+    const meta = await fetchChannelMeta(client, channelId!, tokenKey);
+    const kind = meta.is_im ? 'DM' : meta.is_mpim ? 'group DM' : meta.is_private ? 'private' : 'public';
+    const label = meta.is_im || meta.is_mpim ? meta.name || channelId! : `#${meta.name}`;
+    const header = `${label} (${channelId}) — ${kind}${meta.is_shared ? ', shared with another organisation' : ''}`;
+
+    let denial: SlackAccessDenied | undefined;
+    try {
+      assertAccess(rules, meta);
+      await assertDmMemberAccess(client, rules, meta, channelId!);
+    } catch (err) {
+      if (err instanceof SlackAccessDenied) denial = err;
+      else if (err instanceof UserError) {
+        return [header, '', `Denied by: ${err.message}`].join('\n');
+      } else throw err;
+    }
+
+    if (!denial) {
+      return [header, '', 'Readable: yes. Every access rule passes for this channel.'].join('\n');
+    }
+
+    // --- Explain -------------------------------------------------------------
+    const out = [header, '', `Denied by: ${DENIAL_LABELS[denial.reason] ?? denial.reason}`];
+    switch (denial.reason) {
+      case 'org-not-allowed': {
+        const { names } = await resolveTeamNames(client, denial.orgIds ?? [], { tokenKey });
+        const labels = (denial.orgIds ?? []).map(id => formatTeamLabel(id, names)).join(', ');
+        out.push(`Organisation(s) not allowed: ${labels}`);
+        out.push(`Your allowed organisations: ${rules.allowedOrgs.length ? rules.allowedOrgs.join(', ') : '(none)'}`);
+        out.push('Fix: tick the organisation under Access Rules → Organizations in the dashboard.');
+        out.push('If it has no checkbox there, it was not discovered — reopen the modal to refresh, and note that an organisation Slack will not name is listed by its raw ID.');
+        break;
+      }
+      case 'org-unverified':
+        out.push('Slack returned no organisation for this shared channel, so it cannot be checked against your allowlist.');
+        out.push('Fix: this is usually transient. If it persists the channel is shared with an organisation Slack will not disclose to this token.');
+        break;
+      case 'whitelist-empty':
+        out.push('Your channel whitelist is empty, so no channel is readable.');
+        out.push('Fix: add at least one pattern under Access Rules → Channels (use "*" to allow all).');
+        break;
+      case 'whitelist-miss':
+        out.push(`Your whitelist patterns: ${JSON.stringify(denial.patterns ?? [])}`);
+        out.push(`Fix: add "${meta.name}" (or a pattern matching it) under Access Rules → Channels.`);
+        break;
+      case 'blacklist-channel':
+        out.push(`Your blacklist patterns: ${JSON.stringify(denial.patterns ?? [])}`);
+        out.push(`Fix: remove the pattern matching "${meta.name}" under Access Rules → Channels.`);
+        break;
+      case 'blacklist-user':
+        out.push('The other participant is on your blocked-users list.');
+        out.push('Fix: remove them under Access Rules → Blocked users.');
+        break;
+      case 'public-only':
+        out.push('allowPublicOnly is enabled and this channel is private.');
+        out.push('Fix: disable "public channels only" under Access Rules.');
+        break;
+    }
+    return out.join('\n');
   },
 });
