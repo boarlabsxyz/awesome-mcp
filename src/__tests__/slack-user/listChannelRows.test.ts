@@ -169,6 +169,23 @@ describe('renderListSummary', () => {
     assert.doesNotMatch(out, /diagnoseChannelAccess/);
   });
 
+  it('labels DM-filter drops by the rules that caused them, not "blocked user"', () => {
+    // filterDmsByOrg drops for a non-allowed org, and filterGroupDmsByRules for
+    // either a blocked member or an org — calling all three "blocked user"
+    // points at the wrong dashboard control two times out of three.
+    const out = renderListSummary([{ ch: { id: 'C1' } }] as any, new Map([['dm-rules', 2]]), []);
+    assert.match(out, /DM\/group-DM rules \(blocked user or organisation\): 2/);
+    assert.doesNotMatch(out, /^.*blocked user: 2/m);
+  });
+
+  it('surfaces an unchecked-group-DM note verbatim', () => {
+    const out = renderListSummary(
+      [{ ch: { id: 'C1' } }] as any, new Map(),
+      ['4 group DM(s) beyond the first 30 were not checked against your member rules — they are listed, but reading one may still be denied.'],
+    );
+    assert.match(out, /Note: 4 group DM\(s\) beyond the first 30 were not checked/);
+  });
+
   it('appends truncation notes', () => {
     const out = renderListSummary([] as any, new Map(), ['5 shared channel(s) were not checked']);
     assert.match(out, /Note: 5 shared channel\(s\) were not checked/);

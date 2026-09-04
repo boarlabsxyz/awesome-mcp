@@ -302,6 +302,24 @@ export async function filterDmsByOrg(
 export const GROUP_DM_CHECK_MAX = 30;
 
 /**
+ * How many group DMs `filterGroupDmsByRules` will leave unchecked.
+ *
+ * The cap keeps one listChannels call inside Slack's rate limits, but an
+ * unchecked group DM is listed as an ordinary readable row — so the count has
+ * to reach the caller, the same way the conversations.info backfill reports
+ * what it skipped. A read of such a channel is still enforced; the risk is a
+ * caller planning work against a row that will later be denied.
+ */
+export function uncheckedGroupDmCount(
+  rules: SlackAccessRules,
+  channels: Array<{ is_mpim?: boolean }>,
+): number {
+  if (rules.blacklistUsers.length === 0 && rules.allowedOrgs.length === 0) return 0;
+  const mpims = channels.filter(ch => !!ch.is_mpim).length;
+  return Math.max(0, mpims - GROUP_DM_CHECK_MAX);
+}
+
+/**
  * Filter group DMs (mpim) that contain any blacklisted user or user from non-allowed org.
  * Requires async member lookups via conversations.members and users.info.
  */

@@ -7,6 +7,7 @@ import {
   findUnencodable,
   formatCodePoint,
   assertTransportSafe,
+  stringifySafe,
 } from '../google-docs/textSafety.js';
 
 // Built with fromCharCode so this file contains no raw control characters.
@@ -183,5 +184,48 @@ describe('readGoogleDoc json truncation contract', () => {
   it('returns plain JSON when nothing needed cutting', () => {
     const out = truncateEnvelope(doc, 100_000);
     assert.deepEqual(JSON.parse(out), doc);
+  });
+});
+
+describe('stringifySafe', () => {
+  // The gap assertTransportSafe structurally cannot close: after JSON.stringify
+  // a lone surrogate is the six-ASCII escape \udXXX, so scanning the serialised
+  // text for stray code units finds nothing, yet strict parsers reject it.
+  const withLoneSurrogate = {
+    title: 'Doc' + HI,
+    body: { content: [{ paragraph: { elements: [{ textRun: { content: 'ok' + HI + 'bad' } }] } }] },
+  };
+
+  it('plain JSON.stringify leaks an escaped lone surrogate past the backstop', () => {
+    const raw = JSON.stringify(withLoneSurrogate);
+    assert.ok(raw.toLowerCase().includes('ud83d'), 'expected an escaped surrogate');
+    assert.equal(findUnencodable(raw), null, 'backstop cannot see it — this is why stringifySafe exists');
+  });
+
+  it('sanitizes every string in the tree, including titles', () => {
+    const out = stringifySafe(withLoneSurrogate);
+    assert.ok(!out.toLowerCase().includes('ud83d'));
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.title, 'Doc' + FFFD);
+    assert.equal(parsed.body.content[0].paragraph.elements[0].textRun.content, 'ok' + FFFD + 'bad');
+  });
+
+  it('reaches nested text runs, tab titles and arrays alike', () => {
+    const out = stringifySafe({
+      tabs: [{ tabProperties: { title: 'Tab' + LO } }],
+      notes: ['a' + NUL + 'b', 'c' + VT + 'd'],
+    });
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.tabs[0].tabProperties.title, 'Tab' + FFFD);
+    assert.deepEqual(parsed.notes, ['ab', 'c\nd']);
+  });
+
+  it('leaves non-string values and valid text alone', () => {
+    const payload = { n: 42, b: true, nil: null, ok: 'plain ' + EMOJI };
+    assert.deepEqual(JSON.parse(stringifySafe(payload)), payload);
+  });
+
+  it('honours the space argument', () => {
+    assert.ok(stringifySafe({ a: 1 }, 2).includes('\n  '));
   });
 });

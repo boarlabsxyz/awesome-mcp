@@ -72,8 +72,8 @@ export function sliceSafe(text: string, max: number): string {
  */
 export function sanitizeDocText(text: string): string {
   return text
-    // eslint-disable-next-line no-control-regex -- U+000B is Docs' soft line break
-    .replaceAll(/\u000B/g, '\n')
+    // U+000B is Docs' soft line break, so it becomes a real newline.
+    .replaceAll('\u000B', '\n')
     // eslint-disable-next-line no-control-regex -- stripping control characters is the point
     .replaceAll(/[\u0000-\u0008\u000C\u000E-\u001F\u007F]/g, '')
     .replaceAll(PUA_GLOBAL, '')
@@ -127,5 +127,28 @@ export function assertTransportSafe(
   throw new UserError(
     `Refusing to return ${what}content${where}: unencodable character ${formatCodePoint(hit.codePoint)} at offset ${hit.offset}. ` +
     'This character cannot be represented in a JSON tool result. Please report the document ID so the extractor can be fixed.',
+  );
+}
+
+/**
+ * `JSON.stringify` with every string value sanitised on the way out.
+ *
+ * This closes a gap `assertTransportSafe` structurally cannot: once
+ * `JSON.stringify` has run, a lone surrogate in the input has become the
+ * six-ASCII-character escape `\udXXX`, so scanning the *serialised* text for
+ * stray code units finds nothing. The output is well-formed JSON by the letter
+ * of RFC 8259, but the RFC also says the behaviour of software receiving such
+ * escapes is unpredictable, and strict parsers reject them outright — which is
+ * the failure mode this module exists to prevent.
+ *
+ * Sanitising in a replacer catches every string in the tree — textRun content,
+ * document and tab titles, and anything else the Docs API adds later — without
+ * having to enumerate them.
+ */
+export function stringifySafe(value: unknown, space?: number): string {
+  return JSON.stringify(
+    value,
+    (_key, val) => (typeof val === 'string' ? sanitizeDocText(val) : val),
+    space,
   );
 }

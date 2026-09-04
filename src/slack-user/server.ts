@@ -18,7 +18,8 @@ import {
 import {
   assertAccess, assertDmMemberAccess, fetchChannelMeta,
   filterDmsByOrg, filterGroupDmsByRules, classifyChannelList, toChannelMeta, assertNonOrgAccess,
-  SlackAccessDenied, type ListedChannel, type ChannelMeta,
+  SlackAccessDenied, uncheckedGroupDmCount, GROUP_DM_CHECK_MAX,
+  type ListedChannel, type ChannelMeta,
 } from './accessControl.js';
 import { resolveTeamNames, formatTeamLabel } from './teamNames.js';
 import type { SlackAccessRules } from '../mcpConnectionStore.js';
@@ -186,6 +187,7 @@ const DENIAL_LABELS: Record<string, string> = {
   'whitelist-miss': 'whitelist',
   'blacklist-channel': 'blacklist',
   'blacklist-user': 'blocked user',
+  'dm-rules': 'DM/group-DM rules (blocked user or organisation)',
   'public-only': 'private (allowPublicOnly)',
   'org-not-allowed': 'organisation',
   'org-unverified': 'organisation unverified',
@@ -422,7 +424,16 @@ slackUserServer.addTool({
     const afterGroupDm = await filterGroupDmsByRules(client, rules, afterDmOrg as any);
     const survivingIds = new Set(afterGroupDm.map((ch: any) => ch.id));
     const dmDropped = rows.length - survivingIds.size;
-    if (dmDropped > 0) hidden.set('blacklist-user', (hidden.get('blacklist-user') ?? 0) + dmDropped);
+    // Not 'blacklist-user': filterDmsByOrg drops for a non-allowed org, and
+    // filterGroupDmsByRules for either a blacklisted member or an org, so
+    // naming the blocklist would point at the wrong control two times in three.
+    if (dmDropped > 0) hidden.set('dm-rules', (hidden.get('dm-rules') ?? 0) + dmDropped);
+    const uncheckedGroupDms = uncheckedGroupDmCount(rules, visibleChannels as any);
+    if (uncheckedGroupDms > 0) {
+      notes.push(
+        `${uncheckedGroupDms} group DM(s) beyond the first ${GROUP_DM_CHECK_MAX} were not checked against your member rules — they are listed, but reading one may still be denied.`,
+      );
+    }
     const finalRows = rows.filter(r => survivingIds.has(r.ch.id));
 
     if (finalRows.length === 0) {

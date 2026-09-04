@@ -417,3 +417,34 @@ describe('parseDocStructure - detailed mode', () => {
     );
   });
 });
+
+// === inspectDocStructure maxElements bounds ===
+
+import { z } from 'zod';
+
+describe('inspectDocStructure maxElements schema', () => {
+  // Mirrors the tool's parameter. A negative limit reached slice(0, limit),
+  // which *removes* elements from the end while reporting a negative "shown".
+  const maxElements = z.number().int().min(0).optional();
+
+  it('rejects negative limits, which would slice from the end', () => {
+    assert.equal(maxElements.safeParse(-1).success, false);
+  });
+
+  it('rejects fractional limits, which desync the reported counts from reality', () => {
+    assert.equal(maxElements.safeParse(1.5).success, false);
+  });
+
+  it('accepts zero, omission, and positive integers', () => {
+    assert.equal(maxElements.safeParse(0).success, true);
+    assert.equal(maxElements.safeParse(undefined).success, true);
+    assert.equal(maxElements.safeParse(500).success, true);
+  });
+
+  it('demonstrates the behaviour the schema now prevents', () => {
+    const elements = ['a', 'b', 'c'];
+    // What the old schema allowed through:
+    assert.deepEqual(elements.slice(0, -1), ['a', 'b']);   // silently drops one
+    assert.deepEqual(elements.slice(0, 1.5), ['a']);        // shown: 1.5, actual: 1
+  });
+});

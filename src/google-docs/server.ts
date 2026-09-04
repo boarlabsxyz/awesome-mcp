@@ -118,7 +118,7 @@ const server = new FastMCP<UserSession>({
 
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
-import { sliceSafe, sanitizeDocText, assertTransportSafe } from './textSafety.js';
+import { sliceSafe, sanitizeDocText, assertTransportSafe, stringifySafe } from './textSafety.js';
 registerMintRestBearerForCurl(server);
 registerListRestEndpoints(server);
 
@@ -415,7 +415,10 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
         }
 
         if (args.format === 'json') {
-            const jsonContent = JSON.stringify(contentSource, null, 2);
+            // stringifySafe, not JSON.stringify: once serialised, a lone
+            // surrogate in a textRun has become the escape `\udXXX`, which
+            // assertTransportSafe can no longer see and strict parsers reject.
+            const jsonContent = stringifySafe(contentSource, 2);
             // Never slice serialised JSON and hand back the fragment: the result
             // is a dangling string or brace, so anything that parses it fails
             // with "EOF while parsing a string" — a truncation bug that reads
@@ -1656,7 +1659,7 @@ parameters: z.object({
   documentId: z.string().describe('The ID of the Google Document.'),
   detailed: z.boolean().optional().default(false).describe('If true, returns element-by-element listing with type, position, and text previews.'),
   tabId: z.string().optional().describe('Optional tab ID to inspect (defaults to first tab).'),
-  maxElements: z.number().optional().describe(`Maximum elements to list in detailed mode (default ${DEFAULT_MAX_STRUCTURE_ELEMENTS}). Omitted elements are reported, never silently dropped.`),
+  maxElements: z.number().int().min(0).optional().describe(`Maximum elements to list in detailed mode (default ${DEFAULT_MAX_STRUCTURE_ELEMENTS}). Omitted elements are reported, never silently dropped.`),
 }),
 execute: async (args, { log, session }) => {
   const docs = await getDocsClient(session);
@@ -1687,7 +1690,9 @@ execute: async (args, { log, session }) => {
       note: `${total - limit} further element(s) were omitted. Raise maxElements, or inspect a single tab with tabId, to see them.`,
     };
   }
-  return assertTransportSafe(JSON.stringify(structure, null, 2), {
+  // Titles (document and tab) reach the output only through here, so this is
+  // the one place they can be sanitised.
+  return assertTransportSafe(stringifySafe(structure, 2), {
     documentId: args.documentId,
     what: 'structure',
   });

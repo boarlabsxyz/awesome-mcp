@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { matchGlob, assertAccess, filterChannelList, filterDmsByOrg, filterGroupDmsByRules, fetchChannelMeta, classifyChannelList, toChannelMeta, assertNonOrgAccess, SlackAccessDenied } from '../../slack-user/accessControl.js';
+import { matchGlob, assertAccess, filterChannelList, filterDmsByOrg, filterGroupDmsByRules, fetchChannelMeta, classifyChannelList, toChannelMeta, assertNonOrgAccess, SlackAccessDenied, uncheckedGroupDmCount, GROUP_DM_CHECK_MAX } from '../../slack-user/accessControl.js';
 import type { SlackAccessRules } from '../../mcpConnectionStore.js';
 import type { ChannelMeta } from '../../slack-user/accessControl.js';
 import { channelSharedTeamIds, channelTeamIds } from '../../slack/apiHelpers.js';
@@ -627,5 +627,48 @@ describe('assertNonOrgAccess', () => {
   it('ignores the org rule but still applies the channel rules', () => {
     assert.doesNotThrow(() => assertNonOrgAccess(rules, shared));
     assert.throws(() => assertNonOrgAccess(rules, { ...shared, name: 'marketing' }), /whitelist/);
+  });
+});
+
+// === uncheckedGroupDmCount ===
+
+describe('uncheckedGroupDmCount', () => {
+  const withRules: SlackAccessRules = {
+    allowedOrgs: ['T_MINE'], blacklistUsers: [],
+    whitelistChannels: ['*'], blacklistChannels: [], allowPublicOnly: false,
+  };
+  const mpims = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `G${i}`, is_mpim: true }));
+
+  it('is zero when no member rules apply, since nothing is skipped', () => {
+    const none: SlackAccessRules = { ...withRules, allowedOrgs: [], blacklistUsers: [] };
+    assert.equal(uncheckedGroupDmCount(none, mpims(100)), 0);
+  });
+
+  it('is zero while the group DMs fit inside the cap', () => {
+    assert.equal(uncheckedGroupDmCount(withRules, mpims(GROUP_DM_CHECK_MAX)), 0);
+  });
+
+  it('counts only the overflow, so the note can name it', () => {
+    assert.equal(uncheckedGroupDmCount(withRules, mpims(GROUP_DM_CHECK_MAX + 7)), 7);
+  });
+
+  it('ignores non-group-DM channels', () => {
+    const plain = Array.from({ length: 50 }, (_, i) => ({ id: `C${i}`, is_mpim: false }));
+    const mixed = [...mpims(GROUP_DM_CHECK_MAX + 2), ...plain];
+    assert.equal(uncheckedGroupDmCount(withRules, mixed), 2);
+  });
+
+  it('matches what filterGroupDmsByRules actually skips', async () => {
+    // The count is only useful if it tracks the real cap.
+    const channels = mpims(GROUP_DM_CHECK_MAX + 5);
+    const checked: string[] = [];
+    const client: any = {
+      conversationsMembers: async (id: string) => { checked.push(id); return { members: ['U1'] }; },
+      usersInfo: async () => ({ user: { id: 'U1', team_id: 'T_MINE' } }),
+    };
+    await filterGroupDmsByRules(client, withRules, channels as any);
+    assert.equal(checked.length, GROUP_DM_CHECK_MAX);
+    assert.equal(uncheckedGroupDmCount(withRules, channels), channels.length - checked.length);
   });
 });
