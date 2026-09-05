@@ -15,7 +15,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Slides](#google-slides) (6)
 - [ClickUp](#clickup) (45)
 - [Slack (bot)](#slack-bot-) (8)
-- [Slack (user)](#slack-user-) (15)
+- [Slack (user)](#slack-user-) (16)
 - [Outline](#outline) (27)
 - [PeopleForce](#peopleforce) (45)
 - [HubSpot](#hubspot) (23)
@@ -223,11 +223,11 @@ Source: `src/slack/server.ts` — 8 tools.
 
 ## Slack (user)
 
-Source: `src/slack-user/server.ts` — 15 tools.
+Source: `src/slack-user/server.ts` — 16 tools.
 
 | Tool | Description | REST |
 |---|---|---|
-| `listChannels` | List Slack channels and DMs you have access to, filtered by your access rules. Use the "search" parameter to find a specific channel by name without paginating. | — |
+| `listChannels` | List Slack channels and DMs you have access to, filtered by your access rules. Channels blocked by an organisation rule are still listed, marked "Not readable" with the organisation named, so you know not to plan work against them. Channels hidden by your channel patterns are counted in the summary — use diagnoseChannelAccess to find out why a specific one is missing. Use the "search" parameter to find a specific channel by name without paginating. | — |
 | `readChannelHistory` | Read recent messages from a Slack channel. Access rules are enforced. | — |
 | `readThreadReplies` | Read replies in a Slack thread. Access rules are enforced. | — |
 | `downloadFile` | Download a file attached to a Slack message. Get the fileId from the 📎 lines in readChannelHistory or readThreadReplies output, and pass the channel you read it from. Images: format "url" (default) re-hosts the image at a public URL suitable for tools that take an image URL (e.g. insertImageFromUrl), format "inline" returns the image itself so you can look at it. Text files are returned as text; other file types return metadata only. Access rules are enforced. | — |
@@ -242,6 +242,7 @@ Source: `src/slack-user/server.ts` — 15 tools.
 | `getChannelEventHistory` | Read the Slack events captured for a channel since you subscribed to it — the exact record of what happened, instead of re-reading the channel and filtering client-side. IMPORTANT: history only accrues from the moment subscribeToChannelEvents was called; the response reports that boundary, and for earlier windows you should fall back to readChannelHistory. If no subscription exists this reports that as a warning rather than an error, so a routine can fall back cleanly. Access rules are enforced on every call, so a channel that has since been denied stops returning history. | — |
 | `debugChannelEventSubscription` | Diagnose a channel-event subscription that reports success but is not accruing events. Reports the local record, whether SLACK_SIGNING_SECRET is configured, the Request URL the Slack app must be pointed at, which per-channel-type event subscription (message.channels / message.groups / message.im / message.mpim) this channel needs enabled on the Slack app, whether you are a member of the channel, event-store counts, and — decisively — whether Slack has ever POSTed to this deployment at all and how those deliveries ended. That last part separates "the Request URL is not configured" from "deliveries arrive but nothing matched". Use when getChannelEventHistory stays empty. | — |
 | `unsubscribeFromChannelEvents` | Delete your channel-event subscription for a Slack channel. This also deletes the events captured for it, so history cannot be recovered by re-subscribing — a fresh subscription starts accruing from that moment. Nothing changes on Slack's side: event delivery is configured on the app, so other subscribers keep receiving events. | — |
+| `diagnoseChannelAccess` | Explain why a Slack channel is or is not readable under your access rules. Use this when a channel you expect is missing from listChannels, or when a read is denied and you want to know which rule caused it and how to fix it. Pass channelId when you have it (fastest); otherwise pass name. Returns the deciding rule and your current configuration — never message content. | — |
 
 ## Outline
 
@@ -361,4 +362,4 @@ Source: `src/hubspot/server.ts` — 23 tools.
 
 ---
 
-**Grand total: 248 tools across 13 sections.**
+**Grand total: 249 tools across 13 sections.**

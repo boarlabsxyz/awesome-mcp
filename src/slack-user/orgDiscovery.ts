@@ -18,6 +18,7 @@ import {
   isSharedChannel,
   type SlackChannelTeamFields,
 } from '../slack/apiHelpers.js';
+import { resolveTeamNames } from './teamNames.js';
 
 /** An org offered to the user as an allowlist checkbox. */
 export interface DiscoveredOrg {
@@ -88,6 +89,13 @@ export interface OrgDiscoveryOptions {
   currentOrgId?: string;
   /** Orgs already in `allowedOrgs`. Always returned, discovered or not. */
   savedOrgIds?: string[];
+  /**
+   * Scopes the shared team-name cache. Pass the same key the MCP server uses
+   * (see `getTokenKey`) so a name resolved here is reusable when an access
+   * denial has to name an org, and vice versa. Omit it to bypass the cache —
+   * which is what tests do, and what keeps names from crossing tenants.
+   */
+  tokenKey?: string;
 }
 
 interface Accumulator {
@@ -236,7 +244,7 @@ export async function discoverConnectedOrgs(
 
   // --- 7. Names ------------------------------------------------------------
   const orgIds = [...acc.ids.keys()].filter(id => id && id !== currentOrgId);
-  const names = await resolveOrgNames(client, orgIds, acc);
+  const names = await resolveOrgNames(client, orgIds, acc, options.tokenKey);
 
   const orgs: DiscoveredOrg[] = orgIds.map(id => {
     const sources = [...(acc.ids.get(id) || [])];
@@ -264,17 +272,13 @@ async function resolveOrgNames(
   client: OrgDiscoveryClient,
   orgIds: string[],
   acc: Accumulator,
+  tokenKey?: string,
 ): Promise<Map<string, string>> {
-  const names = new Map<string, string>();
-  if (orgIds.length > TEAM_INFO_MAX) {
-    cap(acc, `Only the first ${TEAM_INFO_MAX} organisations were named; the rest are shown by ID.`);
-  }
-  for (const id of orgIds.slice(0, TEAM_INFO_MAX)) {
-    try {
-      const { team } = await client.teamInfo(id);
-      if (team?.name) names.set(id, team.name);
-    } catch { /* external org — the ID is the fallback label */ }
-  }
+  const { names, truncated, note } = await resolveTeamNames(client, orgIds, {
+    tokenKey,
+    max: TEAM_INFO_MAX,
+  });
+  if (truncated && note) cap(acc, note);
   return names;
 }
 

@@ -325,6 +325,7 @@ import {
   type SpreadsheetOrderBy,
 } from '../google-sheets/listHandlers.js';
 import { describeDriveError } from '../google-drive/driveErrors.js';
+import { sliceSafe, sanitizeDocText } from '../google-docs/textSafety.js';
 import {
   connectMcp,
   getMcpConnection,
@@ -3392,8 +3393,11 @@ function registerRestApiRoutes(app: express.Express): void {
       }
 
       if (wantText) {
-        let text = extractDocBodyText(selection.content as any);
-        if (maxLength > 0 && text.length > maxLength) text = text.substring(0, maxLength);
+        // Same treatment the MCP readGoogleDoc tool gives this text, so the two
+        // surfaces cannot drift: strip the Docs control/private-use artifacts,
+        // and cut on whole characters rather than UTF-16 code units.
+        let text = sanitizeDocText(extractDocBodyText(selection.content as any));
+        if (maxLength > 0 && text.length > maxLength) text = sliceSafe(text, maxLength);
         res.type('text/plain; charset=utf-8').send(text);
         return;
       }
