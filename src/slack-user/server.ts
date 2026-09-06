@@ -954,7 +954,8 @@ const DIAGNOSE_MAX_PAGES = 10;
 export type ChannelLookup =
   | { kind: 'found'; channelId: string }
   | { kind: 'none' }
-  | { kind: 'scanBounded'; pages: number }
+  /** Which scan ran out of pages — the caller has to name the right one. */
+  | { kind: 'scanBounded'; pages: number; source: 'member' | 'workspace' | 'both' }
   | { kind: 'ambiguous'; ids: string[] };
 
 /**
@@ -990,7 +991,11 @@ export async function lookupChannelByName(
     memberPages++;
   } while (hits.length === 0 && cursor && memberPages < DIAGNOSE_MAX_PAGES);
 
-  if (hits.length === 0 && cursor) return { kind: 'scanBounded', pages: memberPages };
+  // Hitting the member bound must NOT skip the workspace scan: a public channel
+  // the user is not in is only ever found there, and an account with enough
+  // member conversations would otherwise never reach it. Remember the
+  // uncertainty and carry on.
+  const memberScanBounded = hits.length === 0 && !!cursor;
 
   // Pass 2: the workspace-wide list, for a channel the user is not in.
   let workspacePages = 0;
@@ -1005,8 +1010,16 @@ export async function lookupChannelByName(
 
   if (hits.length === 1) return { kind: 'found', channelId: hits[0].id };
   if (hits.length > 1) return { kind: 'ambiguous', ids: hits.map(h => h.id) };
-  // A bounded scan is a floor, not a verdict.
-  return cursor ? { kind: 'scanBounded', pages: workspacePages } : { kind: 'none' };
+
+  // A bounded scan is a floor, not a verdict — and the caller has to be told
+  // which list ran out, since the two mean different things to the user.
+  const workspaceScanBounded = !!cursor;
+  if (memberScanBounded && workspaceScanBounded) {
+    return { kind: 'scanBounded', pages: Math.max(memberPages, workspacePages), source: 'both' };
+  }
+  if (workspaceScanBounded) return { kind: 'scanBounded', pages: workspacePages, source: 'workspace' };
+  if (memberScanBounded) return { kind: 'scanBounded', pages: memberPages, source: 'member' };
+  return { kind: 'none' };
 }
 
 /**
@@ -1129,11 +1142,17 @@ slackUserServer.addTool({
         case 'ambiguous':
           return [`${found.ids.length} channels are named "${args.name}". Re-run with one of these IDs:`,
             ...found.ids.map(id => `  ${id}`)].join('\n');
-        case 'scanBounded':
+        case 'scanBounded': {
+          const which = {
+            member: 'your own conversations',
+            workspace: 'the workspace channel list',
+            both: 'both your own conversations and the workspace channel list',
+          }[found.source];
           return [
-            `No channel named "${args.name}" found in the first ${found.pages} page(s) of the workspace channel list.`,
+            `No channel named "${args.name}" found in the first ${found.pages} page(s) of ${which}.`,
             'The scan stopped at its page limit, so the channel may still exist further in. Pass channelId to check it directly.',
           ].join('\n');
+        }
         default:
           return `No channel named "${args.name}" is visible to your Slack account. Slack itself does not return it, so this is not an access-rules problem — you are most likely not a member of it.`;
       }

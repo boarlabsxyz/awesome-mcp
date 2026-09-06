@@ -247,6 +247,7 @@ describe('lookupChannelByName', () => {
     const res = await lookupChannelByName(client, 'missing');
     assert.equal(res.kind, 'scanBounded');
     assert.equal((res as any).pages, 10);
+    assert.equal((res as any).source, 'workspace');
   });
 
   it('reports a genuine absence when the scan reached the end', async () => {
@@ -430,6 +431,7 @@ describe('lookupChannelByName pagination', () => {
     const res = await lookupChannelByName(lookupClient(pages), 'missing');
     assert.equal(res.kind, 'scanBounded');
     assert.equal((res as any).pages, 10);
+    assert.equal((res as any).source, 'member');
   });
 
   it('stops paginating members as soon as it matches', async () => {
@@ -500,5 +502,35 @@ describe('explainDenial for member rules', () => {
     const client: any = { usersInfo: async () => ({ user: { id: 'U1', team_id: 'T_OTHER' } }) };
     const d = await dmDenial({ is_im: true, user: 'U1' }, client);
     assert.match(explainDenial(d, rulesWithOrg, '').join('\n'), /not allowed: T_OTHER/);
+  });
+});
+
+describe('lookupChannelByName workspace fallback after a bounded member scan', () => {
+  it('still finds a workspace channel when the member scan ran out of pages', async () => {
+    // The regression: returning early on the member bound meant an account with
+    // enough member conversations could never reach the workspace list, so a
+    // public channel it is not a member of became undiscoverable.
+    const memberPages = Array.from({ length: 11 }, (_, i) => [{ id: `D${i}`, name: `dm-${i}`, is_im: true }]);
+    const client = lookupClient(memberPages, [[{ id: 'C_TARGET', name: 'eng-general' }]]);
+    assert.deepEqual(await lookupChannelByName(client, 'eng-general'), {
+      kind: 'found', channelId: 'C_TARGET',
+    });
+  });
+
+  it('reports both limits when neither scan finished', async () => {
+    const memberPages = Array.from({ length: 12 }, (_, i) => [{ id: `D${i}`, name: `dm-${i}`, is_im: true }]);
+    const workspacePages = Array.from({ length: 12 }, (_, i) => [{ id: `C${i}`, name: `ch-${i}` }]);
+    const res = await lookupChannelByName(lookupClient(memberPages, workspacePages), 'missing');
+    assert.equal(res.kind, 'scanBounded');
+    assert.equal((res as any).source, 'both');
+  });
+
+  it('reports only the member limit when the workspace list was exhausted', async () => {
+    const memberPages = Array.from({ length: 12 }, (_, i) => [{ id: `D${i}`, name: `dm-${i}`, is_im: true }]);
+    const res = await lookupChannelByName(
+      lookupClient(memberPages, [[{ id: 'C1', name: 'something-else' }]]), 'missing',
+    );
+    assert.equal(res.kind, 'scanBounded');
+    assert.equal((res as any).source, 'member');
   });
 });
