@@ -188,6 +188,9 @@ const DENIAL_LABELS: Record<string, string> = {
   'blacklist-channel': 'blacklist',
   'blacklist-user': 'blocked user',
   'dm-rules': 'DM/group-DM rules (blocked user or organisation)',
+  'dm-org-not-allowed': 'organisation of the other participant',
+  'group-dm-blacklist': 'blocked user in the group DM',
+  'group-dm-org': 'organisation of a group DM member',
   'public-only': 'private (allowPublicOnly)',
   'org-not-allowed': 'organisation',
   'org-unverified': 'organisation unverified',
@@ -972,23 +975,38 @@ export async function lookupChannelByName(
   const matches = (channels: ListedChannel[]) =>
     channels.filter(ch => ch.name?.toLowerCase() === wanted);
 
-  const mine = await client.conversationsList(undefined, 'public_channel,private_channel,mpim,im');
-  let hits = matches(mine.channels as ListedChannel[]);
-
+  // Pass 1: users.conversations, paginated. It is member-scoped, so it is both
+  // cheap and the *only* source that returns DMs and group DMs — the workspace
+  // fallback below cannot see them at all. Following its cursor therefore is
+  // not an optimisation: without it, a DM on page two is simply unfindable.
+  // No initialiser: the do-while below always assigns before anything reads it.
+  let hits: ListedChannel[];
   let cursor: string | undefined;
-  let pages = 0;
-  while (hits.length === 0 && pages < DIAGNOSE_MAX_PAGES) {
+  let memberPages = 0;
+  do {
+    const page = await client.conversationsList(cursor, 'public_channel,private_channel,mpim,im');
+    hits = matches(page.channels as ListedChannel[]);
+    cursor = page.response_metadata?.next_cursor || undefined;
+    memberPages++;
+  } while (hits.length === 0 && cursor && memberPages < DIAGNOSE_MAX_PAGES);
+
+  if (hits.length === 0 && cursor) return { kind: 'scanBounded', pages: memberPages };
+
+  // Pass 2: the workspace-wide list, for a channel the user is not in.
+  let workspacePages = 0;
+  cursor = undefined;
+  while (hits.length === 0 && workspacePages < DIAGNOSE_MAX_PAGES) {
     const page = await client.conversationsListAll(cursor, 'public_channel,private_channel');
     hits = matches(page.channels as ListedChannel[]);
     cursor = page.response_metadata?.next_cursor || undefined;
-    pages++;
+    workspacePages++;
     if (!cursor) break;
   }
 
   if (hits.length === 1) return { kind: 'found', channelId: hits[0].id };
   if (hits.length > 1) return { kind: 'ambiguous', ids: hits.map(h => h.id) };
   // A bounded scan is a floor, not a verdict.
-  return cursor ? { kind: 'scanBounded', pages } : { kind: 'none' };
+  return cursor ? { kind: 'scanBounded', pages: workspacePages } : { kind: 'none' };
 }
 
 /**
@@ -1015,6 +1033,25 @@ export function explainDenial(
       );
       break;
     }
+    case 'dm-org-not-allowed':
+    case 'group-dm-org': {
+      const labels = (denial.orgIds ?? []).map(id => formatTeamLabel(id, orgNames)).join(', ');
+      const who = denial.reason === 'dm-org-not-allowed'
+        ? 'The other participant belongs to'
+        : 'A member of this group DM belongs to';
+      out.push(
+        `${who} an organisation that is not allowed: ${labels || '(unresolved)'}`,
+        `Your allowed organisations: ${rules.allowedOrgs.length ? rules.allowedOrgs.join(', ') : '(none)'}`,
+        'Fix: tick the organisation under Access Rules → Organizations in the dashboard, or remove the person from the conversation.',
+      );
+      break;
+    }
+    case 'group-dm-blacklist':
+      out.push(
+        'One of this group DM\'s members is on your blocked-users list.',
+        'Fix: remove them under Access Rules → Blocked users, or leave the conversation.',
+      );
+      break;
     case 'org-unverified':
       out.push(
         'Slack returned no organisation for this shared channel, so it cannot be checked against your allowlist.',
@@ -1111,7 +1148,10 @@ slackUserServer.addTool({
       await assertDmMemberAccess(client, rules, meta, channelId!);
     } catch (err) {
       if (err instanceof SlackAccessDenied) denial = err;
-      else if (err instanceof UserError) return [header, '', `Denied by: ${err.message}`].join('\n');
+      // Every access rule now throws SlackAccessDenied, so this branch is only
+      // for a UserError that is not a denial at all — a missing rules record,
+      // say. Report it rather than dressing it up as a rule verdict.
+      else if (err instanceof UserError) return [header, '', `Could not evaluate: ${err.message}`].join('\n');
       else throw err;
     }
 
@@ -1119,8 +1159,8 @@ slackUserServer.addTool({
       return [header, '', 'Readable: yes. Every access rule passes for this channel.'].join('\n');
     }
 
-    const orgNames = denial.reason === 'org-not-allowed'
-      ? (await resolveTeamNames(client, denial.orgIds ?? [], { tokenKey })).names
+    const orgNames = (denial.orgIds?.length ?? 0) > 0
+      ? (await resolveTeamNames(client, denial.orgIds!, { tokenKey })).names
       : undefined;
     return [header, '', ...explainDenial(denial, rules, meta.name, orgNames)].join('\n');
   },
