@@ -188,6 +188,9 @@ const DENIAL_LABELS: Record<string, string> = {
   'blacklist-channel': 'blacklist',
   'blacklist-user': 'blocked user',
   'dm-rules': 'DM/group-DM rules (blocked user or organisation)',
+  'dm-org-not-allowed': 'organisation of the other participant',
+  'group-dm-blacklist': 'blocked user in the group DM',
+  'group-dm-org': 'organisation of a group DM member',
   'public-only': 'private (allowPublicOnly)',
   'org-not-allowed': 'organisation',
   'org-unverified': 'organisation unverified',
@@ -951,7 +954,8 @@ const DIAGNOSE_MAX_PAGES = 10;
 export type ChannelLookup =
   | { kind: 'found'; channelId: string }
   | { kind: 'none' }
-  | { kind: 'scanBounded'; pages: number }
+  /** Which scan ran out of pages — the caller has to name the right one. */
+  | { kind: 'scanBounded'; pages: number; source: 'member' | 'workspace' | 'both' }
   | { kind: 'ambiguous'; ids: string[] };
 
 /**
@@ -972,23 +976,50 @@ export async function lookupChannelByName(
   const matches = (channels: ListedChannel[]) =>
     channels.filter(ch => ch.name?.toLowerCase() === wanted);
 
-  const mine = await client.conversationsList(undefined, 'public_channel,private_channel,mpim,im');
-  let hits = matches(mine.channels as ListedChannel[]);
-
+  // Pass 1: users.conversations, paginated. It is member-scoped, so it is both
+  // cheap and the *only* source that returns DMs and group DMs — the workspace
+  // fallback below cannot see them at all. Following its cursor therefore is
+  // not an optimisation: without it, a DM on page two is simply unfindable.
+  // No initialiser: the do-while below always assigns before anything reads it.
+  let hits: ListedChannel[];
   let cursor: string | undefined;
-  let pages = 0;
-  while (hits.length === 0 && pages < DIAGNOSE_MAX_PAGES) {
+  let memberPages = 0;
+  do {
+    const page = await client.conversationsList(cursor, 'public_channel,private_channel,mpim,im');
+    hits = matches(page.channels as ListedChannel[]);
+    cursor = page.response_metadata?.next_cursor || undefined;
+    memberPages++;
+  } while (hits.length === 0 && cursor && memberPages < DIAGNOSE_MAX_PAGES);
+
+  // Hitting the member bound must NOT skip the workspace scan: a public channel
+  // the user is not in is only ever found there, and an account with enough
+  // member conversations would otherwise never reach it. Remember the
+  // uncertainty and carry on.
+  const memberScanBounded = hits.length === 0 && !!cursor;
+
+  // Pass 2: the workspace-wide list, for a channel the user is not in.
+  let workspacePages = 0;
+  cursor = undefined;
+  while (hits.length === 0 && workspacePages < DIAGNOSE_MAX_PAGES) {
     const page = await client.conversationsListAll(cursor, 'public_channel,private_channel');
     hits = matches(page.channels as ListedChannel[]);
     cursor = page.response_metadata?.next_cursor || undefined;
-    pages++;
+    workspacePages++;
     if (!cursor) break;
   }
 
   if (hits.length === 1) return { kind: 'found', channelId: hits[0].id };
   if (hits.length > 1) return { kind: 'ambiguous', ids: hits.map(h => h.id) };
-  // A bounded scan is a floor, not a verdict.
-  return cursor ? { kind: 'scanBounded', pages } : { kind: 'none' };
+
+  // A bounded scan is a floor, not a verdict — and the caller has to be told
+  // which list ran out, since the two mean different things to the user.
+  const workspaceScanBounded = !!cursor;
+  if (memberScanBounded && workspaceScanBounded) {
+    return { kind: 'scanBounded', pages: Math.max(memberPages, workspacePages), source: 'both' };
+  }
+  if (workspaceScanBounded) return { kind: 'scanBounded', pages: workspacePages, source: 'workspace' };
+  if (memberScanBounded) return { kind: 'scanBounded', pages: memberPages, source: 'member' };
+  return { kind: 'none' };
 }
 
 /**
@@ -1015,6 +1046,25 @@ export function explainDenial(
       );
       break;
     }
+    case 'dm-org-not-allowed':
+    case 'group-dm-org': {
+      const labels = (denial.orgIds ?? []).map(id => formatTeamLabel(id, orgNames)).join(', ');
+      const who = denial.reason === 'dm-org-not-allowed'
+        ? 'The other participant belongs to'
+        : 'A member of this group DM belongs to';
+      out.push(
+        `${who} an organisation that is not allowed: ${labels || '(unresolved)'}`,
+        `Your allowed organisations: ${rules.allowedOrgs.length ? rules.allowedOrgs.join(', ') : '(none)'}`,
+        'Fix: tick the organisation under Access Rules → Organizations in the dashboard, or remove the person from the conversation.',
+      );
+      break;
+    }
+    case 'group-dm-blacklist':
+      out.push(
+        'One of this group DM\'s members is on your blocked-users list.',
+        'Fix: remove them under Access Rules → Blocked users, or leave the conversation.',
+      );
+      break;
     case 'org-unverified':
       out.push(
         'Slack returned no organisation for this shared channel, so it cannot be checked against your allowlist.',
@@ -1092,11 +1142,17 @@ slackUserServer.addTool({
         case 'ambiguous':
           return [`${found.ids.length} channels are named "${args.name}". Re-run with one of these IDs:`,
             ...found.ids.map(id => `  ${id}`)].join('\n');
-        case 'scanBounded':
+        case 'scanBounded': {
+          const which = {
+            member: 'your own conversations',
+            workspace: 'the workspace channel list',
+            both: 'both your own conversations and the workspace channel list',
+          }[found.source];
           return [
-            `No channel named "${args.name}" found in the first ${found.pages} page(s) of the workspace channel list.`,
+            `No channel named "${args.name}" found in the first ${found.pages} page(s) of ${which}.`,
             'The scan stopped at its page limit, so the channel may still exist further in. Pass channelId to check it directly.',
           ].join('\n');
+        }
         default:
           return `No channel named "${args.name}" is visible to your Slack account. Slack itself does not return it, so this is not an access-rules problem — you are most likely not a member of it.`;
       }
@@ -1111,7 +1167,10 @@ slackUserServer.addTool({
       await assertDmMemberAccess(client, rules, meta, channelId!);
     } catch (err) {
       if (err instanceof SlackAccessDenied) denial = err;
-      else if (err instanceof UserError) return [header, '', `Denied by: ${err.message}`].join('\n');
+      // Every access rule now throws SlackAccessDenied, so this branch is only
+      // for a UserError that is not a denial at all — a missing rules record,
+      // say. Report it rather than dressing it up as a rule verdict.
+      else if (err instanceof UserError) return [header, '', `Could not evaluate: ${err.message}`].join('\n');
       else throw err;
     }
 
@@ -1119,8 +1178,8 @@ slackUserServer.addTool({
       return [header, '', 'Readable: yes. Every access rule passes for this channel.'].join('\n');
     }
 
-    const orgNames = denial.reason === 'org-not-allowed'
-      ? (await resolveTeamNames(client, denial.orgIds ?? [], { tokenKey })).names
+    const orgNames = (denial.orgIds?.length ?? 0) > 0
+      ? (await resolveTeamNames(client, denial.orgIds!, { tokenKey })).names
       : undefined;
     return [header, '', ...explainDenial(denial, rules, meta.name, orgNames)].join('\n');
   },

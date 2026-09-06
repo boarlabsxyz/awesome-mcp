@@ -22,6 +22,9 @@ import type { SlackAccessRules } from '../mcpConnectionStore.js';
 export type SlackDenialReason =
   | 'org-not-allowed'
   | 'org-unverified'
+  | 'dm-org-not-allowed'
+  | 'group-dm-blacklist'
+  | 'group-dm-org'
   | 'whitelist-empty'
   | 'whitelist-miss'
   | 'blacklist-channel'
@@ -242,7 +245,10 @@ export async function assertDmMemberAccess(
   if (meta.is_im && meta.user && rules.allowedOrgs.length > 0) {
     const { user } = await client.usersInfo(meta.user);
     if (user.team_id && !rules.allowedOrgs.includes(user.team_id)) {
-      throw new UserError('Access denied: this user belongs to an organisation not in your allowed list.');
+      throw new SlackAccessDenied(
+        'Access denied: this user belongs to an organisation not in your allowed list.',
+        { reason: 'dm-org-not-allowed', orgIds: [user.team_id] },
+      );
     }
   }
 
@@ -250,13 +256,19 @@ export async function assertDmMemberAccess(
   if (meta.is_mpim && (rules.blacklistUsers.length > 0 || rules.allowedOrgs.length > 0)) {
     const { members } = await client.conversationsMembers(channelId);
     if (rules.blacklistUsers.length > 0 && members.some(uid => rules.blacklistUsers.includes(uid))) {
-      throw new UserError('Access denied: this group DM contains a blacklisted user.');
+      throw new SlackAccessDenied(
+        'Access denied: this group DM contains a blacklisted user.',
+        { reason: 'group-dm-blacklist' },
+      );
     }
     if (rules.allowedOrgs.length > 0) {
       for (const uid of members) {
         const { user } = await client.usersInfo(uid);
         if (user.team_id && !rules.allowedOrgs.includes(user.team_id)) {
-          throw new UserError('Access denied: this group DM contains a user from a non-allowed organisation.');
+          throw new SlackAccessDenied(
+            'Access denied: this group DM contains a user from a non-allowed organisation.',
+            { reason: 'group-dm-org', orgIds: [user.team_id] },
+          );
         }
       }
     }

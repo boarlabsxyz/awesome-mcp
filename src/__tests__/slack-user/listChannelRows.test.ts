@@ -195,18 +195,26 @@ describe('renderListSummary', () => {
 // === diagnoseChannelAccess helpers ===
 
 import { lookupChannelByName, explainDenial, describeChannel } from '../../slack-user/server.js';
-import { assertAccess, SlackAccessDenied } from '../../slack-user/accessControl.js';
+import { assertAccess, assertDmMemberAccess, SlackAccessDenied } from '../../slack-user/accessControl.js';
 import type { ChannelMeta } from '../../slack-user/accessControl.js';
 
+/** `mine` may be a flat list (one page) or a list of member pages. */
 function lookupClient(mine: any[], workspacePages: any[][] = []) {
-  let page = 0;
+  const memberPages: any[][] = Array.isArray(mine[0]) ? mine as any[][] : [mine];
+  let mp = 0;
+  let wp = 0;
   return {
-    conversationsList: async () => ({ channels: mine }),
+    conversationsList: async () => {
+      const channels = memberPages[mp] ?? [];
+      const more = mp < memberPages.length - 1;
+      mp++;
+      return { channels, response_metadata: more ? { next_cursor: `m${mp}` } : {} };
+    },
     conversationsListAll: async () => {
-      const channels = workspacePages[page] ?? [];
-      const more = page < workspacePages.length - 1;
-      page++;
-      return { channels, response_metadata: more ? { next_cursor: `c${page}` } : {} };
+      const channels = workspacePages[wp] ?? [];
+      const more = wp < workspacePages.length - 1;
+      wp++;
+      return { channels, response_metadata: more ? { next_cursor: `c${wp}` } : {} };
     },
   } as any;
 }
@@ -239,6 +247,7 @@ describe('lookupChannelByName', () => {
     const res = await lookupChannelByName(client, 'missing');
     assert.equal(res.kind, 'scanBounded');
     assert.equal((res as any).pages, 10);
+    assert.equal((res as any).source, 'workspace');
   });
 
   it('reports a genuine absence when the scan reached the end', async () => {
@@ -394,5 +403,134 @@ describe('renderChannelLines', () => {
   it('omits optional fields that Slack did not return', () => {
     const [line] = renderChannelLines([{ ch: { id: 'C2', name: 'bare', is_private: false } as any }], noNames);
     assert.equal(line, '#bare (C2)\n  Type: public');
+  });
+});
+
+describe('lookupChannelByName pagination', () => {
+  it('follows the member-list cursor to find a DM on a later page', async () => {
+    // users.conversations is the ONLY source that returns im/mpim — the
+    // workspace fallback cannot see them — so not following its cursor made a
+    // DM past page one unfindable, not merely slower.
+    const client = lookupClient([
+      [{ id: 'D1', name: 'someone-else', is_im: true }],
+      [{ id: 'D2', name: 'alice', is_im: true }],
+    ]);
+    assert.deepEqual(await lookupChannelByName(client, 'alice'), { kind: 'found', channelId: 'D2' });
+  });
+
+  it('finds a group DM on a later member page', async () => {
+    const client = lookupClient([
+      [{ id: 'G1', name: 'mpdm-x', is_mpim: true }],
+      [{ id: 'G2', name: 'mpdm-target', is_mpim: true }],
+    ]);
+    assert.deepEqual(await lookupChannelByName(client, 'mpdm-target'), { kind: 'found', channelId: 'G2' });
+  });
+
+  it('reports a bounded member scan instead of falling through to a wrong answer', async () => {
+    const pages = Array.from({ length: 12 }, (_, i) => [{ id: `D${i}`, name: `dm-${i}`, is_im: true }]);
+    const res = await lookupChannelByName(lookupClient(pages), 'missing');
+    assert.equal(res.kind, 'scanBounded');
+    assert.equal((res as any).pages, 10);
+    assert.equal((res as any).source, 'member');
+  });
+
+  it('stops paginating members as soon as it matches', async () => {
+    let calls = 0;
+    const client: any = {
+      conversationsList: async () => {
+        calls++;
+        return { channels: [{ id: 'C1', name: 'found-it' }], response_metadata: { next_cursor: 'more' } };
+      },
+      conversationsListAll: async () => ({ channels: [], response_metadata: {} }),
+    };
+    await lookupChannelByName(client, 'found-it');
+    assert.equal(calls, 1);
+  });
+
+  it('still falls back to the workspace list for a channel you are not in', async () => {
+    const client = lookupClient([[]], [[{ id: 'C9', name: 'eng-general' }]]);
+    assert.deepEqual(await lookupChannelByName(client, 'eng-general'), { kind: 'found', channelId: 'C9' });
+  });
+});
+
+describe('explainDenial for member rules', () => {
+  const rulesWithOrg: SlackAccessRules = {
+    allowedOrgs: ['T_MINE'], blacklistUsers: ['U_BAD'],
+    whitelistChannels: ['*'], blacklistChannels: [], allowPublicOnly: false,
+  };
+
+  async function dmDenial(meta: any, client: any): Promise<SlackAccessDenied> {
+    try { await assertDmMemberAccess(client, rulesWithOrg, meta, meta.id ?? 'D1'); }
+    catch (e) { return e as SlackAccessDenied; }
+    throw new Error('expected a denial');
+  }
+
+  it('names the DM counterpart\'s organisation and the fix', async () => {
+    const client: any = { usersInfo: async () => ({ user: { id: 'U1', team_id: 'T_OTHER' } }) };
+    const d = await dmDenial({ is_im: true, user: 'U1' }, client);
+    assert.equal(d.reason, 'dm-org-not-allowed');
+    assert.deepEqual(d.orgIds, ['T_OTHER']);
+    const out = explainDenial(d, rulesWithOrg, '', new Map([['T_OTHER', 'Acme Corp']])).join('\n');
+    assert.match(out, /The other participant belongs to an organisation that is not allowed: Acme Corp \(T_OTHER\)/);
+    assert.match(out, /Access Rules → Organizations/);
+  });
+
+  it('names a group DM member\'s organisation', async () => {
+    const client: any = {
+      conversationsMembers: async () => ({ members: ['U1'] }),
+      usersInfo: async () => ({ user: { id: 'U1', team_id: 'T_OTHER' } }),
+    };
+    const d = await dmDenial({ is_mpim: true, id: 'G1' }, client);
+    assert.equal(d.reason, 'group-dm-org');
+    const out = explainDenial(d, rulesWithOrg, '').join('\n');
+    assert.match(out, /A member of this group DM belongs to an organisation that is not allowed/);
+  });
+
+  it('points a blocked group-DM member at the blocked-users list', async () => {
+    const client: any = {
+      conversationsMembers: async () => ({ members: ['U_BAD'] }),
+      usersInfo: async () => ({ user: { id: 'U_BAD', team_id: 'T_MINE' } }),
+    };
+    const d = await dmDenial({ is_mpim: true, id: 'G1' }, client);
+    assert.equal(d.reason, 'group-dm-blacklist');
+    const out = explainDenial(d, rulesWithOrg, '').join('\n');
+    assert.match(out, /blocked-users list/);
+    assert.match(out, /Access Rules → Blocked users/);
+  });
+
+  it('degrades to the raw ID when the org cannot be named', async () => {
+    const client: any = { usersInfo: async () => ({ user: { id: 'U1', team_id: 'T_OTHER' } }) };
+    const d = await dmDenial({ is_im: true, user: 'U1' }, client);
+    assert.match(explainDenial(d, rulesWithOrg, '').join('\n'), /not allowed: T_OTHER/);
+  });
+});
+
+describe('lookupChannelByName workspace fallback after a bounded member scan', () => {
+  it('still finds a workspace channel when the member scan ran out of pages', async () => {
+    // The regression: returning early on the member bound meant an account with
+    // enough member conversations could never reach the workspace list, so a
+    // public channel it is not a member of became undiscoverable.
+    const memberPages = Array.from({ length: 11 }, (_, i) => [{ id: `D${i}`, name: `dm-${i}`, is_im: true }]);
+    const client = lookupClient(memberPages, [[{ id: 'C_TARGET', name: 'eng-general' }]]);
+    assert.deepEqual(await lookupChannelByName(client, 'eng-general'), {
+      kind: 'found', channelId: 'C_TARGET',
+    });
+  });
+
+  it('reports both limits when neither scan finished', async () => {
+    const memberPages = Array.from({ length: 12 }, (_, i) => [{ id: `D${i}`, name: `dm-${i}`, is_im: true }]);
+    const workspacePages = Array.from({ length: 12 }, (_, i) => [{ id: `C${i}`, name: `ch-${i}` }]);
+    const res = await lookupChannelByName(lookupClient(memberPages, workspacePages), 'missing');
+    assert.equal(res.kind, 'scanBounded');
+    assert.equal((res as any).source, 'both');
+  });
+
+  it('reports only the member limit when the workspace list was exhausted', async () => {
+    const memberPages = Array.from({ length: 12 }, (_, i) => [{ id: `D${i}`, name: `dm-${i}`, is_im: true }]);
+    const res = await lookupChannelByName(
+      lookupClient(memberPages, [[{ id: 'C1', name: 'something-else' }]]), 'missing',
+    );
+    assert.equal(res.kind, 'scanBounded');
+    assert.equal((res as any).source, 'member');
   });
 });
