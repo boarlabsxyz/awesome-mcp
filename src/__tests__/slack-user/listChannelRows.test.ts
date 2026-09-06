@@ -195,18 +195,26 @@ describe('renderListSummary', () => {
 // === diagnoseChannelAccess helpers ===
 
 import { lookupChannelByName, explainDenial, describeChannel } from '../../slack-user/server.js';
-import { assertAccess, SlackAccessDenied } from '../../slack-user/accessControl.js';
+import { assertAccess, assertDmMemberAccess, SlackAccessDenied } from '../../slack-user/accessControl.js';
 import type { ChannelMeta } from '../../slack-user/accessControl.js';
 
+/** `mine` may be a flat list (one page) or a list of member pages. */
 function lookupClient(mine: any[], workspacePages: any[][] = []) {
-  let page = 0;
+  const memberPages: any[][] = Array.isArray(mine[0]) ? mine as any[][] : [mine];
+  let mp = 0;
+  let wp = 0;
   return {
-    conversationsList: async () => ({ channels: mine }),
+    conversationsList: async () => {
+      const channels = memberPages[mp] ?? [];
+      const more = mp < memberPages.length - 1;
+      mp++;
+      return { channels, response_metadata: more ? { next_cursor: `m${mp}` } : {} };
+    },
     conversationsListAll: async () => {
-      const channels = workspacePages[page] ?? [];
-      const more = page < workspacePages.length - 1;
-      page++;
-      return { channels, response_metadata: more ? { next_cursor: `c${page}` } : {} };
+      const channels = workspacePages[wp] ?? [];
+      const more = wp < workspacePages.length - 1;
+      wp++;
+      return { channels, response_metadata: more ? { next_cursor: `c${wp}` } : {} };
     },
   } as any;
 }
@@ -394,5 +402,103 @@ describe('renderChannelLines', () => {
   it('omits optional fields that Slack did not return', () => {
     const [line] = renderChannelLines([{ ch: { id: 'C2', name: 'bare', is_private: false } as any }], noNames);
     assert.equal(line, '#bare (C2)\n  Type: public');
+  });
+});
+
+describe('lookupChannelByName pagination', () => {
+  it('follows the member-list cursor to find a DM on a later page', async () => {
+    // users.conversations is the ONLY source that returns im/mpim — the
+    // workspace fallback cannot see them — so not following its cursor made a
+    // DM past page one unfindable, not merely slower.
+    const client = lookupClient([
+      [{ id: 'D1', name: 'someone-else', is_im: true }],
+      [{ id: 'D2', name: 'alice', is_im: true }],
+    ]);
+    assert.deepEqual(await lookupChannelByName(client, 'alice'), { kind: 'found', channelId: 'D2' });
+  });
+
+  it('finds a group DM on a later member page', async () => {
+    const client = lookupClient([
+      [{ id: 'G1', name: 'mpdm-x', is_mpim: true }],
+      [{ id: 'G2', name: 'mpdm-target', is_mpim: true }],
+    ]);
+    assert.deepEqual(await lookupChannelByName(client, 'mpdm-target'), { kind: 'found', channelId: 'G2' });
+  });
+
+  it('reports a bounded member scan instead of falling through to a wrong answer', async () => {
+    const pages = Array.from({ length: 12 }, (_, i) => [{ id: `D${i}`, name: `dm-${i}`, is_im: true }]);
+    const res = await lookupChannelByName(lookupClient(pages), 'missing');
+    assert.equal(res.kind, 'scanBounded');
+    assert.equal((res as any).pages, 10);
+  });
+
+  it('stops paginating members as soon as it matches', async () => {
+    let calls = 0;
+    const client: any = {
+      conversationsList: async () => {
+        calls++;
+        return { channels: [{ id: 'C1', name: 'found-it' }], response_metadata: { next_cursor: 'more' } };
+      },
+      conversationsListAll: async () => ({ channels: [], response_metadata: {} }),
+    };
+    await lookupChannelByName(client, 'found-it');
+    assert.equal(calls, 1);
+  });
+
+  it('still falls back to the workspace list for a channel you are not in', async () => {
+    const client = lookupClient([[]], [[{ id: 'C9', name: 'eng-general' }]]);
+    assert.deepEqual(await lookupChannelByName(client, 'eng-general'), { kind: 'found', channelId: 'C9' });
+  });
+});
+
+describe('explainDenial for member rules', () => {
+  const rulesWithOrg: SlackAccessRules = {
+    allowedOrgs: ['T_MINE'], blacklistUsers: ['U_BAD'],
+    whitelistChannels: ['*'], blacklistChannels: [], allowPublicOnly: false,
+  };
+
+  async function dmDenial(meta: any, client: any): Promise<SlackAccessDenied> {
+    try { await assertDmMemberAccess(client, rulesWithOrg, meta, meta.id ?? 'D1'); }
+    catch (e) { return e as SlackAccessDenied; }
+    throw new Error('expected a denial');
+  }
+
+  it('names the DM counterpart\'s organisation and the fix', async () => {
+    const client: any = { usersInfo: async () => ({ user: { id: 'U1', team_id: 'T_OTHER' } }) };
+    const d = await dmDenial({ is_im: true, user: 'U1' }, client);
+    assert.equal(d.reason, 'dm-org-not-allowed');
+    assert.deepEqual(d.orgIds, ['T_OTHER']);
+    const out = explainDenial(d, rulesWithOrg, '', new Map([['T_OTHER', 'Acme Corp']])).join('\n');
+    assert.match(out, /The other participant belongs to an organisation that is not allowed: Acme Corp \(T_OTHER\)/);
+    assert.match(out, /Access Rules → Organizations/);
+  });
+
+  it('names a group DM member\'s organisation', async () => {
+    const client: any = {
+      conversationsMembers: async () => ({ members: ['U1'] }),
+      usersInfo: async () => ({ user: { id: 'U1', team_id: 'T_OTHER' } }),
+    };
+    const d = await dmDenial({ is_mpim: true, id: 'G1' }, client);
+    assert.equal(d.reason, 'group-dm-org');
+    const out = explainDenial(d, rulesWithOrg, '').join('\n');
+    assert.match(out, /A member of this group DM belongs to an organisation that is not allowed/);
+  });
+
+  it('points a blocked group-DM member at the blocked-users list', async () => {
+    const client: any = {
+      conversationsMembers: async () => ({ members: ['U_BAD'] }),
+      usersInfo: async () => ({ user: { id: 'U_BAD', team_id: 'T_MINE' } }),
+    };
+    const d = await dmDenial({ is_mpim: true, id: 'G1' }, client);
+    assert.equal(d.reason, 'group-dm-blacklist');
+    const out = explainDenial(d, rulesWithOrg, '').join('\n');
+    assert.match(out, /blocked-users list/);
+    assert.match(out, /Access Rules → Blocked users/);
+  });
+
+  it('degrades to the raw ID when the org cannot be named', async () => {
+    const client: any = { usersInfo: async () => ({ user: { id: 'U1', team_id: 'T_OTHER' } }) };
+    const d = await dmDenial({ is_im: true, user: 'U1' }, client);
+    assert.match(explainDenial(d, rulesWithOrg, '').join('\n'), /not allowed: T_OTHER/);
   });
 });
