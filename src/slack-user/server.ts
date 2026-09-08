@@ -200,6 +200,15 @@ export interface ListRow {
   ch: ListedChannel;
   /** Set when the channel is listed but cannot be read. */
   warning?: string;
+  /**
+   * Set when the channel passed every rule we could evaluate, but its
+   * organisation could not be confirmed — so a read may still be refused.
+   *
+   * Distinct from `warning`: that one means "we know this is blocked", this
+   * one means "we could not check". The row keeps its free text, because
+   * nothing has actually denied it.
+   */
+  caution?: string;
 }
 
 /**
@@ -231,6 +240,22 @@ type RowVerdict =
  * is hidden, and anything unexpected fails closed, because a visible row that
  * then refuses to read is the bug this whole path exists to remove.
  */
+/**
+ * Would this channel pass the user's own rules if the org rule were set aside?
+ *
+ * Guards every path that surfaces an org-blocked channel. Without it, a
+ * channel the user's whitelist excludes outright would be listed on an org
+ * technicality — the leak `assertNonOrgAccess` exists to prevent.
+ */
+function passesNonOrgRules(rules: SlackAccessRules, ch: ListedChannel): boolean {
+  try {
+    assertNonOrgAccess(rules, toChannelMeta(ch));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function verifyBackfilledChannel(
   client: SlackClient,
   session: UserSession,
@@ -278,16 +303,34 @@ export async function buildChannelRows(
     );
   }
 
-  const pending: Array<{ ch: ListedChannel; denial?: SlackAccessDenied }> = [];
+  const pending: Array<{ ch: ListedChannel; denial?: SlackAccessDenied; caution?: string }> = [];
   const orgIdsToName: string[] = [];
 
   for (const entry of classified) {
     if (!entry.allowed) {
-      bump(entry.denial?.reason ?? 'unknown');
+      // An org denial is surfaced, not swallowed. Hiding it was the whole
+      // complaint: the channel simply vanished, so the user had no way to see
+      // which organisation to tick, and this tool's own description promised
+      // the opposite. Only the org rule gets this treatment, and only when the
+      // user's own rules would have allowed the channel.
+      const denial = entry.denial;
+      if (denial?.reason === 'org-not-allowed' && passesNonOrgRules(rules, entry.ch)) {
+        orgIdsToName.push(...(denial.orgIds ?? []));
+        pending.push({ ch: entry.ch, denial });
+      } else {
+        bump(denial?.reason ?? 'unknown');
+      }
       continue;
     }
     if (!resolvable.has(entry.ch.id)) {
-      pending.push({ ch: entry.ch });
+      // Past the backfill budget: its organisation is unchecked. It used to be
+      // emitted as an ordinary readable row, so an agent would plan work
+      // against a channel every read then refused. Mark it instead — the
+      // trailing note alone was too easy to miss.
+      pending.push({
+        ch: entry.ch,
+        caution: 'Organisation unverified: this shared channel was not checked, so a read may be denied.',
+      });
       continue;
     }
     // Resolving also warms fetchChannelMeta's cache, so a follow-up read of the
@@ -304,8 +347,8 @@ export async function buildChannelRows(
     ? (await resolveTeamNames(client, orgIdsToName, { tokenKey: getTokenKey(session) })).names
     : new Map<string, string>();
 
-  const rows: ListRow[] = pending.map(({ ch, denial }) => {
-    if (!denial) return { ch };
+  const rows: ListRow[] = pending.map(({ ch, denial, caution }) => {
+    if (!denial) return caution ? { ch, caution } : { ch };
     const labels = (denial.orgIds ?? []).map(id => formatTeamLabel(id, names)).join(', ');
     return {
       ch,
@@ -333,7 +376,7 @@ function channelTypeLabel(ch: ListedChannel): string {
  * contents to the model anyway.
  */
 export function renderChannelLines(rows: ListRow[], userNames: Map<string, string>): string[] {
-  return rows.map(({ ch, warning }) => {
+  return rows.map(({ ch, warning, caution }) => {
     const isDm = !!ch.is_im;
     const displayName = isDm && ch.user && userNames.has(ch.user)
       ? userNames.get(ch.user)!
@@ -346,6 +389,7 @@ export function renderChannelLines(rows: ListRow[], userNames: Map<string, strin
     if (!warning && anyCh.purpose?.value) parts.push(`  Purpose: ${anyCh.purpose.value}`);
     if (anyCh.num_members !== undefined) parts.push(`  Members: ${anyCh.num_members}`);
     if (warning) parts.push(`  ⚠ ${warning}`);
+    else if (caution) parts.push(`  ⚠ ${caution}`);
     return parts.join('\n');
   });
 }
@@ -353,12 +397,14 @@ export function renderChannelLines(rows: ListRow[], userNames: Map<string, strin
 /** Render the trailing summary. Counts are never omitted — a silently short
  *  list is what made a missing channel look like a channel that doesn't exist. */
 export function renderListSummary(rows: ListRow[], hidden: Map<string, number>, notes: string[]): string {
-  const readable = rows.filter(r => !r.warning).length;
-  const flagged = rows.length - readable;
+  const flagged = rows.filter(r => r.warning).length;
+  const unverified = rows.filter(r => !r.warning && r.caution).length;
+  const readable = rows.length - flagged - unverified;
   const hiddenTotal = [...hidden.values()].reduce((a, b) => a + b, 0);
 
   const parts = [`${readable} channel(s) shown`];
   if (flagged > 0) parts.push(`${flagged} listed but not readable`);
+  if (unverified > 0) parts.push(`${unverified} listed with an unverified organisation`);
   if (hiddenTotal > 0) {
     const breakdown = [...hidden.entries()]
       .map(([reason, n]) => `${DENIAL_LABELS[reason] ?? reason}: ${n}`)
@@ -366,7 +412,7 @@ export function renderListSummary(rows: ListRow[], hidden: Map<string, number>, 
     parts.push(`${hiddenTotal} hidden by your access rules (${breakdown})`);
   }
   let out = parts.join(', ') + '.';
-  if (hiddenTotal > 0 || flagged > 0) {
+  if (hiddenTotal > 0 || flagged > 0 || unverified > 0) {
     out += ' Use diagnoseChannelAccess to see why a specific channel is missing or blocked.';
   }
   for (const note of notes) out += `\nNote: ${note}`;
@@ -376,7 +422,7 @@ export function renderListSummary(rows: ListRow[], hidden: Map<string, number>, 
 slackUserServer.addTool({
   name: 'listChannels',
   annotations: { readOnlyHint: true },
-  description: 'List Slack channels and DMs you have access to, filtered by your access rules. Channels blocked by an organisation rule are still listed, marked "Not readable" with the organisation named, so you know not to plan work against them. Channels hidden by your channel patterns are counted in the summary — use diagnoseChannelAccess to find out why a specific one is missing. Use the "search" parameter to find a specific channel by name without paginating.',
+  description: 'List Slack channels and DMs you have access to, filtered by your access rules. A channel blocked only by an organisation rule is still listed, marked "Not readable" with the organisation named, so you know which org to tick rather than wondering where the channel went; one whose organisation could not be checked is listed and marked "unverified", meaning a read may still be refused. Do not plan work against either. Channels excluded by your own channel patterns are not listed at all — they are only counted in the summary, so use diagnoseChannelAccess to find out why a specific one is missing. Use the "search" parameter to find a specific channel by name without paginating.',
   parameters: z.object({
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
     search: z.string().optional().describe('Search for channels by name (case-insensitive substring match). When provided, paginates through all channels internally and returns only matches.'),

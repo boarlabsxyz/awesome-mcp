@@ -46,6 +46,119 @@ describe('buildChannelRows', () => {
     clearTeamNameCache();
   });
 
+  // Reported: Slack Connect channels were "discoverable but unreadable". Past
+  // the 25-channel backfill budget they were emitted as ordinary readable rows
+  // — only a trailing note hinted otherwise — so an agent planned work against
+  // channels every read then refused.
+  it('marks shared channels it could not verify instead of presenting them as readable', async () => {
+    const { client } = stubClient({});
+    // 30 shared channels with no team IDs: more than the backfill budget of 25.
+    const channels = Array.from({ length: 30 }, (_, i) => ({
+      id: `C_S${i}`,
+      name: `eng-shared-${i}`,
+      is_private: false,
+      is_shared: true,
+    })) as any[];
+
+    const { rows, notes } = await buildChannelRows(client, session, rules, channels);
+
+    const unverified = rows.filter(r => r.caution);
+    assert.ok(unverified.length > 0, 'the ones past the budget must be marked');
+    assert.match(unverified[0].caution ?? '', /unverified/i);
+    assert.ok(notes.length > 0, 'the trailing note still explains the budget');
+
+    // No row may look plainly readable unless it was actually verified.
+    for (const row of rows) {
+      assert.ok(row.warning || row.caution || !(row.ch as any).is_shared,
+        `#${row.ch.name} presented as readable without verification`);
+    }
+  });
+
+  it('counts unverified rows separately in the summary', async () => {
+    const summary = renderListSummary(
+      [
+        { ch: { id: 'C1', name: 'ok' } as any },
+        { ch: { id: 'C2', name: 'blocked' } as any, warning: 'Not readable: shared with X.' },
+        { ch: { id: 'C3', name: 'unsure' } as any, caution: 'Organisation unverified: ...' },
+      ],
+      new Map(),
+      [],
+    );
+    assert.match(summary, /1 channel\(s\) shown/);
+    assert.match(summary, /1 listed but not readable/);
+    assert.match(summary, /1 listed with an unverified organisation/);
+    assert.match(summary, /diagnoseChannelAccess/);
+  });
+
+  it('keeps free text on an unverified row but withholds it on a blocked one', async () => {
+    // Nothing has denied an unverified channel, so its topic is not withheld;
+    // a blocked one's is, because the rules refuse to let us read it.
+    const { renderChannelLines } = await import('../../slack-user/server.js');
+    const [blocked, unsure] = renderChannelLines(
+      [
+        { ch: { id: 'C2', name: 'blocked', topic: { value: 'secret-topic' } } as any, warning: 'Not readable: X' },
+        { ch: { id: 'C3', name: 'unsure', topic: { value: 'open-topic' } } as any, caution: 'Organisation unverified: Y' },
+      ],
+      new Map(),
+    );
+    assert.doesNotMatch(blocked, /secret-topic/);
+    assert.match(unsure, /open-topic/);
+    assert.match(unsure, /⚠/);
+  });
+
+  // Reported: listChannels' own description promised org-blocked channels are
+  // "still listed, marked Not readable" — they were not. Only the backfill path
+  // flagged; a channel whose org was known upfront was dropped silently.
+  it('flags an org-blocked channel whose team IDs were already in the list payload', async () => {
+    const { client, calls } = stubClient({}, { T_OTHER: 'Partner Corp' });
+    const { rows, hidden } = await buildChannelRows(client, session, rules, [
+      {
+        id: 'C_CONNECT',
+        name: 'eng-shared',
+        is_private: false,
+        is_shared: true,
+        shared_team_ids: ['T_OTHER'],
+      } as any,
+    ]);
+
+    assert.equal(rows.length, 1, 'must be listed, not hidden');
+    assert.match(rows[0].warning ?? '', /Not readable/);
+    assert.match(rows[0].warning ?? '', /Partner Corp/, 'names the org, not just its ID');
+    assert.equal(hidden.size, 0, 'nothing silently dropped');
+    assert.equal(calls.info.length, 0, 'the list payload already had the org — no extra call');
+  });
+
+  // The guard that keeps the fix above from becoming a leak.
+  it('still hides an org-blocked channel the whitelist would exclude anyway', async () => {
+    const { client } = stubClient({}, { T_OTHER: 'Partner Corp' });
+    const { rows, hidden } = await buildChannelRows(client, session, rules, [
+      {
+        id: 'C_NOPE',
+        name: 'marketing-shared',
+        is_private: false,
+        is_shared: true,
+        shared_team_ids: ['T_OTHER'],
+      } as any,
+    ]);
+
+    assert.equal(rows.length, 0, 'the org rule must not smuggle past the whitelist');
+    assert.equal([...hidden.values()].reduce((a, b) => a + b, 0), 1);
+  });
+
+  it('reports the org rule, matching what diagnoseChannelAccess would say', async () => {
+    // Reported: listChannels blamed "no whitelist configured" for a channel
+    // diagnoseChannelAccess blamed on the organisation.
+    const { client } = stubClient({}, { T_OTHER: 'Partner Corp' });
+    const { rows } = await buildChannelRows(client, session, rules, [
+      { id: 'C_X', name: 'eng-x', is_private: false, is_shared: true, shared_team_ids: ['T_OTHER'] } as any,
+    ]);
+    // Attributed to the org rule (it names the org and the Organizations
+    // setting), not to the whitelist.
+    assert.match(rows[0].warning ?? '', /Access Rules → Organizations/);
+    assert.match(rows[0].warning ?? '', /Partner Corp/);
+    assert.doesNotMatch(rows[0].warning ?? '', /whitelist/i);
+  });
+
   it('lists a readable channel with no warning', async () => {
     const { client } = stubClient({});
     const { rows, hidden } = await buildChannelRows(client, session, rules, [
