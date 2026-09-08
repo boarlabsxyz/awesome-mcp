@@ -304,7 +304,7 @@ import { createSession, getSession, deleteSession, Session } from './sessionStor
 import { consumeLoginAttempt, resetLoginAttempts, RateLimitVerdict, LOGIN_RATE_LIMIT } from './loginRateLimit.js';
 import { sendMail, isMailConfigured, MailNotConfiguredError } from './mailer.js';
 import { verificationEmail, alreadyRegisteredEmail } from './authEmails.js';
-import { createPendingRegistration, consumePendingRegistration, PENDING_REGISTRATION } from './pendingRegistrationStore.js';
+import { createPendingRegistration, consumePendingRegistration, deletePendingRegistration, restorePendingRegistration, PENDING_REGISTRATION } from './pendingRegistrationStore.js';
 import { lookupRestToken } from './restTokenStore.js';
 import { mapSlackErrorToHttpStatus } from './slackErrorMapper.js';
 import { negotiateFormat, respondNegotiated } from './restContent.js';
@@ -1146,9 +1146,12 @@ function registerSharedRoutes(app: express.Express): void {
       // question the identical body refuses to.
       const passwordHash = await hashPassword(password);
 
+      // Both branches log the same line, with no address in it. A log that
+      // says which branch ran — or which address asked — re-opens by another
+      // route exactly the question the identical response refuses to answer.
       if (existing) {
         await sendMail(alreadyRegisteredEmail(email, `${BASE_URL}/login`));
-        console.error('[register] address already registered; notified the owner');
+        console.error('[register] sign-up request processed');
         res.status(202).json(REGISTRATION_ACCEPTED);
         return;
       }
@@ -1158,11 +1161,18 @@ function registerSharedRoutes(app: express.Express): void {
       // account, and an unreachable one leaves nothing behind to clean up.
       const token = await createPendingRegistration(email, passwordHash);
       const verifyUrl = `${BASE_URL}/auth/verify?token=${encodeURIComponent(token)}`;
-      await sendMail(
-        verificationEmail(email, verifyUrl, PENDING_REGISTRATION.TTL_SECONDS / 3600),
-      );
+      try {
+        await sendMail(
+          verificationEmail(email, verifyUrl, PENDING_REGISTRATION.TTL_SECONDS / 3600),
+        );
+      } catch (sendErr) {
+        // The token only ever existed inside this request, so an undelivered
+        // record is unreachable by anyone and would just sit until its TTL.
+        await deletePendingRegistration(token).catch(() => {});
+        throw sendErr;
+      }
 
-      console.error(`[register] verification link sent to ${email}`);
+      console.error('[register] sign-up request processed');
       res.status(202).json(REGISTRATION_ACCEPTED);
     } catch (err: any) {
       if (err instanceof MailNotConfiguredError) {
@@ -1178,23 +1188,43 @@ function registerSharedRoutes(app: express.Express): void {
   });
 
   /**
-   * Redeem a verification link: this is where the account is actually created.
+   * Show the confirmation page for a verification link. Deliberately inert.
    *
-   * A GET that mutates, because it is reached by clicking a link in a mail
-   * client. The token is single-use and consumed before anything else, so a
-   * scanner that prefetches the URL burns the link rather than silently
-   * creating an account someone else then lands on.
+   * This used to redeem the token and create the account in one GET, which
+   * meant a mail scanner following the link did the sign-up on the
+   * recipient's behalf and burned their link — they would then click it and
+   * be told it was invalid. Nothing here touches the store; redemption
+   * happens on the POST below, which a prefetch will not make.
    */
-  app.get('/auth/verify', async (req: Request, res: Response) => {
-    // The token sits in the query string, so it would otherwise ride along in
-    // the Referer of anything the next page loads.
+  app.get('/auth/verify', (req: Request, res: Response) => {
+    // The token is in the query string, so it would otherwise ride along in
+    // the Referer of anything this page loads.
     res.set('Referrer-Policy', 'no-referrer');
 
-    const failure = (reason: string) =>
-      res.redirect(`/login?verify=${encodeURIComponent(reason)}`);
+    const token = typeof req.query.token === 'string' ? req.query.token : '';
+    if (!token) {
+      res.redirect('/login?verify=invalid');
+      return;
+    }
+    res.sendFile(path.join(publicDir, 'verify.html'));
+  });
 
-    try {
-      const token = typeof req.query.token === 'string' ? req.query.token : '';
+  /**
+   * Redeem a verification link. This is where the account is created.
+   *
+   * A POST, so that only a deliberate submission — never a link prefetch —
+   * can bring an account into existence.
+   */
+  app.post(
+    '/auth/verify',
+    express.urlencoded({ extended: false }),
+    async (req: Request, res: Response) => {
+      res.set('Referrer-Policy', 'no-referrer');
+
+      const failure = (reason: string) =>
+        res.redirect(`/login?verify=${encodeURIComponent(reason)}`);
+
+      const token = typeof req.body?.token === 'string' ? req.body.token : '';
       const pending = await consumePendingRegistration(token);
       if (!pending) {
         // Unknown, already used, and expired are deliberately one answer:
@@ -1203,31 +1233,42 @@ function registerSharedRoutes(app: express.Express): void {
         return;
       }
 
-      await loadUsers();
-      const user = await createPasswordUser({
-        email: pending.email,
-        name: pending.email,
-        passwordHash: pending.passwordHash,
-      });
+      try {
+        await loadUsers();
+        const user = await createPasswordUser({
+          email: pending.email,
+          name: pending.email,
+          passwordHash: pending.passwordHash,
+        });
 
-      console.error(`User registered via password: ${user.email}`);
-      await Promise.all(attemptKeys(req, pending.email).map(({ key }) => resetLoginAttempts(key)));
+        console.error(`User registered via password: ${user.email}`);
+        await Promise.all(
+          attemptKeys(req, pending.email).map(({ key }) => resetLoginAttempts(key)),
+        );
 
-      const redirectTo = await completeSignIn(req, res, user);
-      res.redirect(redirectTo);
-    } catch (err: any) {
-      // The address gained an account between sending the link and clicking it
-      // — a second verified sign-up, or a Google sign-in that claimed it. The
-      // link cannot mint a duplicate, and we must not sign anyone in on the
-      // strength of a password this request never proved.
-      if (err instanceof DuplicateEmailError) {
-        failure('exists');
-        return;
+        const redirectTo = await completeSignIn(req, res, user);
+        res.redirect(redirectTo);
+      } catch (err: any) {
+        // The address gained an account between sending the link and
+        // redeeming it — a second verified sign-up, or a Google sign-in that
+        // claimed it. The link cannot mint a duplicate, and we must not sign
+        // anyone in on the strength of a password this request never proved.
+        // The record stays consumed: there is an account now, so the link has
+        // no further use.
+        if (err instanceof DuplicateEmailError) {
+          failure('exists');
+          return;
+        }
+
+        // Anything else — the database being unreachable, say — is not the
+        // link's fault, and no account was created. Put the record back so a
+        // valid link is not spent on our outage.
+        await restorePendingRegistration(token, pending).catch(() => {});
+        console.error('Verification error:', err);
+        failure('failed');
       }
-      console.error('Verification error:', err);
-      failure('failed');
-    }
-  });
+    },
+  );
 
   app.post('/api/auth/login', express.json(), async (req: Request, res: Response) => {
     try {

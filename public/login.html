@@ -351,7 +351,12 @@
       // Arrived from a verification link that did not work out.
       var verifyResult = params.get('verify');
       if (verifyResult) {
-        showError(VERIFY_MESSAGES[verifyResult] || VERIFY_MESSAGES.failed);
+        // Own-property check, not a bare lookup. VERIFY_MESSAGES inherits from
+        // Object.prototype, so /login?verify=constructor would otherwise
+        // resolve to an inherited function — truthy, so the || fallback never
+        // runs — and the page would render that function's source at the user.
+        var known = Object.prototype.hasOwnProperty.call(VERIFY_MESSAGES, verifyResult);
+        showError(known ? VERIFY_MESSAGES[verifyResult] : VERIFY_MESSAGES.failed);
       }
 
       backToSignIn.addEventListener('click', function () {

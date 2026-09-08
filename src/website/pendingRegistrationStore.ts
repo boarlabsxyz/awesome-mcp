@@ -119,6 +119,55 @@ export async function consumePendingRegistration(
   return record.expiresAt > Date.now() ? record : null;
 }
 
+/**
+ * Drop a pending sign-up without redeeming it.
+ *
+ * Used when the verification mail could not be delivered: the token existed
+ * only inside that request, so the record is unreachable by anyone and would
+ * otherwise sit until its TTL. Cleaning up keeps a failed sign-up from leaving
+ * state behind.
+ */
+export async function deletePendingRegistration(token: string): Promise<void> {
+  if (!token) return;
+  const key = digest(token);
+  if (isDatabaseAvailable()) {
+    await getRedis().del(`${REDIS_PREFIX}${key}`);
+    return;
+  }
+  memoryPending.delete(key);
+}
+
+/**
+ * Put a consumed record back under its original token.
+ *
+ * `consumePendingRegistration` deletes before returning, so a redemption that
+ * then fails for an unrelated reason — the database being down, say — would
+ * otherwise burn a valid link and force the person to sign up again. Restoring
+ * is safe precisely because that path creates no account: single-use still
+ * holds, since only a *successful* redemption keeps the record consumed.
+ *
+ * Keeps the original expiry rather than extending it; a failed attempt must
+ * not lengthen the window.
+ */
+export async function restorePendingRegistration(
+  token: string,
+  record: PendingRegistration,
+): Promise<void> {
+  const remainingMs = record.expiresAt - Date.now();
+  if (remainingMs <= 0) return;
+
+  const key = digest(token);
+  if (isDatabaseAvailable()) {
+    await getRedis().setex(
+      `${REDIS_PREFIX}${key}`,
+      Math.ceil(remainingMs / 1000),
+      JSON.stringify(record),
+    );
+    return;
+  }
+  memoryPending.set(key, record);
+}
+
 /** Test seam — current size of the process-local map. */
 export function __pendingCountForTests(): number {
   return memoryPending.size;

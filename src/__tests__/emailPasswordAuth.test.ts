@@ -28,7 +28,8 @@ const { __memoryKeyCountForTests, consumeLoginAttempt } = await import('../websi
 const { validatePassword } = await import('../auth/password.js');
 const { sendMail, isMailConfigured, MailNotConfiguredError, MailDeliveryError } =
   await import('../website/mailer.js');
-const { createPendingRegistration } = await import('../website/pendingRegistrationStore.js');
+const { createPendingRegistration, deletePendingRegistration, restorePendingRegistration } =
+  await import('../website/pendingRegistrationStore.js');
 const {
   consumePendingRegistration,
   __pendingCountForTests,
@@ -57,7 +58,15 @@ async function registerAndVerify(email: string, password = GOOD_PASSWORD) {
 
   const token = lastVerificationToken(email);
   assert.ok(token, 'a verification link should have been sent');
-  return request(app).get('/auth/verify').query({ token });
+  return redeem(token!);
+}
+
+/**
+ * Redeem a token the way the confirmation page does: a form POST. The GET is
+ * deliberately inert, so it cannot stand in for this.
+ */
+function redeem(token: string) {
+  return request(app).post('/auth/verify').type('form').send({ token });
 }
 
 /**
@@ -239,16 +248,16 @@ describe('Email + password authentication', () => {
       const token = (await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD }),
         lastVerificationToken(email))!;
 
-      const first = await request(app).get('/auth/verify').query({ token });
+      const first = await redeem(token);
       assert.equal(first.headers.location, '/dashboard');
 
-      const second = await request(app).get('/auth/verify').query({ token });
+      const second = await redeem(token);
       assert.equal(second.headers.location, '/login?verify=invalid');
     });
 
     it('rejects an unknown or missing token the same way', async () => {
       for (const token of ['totally-made-up', '']) {
-        const res = await request(app).get('/auth/verify').query({ token });
+        const res = await redeem(token);
         assert.equal(res.headers.location, '/login?verify=invalid', JSON.stringify(token));
       }
     });
@@ -263,7 +272,7 @@ describe('Email + password authentication', () => {
       assert.ok(pending);
       const expired = __seedExpiredPendingForTests(pending!.email, pending!.passwordHash);
 
-      const res = await request(app).get('/auth/verify').query({ token: expired });
+      const res = await redeem(expired);
       assert.equal(res.headers.location, '/login?verify=invalid');
       assert.equal(await getUserByEmail(email), undefined, 'no account from an expired link');
     });
@@ -282,7 +291,7 @@ describe('Email + password authentication', () => {
       // Someone else claims the address before the link is clicked.
       await createPasswordUser({ email, name: email, passwordHash: 'already-taken' });
 
-      const res = await request(app).get('/auth/verify').query({ token });
+      const res = await redeem(token);
       assert.equal(res.headers.location, '/login?verify=exists');
     });
   });
@@ -545,8 +554,8 @@ describe('Email + password authentication', () => {
       const second = lastVerificationToken(email)!;
       assert.notEqual(first, second, 'each sign-up gets its own token');
 
-      const winner = await request(app).get('/auth/verify').query({ token: first });
-      const loser = await request(app).get('/auth/verify').query({ token: second });
+      const winner = await redeem(first);
+      const loser = await redeem(second);
 
       assert.equal(winner.headers.location, '/dashboard');
       assert.equal(loser.headers.location, '/login?verify=exists');
@@ -622,6 +631,104 @@ describe('Email + password authentication', () => {
     });
   });
 
+  describe('a link prefetch must not sign anyone up', () => {
+    it('GET /auth/verify creates nothing and leaves the token usable', async () => {
+      const email = freshEmail();
+      await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+      const token = lastVerificationToken(email)!;
+
+      // Exactly what a mail scanner does: follow the URL from the message.
+      const prefetch = await request(app).get('/auth/verify').query({ token });
+      // publicDir resolves to src/public under tsx, so sendFile may 404 here —
+      // same accommodation as the /login test. What matters is that the GET
+      // neither redeemed the token nor redirected anywhere.
+      assert.ok([200, 404].includes(prefetch.status), `unexpected status ${prefetch.status}`);
+      assert.notEqual(prefetch.status, 302, 'a prefetch must not be redirected into redeeming');
+      assert.equal(await getUserByEmail(email), undefined, 'a prefetch must not create the account');
+
+      // And the recipient's link still works afterwards.
+      const res = await redeem(token);
+      assert.equal(res.headers.location, '/dashboard');
+      assert.ok(await getUserByEmail(email), 'the real click still completes the sign-up');
+    });
+
+    it('serves a page that submits rather than a link that acts', async () => {
+      const html = fs.readFileSync(path.join(process.cwd(), 'public', 'verify.html'), 'utf8');
+      assert.match(html, /method="POST"/i);
+      assert.match(html, /action="\/auth\/verify"/);
+      assert.match(html, /name="token"/);
+    });
+
+    it('sends a tokenless GET straight to sign-in', async () => {
+      const res = await request(app).get('/auth/verify');
+      assert.equal(res.headers.location, '/login?verify=invalid');
+    });
+
+    it('keeps the token out of the Referer on both steps', async () => {
+      const email = freshEmail();
+      await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+      const token = lastVerificationToken(email)!;
+
+      assert.equal(
+        (await request(app).get('/auth/verify').query({ token })).headers['referrer-policy'],
+        'no-referrer',
+      );
+      assert.equal((await redeem(token)).headers['referrer-policy'], 'no-referrer');
+    });
+  });
+
+  describe('pending records survive our failures, not the user\'s', () => {
+    it('drops the record when the verification mail cannot be sent', async () => {
+      const email = freshEmail();
+      const realFetch = globalThis.fetch;
+      const previousKey = process.env.RESEND_API_KEY;
+      process.env.RESEND_API_KEY = 'test-key';
+      globalThis.fetch = (async () => new Response('boom', { status: 500 })) as typeof globalThis.fetch;
+
+      const before = __pendingCountForTests();
+      try {
+        const res = await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+        assert.equal(res.status, 500, 'a failed send must not report success');
+      } finally {
+        globalThis.fetch = realFetch;
+        if (previousKey === undefined) delete process.env.RESEND_API_KEY;
+        else process.env.RESEND_API_KEY = previousKey;
+      }
+
+      // The token existed only inside that request, so the record is
+      // unreachable and must not linger for its full TTL.
+      assert.equal(__pendingCountForTests(), before, 'undelivered record should be cleaned up');
+      assert.equal(await getUserByEmail(email), undefined);
+    });
+
+    it('puts the record back when account creation fails for our reasons', async () => {
+      // consume() deletes before returning, so an unrelated failure after it
+      // would otherwise spend a valid link on our outage.
+      const token = await createPendingRegistration('restore@example.com', 'hash');
+      const claimed = await consumePendingRegistration(token);
+      assert.ok(claimed);
+      assert.equal(await consumePendingRegistration(token), null, 'consumed');
+
+      await restorePendingRegistration(token, claimed!);
+      assert.equal((await consumePendingRegistration(token))?.email, 'restore@example.com');
+    });
+
+    it('will not restore a record that has already expired', async () => {
+      const token = 'expired-restore-token';
+      await restorePendingRegistration(token, {
+        email: 'stale@example.com',
+        passwordHash: 'hash',
+        expiresAt: Date.now() - 1000,
+      });
+      assert.equal(await consumePendingRegistration(token), null);
+    });
+
+    it('deletePendingRegistration is a no-op on an unknown token', async () => {
+      await deletePendingRegistration('never-existed');
+      await deletePendingRegistration('');
+    });
+  });
+
   describe('mailer', () => {
     it('reports itself unconfigured without RESEND_API_KEY', () => {
       assert.equal(isMailConfigured(), false, 'tests must not be sending real mail');
@@ -640,6 +747,30 @@ describe('Email + password authentication', () => {
         );
       } finally {
         process.env.NODE_ENV = previous;
+      }
+    });
+
+    it('treats a missing MAIL_FROM as unconfigured in production', async () => {
+      // The fallback sender is Resend's sandbox address. A deployment with a
+      // key but no MAIL_FROM used to pass preflight, build pending state, and
+      // only then fail at the provider — or send from an identity nobody chose.
+      const previousKey = process.env.RESEND_API_KEY;
+      const previousFrom = process.env.MAIL_FROM;
+      const previousEnv = process.env.NODE_ENV;
+      process.env.RESEND_API_KEY = 'test-key';
+      delete process.env.MAIL_FROM;
+      process.env.NODE_ENV = 'production';
+      try {
+        assert.equal(isMailConfigured(), false, 'a key alone is not enough in production');
+        await assert.rejects(
+          () => sendMail({ to: 'x@example.com', subject: 's', html: '<p>h</p>', text: 't' }),
+          (err: unknown) => err instanceof MailNotConfiguredError && /MAIL_FROM/.test((err as Error).message),
+        );
+      } finally {
+        process.env.NODE_ENV = previousEnv;
+        if (previousKey === undefined) delete process.env.RESEND_API_KEY;
+        else process.env.RESEND_API_KEY = previousKey;
+        if (previousFrom !== undefined) process.env.MAIL_FROM = previousFrom;
       }
     });
 
@@ -729,7 +860,12 @@ describe('Email + password authentication', () => {
       assert.match(html, /id="authForm"/);
       assert.doesNotMatch(html, /id="name"/, 'sign-up must not collect a display name');
       assert.match(html, /Check your email/, 'sign-up must confirm a link was sent');
-      assert.match(html, /VERIFY_MESSAGES/, 'must explain a failed verification link');
+      // Assert the copy a user actually reads, not just that the lookup table
+      // exists — the identifier surviving a rename says nothing about the text.
+      assert.match(html, /no longer valid/, 'must explain an expired or used link');
+      assert.match(html, /already has an account/, 'must explain a taken address');
+      assert.match(html, /hasOwnProperty\.call\(VERIFY_MESSAGES/,
+        'must not resolve verify= through the prototype chain');
     });
   });
 });
