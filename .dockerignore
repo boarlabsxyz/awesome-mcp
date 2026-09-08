@@ -11,10 +11,19 @@ tests
 *.test.ts
 *.spec.ts
 .DS_Store
-*.mp4
-docs
-pages
-assets
+# Root-level only. NOTE: .dockerignore patterns match the FULL relative path
+# and `*` does not cross `/`, so these do NOT touch public/docs/**.
+/*.mp4
+/docs
+/pages
+/assets
+
+# The public docs site and its screencasts MUST ship in the image.
+!public/docs
+!public/docs/**
+
+# Dev-only symlink created by `npm run dev:docs`; the image gets dist/public.
+src/public
 .repomix
 repomix-output.txt.xml
 

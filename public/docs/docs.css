@@ -1,0 +1,622 @@
+/* ==========================================================================
+   Awesome MCP — documentation site
+   App variant (dark). Palette values are literal hex matching
+   .claude/skills/ui-helper/references/tokens.md — do not introduce color
+   tokens here; the palette must stay greppable across the repo.
+   The only custom properties are layout dimensions, which appear in ~10
+   places each (grid columns, sticky offsets, scroll-margin, breakpoints).
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+  --docs-header-h: 64px;
+  --docs-sidebar-w: 240px;
+  --docs-toc-w: 200px;
+}
+
+/* --- Shared a11y baseline (copied from ui-helper app-page.html) ---------- */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #000;
+  color: #ededed;
+  min-height: 100vh;
+}
+
+:focus-visible {
+  outline: 2px solid #0070f3;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+}
+.skip-link:focus {
+  left: 8px;
+  top: 8px;
+  z-index: 10000;
+  padding: 0.5rem 1rem;
+  background: #0070f3;
+  color: #fff;
+  border-radius: 6px;
+  text-decoration: none;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* --- Header -------------------------------------------------------------
+   Delta from the other app pages: the sticky header spans the full viewport
+   above the docs grid, so its max-width moves to .header-inner. Every other
+   value is unchanged from tokens.md.
+   ------------------------------------------------------------------------ */
+
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  height: var(--docs-header-h);
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  backdrop-filter: blur(12px);
+  background: rgba(0,0,0,0.8);
+}
+.header-inner {
+  max-width: 1280px;
+  height: 100%;
+  margin: 0 auto;
+  padding: 0 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.header h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.header h1 a {
+  color: inherit;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.docs-brand-tag {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #4ea3ff;
+  background: rgba(0,112,243,0.15);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+}
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.nav-link {
+  color: #888;
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: color 0.15s;
+  touch-action: manipulation;
+}
+.nav-link:hover { color: #ededed; }
+.btn-primary {
+  padding: 0.5rem 1rem;
+  background: #0070f3;
+  color: #fff;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: background-color 0.2s;
+  touch-action: manipulation;
+}
+.btn-primary:hover { background: #005bb5; }
+
+.docs-menu-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  color: #ededed;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.docs-menu-toggle:hover { background: rgba(255,255,255,0.05); }
+.docs-menu-toggle span[aria-hidden] { font-size: 1.1rem; line-height: 1; }
+
+/* --- Layout -------------------------------------------------------------- */
+
+.docs-layout {
+  display: grid;
+  grid-template-columns: var(--docs-sidebar-w) minmax(0, 1fr) var(--docs-toc-w);
+  gap: 3rem;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  align-items: start;
+}
+
+/* Pages with no TOC — the 404, a page with fewer than two headings, or any
+   page when JavaScript is off — should not leave a dead gutter on the right.
+   Browsers without :has() fall back to the three-column grid, which is
+   harmless rather than broken. */
+@media (min-width: 900px) {
+  .docs-layout:not(:has(.docs-toc:not([hidden]))) {
+    grid-template-columns: var(--docs-sidebar-w) minmax(0, 1fr);
+  }
+}
+
+.docs-sidebar,
+.docs-toc {
+  position: sticky;
+  top: calc(var(--docs-header-h) + 1rem);
+  align-self: start;
+  max-height: calc(100vh - var(--docs-header-h) - 2rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.docs-content {
+  max-width: 46rem;   /* ~72ch measure */
+  min-width: 0;
+}
+
+/* --- Sidebar nav --------------------------------------------------------- */
+
+.docs-nav-group {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #666;
+  margin: 1.5rem 0 0.5rem;
+}
+.docs-nav-group:first-child { margin-top: 0; }
+
+.docs-sidebar ul { list-style: none; }
+.docs-nav-link {
+  display: block;
+  padding: 0.35rem 0.6rem;
+  margin-left: -0.6rem;
+  border-radius: 6px;
+  color: #888;
+  text-decoration: none;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  transition: color 0.15s, background-color 0.15s;
+  touch-action: manipulation;
+}
+.docs-nav-link:hover { color: #ededed; background: rgba(255,255,255,0.03); }
+.docs-nav-link.active {
+  color: #4ea3ff;
+  background: rgba(0,112,243,0.1);
+  font-weight: 500;
+}
+
+/* --- On-this-page TOC ---------------------------------------------------- */
+
+.docs-toc-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #666;
+  margin-bottom: 0.75rem;
+}
+.docs-toc ul { list-style: none; }
+.docs-toc a {
+  display: block;
+  padding: 0.25rem 0 0.25rem 0.75rem;
+  border-left: 2px solid rgba(255,255,255,0.08);
+  color: #888;
+  text-decoration: none;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  transition: color 0.15s, border-color 0.15s;
+  touch-action: manipulation;
+}
+.docs-toc a:hover { color: #ededed; }
+.docs-toc a.active { color: #4ea3ff; border-left-color: #0070f3; }
+.docs-toc .docs-toc-h3 a { padding-left: 1.5rem; font-size: 0.78rem; }
+
+/* --- Content typography -------------------------------------------------- */
+
+.docs-eyebrow {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #4ea3ff;
+  margin-bottom: 0.5rem;
+}
+
+.docs-content h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  margin-bottom: 0.75rem;
+  text-wrap: balance;
+}
+.docs-lede {
+  font-size: 1.05rem;
+  color: #aaa;
+  line-height: 1.6;
+  margin-bottom: 2.5rem;
+  text-wrap: pretty;
+}
+
+.docs-content h2 {
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 3rem 0 1rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  text-wrap: balance;
+}
+.docs-content h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 2rem 0 0.75rem;
+  text-wrap: balance;
+}
+.docs-content h2, .docs-content h3 {
+  scroll-margin-top: calc(var(--docs-header-h) + 1rem);
+}
+
+.docs-content p,
+.docs-content li {
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: #ccc;
+  text-wrap: pretty;
+}
+.docs-content p { margin-bottom: 1rem; }
+.docs-content ul,
+.docs-content ol { margin: 0 0 1.25rem 1.25rem; }
+.docs-content li { margin-bottom: 0.5rem; }
+.docs-content li > ul,
+.docs-content li > ol { margin-top: 0.5rem; margin-bottom: 0.5rem; }
+
+.docs-content strong { color: #ededed; font-weight: 600; }
+.docs-content a {
+  color: #4f8df7;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(79,141,247,0.35);
+  transition: color 0.15s, border-color 0.15s;
+  touch-action: manipulation;
+}
+.docs-content a:hover { color: #4ea3ff; border-bottom-color: #4ea3ff; }
+
+.docs-content code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  color: #7dd3fc;
+  background: rgba(125,211,252,0.12);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+
+/* --- Code blocks --------------------------------------------------------- */
+
+.docs-pre-wrap { position: relative; margin: 0 0 1.5rem; }
+.docs-content pre {
+  background: #0a0a0a;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  padding: 1.1rem 1.25rem;
+  overflow-x: auto;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+.docs-content pre code {
+  color: #ededed;
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+.btn-copy {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  padding: 0.4rem 0.7rem;
+  background: #0070f3;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  opacity: 0;
+  transition: background-color 0.2s, opacity 0.15s;
+  touch-action: manipulation;
+}
+.docs-pre-wrap:hover .btn-copy,
+.btn-copy:focus-visible { opacity: 1; }
+.btn-copy:hover { background: #005bb5; }
+.btn-copy.copied { background: #34a853; opacity: 1; }
+.btn-copy.copy-failed { background: #dc3545; opacity: 1; }
+
+/* --- Callouts ------------------------------------------------------------ */
+
+.docs-note {
+  margin: 0 0 1.5rem;
+  padding: 1rem 1.25rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.03);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: #ccc;
+}
+.docs-note p { font-size: inherit; margin-bottom: 0.6rem; }
+.docs-note p:last-child, .docs-note ul:last-child { margin-bottom: 0; }
+.docs-note-label {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.4rem;
+}
+.docs-note--info { border-color: rgba(0,112,243,0.3); background: rgba(0,112,243,0.1); }
+.docs-note--info .docs-note-label { color: #4ea3ff; }
+.docs-note--warn { border-color: rgba(240,173,78,0.3); background: rgba(240,173,78,0.1); }
+.docs-note--warn .docs-note-label { color: #f0ad4e; }
+.docs-note--operator { border-color: rgba(255,255,255,0.15); background: #0a0a0a; }
+.docs-note--operator .docs-note-label { color: #888; }
+
+/* --- Tables -------------------------------------------------------------- */
+
+.docs-table-wrap { overflow-x: auto; margin: 0 0 1.5rem; }
+.docs-content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.docs-content th, .docs-content td {
+  text-align: left;
+  padding: 0.6rem 0.8rem;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  vertical-align: top;
+  line-height: 1.5;
+}
+.docs-content th {
+  color: #888;
+  font-weight: 600;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.docs-content td { color: #ccc; }
+
+/* --- Numbered step list -------------------------------------------------- */
+
+.docs-steps { list-style: none; margin: 0 0 1.5rem; counter-reset: docs-step; }
+.docs-steps > li {
+  counter-increment: docs-step;
+  position: relative;
+  padding-left: 2.25rem;
+  margin-bottom: 1rem;
+}
+.docs-steps > li::before {
+  content: counter(docs-step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1.6rem;
+  height: 1.6rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(0,112,243,0.15);
+  color: #4ea3ff;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+/* --- Card grid (overview page) ------------------------------------------- */
+
+.docs-cards {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 1rem;
+  margin: 0 0 1.5rem;
+}
+.docs-cards li { margin: 0; }
+.docs-card {
+  display: block;
+  height: 100%;
+  padding: 1.25rem;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  text-decoration: none;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+.docs-card:hover { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.15); }
+.docs-content .docs-card { border-bottom: 1px solid rgba(255,255,255,0.08); }
+.docs-content .docs-card:hover { border-bottom-color: rgba(255,255,255,0.15); }
+.docs-card-title {
+  display: block;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #ededed;
+  margin-bottom: 0.35rem;
+}
+.docs-card-desc { display: block; font-size: 0.85rem; color: #888; line-height: 1.5; }
+
+/* --- Media --------------------------------------------------------------- */
+
+.docs-media { margin: 0 0 1.75rem; }
+.docs-video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: #0a0a0a;
+}
+.docs-media img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.docs-media figcaption {
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+  color: #888;
+  line-height: 1.5;
+}
+/* Reserved slot for a clip that has not been recorded yet. Reuses the
+   .empty-state treatment from dashboard.html so swapping in the real
+   <video> causes zero reflow. Grep `docs-media--pending` for the to-do list. */
+.docs-media-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  text-align: center;
+  aspect-ratio: 16 / 9;
+  padding: 3rem;
+  color: #888;
+  background: #0a0a0a;
+  border-radius: 12px;
+  border: 2px dashed rgba(255,255,255,0.15);
+}
+.docs-media-placeholder p { font-size: 0.9rem; margin: 0; color: #888; }
+.docs-media-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #4ea3ff;
+  background: rgba(0,112,243,0.15);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+}
+
+/* --- Prev / next --------------------------------------------------------- */
+
+.docs-prevnext {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 4rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+.docs-prevnext a {
+  flex: 1 1 220px;
+  padding: 1rem 1.25rem;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  text-decoration: none;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+.docs-prevnext a:hover { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.15); }
+.docs-prevnext .docs-prevnext-dir {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #666;
+  margin-bottom: 0.25rem;
+}
+.docs-prevnext .docs-prevnext-title { display: block; font-size: 0.95rem; font-weight: 600; color: #ededed; }
+.docs-prevnext a.docs-prevnext-next { text-align: right; }
+
+/* --- Footer -------------------------------------------------------------- */
+
+.docs-footer {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  color: #666;
+  font-size: 0.8rem;
+}
+.docs-footer a { color: #888; text-decoration: none; touch-action: manipulation; }
+.docs-footer a:hover { color: #ededed; }
+
+/* --- Responsive ---------------------------------------------------------- */
+
+@media (max-width: 1199px) {
+  .docs-layout { grid-template-columns: var(--docs-sidebar-w) minmax(0, 1fr); gap: 2.5rem; }
+  .docs-toc { display: none; }
+}
+
+@media (max-width: 899px) {
+  .docs-layout { grid-template-columns: minmax(0, 1fr); padding: 1.5rem 1.25rem; }
+  .header-inner { padding: 0 1.25rem; }
+  .docs-menu-toggle { display: inline-flex; }
+  .header h1 { font-size: 1.15rem; }
+  .docs-sidebar {
+    position: fixed;
+    top: var(--docs-header-h);
+    bottom: 0;
+    left: 0;
+    z-index: 90;
+    width: 280px;
+    max-height: none;
+    padding: 1.5rem 1.25rem;
+    background: #0a0a0a;
+    border-right: 1px solid rgba(255,255,255,0.1);
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+  }
+  .docs-sidebar[data-open="true"] { transform: none; }
+  .docs-content h1 { font-size: 1.6rem; }
+  .btn-copy { opacity: 1; }
+}
+
+@media (max-width: 599px) {
+  .header-right .nav-link { display: none; }
+}
+

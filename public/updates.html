@@ -72,6 +72,11 @@
       background: #111;
       color: #ededed;
     }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
 
     .release {
       margin-bottom: 3rem;
@@ -167,7 +172,10 @@
   <div class="page-container">
     <div class="header">
       <h1>Updates</h1>
-      <a href="/dashboard">Dashboard</a>
+      <div class="header-right">
+        <a href="/docs">Docs</a>
+        <a href="/dashboard">Dashboard</a>
+      </div>
     </div>
 
     <main id="main">

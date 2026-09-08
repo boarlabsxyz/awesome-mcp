@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <title>Google Workspace &middot; Docs &middot; Awesome MCP</title>
+  <meta name="description" content="Connect Google Docs, Sheets, Slides, Drive, Gmail and Calendar. One consent flow, six connectors.">
+  <link rel="canonical" href="https://app.awesome-mcp.xyz/docs/google">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body class="docs-body">
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  <header class="header">
+    <div class="header-inner">
+      <button class="docs-menu-toggle" type="button" aria-expanded="false" aria-controls="docs-sidebar">
+        <span class="sr-only">Toggle documentation menu</span>
+        <span aria-hidden="true">&#9776;</span>
+      </button>
+      <h1><a href="/docs" translate="no">Awesome MCP <span class="docs-brand-tag">Docs</span></a></h1>
+      <div class="header-right">
+        <a href="/integrations" class="nav-link">Integrations</a>
+        <a href="/dashboard" class="btn-primary">Dashboard</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" id="docs-sidebar">
+      <nav aria-label="Documentation">
+        <p class="docs-nav-group">Getting started</p>
+        <ul>
+          <li><a href="/docs" class="docs-nav-link">Overview &amp; quickstart</a></li>
+          <li><a href="/docs/connect-a-connector" class="docs-nav-link">Connect a connector</a></li>
+          <li><a href="/docs/add-to-claude" class="docs-nav-link">Add to Claude</a></li>
+          <li><a href="/docs/images" class="docs-nav-link">Images</a></li>
+        </ul>
+        <p class="docs-nav-group">Connectors</p>
+        <ul>
+          <li><a href="/docs/google" class="docs-nav-link active" aria-current="page">Google Workspace</a></li>
+          <li><a href="/docs/clickup" class="docs-nav-link">ClickUp</a></li>
+          <li><a href="/docs/slack" class="docs-nav-link">Slack</a></li>
+          <li><a href="/docs/outline" class="docs-nav-link">Outline Wiki</a></li>
+          <li><a href="/docs/peopleforce" class="docs-nav-link">PeopleForce</a></li>
+          <li><a href="/docs/hubspot" class="docs-nav-link">HubSpot</a></li>
+        </ul>
+        <p class="docs-nav-group">Reference</p>
+        <ul>
+          <li><a href="/docs/rest-api" class="docs-nav-link">REST API</a></li>
+          <li><a href="/docs/troubleshooting" class="docs-nav-link">Troubleshooting</a></li>
+        </ul>
+      </nav>
+    </aside>
+
+    <main id="main" class="docs-content">
+  <p class="docs-eyebrow">Connectors</p>
+  <h1>Google Workspace</h1>
+  <p class="docs-lede">Docs, Sheets, Slides, Drive, Gmail and Calendar. They are six separate connectors, but the setup is the same for all of them.</p>
+
+
+  <p>Six connectors share one page because they share one sign-in. Each is added separately from the
+  dashboard and gets its own URL, but they all send you to the same Google consent screen and ask
+  only for what that particular service needs.</p>
+
+  <h2 id="connecting">Connecting</h2>
+  <ol class="docs-steps">
+    <li>On the <a href="/dashboard">dashboard</a>, click <strong>+ Add Tool</strong> and pick the
+    Google service you want.</li>
+    <li>You are sent to Google&rsquo;s consent screen. Pick the account &mdash; if you have several, this
+    is where you choose which one this connection uses.</li>
+    <li>Review the permissions and approve.</li>
+    <li>You land back on the dashboard with the new connection. Press <strong>Copy URL</strong>.</li>
+  </ol>
+  <p>Adding a second Google service means going through consent again, because each one asks for
+  different permissions. Adding the <em>same</em> service for a second Google account also works &mdash;
+  you get two rows and two URLs.</p>
+
+  <div class="docs-note docs-note--info">
+    <span class="docs-note-label">Google connections expire</span>
+    <p>Unlike the other connectors, Google access is time-limited and refreshed in the background.
+    If a refresh ever fails, the connection&rsquo;s row shows <strong>Reconnect</strong> instead of
+    <strong>Copy URL</strong>. Press it and approve again; the URL you already gave Claude keeps
+    working.</p>
+  </div>
+
+  <h2 id="docs">Google Docs</h2>
+  <p>Read, write and format documents; work with comments, tables and images. Asks for access to
+  your documents and your Drive files.</p>
+  <ul>
+    <li>&ldquo;Summarize the doc at https://docs.google.com/document/d/…&rdquo;</li>
+    <li>&ldquo;Append a "Next steps" section to my planning doc&rdquo;</li>
+    <li>&ldquo;Find every "TODO" in this doc and turn them into a checklist&rdquo;</li>
+  </ul>
+
+  <p>Inserting images into a Doc is covered on the <a href="/docs/images">images page</a>.</p>
+
+  <h2 id="sheets">Google Sheets</h2>
+  <p>Read and write ranges, append rows, look rows up by a column value, and run batch updates.
+  Asks for access to your spreadsheets and your Drive files.</p>
+  <ul>
+    <li>&ldquo;Read the "Q3 forecast" sheet and chart revenue by region&rdquo;</li>
+    <li>&ldquo;Append a new row with today's standup notes&rdquo;</li>
+    <li>&ldquo;Clear the scratchpad range A1:D50&rdquo;</li>
+  </ul>
+
+  <h2 id="slides">Google Slides</h2>
+  <p>Create and read presentations, edit slides and speaker notes. Asks for access to your
+  presentations and your Drive files.</p>
+  <ul>
+    <li>&ldquo;Add a title slide to the kickoff deck&rdquo;</li>
+    <li>&ldquo;Replace "OLD_LOGO" with our new logo in every slide&rdquo;</li>
+    <li>&ldquo;Read the speaker notes from slide 5&rdquo;</li>
+  </ul>
+
+  <h2 id="drive">Google Drive</h2>
+  <p>Browse, search, move, copy and share files and folders. Asks for access to your Drive files.</p>
+  <ul>
+    <li>&ldquo;Find the latest version of the pricing memo&rdquo;</li>
+    <li>&ldquo;Move all PDFs from /Inbox to /Archive&rdquo;</li>
+    <li>&ldquo;Share this folder with alex@ as commenter&rdquo;</li>
+  </ul>
+
+  <h2 id="gmail">Gmail</h2>
+  <p>Read, search, send and draft mail; create and apply labels; work with attachments. Asks for
+  permission to read and modify your mail.</p>
+  <ul>
+    <li>&ldquo;Summarize unread mail from this week&rdquo;</li>
+    <li>&ldquo;Draft a reply to the latest message from finance@&rdquo;</li>
+    <li>&ldquo;Search for invoices from Stripe and label them "Receipts"&rdquo;</li>
+  </ul>
+
+  <div class="docs-note docs-note--warn">
+    <span class="docs-note-label">Gmail can send</span>
+    <p>This connector can send mail as you, not only read it. If you would rather it only drafted,
+    say so in your prompt &mdash; there is no server-side read-only mode.</p>
+  </div>
+
+  <h2 id="calendar">Google Calendar</h2>
+  <p>List calendars, read and create events, move and update them. Asks for access to your calendars
+  and their events.</p>
+  <ul>
+    <li>&ldquo;What's on my calendar tomorrow?&rdquo;</li>
+    <li>&ldquo;Schedule a 30-min sync with the team for Thursday afternoon&rdquo;</li>
+    <li>&ldquo;Move my 4pm meeting to Friday&rdquo;</li>
+  </ul>
+
+  <p>Reading a busy week can return a lot of data. The <a href="/docs/rest-api">REST API</a> exists
+  for exactly that case.</p>
+
+
+  <nav class="docs-prevnext" aria-label="Pagination">
+    <a href="/docs/images" class="docs-prevnext-prev"><span class="docs-prevnext-dir">Previous</span><span class="docs-prevnext-title">Images</span></a>
+    <a href="/docs/clickup" class="docs-prevnext-next"><span class="docs-prevnext-dir">Next</span><span class="docs-prevnext-title">ClickUp</span></a>
+  </nav>
+    </main>
+
+    <aside class="docs-toc" id="docs-toc" aria-labelledby="toc-heading" hidden>
+      <p id="toc-heading" class="docs-toc-title">On this page</p>
+      <nav aria-label="On this page"></nav>
+    </aside>
+  </div>
+
+  <footer class="docs-footer">
+    <p><a href="/dashboard">Dashboard</a> &middot; <a href="/integrations">Integrations</a> &middot; <a href="/updates">Updates</a></p>
+  </footer>
+
+  <script src="/docs/docs.js" defer></script>
+</body>
+</html>

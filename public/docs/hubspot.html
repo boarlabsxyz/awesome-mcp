@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <title>HubSpot &middot; Docs &middot; Awesome MCP</title>
+  <meta name="description" content="Connect HubSpot CRM — contacts, companies, deals and tickets — over OAuth.">
+  <link rel="canonical" href="https://app.awesome-mcp.xyz/docs/hubspot">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body class="docs-body">
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  <header class="header">
+    <div class="header-inner">
+      <button class="docs-menu-toggle" type="button" aria-expanded="false" aria-controls="docs-sidebar">
+        <span class="sr-only">Toggle documentation menu</span>
+        <span aria-hidden="true">&#9776;</span>
+      </button>
+      <h1><a href="/docs" translate="no">Awesome MCP <span class="docs-brand-tag">Docs</span></a></h1>
+      <div class="header-right">
+        <a href="/integrations" class="nav-link">Integrations</a>
+        <a href="/dashboard" class="btn-primary">Dashboard</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" id="docs-sidebar">
+      <nav aria-label="Documentation">
+        <p class="docs-nav-group">Getting started</p>
+        <ul>
+          <li><a href="/docs" class="docs-nav-link">Overview &amp; quickstart</a></li>
+          <li><a href="/docs/connect-a-connector" class="docs-nav-link">Connect a connector</a></li>
+          <li><a href="/docs/add-to-claude" class="docs-nav-link">Add to Claude</a></li>
+          <li><a href="/docs/images" class="docs-nav-link">Images</a></li>
+        </ul>
+        <p class="docs-nav-group">Connectors</p>
+        <ul>
+          <li><a href="/docs/google" class="docs-nav-link">Google Workspace</a></li>
+          <li><a href="/docs/clickup" class="docs-nav-link">ClickUp</a></li>
+          <li><a href="/docs/slack" class="docs-nav-link">Slack</a></li>
+          <li><a href="/docs/outline" class="docs-nav-link">Outline Wiki</a></li>
+          <li><a href="/docs/peopleforce" class="docs-nav-link">PeopleForce</a></li>
+          <li><a href="/docs/hubspot" class="docs-nav-link active" aria-current="page">HubSpot</a></li>
+        </ul>
+        <p class="docs-nav-group">Reference</p>
+        <ul>
+          <li><a href="/docs/rest-api" class="docs-nav-link">REST API</a></li>
+          <li><a href="/docs/troubleshooting" class="docs-nav-link">Troubleshooting</a></li>
+        </ul>
+      </nav>
+    </aside>
+
+    <main id="main" class="docs-content">
+  <p class="docs-eyebrow">Connectors</p>
+  <h1>HubSpot</h1>
+  <p class="docs-lede">CRM reads and writes over OAuth. If you connected before deal support existed, start with the reconnect note below.</p>
+
+
+  <p>Contacts, companies, deals, tickets, properties and activity &mdash; reads and writes.</p>
+
+  <h2 id="connecting">Connecting</h2>
+  <ol class="docs-steps">
+    <li>Click <strong>+ Add Tool</strong> and pick <strong>HubSpot MCP</strong>.</li>
+    <li>Choose <strong>Connect with HubSpot</strong> and approve in HubSpot, selecting the portal you
+    want.</li>
+  </ol>
+  <p>If your deployment has not been configured with a HubSpot application you will be asked for a
+  private-app token instead &mdash; create one under
+  <strong>Settings &rarr; Integrations &rarr; Private Apps</strong>, granting read scopes for lookups
+  and write scopes for anything that creates or updates records.</p>
+
+  <h2 id="deals">Deals need a reconnect</h2>
+  <div class="docs-note docs-note--warn">
+    <span class="docs-note-label">If deal lookups fail, this is why</span>
+    <p>Permission to read deals was added after this connector first shipped, and a token only ever
+    holds the permissions it was granted when it was created. If you connected HubSpot before that,
+    every deal request is refused &mdash; while the connection continues to look completely healthy,
+    because HubSpot tokens do not expire in a way the dashboard can detect.</p>
+    <p>Press <strong>Reconnect</strong> on the dashboard and approve again.</p>
+    <p>If it still fails afterwards, the missing permission is in the HubSpot application or portal
+    configuration, not in your consent &mdash; reconnecting again will not help. The error message
+    distinguishes these two cases: it lists both what was needed and what your token actually holds.</p>
+  </div>
+  <p>Note that a company record shows how many deals it has without granting any access to them. Seeing
+  a deal count and then getting nothing back is that, not a bug.</p>
+
+  <h2 id="behaviour">What to expect from the answers</h2>
+  <ul>
+    <li>Asking for specific properties that HubSpot does not return is flagged explicitly, so
+    &ldquo;this record has no value&rdquo; is never confused with &ldquo;the connector cannot see that
+    field&rdquo;.</li>
+    <li>Counts from a large scan are reported as a floor &mdash; &ldquo;25+&rdquo; rather than
+    &ldquo;25&rdquo; &mdash; when the scan hit its limit, so a partial result never reads as a complete
+    pipeline.</li>
+    <li>After an update, the record is re-read, so what you are shown is the record as it now stands
+    rather than HubSpot&rsquo;s partial echo of the change.</li>
+  </ul>
+
+  <h2 id="activity">Activity and email bodies</h2>
+  <p>Company activity covers notes, calls and meetings. Email bodies need an additional permission;
+  if emails come back empty while meetings and calls are fine, that permission is missing &mdash;
+  reconnect.</p>
+
+  <h2 id="engagements">Logging activity</h2>
+  <p>Claude can create notes and tasks and log calls and meetings against a record, and delete them
+  again. A deletion archives the engagement &mdash; it disappears from the timeline but is recoverable
+  from HubSpot&rsquo;s recycling bin, which makes these safe to try on a real portal.</p>
+
+  <h2 id="prompts">Try asking</h2>
+  <ul>
+    <li>&ldquo;Find the Acme Corp company and summarize its recent activity&rdquo;</li>
+    <li>&ldquo;Update the lifecycle stage for contact jane@acme.com&rdquo;</li>
+    <li>&ldquo;List open tickets modified this week&rdquo;</li>
+  </ul>
+
+
+
+  <nav class="docs-prevnext" aria-label="Pagination">
+    <a href="/docs/peopleforce" class="docs-prevnext-prev"><span class="docs-prevnext-dir">Previous</span><span class="docs-prevnext-title">PeopleForce</span></a>
+    <a href="/docs/rest-api" class="docs-prevnext-next"><span class="docs-prevnext-dir">Next</span><span class="docs-prevnext-title">REST API</span></a>
+  </nav>
+    </main>
+
+    <aside class="docs-toc" id="docs-toc" aria-labelledby="toc-heading" hidden>
+      <p id="toc-heading" class="docs-toc-title">On this page</p>
+      <nav aria-label="On this page"></nav>
+    </aside>
+  </div>
+
+  <footer class="docs-footer">
+    <p><a href="/dashboard">Dashboard</a> &middot; <a href="/integrations">Integrations</a> &middot; <a href="/updates">Updates</a></p>
+  </footer>
+
+  <script src="/docs/docs.js" defer></script>
+</body>
+</html>

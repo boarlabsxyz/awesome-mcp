@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <title>Overview and quickstart &middot; Docs &middot; Awesome MCP</title>
+  <meta name="description" content="Connect Google, Slack, ClickUp, Outline, PeopleForce or HubSpot to Claude in about five minutes.">
+  <link rel="canonical" href="https://app.awesome-mcp.xyz/docs">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body class="docs-body">
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  <header class="header">
+    <div class="header-inner">
+      <button class="docs-menu-toggle" type="button" aria-expanded="false" aria-controls="docs-sidebar">
+        <span class="sr-only">Toggle documentation menu</span>
+        <span aria-hidden="true">&#9776;</span>
+      </button>
+      <h1><a href="/docs" translate="no">Awesome MCP <span class="docs-brand-tag">Docs</span></a></h1>
+      <div class="header-right">
+        <a href="/integrations" class="nav-link">Integrations</a>
+        <a href="/dashboard" class="btn-primary">Dashboard</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" id="docs-sidebar">
+      <nav aria-label="Documentation">
+        <p class="docs-nav-group">Getting started</p>
+        <ul>
+          <li><a href="/docs" class="docs-nav-link active" aria-current="page">Overview &amp; quickstart</a></li>
+          <li><a href="/docs/connect-a-connector" class="docs-nav-link">Connect a connector</a></li>
+          <li><a href="/docs/add-to-claude" class="docs-nav-link">Add to Claude</a></li>
+          <li><a href="/docs/images" class="docs-nav-link">Images</a></li>
+        </ul>
+        <p class="docs-nav-group">Connectors</p>
+        <ul>
+          <li><a href="/docs/google" class="docs-nav-link">Google Workspace</a></li>
+          <li><a href="/docs/clickup" class="docs-nav-link">ClickUp</a></li>
+          <li><a href="/docs/slack" class="docs-nav-link">Slack</a></li>
+          <li><a href="/docs/outline" class="docs-nav-link">Outline Wiki</a></li>
+          <li><a href="/docs/peopleforce" class="docs-nav-link">PeopleForce</a></li>
+          <li><a href="/docs/hubspot" class="docs-nav-link">HubSpot</a></li>
+        </ul>
+        <p class="docs-nav-group">Reference</p>
+        <ul>
+          <li><a href="/docs/rest-api" class="docs-nav-link">REST API</a></li>
+          <li><a href="/docs/troubleshooting" class="docs-nav-link">Troubleshooting</a></li>
+        </ul>
+      </nav>
+    </aside>
+
+    <main id="main" class="docs-content">
+  <p class="docs-eyebrow">Getting started</p>
+  <h1>Awesome MCP documentation</h1>
+  <p class="docs-lede">Connect a service once, paste one URL into Claude, and your assistant can use it. This page is the five-minute version; the rest of these docs are the details.</p>
+
+
+  <figure class="docs-media docs-media--pending">
+    <div class="docs-media-placeholder" role="img" aria-label="Screencast pending: signing in, adding a connector, and copying its MCP URL">
+      <span class="docs-media-badge">Screencast</span>
+      <p>Sign in, add a connector, copy the URL &mdash; recording pending.</p>
+    </div>
+    <figcaption>The whole quickstart, end to end.</figcaption>
+  </figure>
+
+  <h2 id="what-this-is">What this is</h2>
+  <p>Awesome MCP is a hosted <strong>Model Context Protocol</strong> server. You connect a service once
+  &mdash; Google Workspace, Slack, ClickUp, Outline, PeopleForce or HubSpot &mdash; and get back a URL.
+  Paste that URL into Claude (or any MCP-compatible assistant) and the assistant can use that service
+  on your behalf.</p>
+  <p>Nothing runs on your machine. Your credentials stay on the server; the assistant only ever sees
+  the tools, never the tokens.</p>
+
+  <h2 id="quickstart">Quickstart</h2>
+  <ol class="docs-steps">
+    <li><strong>Sign in.</strong> Go to the <a href="/dashboard">dashboard</a> and sign in &mdash;
+    with Google, or with an email and password. The first sign-in creates your account.</li>
+    <li><strong>Add a tool.</strong> Click <strong>+ Add Tool</strong> and pick a service. You will either
+    be sent through that provider&rsquo;s OAuth consent screen, or asked to paste an API token &mdash;
+    see <a href="/docs/connect-a-connector">Connect a connector</a> for which is which.</li>
+    <li><strong>Copy the URL.</strong> Each connected instance gets its own <strong>Copy URL</strong>
+    button. That URL already contains your credentials, so treat it like a password.</li>
+    <li><strong>Add it to Claude.</strong> In Claude, add the URL as a custom connector.
+    See <a href="/docs/add-to-claude">Add to Claude</a> for the exact steps in Claude.ai,
+    Claude Desktop and Claude Code.</li>
+    <li><strong>Ask for something.</strong> &ldquo;What&rsquo;s on my calendar tomorrow?&rdquo; is a good first test
+    &mdash; it proves the connection without changing anything.</li>
+  </ol>
+
+  <div class="docs-note docs-note--warn">
+    <span class="docs-note-label">Treat the URL as a secret</span>
+    <p>The MCP URL embeds your API key as a query parameter. Anyone who has it can use your connected
+    services. Do not paste it into a shared document, a ticket, or a public channel. If it leaks,
+    delete the instance from the dashboard and connect again.</p>
+  </div>
+
+  <h2 id="where-to-next">Where to next</h2>
+  <ul class="docs-cards">
+    <li><a class="docs-card" href="/docs/connect-a-connector">
+      <span class="docs-card-title">Connect a connector</span>
+      <span class="docs-card-desc">Sign-in, the Add Tool flow, and what every button on an instance row does.</span></a></li>
+    <li><a class="docs-card" href="/docs/add-to-claude">
+      <span class="docs-card-title">Add to Claude</span>
+      <span class="docs-card-desc">Claude.ai, Claude Desktop and Claude Code, step by step.</span></a></li>
+    <li><a class="docs-card" href="/docs/images">
+      <span class="docs-card-title">Let Claude post images</span>
+      <span class="docs-card-desc">The one workflow with a setup step people miss.</span></a></li>
+    <li><a class="docs-card" href="/docs/troubleshooting">
+      <span class="docs-card-title">Troubleshooting</span>
+      <span class="docs-card-desc">Reconnect prompts, missing scopes, and other common failures.</span></a></li>
+  </ul>
+
+  <h2 id="connectors">Connectors</h2>
+  <ul class="docs-cards">
+    <li><a class="docs-card" href="/docs/google">
+      <span class="docs-card-title">Google Workspace</span>
+      <span class="docs-card-desc">Docs, Sheets, Slides, Drive, Gmail and Calendar.</span></a></li>
+    <li><a class="docs-card" href="/docs/clickup">
+      <span class="docs-card-title">ClickUp</span>
+      <span class="docs-card-desc">Tasks, lists, docs and time tracking.</span></a></li>
+    <li><a class="docs-card" href="/docs/slack">
+      <span class="docs-card-title">Slack</span>
+      <span class="docs-card-desc">Two connectors: your own account, or a bot token.</span></a></li>
+    <li><a class="docs-card" href="/docs/outline">
+      <span class="docs-card-title">Outline Wiki</span>
+      <span class="docs-card-desc">Documents and collections in a self-hosted wiki.</span></a></li>
+    <li><a class="docs-card" href="/docs/peopleforce">
+      <span class="docs-card-title">PeopleForce</span>
+      <span class="docs-card-desc">Employees, departments and leave requests.</span></a></li>
+    <li><a class="docs-card" href="/docs/hubspot">
+      <span class="docs-card-title">HubSpot</span>
+      <span class="docs-card-desc">Contacts, companies, deals and tickets.</span></a></li>
+  </ul>
+
+
+  <nav class="docs-prevnext" aria-label="Pagination">
+    <a href="/docs/connect-a-connector" class="docs-prevnext-next"><span class="docs-prevnext-dir">Next</span><span class="docs-prevnext-title">Connect a connector</span></a>
+  </nav>
+    </main>
+
+    <aside class="docs-toc" id="docs-toc" aria-labelledby="toc-heading" hidden>
+      <p id="toc-heading" class="docs-toc-title">On this page</p>
+      <nav aria-label="On this page"></nav>
+    </aside>
+  </div>
+
+  <footer class="docs-footer">
+    <p><a href="/dashboard">Dashboard</a> &middot; <a href="/integrations">Integrations</a> &middot; <a href="/updates">Updates</a></p>
+  </footer>
+
+  <script src="/docs/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <title>REST API &middot; Docs &middot; Awesome MCP</title>
+  <meta name="description" content="The curl-able data plane: why it exists, how to authenticate, and where the full endpoint catalog lives.">
+  <link rel="canonical" href="https://app.awesome-mcp.xyz/docs/rest-api">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body class="docs-body">
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  <header class="header">
+    <div class="header-inner">
+      <button class="docs-menu-toggle" type="button" aria-expanded="false" aria-controls="docs-sidebar">
+        <span class="sr-only">Toggle documentation menu</span>
+        <span aria-hidden="true">&#9776;</span>
+      </button>
+      <h1><a href="/docs" translate="no">Awesome MCP <span class="docs-brand-tag">Docs</span></a></h1>
+      <div class="header-right">
+        <a href="/integrations" class="nav-link">Integrations</a>
+        <a href="/dashboard" class="btn-primary">Dashboard</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" id="docs-sidebar">
+      <nav aria-label="Documentation">
+        <p class="docs-nav-group">Getting started</p>
+        <ul>
+          <li><a href="/docs" class="docs-nav-link">Overview &amp; quickstart</a></li>
+          <li><a href="/docs/connect-a-connector" class="docs-nav-link">Connect a connector</a></li>
+          <li><a href="/docs/add-to-claude" class="docs-nav-link">Add to Claude</a></li>
+          <li><a href="/docs/images" class="docs-nav-link">Images</a></li>
+        </ul>
+        <p class="docs-nav-group">Connectors</p>
+        <ul>
+          <li><a href="/docs/google" class="docs-nav-link">Google Workspace</a></li>
+          <li><a href="/docs/clickup" class="docs-nav-link">ClickUp</a></li>
+          <li><a href="/docs/slack" class="docs-nav-link">Slack</a></li>
+          <li><a href="/docs/outline" class="docs-nav-link">Outline Wiki</a></li>
+          <li><a href="/docs/peopleforce" class="docs-nav-link">PeopleForce</a></li>
+          <li><a href="/docs/hubspot" class="docs-nav-link">HubSpot</a></li>
+        </ul>
+        <p class="docs-nav-group">Reference</p>
+        <ul>
+          <li><a href="/docs/rest-api" class="docs-nav-link active" aria-current="page">REST API</a></li>
+          <li><a href="/docs/troubleshooting" class="docs-nav-link">Troubleshooting</a></li>
+        </ul>
+      </nav>
+    </aside>
+
+    <main id="main" class="docs-content">
+  <p class="docs-eyebrow">Reference</p>
+  <h1>REST API</h1>
+  <p class="docs-lede">A read-mostly HTTP surface alongside the connectors, for fetching bulk data without pushing all of it through the conversation.</p>
+
+
+  <h2 id="why">Why it exists</h2>
+  <p>Every answer a connector gives passes through the conversation, and every byte of it costs
+  context. For bulk reads &mdash; a month of calendar events, a long channel history, a whole document
+  body &mdash; that is wasteful: the assistant usually wants to filter or count, not read every row.</p>
+  <p>The REST plane lets Claude fetch those bytes with <code>curl</code> and process them with tools
+  like <code>jq</code>, so only the answer comes back into the conversation. In practice you do not
+  invoke this yourself &mdash; Claude reaches for it when a read is large.</p>
+
+  <h2 id="auth">Authentication</h2>
+  <p>Two credentials work:</p>
+  <ol class="docs-steps">
+    <li><strong>A short-lived bearer.</strong> From any connected MCP session, Claude can mint a
+    token that is valid for five minutes. This is the normal path.</li>
+    <li><strong>Your dashboard API key.</strong> Permanent, and accepted for compatibility with
+    clients that cannot mint a token. Because it does not expire, treat it accordingly.</li>
+  </ol>
+  <div class="docs-pre-wrap"><pre><code>curl -H "Authorization: Bearer $TOKEN" \
+  "https://app.awesome-mcp.xyz/api/v1/docs?q=pricing" </code></pre></div>
+
+  <div class="docs-note docs-note--warn">
+    <span class="docs-note-label">The permanent key can write</span>
+    <p>Most REST endpoints only read, but some accept <code>POST</code> and change data &mdash; creating
+    a leave request, moving a recruitment application. Your dashboard API key is accepted on those
+    too. Anyone holding that key can therefore make changes, not just look. You can rotate it from
+    the dashboard.</p>
+  </div>
+
+  <h2 id="formats">JSON or text</h2>
+  <div class="docs-table-wrap">
+  <table>
+    <thead><tr><th>Request</th><th>You get</th></tr></thead>
+    <tbody>
+      <tr><td>Default, or <code>Accept: application/json</code></td><td>The upstream provider&rsquo;s raw JSON, untransformed</td></tr>
+      <tr><td><code>Accept: text/plain</code>, or <code>?format=text</code></td><td>The same readable rendering the connector would have produced</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="examples">Examples</h2>
+  <div class="docs-pre-wrap"><pre><code># Search your Google Docs
+curl -H "Authorization: Bearer $TOKEN" \
+  "https://app.awesome-mcp.xyz/api/v1/docs?q=onboarding"
+
+# Read a doc as plain text rather than raw JSON
+curl -H "Authorization: Bearer $TOKEN" \
+  -H "Accept: text/plain" \
+  "https://app.awesome-mcp.xyz/api/v1/docs/DOCUMENT_ID"
+
+# Read a spreadsheet range and pull out one column
+curl -sH "Authorization: Bearer $TOKEN" \
+  "https://app.awesome-mcp.xyz/api/v1/sheets/SHEET_ID/ranges?range=A1:D50" \
+  | jq '.values[][0]'</code></pre></div>
+
+
+  <h2 id="reference">Full endpoint list</h2>
+  <p>The complete catalog is machine-readable and always current:</p>
+  <ul>
+    <li><a href="/openapi.json">/openapi.json</a> &mdash; the OpenAPI specification for every endpoint</li>
+    <li>Per-service specifications are also published, for clients that want a smaller surface &mdash;
+    for example <a href="/openapi-calendar.json">/openapi-calendar.json</a></li>
+  </ul>
+  <p>Not every connector has REST endpoints, and coverage differs by service. The specification is
+  the authority on what exists.</p>
+
+
+  <nav class="docs-prevnext" aria-label="Pagination">
+    <a href="/docs/hubspot" class="docs-prevnext-prev"><span class="docs-prevnext-dir">Previous</span><span class="docs-prevnext-title">HubSpot</span></a>
+    <a href="/docs/troubleshooting" class="docs-prevnext-next"><span class="docs-prevnext-dir">Next</span><span class="docs-prevnext-title">Troubleshooting</span></a>
+  </nav>
+    </main>
+
+    <aside class="docs-toc" id="docs-toc" aria-labelledby="toc-heading" hidden>
+      <p id="toc-heading" class="docs-toc-title">On this page</p>
+      <nav aria-label="On this page"></nav>
+    </aside>
+  </div>
+
+  <footer class="docs-footer">
+    <p><a href="/dashboard">Dashboard</a> &middot; <a href="/integrations">Integrations</a> &middot; <a href="/updates">Updates</a></p>
+  </footer>
+
+  <script src="/docs/docs.js" defer></script>
+</body>
+</html>
