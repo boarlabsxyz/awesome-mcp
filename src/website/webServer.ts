@@ -2,6 +2,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { timingSafeEqual } from 'crypto';
 import * as path from 'path';
+import * as fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
@@ -377,6 +378,41 @@ export function computeEffectiveScopes(
 
 const BASE_URL = stripTrailingSlashes(process.env.BASE_URL || 'http://localhost:8080');
 const COOKIE_SECRET = process.env.COOKIE_SECRET || 'dev-secret-change-me';
+
+/**
+ * Temporarily take the Google sign-in button off the sign-in surfaces.
+ *
+ * Presentation only — `GET /auth/google` keeps working. That matters: a
+ * Google-created account has `password_hash` NULL, so the email form cannot
+ * sign it in, and there is no password reset yet. Removing the route as well
+ * would strand every such account with no way back in, so the affordance is
+ * hidden while the path stays open for anyone who knows it.
+ */
+function hideGoogleSignin(): boolean {
+  return process.env.HIDE_GOOGLE_SIGNIN === 'true';
+}
+
+/** Markers around the Google block in the sign-in pages. */
+const GOOGLE_SIGNIN_BLOCK = /[ \t]*<!-- google-signin:start -->[\s\S]*?<!-- google-signin:end -->\n?/g;
+
+/**
+ * Serve a sign-in page, dropping the Google block when it is hidden.
+ *
+ * Stripped server-side rather than hidden with CSS or by a script, so the
+ * button never reaches the browser and cannot flash before being removed.
+ * Falls back to a plain 404 when the file is missing, matching what sendFile
+ * did before.
+ */
+async function sendSigninPage(res: Response, fileName: string): Promise<void> {
+  let html: string;
+  try {
+    html = await fs.readFile(path.join(publicDir, fileName), 'utf8');
+  } catch {
+    res.sendStatus(404);
+    return;
+  }
+  res.type('html').send(hideGoogleSignin() ? html.replace(GOOGLE_SIGNIN_BLOCK, '') : html);
+}
 const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /** How long a pending "finish this after you log in" intent stays valid. */
@@ -874,7 +910,11 @@ async function guardAttempt(req: Request, email: string): Promise<RateLimitVerdi
 function registerSharedRoutes(app: express.Express): void {
   // Serve config to frontend (BASE_URL, auth mode)
   app.get('/api/config', (_req, res) => {
-    res.json({ baseUrl: BASE_URL, authMode: process.env.DUAL_AUTH_MODE !== 'false' ? 'dual' : 'jwt' });
+    res.json({
+      baseUrl: BASE_URL,
+      authMode: process.env.DUAL_AUTH_MODE !== 'false' ? 'dual' : 'jwt',
+      googleSigninHidden: hideGoogleSignin(),
+    });
   });
 
   // Redirect to landing page on Vercel
@@ -886,12 +926,12 @@ function registerSharedRoutes(app: express.Express): void {
   // This used to redirect straight to /auth/google, which is no longer a
   // correct default now that an account can exist without a Google identity.
   app.get('/login', (_req, res) => {
-    res.sendFile(path.join(publicDir, 'login.html'));
+    void sendSigninPage(res, 'login.html');
   });
 
   // Dashboard - always serve the page (JS handles auth via /api/me)
   app.get('/dashboard', (_req, res) => {
-    res.sendFile(path.join(publicDir, 'dashboard.html'));
+    void sendSigninPage(res, 'dashboard.html');
   });
 
   // Public changelog / release notes

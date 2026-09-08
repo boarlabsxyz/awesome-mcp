@@ -838,6 +838,70 @@ describe('Email + password authentication', () => {
     });
   });
 
+  describe('hiding Google sign-in (HIDE_GOOGLE_SIGNIN)', () => {
+    // publicDir resolves to src/public under tsx, so the page routes may 404 in
+    // test. Exercise the strip against the real files instead, then assert the
+    // route wiring separately.
+    const pageSource = (name: string) =>
+      fs.readFileSync(path.join(process.cwd(), 'public', name), 'utf8');
+    const BLOCK = /[ \t]*<!-- google-signin:start -->[\s\S]*?<!-- google-signin:end -->\n?/g;
+
+    for (const page of ['login.html', 'dashboard.html']) {
+      it(`${page} marks the Google block so it can be stripped`, () => {
+        const html = pageSource(page);
+        assert.match(html, /<!-- google-signin:start -->/, 'needs an opening marker');
+        assert.match(html, /<!-- google-signin:end -->/, 'needs a closing marker');
+        // The marked region must actually contain the affordance, or stripping
+        // it would remove nothing.
+        const marked = html.match(BLOCK)?.join('') ?? '';
+        assert.match(marked, /<a href="\/auth\/google"/, 'the block must hold the button');
+      });
+
+      it(`${page} loses the button, and nothing else, when stripped`, () => {
+        const html = pageSource(page);
+        const stripped = html.replace(BLOCK, '');
+
+        assert.doesNotMatch(stripped, /<a href="\/auth\/google"/, 'button must be gone');
+        assert.doesNotMatch(stripped, /google-signin:/, 'markers must not linger');
+        // The email path is the whole point of hiding the other one.
+        assert.match(stripped, page === 'login.html' ? /id="authForm"/ : /sign in with email/);
+      });
+    }
+
+    it('drops the "or" divider along with the button', () => {
+      // The divider only makes sense between two options.
+      const stripped = pageSource('login.html').replace(BLOCK, '');
+      assert.doesNotMatch(stripped, /class="divider"/);
+    });
+
+    it('keeps the button by default', () => {
+      // Nothing changes for a deployment that never sets the variable.
+      assert.notEqual(process.env.HIDE_GOOGLE_SIGNIN, 'true');
+      assert.match(pageSource('login.html'), /<a href="\/auth\/google"/);
+    });
+
+    it('reports the flag through /api/config', async () => {
+      const res = await request(app).get('/api/config');
+      assert.equal(res.status, 200);
+      assert.equal(res.body.googleSigninHidden, false);
+    });
+
+    it('leaves GET /auth/google reachable', async () => {
+      // Load-bearing: a Google-created account has password_hash NULL, so the
+      // email form cannot sign it in and there is no reset yet. Removing the
+      // route would strand every such account.
+      const res = await request(app).get('/auth/google');
+      assert.equal(res.status, 302);
+      assert.match(res.headers.location, /accounts\.google\.com/);
+    });
+
+    it('focuses the email link when the button is absent', () => {
+      const html = pageSource('dashboard.html');
+      assert.match(html, /querySelector\('\.btn-google-login, \.login-alt a'\)/,
+        'overlay focus must fall back rather than focus nothing');
+    });
+  });
+
   describe('GET /login', () => {
     it('serves a page instead of bouncing straight to Google', async () => {
       const res = await request(app).get('/login');
