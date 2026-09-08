@@ -136,6 +136,40 @@
     .btn-primary:hover:not(:disabled) { background: #005bb5; }
     .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
 
+    .form-notice {
+      background: rgba(0, 112, 243, 0.12);
+      border: 1px solid rgba(0, 112, 243, 0.35);
+      color: #9dc4fb;
+      border-radius: 8px;
+      padding: 0.7rem 0.9rem;
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+      line-height: 1.45;
+    }
+    .sent-panel {
+      text-align: center;
+    }
+    .sent-panel .sent-icon {
+      font-size: 2rem;
+      line-height: 1;
+      margin-bottom: 0.75rem;
+    }
+    .sent-panel h2 {
+      font-size: 1.15rem;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.01em;
+    }
+    .sent-panel p {
+      color: #888;
+      font-size: 0.9rem;
+      line-height: 1.55;
+      margin-bottom: 0.75rem;
+    }
+    .sent-panel .sent-address {
+      color: #ededed;
+      font-weight: 500;
+      word-break: break-all;
+    }
     .form-error {
       background: rgba(220, 38, 38, 0.12);
       border: 1px solid rgba(220, 38, 38, 0.35);
@@ -183,6 +217,7 @@
 
     <div class="divider">or</div>
 
+    <div id="formNotice" class="form-notice hidden" role="status" aria-live="polite"></div>
     <div id="formError" class="form-error hidden" role="alert" aria-live="assertive"></div>
 
     <form id="authForm" novalidate>
@@ -201,10 +236,23 @@
       <button type="submit" class="btn-primary" id="submitBtn">Sign in</button>
     </form>
 
-    <p class="toggle-line">
+    <p class="toggle-line" id="toggleLine">
       <span id="toggleText">Don't have an account?</span>
       <button type="button" id="toggleMode">Create one</button>
     </p>
+
+    <!-- Replaces the form once a sign-up is submitted. No account exists yet
+         at this point; the link in the email is what creates it. -->
+    <div id="sentPanel" class="sent-panel hidden">
+      <div class="sent-icon" aria-hidden="true">&#9993;</div>
+      <h2>Check your email</h2>
+      <p>
+        If that address can be registered, we've sent a link to
+        <span class="sent-address" id="sentAddress"></span>.
+      </p>
+      <p>Click the link to finish creating your account. It expires in 24 hours.</p>
+      <p><button type="button" id="backToSignIn" style="background:none;border:none;color:#4f8df7;font:inherit;cursor:pointer;text-decoration:underline;padding:0">Back to sign in</button></p>
+    </div>
 
     <p class="auth-footer">
       Connecting a <span translate="no">Google</span> service is done per-connector from the dashboard,
@@ -226,6 +274,13 @@
       var subtitle = document.getElementById('authSubtitle');
       var toggleText = document.getElementById('toggleText');
       var toggleBtn = document.getElementById('toggleMode');
+      var noticeBox = document.getElementById('formNotice');
+      var googleBtn = document.querySelector('.btn-google-login');
+      var divider = document.querySelector('.divider');
+      var toggleLine = document.getElementById('toggleLine');
+      var sentPanel = document.getElementById('sentPanel');
+      var sentAddress = document.getElementById('sentAddress');
+      var backToSignIn = document.getElementById('backToSignIn');
 
       function showError(message) {
         errorBox.textContent = message;
@@ -237,6 +292,33 @@
         errorBox.classList.add('hidden');
       }
 
+      function showNotice(message) {
+        noticeBox.textContent = message;
+        noticeBox.classList.remove('hidden');
+      }
+
+      // Swap the whole form out for the confirmation panel. Leaving a filled
+      // form on screen invites a second submit, which just burns another
+      // rate-limit attempt and mails the same person again.
+      function showSentPanel(address) {
+        sentAddress.textContent = address;
+        [form, toggleLine, googleBtn, divider, errorBox, noticeBox].forEach(function (el) {
+          if (el) el.classList.add('hidden');
+        });
+        title.classList.add('hidden');
+        subtitle.classList.add('hidden');
+        sentPanel.classList.remove('hidden');
+      }
+
+      // Why a verification link failed. The server answers 'invalid' for
+      // unknown, used, and expired alike, so this wording must cover all three
+      // without implying which it was.
+      var VERIFY_MESSAGES = {
+        invalid: 'That confirmation link is no longer valid — it may have expired or already been used. Sign up again to get a new one.',
+        exists: 'That address already has an account. Sign in below.',
+        failed: "We couldn't finish creating your account. Please try signing up again.",
+      };
+
       function setMode(next) {
         mode = next;
         clearError();
@@ -244,7 +326,7 @@
 
         title.textContent = registering ? 'Create your account' : 'Sign in';
         subtitle.textContent = registering
-          ? 'Sign up with an email and password — no Google account required.'
+          ? "Sign up with an email and password — we'll email you a link to confirm."
           : 'Access your MCP dashboard and connectors.';
         submitBtn.textContent = registering ? 'Create account' : 'Sign in';
         toggleText.textContent = registering ? 'Already have an account?' : "Don't have an account?";
@@ -259,10 +341,22 @@
         setMode(mode === 'login' ? 'register' : 'login');
       });
 
+      var params = new URLSearchParams(window.location.search);
+
       // Deep-link straight into the sign-up form: /login?mode=register
-      if (new URLSearchParams(window.location.search).get('mode') === 'register') {
+      if (params.get('mode') === 'register') {
         setMode('register');
       }
+
+      // Arrived from a verification link that did not work out.
+      var verifyResult = params.get('verify');
+      if (verifyResult) {
+        showError(VERIFY_MESSAGES[verifyResult] || VERIFY_MESSAGES.failed);
+      }
+
+      backToSignIn.addEventListener('click', function () {
+        window.location.href = '/login';
+      });
 
       form.addEventListener('submit', async function (event) {
         event.preventDefault();
@@ -297,6 +391,14 @@
 
           if (!res.ok) {
             showError(data.error || 'Something went wrong. Please try again.');
+            return;
+          }
+
+          // Registering no longer signs anyone in — 202 means a link is on its
+          // way and the account does not exist yet. Only sign-in has a session
+          // to redirect with.
+          if (mode === 'register') {
+            showSentPanel(email);
             return;
           }
 

@@ -302,6 +302,9 @@ import { loadClientCredentials } from '../auth.js';
 import { getOAuthState, deleteOAuthState, storeAuthCode, storeClient, getClient, exchangeAuthCode } from './oauthServer.js';
 import { createSession, getSession, deleteSession, Session } from './sessionStore.js';
 import { consumeLoginAttempt, resetLoginAttempts, RateLimitVerdict, LOGIN_RATE_LIMIT } from './loginRateLimit.js';
+import { sendMail, isMailConfigured, MailNotConfiguredError } from './mailer.js';
+import { verificationEmail, alreadyRegisteredEmail } from './authEmails.js';
+import { createPendingRegistration, consumePendingRegistration, PENDING_REGISTRATION } from './pendingRegistrationStore.js';
 import { lookupRestToken } from './restTokenStore.js';
 import { mapSlackErrorToHttpStatus } from './slackErrorMapper.js';
 import { negotiateFormat, respondNegotiated } from './restContent.js';
@@ -1093,6 +1096,19 @@ function registerSharedRoutes(app: express.Express): void {
     return parked || '/dashboard';
   }
 
+  /**
+   * Identical answer whether or not the address is already taken.
+   *
+   * Registration used to reply 409 on a duplicate, which made it an
+   * account-existence oracle for anyone willing to ask. Now the address owner
+   * still learns what happened — by mail — while the caller cannot tell the
+   * two cases apart.
+   */
+  const REGISTRATION_ACCEPTED = {
+    message: "If that address can be registered, we've sent a link to it. " +
+      'Click the link in the email to finish creating your account.',
+  };
+
   app.post('/api/auth/register', express.json(), async (req: Request, res: Response) => {
     try {
       const email = normalizeEmail(String(req.body?.email ?? ''));
@@ -1115,47 +1131,101 @@ function registerSharedRoutes(app: express.Express): void {
         return;
       }
 
+      // Refuse before doing anything else if we could not deliver the link.
+      // Reporting "check your email" for a mail that was never sent strands
+      // the user waiting for something that is not coming.
+      if (!isMailConfigured() && process.env.NODE_ENV === 'production') {
+        throw new MailNotConfiguredError();
+      }
+
       await loadUsers();
-      if (await getUserByEmail(email)) {
-        // Deliberately explicit rather than a generic error. Registration is
-        // already an existence oracle — any wording that let a real duplicate
-        // through would be worse than the disclosure, because the user would
-        // be stuck with no way to tell "taken" from "broken".
-        res.status(409).json({
-          error: 'An account with that email already exists. Sign in instead.',
-        });
+      const existing = await getUserByEmail(email);
+
+      // Hash on both paths. It is the dominant cost of this request (~190ms),
+      // so skipping it for a known address would let response time answer the
+      // question the identical body refuses to.
+      const passwordHash = await hashPassword(password);
+
+      if (existing) {
+        await sendMail(alreadyRegisteredEmail(email, `${BASE_URL}/login`));
+        console.error('[register] address already registered; notified the owner');
+        res.status(202).json(REGISTRATION_ACCEPTED);
         return;
       }
 
-      const user = await createPasswordUser({
-        // Sign-up collects no display name — the account is identified by its
-        // email, and asking for a name at the door buys nothing the address
-        // does not already give us. A `name` in the request body is ignored
-        // rather than trusted, so it cannot be used to spoof a display name.
-        email,
-        name: email,
-        passwordHash: await hashPassword(password),
-      });
+      // No account yet — only a pending sign-up. `users` stays untouched until
+      // the link is clicked, so an unverified address can never hold an
+      // account, and an unreachable one leaves nothing behind to clean up.
+      const token = await createPendingRegistration(email, passwordHash);
+      const verifyUrl = `${BASE_URL}/auth/verify?token=${encodeURIComponent(token)}`;
+      await sendMail(
+        verificationEmail(email, verifyUrl, PENDING_REGISTRATION.TTL_SECONDS / 3600),
+      );
 
-      // Email only — no API-key prefix. A key fragment in logs is a fragment
-      // of a live credential, and it buys nothing an account id doesn't.
-      console.error(`User registered via password: ${user.email}`);
-      await Promise.all(attemptKeys(req, email).map(({ key }) => resetLoginAttempts(key)));
-
-      const redirectTo = await completeSignIn(req, res, user);
-      res.status(201).json({ email: user.email, name: user.name, redirectTo });
+      console.error(`[register] verification link sent to ${email}`);
+      res.status(202).json(REGISTRATION_ACCEPTED);
     } catch (err: any) {
-      // Two concurrent registrations can both clear the pre-check above; the
-      // store's uniqueness rule decides, and the loser gets the same 409 it
-      // would have got had it arrived a moment later.
-      if (err instanceof DuplicateEmailError) {
-        res.status(409).json({
-          error: 'An account with that email already exists. Sign in instead.',
+      if (err instanceof MailNotConfiguredError) {
+        console.error('Registration blocked: RESEND_API_KEY is not set');
+        res.status(503).json({
+          error: 'Email delivery is not configured, so sign-up is unavailable. Please try again later.',
         });
         return;
       }
       console.error('Registration error:', err);
       res.status(500).json({ error: 'Registration failed. Please try again.' });
+    }
+  });
+
+  /**
+   * Redeem a verification link: this is where the account is actually created.
+   *
+   * A GET that mutates, because it is reached by clicking a link in a mail
+   * client. The token is single-use and consumed before anything else, so a
+   * scanner that prefetches the URL burns the link rather than silently
+   * creating an account someone else then lands on.
+   */
+  app.get('/auth/verify', async (req: Request, res: Response) => {
+    // The token sits in the query string, so it would otherwise ride along in
+    // the Referer of anything the next page loads.
+    res.set('Referrer-Policy', 'no-referrer');
+
+    const failure = (reason: string) =>
+      res.redirect(`/login?verify=${encodeURIComponent(reason)}`);
+
+    try {
+      const token = typeof req.query.token === 'string' ? req.query.token : '';
+      const pending = await consumePendingRegistration(token);
+      if (!pending) {
+        // Unknown, already used, and expired are deliberately one answer:
+        // distinguishing them tells a probe which tokens once existed.
+        failure('invalid');
+        return;
+      }
+
+      await loadUsers();
+      const user = await createPasswordUser({
+        email: pending.email,
+        name: pending.email,
+        passwordHash: pending.passwordHash,
+      });
+
+      console.error(`User registered via password: ${user.email}`);
+      await Promise.all(attemptKeys(req, pending.email).map(({ key }) => resetLoginAttempts(key)));
+
+      const redirectTo = await completeSignIn(req, res, user);
+      res.redirect(redirectTo);
+    } catch (err: any) {
+      // The address gained an account between sending the link and clicking it
+      // — a second verified sign-up, or a Google sign-in that claimed it. The
+      // link cannot mint a duplicate, and we must not sign anyone in on the
+      // strength of a password this request never proved.
+      if (err instanceof DuplicateEmailError) {
+        failure('exists');
+        return;
+      }
+      console.error('Verification error:', err);
+      failure('failed');
     }
   });
 
