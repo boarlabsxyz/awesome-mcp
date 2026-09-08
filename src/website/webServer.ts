@@ -2,6 +2,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { timingSafeEqual } from 'crypto';
 import * as path from 'path';
+import * as fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
@@ -302,6 +303,9 @@ import { loadClientCredentials } from '../auth.js';
 import { getOAuthState, deleteOAuthState, storeAuthCode, storeClient, getClient, exchangeAuthCode } from './oauthServer.js';
 import { createSession, getSession, deleteSession, Session } from './sessionStore.js';
 import { consumeLoginAttempt, resetLoginAttempts, RateLimitVerdict, LOGIN_RATE_LIMIT } from './loginRateLimit.js';
+import { sendMail, isMailConfigured, MailNotConfiguredError } from './mailer.js';
+import { verificationEmail, alreadyRegisteredEmail } from './authEmails.js';
+import { createPendingRegistration, consumePendingRegistration, deletePendingRegistration, restorePendingRegistration, PENDING_REGISTRATION } from './pendingRegistrationStore.js';
 import { lookupRestToken } from './restTokenStore.js';
 import { mapSlackErrorToHttpStatus } from './slackErrorMapper.js';
 import { negotiateFormat, respondNegotiated } from './restContent.js';
@@ -374,6 +378,41 @@ export function computeEffectiveScopes(
 
 const BASE_URL = stripTrailingSlashes(process.env.BASE_URL || 'http://localhost:8080');
 const COOKIE_SECRET = process.env.COOKIE_SECRET || 'dev-secret-change-me';
+
+/**
+ * Temporarily take the Google sign-in button off the sign-in surfaces.
+ *
+ * Presentation only — `GET /auth/google` keeps working. That matters: a
+ * Google-created account has `password_hash` NULL, so the email form cannot
+ * sign it in, and there is no password reset yet. Removing the route as well
+ * would strand every such account with no way back in, so the affordance is
+ * hidden while the path stays open for anyone who knows it.
+ */
+function hideGoogleSignin(): boolean {
+  return process.env.HIDE_GOOGLE_SIGNIN === 'true';
+}
+
+/** Markers around the Google block in the sign-in pages. */
+const GOOGLE_SIGNIN_BLOCK = /[ \t]*<!-- google-signin:start -->[\s\S]*?<!-- google-signin:end -->\n?/g;
+
+/**
+ * Serve a sign-in page, dropping the Google block when it is hidden.
+ *
+ * Stripped server-side rather than hidden with CSS or by a script, so the
+ * button never reaches the browser and cannot flash before being removed.
+ * Falls back to a plain 404 when the file is missing, matching what sendFile
+ * did before.
+ */
+async function sendSigninPage(res: Response, fileName: string): Promise<void> {
+  let html: string;
+  try {
+    html = await fs.readFile(path.join(publicDir, fileName), 'utf8');
+  } catch {
+    res.sendStatus(404);
+    return;
+  }
+  res.type('html').send(hideGoogleSignin() ? html.replace(GOOGLE_SIGNIN_BLOCK, '') : html);
+}
 const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /** How long a pending "finish this after you log in" intent stays valid. */
@@ -871,7 +910,11 @@ async function guardAttempt(req: Request, email: string): Promise<RateLimitVerdi
 function registerSharedRoutes(app: express.Express): void {
   // Serve config to frontend (BASE_URL, auth mode)
   app.get('/api/config', (_req, res) => {
-    res.json({ baseUrl: BASE_URL, authMode: process.env.DUAL_AUTH_MODE !== 'false' ? 'dual' : 'jwt' });
+    res.json({
+      baseUrl: BASE_URL,
+      authMode: process.env.DUAL_AUTH_MODE !== 'false' ? 'dual' : 'jwt',
+      googleSigninHidden: hideGoogleSignin(),
+    });
   });
 
   // Redirect to landing page on Vercel
@@ -883,12 +926,12 @@ function registerSharedRoutes(app: express.Express): void {
   // This used to redirect straight to /auth/google, which is no longer a
   // correct default now that an account can exist without a Google identity.
   app.get('/login', (_req, res) => {
-    res.sendFile(path.join(publicDir, 'login.html'));
+    void sendSigninPage(res, 'login.html');
   });
 
   // Dashboard - always serve the page (JS handles auth via /api/me)
   app.get('/dashboard', (_req, res) => {
-    res.sendFile(path.join(publicDir, 'dashboard.html'));
+    void sendSigninPage(res, 'dashboard.html');
   });
 
   // Public changelog / release notes
@@ -1093,6 +1136,19 @@ function registerSharedRoutes(app: express.Express): void {
     return parked || '/dashboard';
   }
 
+  /**
+   * Identical answer whether or not the address is already taken.
+   *
+   * Registration used to reply 409 on a duplicate, which made it an
+   * account-existence oracle for anyone willing to ask. Now the address owner
+   * still learns what happened — by mail — while the caller cannot tell the
+   * two cases apart.
+   */
+  const REGISTRATION_ACCEPTED = {
+    message: "If that address can be registered, we've sent a link to it. " +
+      'Click the link in the email to finish creating your account.',
+  };
+
   app.post('/api/auth/register', express.json(), async (req: Request, res: Response) => {
     try {
       const email = normalizeEmail(String(req.body?.email ?? ''));
@@ -1115,42 +1171,54 @@ function registerSharedRoutes(app: express.Express): void {
         return;
       }
 
+      // Refuse before doing anything else if we could not deliver the link.
+      // Reporting "check your email" for a mail that was never sent strands
+      // the user waiting for something that is not coming.
+      if (!isMailConfigured() && process.env.NODE_ENV === 'production') {
+        throw new MailNotConfiguredError();
+      }
+
       await loadUsers();
-      if (await getUserByEmail(email)) {
-        // Deliberately explicit rather than a generic error. Registration is
-        // already an existence oracle — any wording that let a real duplicate
-        // through would be worse than the disclosure, because the user would
-        // be stuck with no way to tell "taken" from "broken".
-        res.status(409).json({
-          error: 'An account with that email already exists. Sign in instead.',
-        });
+      const existing = await getUserByEmail(email);
+
+      // Hash on both paths. It is the dominant cost of this request (~190ms),
+      // so skipping it for a known address would let response time answer the
+      // question the identical body refuses to.
+      const passwordHash = await hashPassword(password);
+
+      // Both branches log the same line, with no address in it. A log that
+      // says which branch ran — or which address asked — re-opens by another
+      // route exactly the question the identical response refuses to answer.
+      if (existing) {
+        await sendMail(alreadyRegisteredEmail(email, `${BASE_URL}/login`));
+        console.error('[register] sign-up request processed');
+        res.status(202).json(REGISTRATION_ACCEPTED);
         return;
       }
 
-      const user = await createPasswordUser({
-        // Sign-up collects no display name — the account is identified by its
-        // email, and asking for a name at the door buys nothing the address
-        // does not already give us. A `name` in the request body is ignored
-        // rather than trusted, so it cannot be used to spoof a display name.
-        email,
-        name: email,
-        passwordHash: await hashPassword(password),
-      });
+      // No account yet — only a pending sign-up. `users` stays untouched until
+      // the link is clicked, so an unverified address can never hold an
+      // account, and an unreachable one leaves nothing behind to clean up.
+      const token = await createPendingRegistration(email, passwordHash);
+      const verifyUrl = `${BASE_URL}/auth/verify?token=${encodeURIComponent(token)}`;
+      try {
+        await sendMail(
+          verificationEmail(email, verifyUrl, PENDING_REGISTRATION.TTL_SECONDS / 3600),
+        );
+      } catch (sendErr) {
+        // The token only ever existed inside this request, so an undelivered
+        // record is unreachable by anyone and would just sit until its TTL.
+        await deletePendingRegistration(token).catch(() => {});
+        throw sendErr;
+      }
 
-      // Email only — no API-key prefix. A key fragment in logs is a fragment
-      // of a live credential, and it buys nothing an account id doesn't.
-      console.error(`User registered via password: ${user.email}`);
-      await Promise.all(attemptKeys(req, email).map(({ key }) => resetLoginAttempts(key)));
-
-      const redirectTo = await completeSignIn(req, res, user);
-      res.status(201).json({ email: user.email, name: user.name, redirectTo });
+      console.error('[register] sign-up request processed');
+      res.status(202).json(REGISTRATION_ACCEPTED);
     } catch (err: any) {
-      // Two concurrent registrations can both clear the pre-check above; the
-      // store's uniqueness rule decides, and the loser gets the same 409 it
-      // would have got had it arrived a moment later.
-      if (err instanceof DuplicateEmailError) {
-        res.status(409).json({
-          error: 'An account with that email already exists. Sign in instead.',
+      if (err instanceof MailNotConfiguredError) {
+        console.error('Registration blocked: RESEND_API_KEY is not set');
+        res.status(503).json({
+          error: 'Email delivery is not configured, so sign-up is unavailable. Please try again later.',
         });
         return;
       }
@@ -1158,6 +1226,89 @@ function registerSharedRoutes(app: express.Express): void {
       res.status(500).json({ error: 'Registration failed. Please try again.' });
     }
   });
+
+  /**
+   * Show the confirmation page for a verification link. Deliberately inert.
+   *
+   * This used to redeem the token and create the account in one GET, which
+   * meant a mail scanner following the link did the sign-up on the
+   * recipient's behalf and burned their link — they would then click it and
+   * be told it was invalid. Nothing here touches the store; redemption
+   * happens on the POST below, which a prefetch will not make.
+   */
+  app.get('/auth/verify', (req: Request, res: Response) => {
+    // The token is in the query string, so it would otherwise ride along in
+    // the Referer of anything this page loads.
+    res.set('Referrer-Policy', 'no-referrer');
+
+    const token = typeof req.query.token === 'string' ? req.query.token : '';
+    if (!token) {
+      res.redirect('/login?verify=invalid');
+      return;
+    }
+    res.sendFile(path.join(publicDir, 'verify.html'));
+  });
+
+  /**
+   * Redeem a verification link. This is where the account is created.
+   *
+   * A POST, so that only a deliberate submission — never a link prefetch —
+   * can bring an account into existence.
+   */
+  app.post(
+    '/auth/verify',
+    express.urlencoded({ extended: false }),
+    async (req: Request, res: Response) => {
+      res.set('Referrer-Policy', 'no-referrer');
+
+      const failure = (reason: string) =>
+        res.redirect(`/login?verify=${encodeURIComponent(reason)}`);
+
+      const token = typeof req.body?.token === 'string' ? req.body.token : '';
+      const pending = await consumePendingRegistration(token);
+      if (!pending) {
+        // Unknown, already used, and expired are deliberately one answer:
+        // distinguishing them tells a probe which tokens once existed.
+        failure('invalid');
+        return;
+      }
+
+      try {
+        await loadUsers();
+        const user = await createPasswordUser({
+          email: pending.email,
+          name: pending.email,
+          passwordHash: pending.passwordHash,
+        });
+
+        console.error(`User registered via password: ${user.email}`);
+        await Promise.all(
+          attemptKeys(req, pending.email).map(({ key }) => resetLoginAttempts(key)),
+        );
+
+        const redirectTo = await completeSignIn(req, res, user);
+        res.redirect(redirectTo);
+      } catch (err: any) {
+        // The address gained an account between sending the link and
+        // redeeming it — a second verified sign-up, or a Google sign-in that
+        // claimed it. The link cannot mint a duplicate, and we must not sign
+        // anyone in on the strength of a password this request never proved.
+        // The record stays consumed: there is an account now, so the link has
+        // no further use.
+        if (err instanceof DuplicateEmailError) {
+          failure('exists');
+          return;
+        }
+
+        // Anything else — the database being unreachable, say — is not the
+        // link's fault, and no account was created. Put the record back so a
+        // valid link is not spent on our outage.
+        await restorePendingRegistration(token, pending).catch(() => {});
+        console.error('Verification error:', err);
+        failure('failed');
+      }
+    },
+  );
 
   app.post('/api/auth/login', express.json(), async (req: Request, res: Response) => {
     try {
