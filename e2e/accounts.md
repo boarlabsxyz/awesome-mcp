@@ -4,6 +4,10 @@ Three accounts, because one cannot answer the three questions worth asking about
 a tool. Every error message in the harness that mentions a missing env var points
 here.
 
+**Setting this up for the first time? Follow [SETUP.md](SETUP.md)** -- an ordered
+procedure from nothing to a green CI run. This file is the reference behind it:
+what each variable means, and why the model is shaped this way.
+
 | Account | Contents | Written to? | Answers |
 |---|---|---|---|
 | `fixture` | a few frozen docs with unique marker tokens | never | "does this tool still return the bytes it used to" |
