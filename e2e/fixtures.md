@@ -59,3 +59,7 @@ Rotate fixture content and update this doc whenever:
 - The MCP server's tool surface for `readGoogleDoc` changes its output shape.
 - A smoke test starts succeeding by accident on stale content (the needle is too generic).
 - The fixture marker appears anywhere outside the fixture (search the repo before changing the needle).
+
+## Per-account credentials
+
+The three-account model and every `E2E_*` variable the tool checks read are documented in [accounts.md](accounts.md). This file covers the frozen fixture content only.

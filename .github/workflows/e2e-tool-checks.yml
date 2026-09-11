@@ -1,0 +1,141 @@
+name: E2E Tool Checks (Direct MCP)
+
+# The per-tool sweep. Unlike e2e-smoke.yml this drives no client: it speaks MCP
+# over HTTP with each test account's dashboard API key, so it runs on
+# ubuntu-latest, needs no Mac Studio and no Appium, and consumes no Browserbase
+# minutes. That is what makes per-tool coverage affordable at all -- 227 tools at
+# ~2 minutes of live conversation each is ~17 hours per client.
+#
+# e2e-smoke.yml keeps the job it is good at: proving a real client can reach the
+# tools. These checks prove what the tools return.
+
+on:
+  workflow_run:
+    workflows: ['Deploy → Dev']
+    types: [completed]
+  workflow_dispatch:
+  schedule:
+    # Nightly, after the sweeper has had a day's worth of orphans to clear.
+    - cron: '0 3 * * *'
+
+permissions:
+  contents: read
+
+# Sandbox checks create and trash real documents in one shared account. Two
+# concurrent runs would see each other's scratch docs, and the zero-state checks
+# assert that account has nothing matching their query. Queue rather than cancel:
+# a cancelled run skips teardown and leaks.
+concurrency:
+  group: e2e-tool-checks
+  cancel-in-progress: false
+
+jobs:
+  # No accounts, no network: the invariant engine and the sweeper's date logic.
+  # Blocking, because a broken invariant does not fail loudly, it passes silently.
+  harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+      - name: Install e2e deps
+        working-directory: e2e
+        run: npm install
+      - name: Typecheck
+        working-directory: e2e
+        run: npm run typecheck
+      - name: Harness unit tests
+        working-directory: e2e
+        run: npm run test:unit
+
+  checks:
+    needs: [harness]
+    # Dormant until the accounts exist: without E2E_BASE_URL every check fails on
+    # a missing env var, which is noise, not signal.
+    if: ${{ vars.E2E_BASE_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # ADVISORY in v1, same reasoning as e2e-smoke.yml's chatgpt-web job: let it
+    # establish a flake rate before anything depends on it. Remove this line once
+    # it has been green on content nobody is editing by hand.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        shape: [needle, volume, zero]
+    env:
+      ARTIFACTS_DIR: ${{ github.workspace }}/e2e/.artifacts
+      E2E_BASE_URL: ${{ vars.E2E_BASE_URL }}
+      E2E_FIXTURE_API_KEY: ${{ secrets.E2E_FIXTURE_API_KEY }}
+      E2E_RICH_API_KEY: ${{ secrets.E2E_RICH_API_KEY }}
+      E2E_SANDBOX_API_KEY: ${{ secrets.E2E_SANDBOX_API_KEY }}
+      E2E_FIXTURE_DOC_ID: ${{ vars.E2E_FIXTURE_DOC_ID }}
+      E2E_FIXTURE_DOC_NEEDLE: ${{ vars.E2E_FIXTURE_DOC_NEEDLE }}
+      E2E_FIXTURE_DOC_TITLE: ${{ vars.E2E_FIXTURE_DOC_TITLE }}
+      E2E_RICH_DOC_ID: ${{ vars.E2E_RICH_DOC_ID }}
+      E2E_RICH_DOC_MIN_CHARS: ${{ vars.E2E_RICH_DOC_MIN_CHARS }}
+      E2E_RICH_MIN_DOCS: ${{ vars.E2E_RICH_MIN_DOCS }}
+      E2E_SANDBOX_FOLDER_ID: ${{ vars.E2E_SANDBOX_FOLDER_ID }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+      - name: Install e2e deps
+        working-directory: e2e
+        run: npm install
+      - name: Credential pre-flight
+        working-directory: e2e
+        # Separates "the key is wrong" from "the tool is broken" before any
+        # assertion runs. needle and volume read; zero writes, so it checks the
+        # sandbox account's drive connection specifically.
+        run: |
+          if [ "${{ matrix.shape }}" = "zero" ]; then
+            npm run check:auth -- sandbox google-drive
+          elif [ "${{ matrix.shape }}" = "volume" ]; then
+            npm run check:auth -- rich
+          else
+            npm run check:auth -- fixture
+          fi
+      - name: Run ${{ matrix.shape }} checks
+        working-directory: e2e
+        run: npm run check:${{ matrix.shape }}
+      - name: Upload forensics bundle
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-checks-${{ matrix.shape }}-${{ github.sha }}
+          path: e2e/.artifacts/**
+          retention-days: 30
+          if-no-files-found: warn
+
+  # Trash scratch documents from runs that died before teardown. Without this the
+  # sandbox account accumulates and the zero-state checks start failing for
+  # reasons that have nothing to do with the code under test.
+  sweep:
+    if: ${{ github.event_name == 'schedule' && vars.E2E_BASE_URL != '' }}
+    needs: [checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      E2E_BASE_URL: ${{ vars.E2E_BASE_URL }}
+      E2E_SANDBOX_API_KEY: ${{ secrets.E2E_SANDBOX_API_KEY }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+      - name: Install e2e deps
+        working-directory: e2e
+        run: npm install
+      - name: Sweep sandbox scratch
+        working-directory: e2e
+        run: npm run sweep:sandbox
