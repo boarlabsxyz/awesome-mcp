@@ -102,6 +102,9 @@ npm run check:auth -- sandbox google-drive    # expect: the drive tool list
 The last one is the check that catches a sandbox account with no Drive
 connection, which would otherwise fail every write check at setup time.
 
+> These variables are yours and CI's. **None of them go on a Railway service** —
+> see [Deployment side](#deployment-side--what-goes-on-railway).
+
 ---
 
 ## Step 5 — Seed the fixtures
@@ -229,6 +232,59 @@ Remove `continue-on-error: true` from the `checks` job once:
 - the sandbox sweeper has run at least a week without leaking.
 
 Only then consider adding the job name to `create-tag.yml`'s required list.
+
+---
+
+## Deployment side — what goes on Railway
+
+**Nothing.** None of the `E2E_*` variables belong on a Railway service. The
+checks are *clients* of the deployment: they authenticate as ordinary dashboard
+users over the same `/mcp` endpoint a connector uses. The variables live in your
+shell and in GitHub Actions, and nowhere else. Putting the API keys on a service
+would park a credential somewhere that has no use for it.
+
+What Railway must already be true — all four are, verified:
+
+| Requirement | Why | Check |
+|---|---|---|
+| `website-development1` up | serves `/api/v1/catalogs` (URL discovery) and `/api/me` (the keys) | `curl -s -o /dev/null -w '%{http_code}' $E2E_BASE_URL/health` &rarr; `200` |
+| `google-docs-mcp-development` up | the tool under test | POST `/mcp` unauthenticated &rarr; `401` (up, enforcing auth) |
+| `google-drive-mcp-development` up | scratch create/trash for every write and zero-state check | same &rarr; `401` |
+| Google OAuth client configured | accounts cannot connect otherwise | an account shows a connected Google Docs row |
+
+A `401` from those POSTs is the healthy answer. A `404`, a `502` or a hang means
+the service is down, and every check will fail in a way that looks like a
+credential problem.
+
+### The one optional change, which I would skip
+
+`DUAL_AUTH_MODE` on the website service. It is effectively `false` today, which
+is why the dashboard's **Copy URL** emits `?instanceId=…` with no key and step 03
+sends you to `/api/me`. Changing it would put the key back in Copy URL — a
+one-time convenience during setup, in exchange for changing what every user's
+dashboard emits from then on. Not a good trade.
+
+### Two things not to be misled by
+
+`GOOGLE_TOKEN` (and `token.json`) appear in `fixtures.md` and in `src/auth.ts`.
+They belong to the **single-user stdio path** — `authorize()` is called from
+`initializeGoogleClient()`, which the hosted server does not use. The deployment
+stores per-user OAuth tokens in the database, one row per connection. Setting
+`GOOGLE_TOKEN` will not give the checks an identity, and not setting it will not
+take one away.
+
+**Connect the accounts on the same deployment `E2E_BASE_URL` points at.** An
+account connected through the prod dashboard has no connection on dev, so its key
+resolves to a user with nothing attached and every tool call fails on a missing
+connection rather than on auth.
+
+### The one real coupling
+
+The workflow fires on `workflow_run` of **Deploy → Dev**, so the Railway deploy
+pipeline is what schedules the checks. If dev deploys are paused or failing, the
+checks still run nightly and on demand, but they stop running per-change — and
+they will be testing whatever is currently deployed, not the commit that
+triggered them.
 
 ---
 
