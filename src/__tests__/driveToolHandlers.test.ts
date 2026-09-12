@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it, mock } from 'node:test';
 import { UserError } from 'fastmcp';
 import {
+  describeDriveForbidden,
   getDriveClient,
   getDocsClient,
   buildSharedDriveParams,
@@ -125,7 +126,10 @@ describe('handleListGoogleDocs', () => {
     const drive = mkDrive({ files: { ...mkDrive().files, list: mock.fn(async () => { throw mkErr(403); }) } });
     await assert.rejects(
       handleListGoogleDocs(drive, { maxResults: 10, orderBy: 'modifiedTime' }, noopLog),
-      /Permission denied/
+      // listGoogleDocs now reports the reason Google gave rather than a fixed
+      // sentence; see describeDriveForbidden. Other handlers still use the old
+      // wording, hence the identically-named test below asserting it.
+      /Google Drive refused this request \(403\)/
     );
   });
   it('throws on generic error', async () => {
@@ -855,3 +859,58 @@ describe('listGoogleDocs / searchGoogleDocs field projection', () => {
     );
   });
 });
+
+describe('describeDriveForbidden', () => {
+  // The generic "grant Google Drive access" message asserts one cause for every
+  // 403. When the guess is wrong it sends people to reconnect a connection that
+  // is working -- which is what a queried listGoogleDocs did while an unqueried
+  // one succeeded on the same token.
+  it('names the reason Google gave', () => {
+    const err: any = new Error('Insufficient permissions for this file');
+    err.code = 403;
+    err.errors = [{ reason: 'insufficientFilePermissions', message: 'Insufficient permissions for this file' }];
+
+    const message = describeDriveForbidden(err);
+    assert.match(message, /insufficientFilePermissions/);
+    assert.match(message, /Insufficient permissions for this file/);
+    assert.match(message, /reconnecting will not change it/);
+  });
+
+  it('reads the reason out of a wrapped API response', () => {
+    const err: any = new Error('Request failed with status code 403');
+    err.code = 403;
+    err.response = { data: { error: { message: 'The domain policy blocks this', errors: [{ reason: 'domainPolicy' }] } } };
+
+    const message = describeDriveForbidden(err);
+    assert.match(message, /domainPolicy/);
+    assert.match(message, /The domain policy blocks this/);
+  });
+
+  it('still says something useful when Google gives no reason', () => {
+    const err: any = new Error('Forbidden');
+    err.code = 403;
+    assert.match(describeDriveForbidden(err), /403/);
+    assert.match(describeDriveForbidden(err), /Forbidden/);
+  });
+
+  it('is what handleListGoogleDocs throws on a 403', async () => {
+    const drive = mkDrive({ files: { list: mock.fn(async () => { throw mkForbidden(); }) } });
+    await assert.rejects(
+      () => handleListGoogleDocs(drive, { maxResults: 10, orderBy: 'modifiedTime' } as any, noopLog as any),
+      (err: Error) => {
+        assert.ok(err instanceof UserError);
+        assert.match(err.message, /rateLimitExceeded/);
+        // The old fixed string must not come back.
+        assert.doesNotMatch(err.message, /Make sure you have granted/);
+        return true;
+      },
+    );
+  });
+});
+
+function mkForbidden(): any {
+  const e: any = new Error('Rate limit exceeded');
+  e.code = 403;
+  e.errors = [{ reason: 'rateLimitExceeded', message: 'Rate limit exceeded' }];
+  return e;
+}

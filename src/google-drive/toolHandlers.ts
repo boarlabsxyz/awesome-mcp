@@ -82,6 +82,34 @@ function formatFileListEntry(file: drive_v3.Schema$File, index: number, opts: { 
 
 // --- Handlers ---
 
+/**
+ * Say what Google said.
+ *
+ * A Drive 403 carries a machine-readable `reason` (insufficientFilePermissions,
+ * domainPolicy, appNotAuthorizedToFile, rateLimitExceeded, ...) and a prose
+ * message naming the actual cause. Collapsing all of that into "Make sure you
+ * have granted Google Drive access" asserts one cause for every 403, and when
+ * that guess is wrong it sends people to reconnect a connection that is working
+ * -- which is exactly what happened with listGoogleDocs, where an unqueried call
+ * succeeded on the same token that a queried one rejected.
+ *
+ * The googleapis client puts the detail in different places depending on how the
+ * error was raised, hence the fallbacks.
+ */
+export function describeDriveForbidden(error: any): string {
+  const fromErrors = error?.errors?.[0] ?? error?.response?.data?.error?.errors?.[0];
+  const reason: string | undefined = fromErrors?.reason;
+  const detail: string | undefined =
+    error?.response?.data?.error?.message ?? fromErrors?.message ?? error?.message;
+
+  const parts = [`Google Drive refused this request (403${reason ? `: ${reason}` : ''})`];
+  if (detail && detail !== reason) parts.push(detail);
+  parts.push(
+    'If other Drive calls succeed on this account, the connection is fine and the reason above is the cause -- reconnecting will not change it.',
+  );
+  return parts.join('. ');
+}
+
 export async function handleListGoogleDocs(
   drive: drive_v3.Drive,
   args: { maxResults: number; query?: string; orderBy: 'name' | 'modifiedTime' | 'createdTime' } & SharedDriveArgs,
@@ -122,7 +150,7 @@ export async function handleListGoogleDocs(
     return result;
   } catch (error: any) {
     log.error(`Error listing Google Docs: ${error.message || error}`);
-    if (error.code === 403) throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
+    if (error.code === 403) throw new UserError(describeDriveForbidden(error));
     throw new UserError(`Failed to list documents: ${error.message || 'Unknown error'}`);
   }
 }
