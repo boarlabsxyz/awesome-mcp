@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import { runToolCheck } from '../../../runToolCheck.ts';
 import { createScratchDoc, trashFile, bulkText } from '../../../setup/docsScratch.ts';
+import { scratchClients } from '../../../setup/clients.ts';
 
 // A write tool's volume case is seeded in the sandbox, not run against the rich
 // account: volume is a property of the fixture, and the rich account is read-only
@@ -25,7 +26,7 @@ test('appendToGoogleDoc lands at the end of a large document', { timeout: 120_00
       return {
         seed,
         marker: `APPEND-VOLUME-${Date.now()}`,
-        documentId: await createScratchDoc(await c.service('google-drive'), 'appendToGoogleDoc-volume', seed),
+        documentId: await createScratchDoc(await scratchClients(c), 'appendToGoogleDoc-volume', seed),
       };
     },
     args: ({ documentId, marker }) => ({ documentId, textToAppend: marker }),

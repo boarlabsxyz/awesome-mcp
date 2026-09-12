@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import { runToolCheck } from '../../../runToolCheck.ts';
 import { createScratchDoc, trashFile } from '../../../setup/docsScratch.ts';
+import { scratchClients } from '../../../setup/clients.ts';
 
 // Reading a document with no content at all. Nothing in the repo specifies what
 // this should say, which is exactly why it is worth pinning: an empty body that
@@ -18,7 +19,7 @@ test('readGoogleDoc answers calmly for an empty document', { timeout: 60_000 }, 
     account: 'sandbox',
     shape: 'zero',
     writes: true, // creates a scratch doc, so it must resolve sandbox credentials
-    setup: async (c) => ({ documentId: await createScratchDoc(await c.service('google-drive'), 'readGoogleDoc-zero') }),
+    setup: async (c) => ({ documentId: await createScratchDoc(await scratchClients(c), 'readGoogleDoc-zero') }),
     args: ({ documentId }) => ({ documentId, format: 'text' }),
     invariants: {
       transportSafe: true,

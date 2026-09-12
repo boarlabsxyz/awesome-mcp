@@ -139,31 +139,38 @@ export function assertWritable(account: AccountName, tool: string): void {
  * Turn a provider's own error text into something that names the account and the
  * fix.
  *
- * The case this exists for, observed live: Google Drive answers 403 and the tool
- * renders it as "Permission denied. Make sure you have granted Google Drive
- * access to the application." That sentence is misleading in the common case.
- * On a connection where Drive IS granted, an unfiltered `listGoogleDocs`
- * succeeds and returns 100 documents while the same call *with* a query 403s --
- * because the query uses `fullText contains`, which needs the full
- * `auth/drive` scope the catalog requests today, and the stored token was minted
- * before that. A token is frozen at the scopes it was minted with, so the fix is
- * a reconnect, never a retry, and never re-seeding fixtures.
+ * The Drive 403 case is the reason this exists, and the message has been wrong
+ * twice, so the evidence is recorded here rather than re-derived.
  *
- * The two cases are worth separating because they lead to different actions, and
- * the tool's own wording points at the wrong one.
+ * `listGoogleDocs` renders every Drive 403 as "Permission denied. Make sure you
+ * have granted Google Drive access to the application." Measured against three
+ * separate accounts, including one connected minutes earlier:
+ *
+ *   listGoogleDocs, no query                      -> ok
+ *   listGoogleDocs, any query                     -> 403, every account
+ *   listGoogleDocs, query, includeSharedDrives:false / corpora:user / every
+ *     orderBy                                     -> 403
+ *   searchGoogleDocs, same term, searchIn 'name' | 'content' | 'both'
+ *                                                 -> ok
+ *
+ * searchIn defaults to 'both', so searchGoogleDocs builds the *identical* query
+ * string and succeeds. That rules out scopes (a fresh token fails too), shared-
+ * drive parameters, orderBy, and `fullText contains` itself. The two calls now
+ * differ only in their `fields` projection. So a 403 here is a bug in
+ * listGoogleDocs, not a fault in the caller's connection, and the message must
+ * not send anyone off to reconnect an account that is already fine.
  */
 export function explainToolError(account: AccountName, tool: string, text: string): string {
   if (text.includes('granted Google Drive access')) {
     return (
       `${tool} got a 403 from Drive on the '${account}' account.\n` +
-      "The tool renders every Drive 403 as \"grant Google Drive access\", but that is only " +
-      'one of two causes:\n' +
-      "  - Drive was never connected -> connect it on the dashboard.\n" +
-      '  - Drive IS connected but the token predates the current scope set -> reconnect and ' +
-      're-consent. A token keeps the scopes it was minted with.\n' +
-      'Tell them apart: `listGoogleDocs` with no query succeeding while the same call with a ' +
-      "query 403s means the second case -- queries use `fullText contains`, which needs the " +
-      'full auth/drive scope.\n' +
+      'Do not take the wording at face value, and do not reconnect on account of it. ' +
+      'listGoogleDocs 403s on ANY query, for every account tested including freshly ' +
+      'connected ones, while an unqueried listGoogleDocs and searchGoogleDocs with the ' +
+      'same term both succeed -- so the connection is not the problem.\n' +
+      'Workaround: use searchGoogleDocs. If this fires for a tool other than ' +
+      'listGoogleDocs, check whether Drive is connected at all: ' +
+      `npm run check:auth -- ${account} google-drive\n` +
       `Original error: ${text}`
     );
   }

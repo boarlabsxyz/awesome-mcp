@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import { runToolCheck } from '../../../runToolCheck.ts';
 import { createScratchDoc, trashFile } from '../../../setup/docsScratch.ts';
+import { scratchClients } from '../../../setup/clients.ts';
 
 // Appending to a document with nothing in it. The interesting parameter is
 // addNewlineIfNeeded, which defaults to true and asks "does the doc end with a
@@ -16,7 +17,7 @@ test('appendToGoogleDoc writes into an empty document', { timeout: 90_000 }, asy
     writes: true,
     setup: async (c) => ({
       marker: `APPEND-ZERO-${Date.now()}`,
-      documentId: await createScratchDoc(await c.service('google-drive'), 'appendToGoogleDoc-zero'),
+      documentId: await createScratchDoc(await scratchClients(c), 'appendToGoogleDoc-zero'),
     }),
     args: ({ documentId, marker }) => ({ documentId, textToAppend: marker }),
     readback: async (c, { documentId }) =>

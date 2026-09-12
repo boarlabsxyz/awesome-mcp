@@ -67,24 +67,64 @@ test('sweepScratch trashes only titles older than the cutoff', async () => {
     // the sweeper dates a doc from its title and this one carries no stamp.
     `3. **e2e-notes-do-not-delete**\n   ID: doc-human\n   Modified: 1/1/2026\n   Owner: e2e\n\n`;
 
-  const fake: McpClient = {
-    async callTool(name, args): Promise<ToolResult> {
-      if (name === 'listGoogleDocs') return { text: listing, isError: false, raw: null };
-      if (name === 'deleteFile') {
-        deleted.push(String((args as { fileId: string }).fileId));
-        return { text: 'Moved file to trash.', isError: false, raw: null };
-      }
-      throw new Error(`unexpected tool ${name}`);
+  // Each fake answers ONLY the tools its real server registers and throws the
+  // same "Unknown tool" a FastMCP server throws otherwise. That is the whole
+  // point of these doubles: an earlier version of sweepScratch took one client
+  // and called listGoogleDocs (docs server) and deleteFile (drive server) on it,
+  // which a permissive fake happily answered and a live run did not.
+  const fake = (name: string, tools: Record<string, (args: any) => string>): McpClient => ({
+    async callTool(tool, args): Promise<ToolResult> {
+      const handler = tools[tool];
+      if (!handler) throw new Error(`MCP error -32601: Unknown tool: ${tool}`);
+      return { text: handler(args), isError: false, raw: null };
+    },
+    async listTools() {
+      return Object.keys(tools);
+    },
+    async close() {},
+    describe: () => name,
+  });
+
+  const docs = fake('fake-docs', { listGoogleDocs: () => listing });
+  const drive = fake('fake-drive', {
+    deleteFile: (args) => {
+      deleted.push(String(args.fileId));
+      return 'Moved file to trash.';
+    },
+  });
+
+  const result = await sweepScratch({ docs, drive }, { maxAgeHours: 0.5 });
+  assert.deepEqual(deleted, ['doc-old']);
+  assert.equal(result.trashed.length, 1);
+  assert.equal(result.kept, 2);
+});
+
+test('sweepScratch reaches for each tool on the server that registers it', async () => {
+  // Regression lock on the service split. A single-client sweeper passes the
+  // unit test above only because the doubles are separate; this asserts the
+  // routing directly, so collapsing them back fails here rather than in prod.
+  const asked: Record<string, string[]> = { docs: [], drive: [] };
+  const spy = (which: string, reply: string): McpClient => ({
+    async callTool(tool): Promise<ToolResult> {
+      asked[which].push(tool);
+      return { text: reply, isError: false, raw: null };
     },
     async listTools() {
       return [];
     },
     async close() {},
-    describe: () => 'fake',
-  };
+    describe: () => which,
+  });
 
-  const result = await sweepScratch(fake, { maxAgeHours: 0.5 });
-  assert.deepEqual(deleted, ['doc-old']);
-  assert.equal(result.trashed.length, 1);
-  assert.equal(result.kept, 2);
+  const stale = scratchTitle('x', Date.now() - 60 * 60 * 1000);
+  await sweepScratch(
+    {
+      docs: spy('docs', `Found 1 Google Document(s):\n\n1. **${stale}**\n   ID: doc-1\n`),
+      drive: spy('drive', 'Moved file to trash.'),
+    },
+    { maxAgeHours: 0.5 },
+  );
+
+  assert.deepEqual(asked.docs, ['listGoogleDocs']);
+  assert.deepEqual(asked.drive, ['deleteFile']);
 });

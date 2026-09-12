@@ -16,14 +16,16 @@ import { sweepScratch } from '../setup/docsScratch.ts';
 const maxAgeHours = Number(process.env.SWEEP_MAX_AGE_HOURS ?? 24);
 const dryRun = process.env.SWEEP_DRY_RUN === '1';
 
+// Two services: listGoogleDocs is on the docs server, deleteFile on the drive one.
+const docs = await connectMcp(await endpointFor('sandbox', 'google-docs'));
 const drive = await connectMcp(await endpointFor('sandbox', 'google-drive'));
 try {
-  const { trashed, kept } = await sweepScratch(drive, { maxAgeHours, dryRun });
+  const { trashed, kept } = await sweepScratch({ docs, drive }, { maxAgeHours, dryRun });
   console.log(
     `${dryRun ? '[dry run] would trash' : 'trashed'} ${trashed.length}, kept ${kept} ` +
       `(cutoff: ${maxAgeHours}h)`,
   );
   for (const entry of trashed) console.log(`  - ${entry}`);
 } finally {
-  await drive.close();
+  await Promise.all([docs.close(), drive.close()]);
 }

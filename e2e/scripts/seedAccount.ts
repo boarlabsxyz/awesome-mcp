@@ -38,13 +38,17 @@ if (process.env.E2E_SEED_CONFIRM !== '1') {
   fail('Refusing to write without E2E_SEED_CONFIRM=1. Check the account above first.');
 }
 
+// Two services, deliberately: createDocument / createFolder are registered on
+// the drive server, listGoogleDocs on the docs one, and each deployment runs
+// them as separate hosts. One client cannot do both.
 const drive = await connectMcp(endpoint);
+const docs = await connectMcp(await endpointFor(account!, 'google-docs'));
 try {
-  if (account === 'fixture') await seedFixture(drive);
-  else if (account === 'rich') await seedRich(drive);
+  if (account === 'fixture') await seedFixture(drive, docs);
+  else if (account === 'rich') await seedRich(drive, docs);
   else await seedSandbox(drive);
 } finally {
-  await drive.close();
+  await Promise.all([drive.close(), docs.close()]);
 }
 
 /**
@@ -54,9 +58,9 @@ try {
  * because the needle check asserts a specific ID and would then be asserting
  * against whichever copy Drive happened to list first.
  */
-async function seedFixture(drive: McpClient): Promise<void> {
-  const existing = await findByTitle(drive, FIXTURE_TITLE);
-  const id = existing ?? (await createDoc(drive, FIXTURE_TITLE, `${FIXTURE_NEEDLE}\n`));
+async function seedFixture(drive: McpClient, docs: McpClient): Promise<void> {
+  const existing = await findByTitle(docs, FIXTURE_TITLE);
+  const id = existing ?? (await createDoc(drive, docs, FIXTURE_TITLE, `${FIXTURE_NEEDLE}\n`));
   console.log(existing ? '\nFixture doc already existed, reusing it.' : '\nCreated the fixture doc.');
   print({
     E2E_FIXTURE_DOC_ID: id,
@@ -71,17 +75,17 @@ async function seedFixture(drive: McpClient): Promise<void> {
 }
 
 /** Enough documents that a page cap is visible, plus one long enough to truncate. */
-async function seedRich(drive: McpClient): Promise<void> {
-  const existingLong = await findByTitle(drive, RICH_DOC_TITLE);
+async function seedRich(drive: McpClient, docs: McpClient): Promise<void> {
+  const existingLong = await findByTitle(docs, RICH_DOC_TITLE);
   const longId =
     existingLong ??
-    (await createDoc(drive, RICH_DOC_TITLE, bulkText(RICH_DOC_PARAGRAPHS, 'VOLUME')));
+    (await createDoc(drive, docs, RICH_DOC_TITLE, bulkText(RICH_DOC_PARAGRAPHS, 'VOLUME')));
 
-  const have = await countDocs(drive);
+  const have = await countDocs(docs);
   console.log(`\nAccount currently lists ${have} document(s).`);
 
   for (let i = have; i < RICH_DOC_COUNT; i++) {
-    await createDoc(drive, `E2E Volume Filler ${String(i + 1).padStart(3, '0')}`, `filler ${i + 1}`);
+    await createDoc(drive, docs, `E2E Volume Filler ${String(i + 1).padStart(3, '0')}`, `filler ${i + 1}`);
     if ((i + 1) % 10 === 0) console.log(`  created ${i + 1}/${RICH_DOC_COUNT}`);
   }
 
@@ -108,26 +112,46 @@ async function seedSandbox(drive: McpClient): Promise<void> {
   );
 }
 
-async function createDoc(drive: McpClient, title: string, initialContent: string): Promise<string> {
-  const { text, isError } = await drive.callTool('createDocument', { title, initialContent });
-  if (isError) fail(`createDocument failed: ${text}`);
-  if (text.includes('failed to add initial content')) {
-    fail(`created "${title}" but its content did not stick: ${text}`);
+/**
+ * Create on drive, fill on docs.
+ *
+ * createDocument takes an `initialContent` argument, and on this deployment it
+ * does not work: the file is created and the content insert fails, reported only
+ * in the prose of an otherwise-successful reply. Writing the content through the
+ * docs server's appendToGoogleDoc is both reliable and verifiable.
+ */
+async function createDoc(
+  drive: McpClient,
+  docs: McpClient,
+  title: string,
+  initialContent: string,
+): Promise<string> {
+  const created = await drive.callTool('createDocument', { title });
+  if (created.isError) fail(`createDocument failed: ${created.text}`);
+  const id = parseId(created.text);
+
+  const filled = await docs.callTool('appendToGoogleDoc', { documentId: id, textToAppend: initialContent });
+  if (filled.isError) fail(`created "${title}" but could not fill it: ${filled.text}`);
+
+  const back = await docs.callTool('readGoogleDoc', { documentId: id, format: 'text' });
+  if (back.text.length < initialContent.length / 2) {
+    fail(`"${title}" reads back as ${back.text.length} chars after seeding ${initialContent.length}.`);
   }
-  return parseId(text);
+  console.log(`   ${title}: ${back.text.length} chars`);
+  return id;
 }
 
-/** Exact-title match; listGoogleDocs' query is a substring search, so filter again. */
-async function findByTitle(drive: McpClient, title: string): Promise<string | null> {
-  const { text } = await drive.callTool('listGoogleDocs', { query: title, maxResults: 100 });
+/** Exact-title match on the DOCS server; listGoogleDocs' query is a substring search. */
+async function findByTitle(docs: McpClient, title: string): Promise<string | null> {
+  const { text } = await docs.callTool('listGoogleDocs', { query: title, maxResults: 100 });
   for (const [, name, id] of text.matchAll(/^\d+\. \*\*(.+?)\*\*.*\n\s+ID: (\S+)/gm)) {
     if (name === title) return id;
   }
   return null;
 }
 
-async function countDocs(drive: McpClient): Promise<number> {
-  const { text } = await drive.callTool('listGoogleDocs', { maxResults: 100 });
+async function countDocs(docs: McpClient): Promise<number> {
+  const { text } = await docs.callTool('listGoogleDocs', { maxResults: 100 });
   return Number(text.match(/Found (\d+) Google Document\(s\)/)?.[1] ?? 0);
 }
 

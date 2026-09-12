@@ -32,30 +32,47 @@ export function scratchTitle(tool: string, startedAt = Date.now()): string {
 /**
  * Create a scratch doc and return its ID.
  *
- * `initialContent` is not optional-by-omission: createDocument reports partial
- * success in prose when the content insert fails after the file is made, and a
- * check that then asserts on seeded content fails with a confusing diff instead
- * of the real cause. So the partial-success wording is treated as an error here.
+ * Content is written through the DOCS server, not through createDocument's
+ * `initialContent`. Observed live: the drive server creates the file and then
+ * fails to insert the content, reporting it only in the prose of a successful
+ * reply ("Document created but failed to add initial content"). A caller that
+ * does not parse that sentence gets an empty document and an assertion failure
+ * three steps later, pointing at the wrong thing.
+ *
+ * So: create empty on drive, fill on docs, then read it back. The read-back is
+ * not paranoia -- it is the only thing that distinguishes "seeded" from "created
+ * and silently empty", which is exactly the failure this path already produced
+ * once.
  */
 export async function createScratchDoc(
-  drive: McpClient,
+  clients: { docs: McpClient; drive: McpClient },
   tool: string,
   initialContent?: string,
 ): Promise<string> {
   const args: Record<string, unknown> = { title: scratchTitle(tool) };
-  if (initialContent !== undefined) args.initialContent = initialContent;
-
   const parentFolderId = process.env.E2E_SANDBOX_FOLDER_ID;
   if (parentFolderId) args.parentFolderId = parentFolderId;
 
-  const { text, isError } = await drive.callTool('createDocument', args);
-  if (isError) throw new Error(explainToolError('sandbox', 'createDocument', text));
-  if (initialContent !== undefined && text.includes('failed to add initial content')) {
-    throw new Error(`createScratchDoc created the file but not its content: ${text}`);
-  }
+  const created = await clients.drive.callTool('createDocument', args);
+  if (created.isError) throw new Error(explainToolError('sandbox', 'createDocument', created.text));
 
-  const id = text.match(/\(ID: ([^)]+)\)/)?.[1];
-  if (!id) throw new Error(`Could not parse a document ID out of createDocument's reply: ${text}`);
+  const id = created.text.match(/\(ID: ([^)]+)\)/)?.[1];
+  if (!id) throw new Error(`Could not parse a document ID out of createDocument's reply: ${created.text}`);
+  if (initialContent === undefined) return id;
+
+  const filled = await clients.docs.callTool('appendToGoogleDoc', {
+    documentId: id,
+    textToAppend: initialContent,
+  });
+  if (filled.isError) throw new Error(explainToolError('sandbox', 'appendToGoogleDoc', filled.text));
+
+  const readBack = await clients.docs.callTool('readGoogleDoc', { documentId: id, format: 'text' });
+  if (readBack.isError || readBack.text.length < initialContent.length / 2) {
+    throw new Error(
+      `Scratch doc ${id} was created but reads back as ${readBack.text.length} chars ` +
+        `after seeding ${initialContent.length}. The seed did not stick.`,
+    );
+  }
   return id;
 }
 
@@ -72,12 +89,18 @@ export async function trashFile(drive: McpClient, fileId: string): Promise<void>
  * ones that assert "this account has nothing" -- start failing for reasons that
  * have nothing to do with the code under test. Run it on a schedule, not in-band:
  * `maxAgeHours` defaults to 24 so it can never race a run still in flight.
+ *
+ * Takes BOTH clients, and the split is not incidental: `listGoogleDocs` is
+ * registered on the docs server while `deleteFile` is on the drive server, and
+ * the deployment runs them as separate hosts. Passing one client for both fails
+ * with "Unknown tool", which reads like a broken deployment rather than a caller
+ * holding the wrong endpoint.
  */
 export async function sweepScratch(
-  drive: McpClient,
+  clients: { docs: McpClient; drive: McpClient },
   { maxAgeHours = 24, dryRun = false }: { maxAgeHours?: number; dryRun?: boolean } = {},
 ): Promise<{ trashed: string[]; kept: number }> {
-  const { text } = await drive.callTool('listGoogleDocs', {
+  const { text } = await clients.docs.callTool('listGoogleDocs', {
     query: TITLE_PREFIX,
     maxResults: 100,
     orderBy: 'createdTime',
@@ -96,7 +119,7 @@ export async function sweepScratch(
       kept++;
       continue;
     }
-    if (!dryRun) await trashFile(drive, id);
+    if (!dryRun) await trashFile(clients.drive, id);
     trashed.push(`${title} (${id})`);
   }
 
