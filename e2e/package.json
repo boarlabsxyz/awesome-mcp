@@ -5,6 +5,14 @@
   "type": "module",
   "scripts": {
     "test": "node --import tsx --test tests/*.smoke.ts",
+    "test:unit": "node --import tsx --test tests/unit/*.unit.ts",
+    "check": "node --import tsx --test tests/tools/*/*.check.ts",
+    "check:needle": "node --import tsx --test tests/tools/needle/*.check.ts",
+    "check:volume": "node --import tsx --test tests/tools/volume/*.check.ts",
+    "check:zero": "node --import tsx --test tests/tools/zero/*.check.ts",
+    "check:auth": "node --import tsx scripts/checkAuth.ts",
+    "sweep:sandbox": "node --import tsx scripts/sweepSandbox.ts",
+    "seed:account": "node --import tsx scripts/seedAccount.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

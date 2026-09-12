@@ -10,7 +10,13 @@ export interface ForensicsInput {
   prompt: string;
   response?: string;
   error?: unknown;
-  driver: Driver;
+  /**
+   * Absent for direct-transport tool checks, which have no browser and no
+   * window -- there is nothing to screenshot and no app version to pin. The
+   * bundle is still written, because summary.json + response.txt is exactly
+   * what the runbook's triage starts from either way.
+   */
+  driver?: Driver;
   startedAt: number;
 }
 
@@ -31,7 +37,7 @@ export async function writeForensicsBundle(input: ForensicsInput): Promise<void>
     startedAt: new Date(input.startedAt).toISOString(),
     finishedAt: new Date().toISOString(),
     durationMs: Date.now() - input.startedAt,
-    appVersion: await safe(() => input.driver.appVersion()),
+    appVersion: input.driver ? await safe(() => input.driver!.appVersion()) : 'n/a (direct transport)',
     githubRunId: process.env.GITHUB_RUN_ID,
     githubSha: process.env.GITHUB_SHA,
   };
@@ -42,8 +48,10 @@ export async function writeForensicsBundle(input: ForensicsInput): Promise<void>
     await writeFile(join(bundleDir, 'response.txt'), input.response);
   }
 
-  await tryWrite(bundleDir, 'snapshot.txt', () => input.driver.captureAccessibilitySnapshot());
-  await tryWriteBuffer(bundleDir, 'screenshot.png', () => input.driver.captureScreenshot());
+  const driver = input.driver;
+  if (!driver) return;
+  await tryWrite(bundleDir, 'snapshot.txt', () => driver.captureAccessibilitySnapshot());
+  await tryWriteBuffer(bundleDir, 'screenshot.png', () => driver.captureScreenshot());
 }
 
 function serializeError(err: unknown): string | undefined {
