@@ -16,7 +16,13 @@ test('readGoogleDoc returns the whole document when maxLength is omitted', { tim
     account: 'rich',
     shape: 'volume',
     args: { documentId: DOC_ID, format: 'text' },
-    invariants: { minLength: MIN_CHARS, transportSafe: true },
+    invariants: {
+      minLength: MIN_CHARS,
+      transportSafe: true,
+      // Positively the whole-document form, not merely long: a truncated reply
+      // on a large enough document would also clear minLength.
+      matches: [/^Content \(\d+ characters\):/],
+    },
   });
 });
 
@@ -31,15 +37,25 @@ test('readGoogleDoc truncates text without splitting a character', { timeout: 30
     args: { documentId: DOC_ID, format: 'text', maxLength: 4097 },
     invariants: {
       transportSafe: true,
+      // Read the tool's own header rather than measuring the response. The reply
+      // wraps the content in "Content (truncated to N chars of M total):" plus a
+      // trailing note, so the response length is not the content length and a
+      // length comparison answers the wrong question.
       predicate: (body) => {
-        // Guard against a vacuous pass: on a document shorter than maxLength no
-        // truncation happens, transportSafe holds trivially, and the check
-        // proves nothing while reporting green.
-        if (body.length < 4097) {
-          return `fixture too small -- ${body.length} chars is under maxLength 4097, so ` +
-            'truncation never ran. Point E2E_RICH_DOC_ID at a longer document.';
+        const header = body.match(/^Content \(truncated to (\d+) chars of (\d+) total\)/);
+        if (!header) {
+          // Either the document is shorter than maxLength, in which case nothing
+          // was truncated and this check proves nothing, or the response shape
+          // changed. Both need a human.
+          return 'the response is not the truncated form. Point E2E_RICH_DOC_ID at a ' +
+            `document longer than 4097 characters. Got: ${JSON.stringify(body.slice(0, 80))}`;
         }
-        return body.length > 4097 * 2 ? `maxLength 4097 was ignored -- got ${body.length} chars` : undefined;
+        const [, shown, total] = header;
+        if (Number(shown) !== 4097) return `asked for 4097 chars, header says ${shown}`;
+        if (Number(total) <= Number(shown)) {
+          return `header reports ${total} total, which is not more than the ${shown} shown`;
+        }
+        return undefined;
       },
     },
   });

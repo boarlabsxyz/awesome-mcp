@@ -139,16 +139,25 @@ export async function runToolCheck<C extends object>(spec: ToolCheckSpec<C>): Pr
     }
   }
 
-  await writeForensicsBundle({
-    testName: `${spec.tool}.${spec.shape}`,
-    client: `direct-${spec.account}`,
-    prompt: `${spec.tool}(${JSON.stringify(args ?? {}, null, 2)}) via ${mcp.describe()}`,
-    response: spec.readback && asserted !== undefined ? `${response}\n\n--- readback ---\n${asserted}` : response,
-    error: caught,
-    startedAt,
-  });
+  // finally, not sequential: a failed artifact write must not leak the MCP
+  // sessions. Node's test runner keeps the process alive for the next file, so
+  // leaked sessions accumulate across a whole run rather than dying with it.
+  try {
+    await writeForensicsBundle({
+      testName: `${spec.tool}.${spec.shape}`,
+      client: `direct-${spec.account}`,
+      prompt: `${spec.tool}(${JSON.stringify(args ?? {}, null, 2)}) via ${mcp.describe()}`,
+      response:
+        spec.readback && asserted !== undefined ? `${response}\n\n--- readback ---\n${asserted}` : response,
+      error: caught,
+      startedAt,
+    });
+  } catch (forensicsErr) {
+    console.error(`[e2e] could not write the forensics bundle: ${message(forensicsErr)}`);
+  } finally {
+    await Promise.all([...clients.values()].map((c) => c.close()));
+  }
 
-  await Promise.all([...clients.values()].map((c) => c.close()));
   if (caught) throw caught;
 }
 

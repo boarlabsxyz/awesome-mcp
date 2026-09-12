@@ -25,10 +25,15 @@ test('appendToGoogleDoc writes into an empty document', { timeout: 90_000 }, asy
     invariants: ({ marker }) => ({
       includes: [marker],
       transportSafe: true,
-      predicate: (body) =>
-        body.trimStart() === body || body.trim() === marker
+      // No escape clause. An earlier version also passed when `body.trim()`
+      // equalled the marker, which is true of "\n\nMARKER" -- exactly the
+      // leading blank line this check exists to catch.
+      predicate: (body) => {
+        const content = body.replace(/^Content \(\d+ characters\):\n---\n/, '');
+        return content.trimStart() === content
           ? undefined
-          : `appended into an empty doc but the body starts with whitespace: ${JSON.stringify(body.slice(0, 40))}`,
+          : `appended into an empty doc but the content starts with whitespace: ${JSON.stringify(content.slice(0, 40))}`;
+      },
     }),
     teardown: async (c, { documentId }) => trashFile(await c.service('google-drive'), documentId),
   });

@@ -213,8 +213,11 @@ Trigger it by hand: Actions → **E2E Tool Checks (Direct MCP)** → Run workflo
 | `checks (zero)` | green |
 | `sweep` | skipped — scheduled runs only |
 
-`checks` is **advisory** (`continue-on-error: true`) in v1, so a red matrix leg
-does not fail the run. That is intentional: let it establish a flake rate first.
+A red matrix leg fails this workflow, which is the signal you want. It is still
+advisory in the only sense that matters — nothing depends on it until
+`tool-checks` is added to `create-tag.yml`'s required list (step 10). The job
+deliberately does **not** use `continue-on-error`, which would report a failed
+job as successful.
 
 If a leg is red, download the `e2e-checks-<shape>-<sha>` artifact and open
 `summary.json`, then `response.txt`. Same two files `runbook.md`'s triage starts

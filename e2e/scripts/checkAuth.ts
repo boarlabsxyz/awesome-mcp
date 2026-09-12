@@ -19,12 +19,13 @@ if (!['fixture', 'rich', 'sandbox'].includes(account)) {
   process.exit(1);
 }
 
-const endpoint = await endpointFor(account, service);
-console.log(`account: ${account}\nservice: ${service}\nurl:     ${endpoint.url}`);
-
-// A stack trace is noise here: this script's whole job is to answer one question
-// in one line, and the message already says what to do.
+// Resolution is inside the try as well. A missing env var or an unreachable
+// catalog is exactly the kind of misconfiguration this script exists to report,
+// and reporting it as a raw stack defeats the point.
 try {
+  const endpoint = await endpointFor(account, service);
+  console.log(`account: ${account}\nservice: ${service}\nurl:     ${endpoint.url}`);
+
   const mcp = await connectMcp(endpoint);
   try {
     const tools = await mcp.listTools();

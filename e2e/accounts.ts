@@ -54,7 +54,40 @@ const ENV_PREFIX: Record<AccountName, string> = {
   sandbox: 'E2E_SANDBOX',
 };
 
-let catalogCache: Promise<Map<string, string>> | null = null;
+/**
+ * One catalog per base URL, not one per process.
+ *
+ * A single shared promise was wrong the moment two accounts point at different
+ * deployments: whichever resolved first would hand its URLs to the other, and
+ * the second account's checks would run against the first account's services
+ * while reporting the right account name.
+ */
+const catalogCache = new Map<string, Promise<Map<string, string>>>();
+
+/**
+ * Reject any endpoint that would carry an API key in the clear.
+ *
+ * These bearers authenticate as a dashboard user to every MCP they have
+ * connected, so a mistyped `http://` base URL does not just fail, it leaks the
+ * credential to anything on the path. Loopback is allowed because a local
+ * deployment has no network hop to intercept.
+ */
+function assertSecure(url: string, source: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`${source} is not a valid URL: ${JSON.stringify(url)}`);
+  }
+  const loopback = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]';
+  if (parsed.protocol !== 'https:' && !loopback) {
+    throw new Error(
+      `${source} must be https (got ${parsed.protocol}//${parsed.hostname}). These checks send an ` +
+        'account API key as a bearer token; only loopback may use http.',
+    );
+  }
+  return url;
+}
 
 /**
  * slug -> mcpUrl, from the deployment's own public catalog.
@@ -65,22 +98,30 @@ let catalogCache: Promise<Map<string, string>> | null = null;
  * and that a typo'd slug fails with the list of real ones rather than a 404.
  */
 async function catalogUrls(baseUrl: string): Promise<Map<string, string>> {
-  if (!catalogCache) {
-    catalogCache = (async () => {
-      const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/v1/catalogs`);
-      if (!res.ok) {
-        throw new Error(`GET ${baseUrl}/api/v1/catalogs returned ${res.status} ${res.statusText}`);
-      }
-      const body = (await res.json()) as { catalogs?: Array<{ slug: string; mcpUrl: string }> };
-      const map = new Map<string, string>();
-      for (const entry of body.catalogs ?? []) {
-        if (entry.slug && entry.mcpUrl) map.set(entry.slug, entry.mcpUrl);
-      }
-      if (map.size === 0) throw new Error(`${baseUrl}/api/v1/catalogs listed no MCPs`);
-      return map;
-    })();
-  }
-  return catalogCache;
+  const key = baseUrl.replace(/\/+$/, '');
+  const cached = catalogCache.get(key);
+  if (cached) return cached;
+
+  const pending = (async () => {
+    const res = await fetch(`${key}/api/v1/catalogs`);
+    if (!res.ok) {
+      throw new Error(`GET ${key}/api/v1/catalogs returned ${res.status} ${res.statusText}`);
+    }
+    const body = (await res.json()) as { catalogs?: Array<{ slug: string; mcpUrl: string }> };
+    const map = new Map<string, string>();
+    for (const entry of body.catalogs ?? []) {
+      if (entry.slug && entry.mcpUrl) map.set(entry.slug, entry.mcpUrl);
+    }
+    if (map.size === 0) throw new Error(`${key}/api/v1/catalogs listed no MCPs`);
+    return map;
+  })();
+
+  // Cache the promise, not the result, so concurrent checks share one fetch --
+  // but drop it on failure so a transient outage is not remembered for the rest
+  // of the run.
+  catalogCache.set(key, pending);
+  pending.catch(() => catalogCache.delete(key));
+  return pending;
 }
 
 /**
@@ -96,14 +137,24 @@ async function catalogUrls(baseUrl: string): Promise<Map<string, string>> {
  * compound `<key>.<instanceId>` form, or an override URL carrying
  * `?instanceId=`, only when an account has more than one connection for the
  * same MCP.
+ *
+ * Overrides are looked up account-first (`E2E_FIXTURE_MCP_URL_GOOGLE_DOCS`)
+ * before the shared form (`E2E_MCP_URL_GOOGLE_DOCS`), because an override that
+ * names an instance names *one account's* instance -- sharing it across accounts
+ * points every check at whichever account owns that connection.
  */
 export async function endpointFor(account: AccountName, service: ServiceName): Promise<Endpoint> {
   const apiKey = required(`${ENV_PREFIX[account]}_API_KEY`);
-  const override = process.env[`E2E_MCP_URL_${service.toUpperCase().replace(/-/g, '_')}`];
+  const suffix = `MCP_URL_${service.toUpperCase().replace(/-/g, '_')}`;
+  const scoped = process.env[`${ENV_PREFIX[account]}_${suffix}`];
+  const shared = process.env[`E2E_${suffix}`];
 
-  let url = override;
+  let url = scoped ?? shared;
+  let source = scoped ? `${ENV_PREFIX[account]}_${suffix}` : `E2E_${suffix}`;
+
   if (!url) {
-    const base = required(`${ENV_PREFIX[account]}_BASE_URL`, process.env.E2E_BASE_URL);
+    const baseName = `${ENV_PREFIX[account]}_BASE_URL`;
+    const base = assertSecure(required(baseName, process.env.E2E_BASE_URL), baseName);
     const catalog = await catalogUrls(base);
     url = catalog.get(service);
     if (!url) {
@@ -112,9 +163,10 @@ export async function endpointFor(account: AccountName, service: ServiceName): P
           `${[...catalog.keys()].join(', ')}.`,
       );
     }
+    source = `${base}/api/v1/catalogs`;
   }
 
-  return { url, apiKey, account, service };
+  return { url: assertSecure(url, source), apiKey, account, service };
 }
 
 /**
@@ -168,9 +220,10 @@ export function explainToolError(account: AccountName, tool: string, text: strin
       'listGoogleDocs 403s on ANY query, for every account tested including freshly ' +
       'connected ones, while an unqueried listGoogleDocs and searchGoogleDocs with the ' +
       'same term both succeed -- so the connection is not the problem.\n' +
-      'Workaround: use searchGoogleDocs. If this fires for a tool other than ' +
-      'listGoogleDocs, check whether Drive is connected at all: ' +
-      `npm run check:auth -- ${account} google-drive\n` +
+      (tool.startsWith('listGoogleDocs')
+        ? 'Workaround: use searchGoogleDocs, which takes the same term and works.\n'
+        : 'That evidence is about listGoogleDocs specifically. For this tool, first ' +
+          `check whether Drive is connected at all: npm run check:auth -- ${account} google-drive\n`) +
       `Original error: ${text}`
     );
   }

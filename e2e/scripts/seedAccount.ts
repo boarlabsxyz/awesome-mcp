@@ -42,7 +42,15 @@ if (process.env.E2E_SEED_CONFIRM !== '1') {
 // the drive server, listGoogleDocs on the docs one, and each deployment runs
 // them as separate hosts. One client cannot do both.
 const drive = await connectMcp(endpoint);
-const docs = await connectMcp(await endpointFor(account!, 'google-docs'));
+// If the second connection fails the first is already open, so it is closed here
+// rather than in the finally below, which this would never reach.
+let docs: McpClient;
+try {
+  docs = await connectMcp(await endpointFor(account!, 'google-docs'));
+} catch (err) {
+  await drive.close();
+  throw err;
+}
 try {
   if (account === 'fixture') await seedFixture(drive, docs);
   else if (account === 'rich') await seedRich(drive, docs);
@@ -134,6 +142,9 @@ async function createDoc(
   if (filled.isError) fail(`created "${title}" but could not fill it: ${filled.text}`);
 
   const back = await docs.callTool('readGoogleDoc', { documentId: id, format: 'text' });
+  // Check the error flag first: an error message long enough to clear the length
+  // threshold would otherwise be accepted as successfully seeded content.
+  if (back.isError) fail(`"${title}" could not be read back: ${back.text}`);
   if (back.text.length < initialContent.length / 2) {
     fail(`"${title}" reads back as ${back.text.length} chars after seeding ${initialContent.length}.`);
   }
@@ -143,7 +154,11 @@ async function createDoc(
 
 /** Exact-title match on the DOCS server; listGoogleDocs' query is a substring search. */
 async function findByTitle(docs: McpClient, title: string): Promise<string | null> {
-  const { text } = await docs.callTool('listGoogleDocs', { query: title, maxResults: 100 });
+  const { text, isError } = await docs.callTool('listGoogleDocs', { query: title, maxResults: 100 });
+  // Returning null on an error would read as "no such document" and seed a
+  // duplicate on every run, which is precisely what idempotence-by-title exists
+  // to prevent.
+  if (isError) fail(`could not search for "${title}": ${text}`);
   for (const [, name, id] of text.matchAll(/^\d+\. \*\*(.+?)\*\*.*\n\s+ID: (\S+)/gm)) {
     if (name === title) return id;
   }
@@ -151,7 +166,8 @@ async function findByTitle(docs: McpClient, title: string): Promise<string | nul
 }
 
 async function countDocs(docs: McpClient): Promise<number> {
-  const { text } = await docs.callTool('listGoogleDocs', { maxResults: 100 });
+  const { text, isError } = await docs.callTool('listGoogleDocs', { maxResults: 100 });
+  if (isError) fail(`could not count documents: ${text}`);
   return Number(text.match(/Found (\d+) Google Document\(s\)/)?.[1] ?? 0);
 }
 

@@ -100,11 +100,22 @@ export async function sweepScratch(
   clients: { docs: McpClient; drive: McpClient },
   { maxAgeHours = 24, dryRun = false }: { maxAgeHours?: number; dryRun?: boolean } = {},
 ): Promise<{ trashed: string[]; kept: number }> {
-  const { text } = await clients.docs.callTool('listGoogleDocs', {
+  // A negative or NaN age puts the cutoff in the future, which would trash every
+  // scratch doc including the ones a run in flight is still asserting against.
+  // SWEEP_MAX_AGE_HOURS comes from the environment, so a typo reaches here.
+  if (!Number.isFinite(maxAgeHours) || maxAgeHours < 0) {
+    throw new Error(`maxAgeHours must be a non-negative number, got ${JSON.stringify(maxAgeHours)}`);
+  }
+
+  const { text, isError } = await clients.docs.callTool('listGoogleDocs', {
     query: TITLE_PREFIX,
     maxResults: 100,
     orderBy: 'createdTime',
   });
+  // Silence here would be indistinguishable from a clean account: the sweep
+  // would report "trashed 0, kept 0" and the leak it exists to prevent would
+  // keep growing.
+  if (isError) throw new Error(explainToolError('sandbox', 'listGoogleDocs', text));
 
   const cutoff = Date.now() - maxAgeHours * 60 * 60 * 1000;
   const trashed: string[] = [];

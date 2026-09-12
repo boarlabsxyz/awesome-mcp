@@ -71,6 +71,11 @@ export async function connectMcp(endpoint: Endpoint): Promise<McpClient> {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
+      // Every request here carries the account's API key. A redirect would
+      // replay that header at whatever host the response names, so a
+      // misconfigured proxy or a hijacked DNS entry could collect it. MCP has no
+      // legitimate redirect, so treat one as an error rather than following it.
+      redirect: 'error',
     });
 
     // A 401 here is the single most common setup failure: a missing or stale
@@ -134,6 +139,7 @@ export async function connectMcp(endpoint: Endpoint): Promise<McpClient> {
             'mcp-session-id': sessionId,
             'mcp-protocol-version': protocolVersion,
           },
+          redirect: 'error',
         });
       } catch {
         /* ignore */
