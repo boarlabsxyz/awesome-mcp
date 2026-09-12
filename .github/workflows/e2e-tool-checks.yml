@@ -59,10 +59,16 @@ jobs:
     if: ${{ vars.E2E_BASE_URL != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # ADVISORY in v1, same reasoning as e2e-smoke.yml's chatgpt-web job: let it
-    # establish a flake rate before anything depends on it. Remove this line once
-    # it has been green on content nobody is editing by hand.
-    continue-on-error: true
+    # Deliberately NOT continue-on-error, unlike e2e-smoke.yml's chatgpt-web job.
+    # That flag exists there because chatgpt-web shares a workflow with the
+    # blocking claude-desktop job. Nothing shares this one, so a red leg only
+    # makes this workflow red -- which is the signal you want -- and the job
+    # stays advisory by not appearing in create-tag.yml's required list.
+    #
+    # It also matters for the gate: continue-on-error reports the job as having
+    # succeeded, so anything downstream reading its conclusion would treat a
+    # failed check as a pass. An advisory job and a lying job are not the same
+    # thing.
     strategy:
       fail-fast: false
       matrix:
@@ -114,6 +120,34 @@ jobs:
           path: e2e/.artifacts/**
           retention-days: 30
           if-no-files-found: warn
+
+  # One stable check-run name for create-tag.yml's required list.
+  #
+  # The matrix produces `checks (needle)`, `checks (volume)`, `checks (zero)`,
+  # and those names change the moment a fourth shape is added -- a required list
+  # naming them would silently stop covering the new one, or block every tag on a
+  # name that no longer exists. This job's name does not move.
+  #
+  # Carries the same E2E_BASE_URL guard as `checks`, so before the accounts exist
+  # it produces no check run at all. That is the honest state: `validate-ci`
+  # reports it missing rather than a skipped job being counted as a pass.
+  tool-checks:
+    needs: [checks]
+    # always() so a FAILED matrix still reaches this job. Without it the job
+    # skips, the required check goes absent, and the tag gate reports "missing"
+    # for what was actually a failure -- two states that must not look alike.
+    if: ${{ always() && vars.E2E_BASE_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verdict
+        run: |
+          result='${{ needs.checks.result }}'
+          echo "tool checks: $result"
+          if [ "$result" != "success" ]; then
+            echo "::error::tool checks did not pass ($result)"
+            exit 1
+          fi
 
   # Trash scratch documents from runs that died before teardown. Without this the
   # sandbox account accumulates and the zero-state checks start failing for

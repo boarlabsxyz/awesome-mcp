@@ -222,16 +222,56 @@ from; there is no screenshot, because there is no browser in this path.
 
 ---
 
-## Step 10 — Promote to blocking
+## Step 10 — Gate the release on it
 
-Remove `continue-on-error: true` from the `checks` job once:
+**Do not run these at tag-creation time.** Nothing new is deployed at that
+moment, so they would test whatever dev happens to be running — which is not the
+code being tagged. A green check that does not correspond to the tagged commit is
+worse than no check.
 
-- 10+ consecutive runs with no false-positive failures, **and**
-- the rich account's content is stable enough that `E2E_RICH_MIN_DOCS` is not
-  borderline, **and**
-- the sandbox sweeper has run at least a week without leaking.
+`create-tag.yml` already does the right thing: `validate-ci` reads the check runs
+**on the SHA being tagged** and requires each named one to be `success`. Gating
+is therefore a one-line edit, not a new job:
 
-Only then consider adding the job name to `create-tag.yml`'s required list.
+```js
+// .github/workflows/create-tag.yml, "Check CI passed on commit"
+const required = ['lint', 'typecheck', 'test', 'build', 'tool-checks'];
+```
+
+`tool-checks` is the aggregator job in `e2e-tool-checks.yml`, and it exists
+precisely for this. Do **not** name the matrix legs (`checks (needle)` and
+friends) — those names change the moment a fourth shape is added, and a required
+list naming them would either stop covering the new one or block every tag on a
+name that no longer exists.
+
+### The release protocol this implies
+
+`Deploy → Dev` is `workflow_dispatch` only: it does not fire on every push to
+main. Since the checks run on `workflow_run` of that deploy, a commit only has a
+`tool-checks` result if someone deployed **that commit** to dev. So the release
+sequence becomes:
+
+1. Deploy the release candidate SHA to dev.
+2. Let `E2E Tool Checks` finish green against it.
+3. Create the tag on that SHA.
+
+Skip step 1 and `validate-ci` fails with *Missing CI checks: tool-checks* — a
+blocked release for a reason that is not a test failure.
+
+### Before you add it to the list
+
+- **10+ consecutive runs with no false-positive failures.**
+- The rich account's content is stable enough that `E2E_RICH_MIN_DOCS` is not
+  borderline.
+- The sandbox sweeper has run a week without leaking.
+- `E2E_BASE_URL` is set and stays set. Both `checks` and `tool-checks` are gated
+  on it, so unsetting it makes the required check vanish and blocks every
+  release.
+
+Until then the workflow is advisory by the only mechanism that means anything:
+nothing depends on it. Note it does **not** use `continue-on-error` — that flag
+reports a failed job as successful, so a gate reading its conclusion would treat
+a red run as a pass. An advisory job and a lying job are not the same thing.
 
 ---
 
