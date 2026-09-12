@@ -98,7 +98,21 @@ export async function handleListGoogleDocs(
       q: queryString,
       pageSize: args.maxResults,
       orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
-      fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress),driveId)',
+      // Same projection as handleSearchGoogleDocs, deliberately.
+      //
+      // With this projection every `query` returned 403 "Permission denied" --
+      // on three separate accounts, one of them connected minutes earlier, under
+      // every corpora / includeSharedDrives / orderBy combination. The unqueried
+      // call was fine, and searchGoogleDocs with the identical query string
+      // (searchIn defaults to 'both') was fine, which rules out scopes, shared-
+      // drive parameters, orderBy and `fullText contains` itself and leaves the
+      // projection as the only difference between a call that works and one that
+      // does not.
+      //
+      // Nothing is lost: formatFileListEntry renders name, id, modifiedTime,
+      // owners[0].displayName, driveId and webViewLink, and never reads `size`
+      // or an owner's emailAddress.
+      fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName),parents,driveId)',
       ...buildSharedDriveParams(args),
     });
     const files = response.data.files || [];
