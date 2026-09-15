@@ -125,13 +125,23 @@ real client can reach a tool, only what the tool returns.
 
 Division of labour:
 
-- **needle, live client** (`tests/*.smoke.ts`): a few representative tools per
-  service, per deploy. This is the gate signal, and the only thing that proves
-  client → connector → OAuth → tool → render.
+- **tasks, live client** (`tests/tasks/*.task.ts`): a handful of prompts per
+  service, phrased the way a person asks — no tool named, no parameters given.
+  These are not per-tool coverage and should never grow that way. They exist for
+  two things nothing else can see: the argument combinations a *model* picks,
+  and whether a tool failure surfaces as a model politely explaining itself.
+  Both were live for months in `listGoogleDocs`, whose every search 403'd while
+  the assistant said "I don't have permission to search your Drive".
 - **needle / volume / zero, direct** (`tests/tools/*/*.check.ts`): the per-tool
   sweep. 227 tools at ~2 min of live conversation each is ~17 hours per client;
   the same coverage here runs in minutes on `ubuntu-latest`, and consumes no
   Browserbase minutes.
+
+The dividing line: a direct check asserts the arguments someone thought to write
+down, exactly. A task test asserts an outcome and lets the model choose the
+route. The sorting bug lived in the gap — the failing combination was the
+*default* one, which is why no hand-written check had it until the task tier
+went looking.
 
 ## Where each value comes from
 

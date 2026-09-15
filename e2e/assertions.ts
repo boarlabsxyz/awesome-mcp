@@ -153,3 +153,44 @@ function hex(code: number): string {
 function truncate(s: string, n = 600): string {
   return s.length > n ? `${s.slice(0, n)}...(truncated)` : s;
 }
+
+/**
+ * Phrases a model uses when a tool let it down.
+ *
+ * This is the assertion that only exists for live-client tests, and it covers a
+ * failure mode nothing else can see. A direct tool check gets a 403 and fails
+ * loudly. A model gets the same 403 and says "I don't have permission to search
+ * your Drive" -- or quietly falls back to another tool and answers anyway. Both
+ * read as success to anything watching the transport, and in production nobody
+ * files a bug for the first one, because the assistant sounded like it was
+ * working as intended.
+ *
+ * Deliberately excluded: "I couldn't find". That is the correct answer to a
+ * search with no matches, so a task that expects an empty result opts in
+ * separately rather than having it banned by default.
+ */
+export const REPORTED_FAILURE_PHRASES = [
+  "i don't have permission",
+  'i do not have permission',
+  "i don't have access",
+  'i do not have access',
+  'permission denied',
+  "i wasn't able to",
+  'i was unable to',
+  'i encountered an error',
+  'something went wrong',
+  'an error occurred',
+  'failed to retrieve',
+  'failed to access',
+  'not authorized',
+  'insufficient permission',
+] as const;
+
+/** The first failure phrase present in `text`, or null. Case-insensitive. */
+export function findReportedFailure(text: string, extra: readonly string[] = []): string | null {
+  const haystack = text.toLowerCase();
+  for (const phrase of [...REPORTED_FAILURE_PHRASES, ...extra]) {
+    if (haystack.includes(phrase.toLowerCase())) return phrase;
+  }
+  return null;
+}

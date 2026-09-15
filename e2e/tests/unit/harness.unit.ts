@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkInvariants, findLoneSurrogate, findUnsafeChar } from '../../assertions.ts';
+import {
+  checkInvariants,
+  findLoneSurrogate,
+  findReportedFailure,
+  findUnsafeChar,
+} from '../../assertions.ts';
 import { scratchTitle, sweepScratch } from '../../setup/docsScratch.ts';
 import type { McpClient, ToolResult } from '../../transports/mcpHttp.ts';
 
@@ -127,4 +132,36 @@ test('sweepScratch reaches for each tool on the server that registers it', async
 
   assert.deepEqual(asked.docs, ['listGoogleDocs']);
   assert.deepEqual(asked.drive, ['deleteFile']);
+});
+
+// The live-client tier's whole value rests on this detector, and a detector that
+// silently matches nothing passes every test it guards. These are the replies a
+// model actually produced against the broken listGoogleDocs.
+test('findReportedFailure catches a model explaining a tool failure', () => {
+  const refusals = [
+    "I don't have permission to search your Google Drive.",
+    'I was unable to access your documents.',
+    'It looks like an error occurred while searching.',
+    'Permission denied when listing your files.',
+    'I do not have access to that folder.',
+  ];
+  for (const reply of refusals) {
+    assert.notEqual(findReportedFailure(reply), null, `should have flagged: ${reply}`);
+  }
+});
+
+test('findReportedFailure leaves a genuine empty result alone', () => {
+  // "I couldn't find" is the CORRECT answer to a search with no matches. Banning
+  // it by default would make every zero-state task unpassable.
+  assert.equal(findReportedFailure("I couldn't find any document mentioning that."), null);
+  assert.equal(findReportedFailure('OUTPUT_BEGINE2E Smoke Fixture DocOUTPUT_END'), null);
+});
+
+test('findReportedFailure is case-insensitive and takes extra phrases', () => {
+  assert.notEqual(findReportedFailure('I DO NOT HAVE ACCESS'), null);
+  assert.equal(findReportedFailure('the connector is not configured'), null);
+  assert.notEqual(
+    findReportedFailure('the connector is not configured', ['not configured']),
+    null,
+  );
 });
