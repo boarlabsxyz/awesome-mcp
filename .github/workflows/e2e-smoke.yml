@@ -1,29 +1,116 @@
 name: E2E Smoke (Live Clients)
 
-# Runs after each successful dev deploy. Drives the real Claude Desktop and
-# ChatGPT clients against the dev MCP server via a self-hosted Mac Studio.
+# Proves a real client can reach the MCP server: client → connector → OAuth →
+# tool → render. That is the ONLY thing this suite is for. Per-tool coverage
+# lives in e2e-tool-checks.yml, which needs no browser and runs in minutes --
+# keep this suite to a handful of smokes per service, because every test here
+# costs a full LLM conversation and a browser session.
 #
-# Claude Desktop is the blocking signal for prod promotion.
-# ChatGPT is advisory in v1 (continue-on-error) while OpenAI's MCP surface
-# is still shifting. Promote to blocking once flake rate is acceptable.
+# Runs on GitHub-hosted runners against Browserbase cloud browsers. There is no
+# self-hosted dependency left in this file.
+#
+# DORMANT until `E2E_BROWSER` is set to `browserbase` in repository variables,
+# so it cannot fail noisily before the Browserbase account is wired up.
 
 on:
   workflow_run:
     workflows: ['Deploy → Dev']
     types: [completed]
   workflow_dispatch:
-    inputs:
-      ref:
-        description: 'Git SHA to test (defaults to latest dev deploy)'
-        required: false
-        type: string
 
 permissions:
   contents: read
 
+# One browser session per job, and the seeded auth context is shared state.
+# Queue rather than cancel: a cancelled run leaves its session billing until the
+# api_timeout expires.
+concurrency:
+  group: e2e-smoke
+  cancel-in-progress: false
+
 jobs:
+  web-clients:
+    if: ${{ vars.E2E_BROWSER == 'browserbase' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # ADVISORY until the drivers have been verified against a live DOM. Every
+    # selector in claude-web.ts is marked SELECTOR-TODO, and ChatGPT's DOM moves
+    # often enough that e2e-smoke has never been a trustworthy red/green signal.
+    # Remove once a client has produced 10+ consecutive true results.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [claude-web, chatgpt-web]
+    env:
+      CLIENT: ${{ matrix.client }}
+      E2E_BROWSER: browserbase
+      ARTIFACTS_DIR: ${{ github.workspace }}/e2e/.artifacts
+      RESPONSE_TIMEOUT_MS: '120000'
+      BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
+      BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
+      # Both go to both jobs; contextIdFor() picks the one matching CLIENT.
+      # Separate contexts are not an optimisation: claude.ai and chatgpt.com are
+      # unrelated logins, so one shared context sends whichever client runs
+      # second to a sign-in page -- which looks like a broken selector rather
+      # than the wrong cookie jar.
+      BROWSERBASE_CONTEXT_ID_CLAUDE_WEB: ${{ secrets.BROWSERBASE_CONTEXT_ID_CLAUDE_WEB }}
+      BROWSERBASE_CONTEXT_ID_CHATGPT_WEB: ${{ secrets.BROWSERBASE_CONTEXT_ID_CHATGPT_WEB }}
+      E2E_FIXTURE_DOC_ID: ${{ vars.E2E_FIXTURE_DOC_ID }}
+      E2E_FIXTURE_DOC_NEEDLE: ${{ vars.E2E_FIXTURE_DOC_NEEDLE }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
+      - name: Pre-flight - Browserbase configured
+        # Fail here, with a name, rather than inside a driver as a 401 from an
+        # SDK call. A missing context secret is the likely mistake: there is one
+        # per client and they are easy to mix up.
+        run: |
+          CONTEXT_VAR="BROWSERBASE_CONTEXT_ID_$(echo "$CLIENT" | tr 'a-z-' 'A-Z_')"
+          for var in BROWSERBASE_API_KEY BROWSERBASE_PROJECT_ID "$CONTEXT_VAR"; do
+            if [ -z "${!var}" ]; then
+              echo "::error::$var is empty. Seed it with: CLIENT=$CLIENT npm run seed:browserbase"
+              exit 1
+            fi
+          done
+          echo "Browserbase configured for ${CLIENT} (context from ${CONTEXT_VAR})."
+
+      - name: Install e2e deps
+        working-directory: e2e
+        run: npm install
+
+      - name: Run ${{ matrix.client }} smoke tests
+        working-directory: e2e
+        run: npm test
+
+      - name: Upload forensics bundle
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-${{ matrix.client }}-${{ github.sha }}
+          path: e2e/.artifacts/**
+          retention-days: 30
+          if-no-files-found: warn
+
+  # Kept, and off.
+  #
+  # claude-desktop drives the signed Electron app through Appium and macOS
+  # Accessibility because CDP is fused off by Electron Fuses, so it cannot run
+  # anywhere but a Mac. It is gated behind a variable rather than deleted: if the
+  # cloud-browser path turns out to be unreliable -- Cloudflare is the open
+  # question -- reviving this is setting E2E_MAC_STUDIO=true, not recovering a
+  # workflow from git history.
+  #
+  # Note what is lost while it is off: nothing exercises the desktop app most
+  # people actually use. The web clients are a proxy for it, not a replacement.
   claude-desktop:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ vars.E2E_MAC_STUDIO == 'true' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success') }}
     runs-on: [self-hosted, macOS, mac-studio]
     timeout-minutes: 30
     env:
@@ -37,7 +124,6 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          ref: ${{ inputs.ref || github.event.workflow_run.head_sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -47,8 +133,7 @@ jobs:
       - name: Pre-flight - Appium reachable
         run: |
           curl --fail --silent --show-error --max-time 5 \
-            "http://${APPIUM_HOST}:${APPIUM_PORT}/status" \
-            | head -c 300
+            "http://${APPIUM_HOST}:${APPIUM_PORT}/status" | head -c 300
 
       - name: Install e2e deps
         working-directory: e2e
@@ -62,56 +147,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: e2e-claude-desktop-${{ inputs.ref || github.event.workflow_run.head_sha }}
+          name: e2e-claude-desktop-${{ github.sha }}
           path: e2e/.artifacts/**
-          retention-days: 90
-          if-no-files-found: warn
-
-  chatgpt-web:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    runs-on: [self-hosted, macOS, mac-studio]
-    needs: [claude-desktop]
-    # ADVISORY in v1: failures here do not block prod promotion. Remove this
-    # line and add the job name to create-tag.yml's required list once ChatGPT
-    # has shown a stable flake rate.
-    continue-on-error: true
-    timeout-minutes: 30
-    env:
-      CLIENT: chatgpt-web
-      ARTIFACTS_DIR: ${{ github.workspace }}/e2e/.artifacts
-      CHATGPT_CDP_ENDPOINT: http://127.0.0.1:9222
-      RESPONSE_TIMEOUT_MS: '120000'
-      E2E_FIXTURE_DOC_ID: ${{ vars.E2E_FIXTURE_DOC_ID }}
-      E2E_FIXTURE_DOC_NEEDLE: ${{ vars.E2E_FIXTURE_DOC_NEEDLE }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          ref: ${{ inputs.ref || github.event.workflow_run.head_sha }}
-          persist-credentials: false
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 20
-
-      - name: Pre-flight - Chrome CDP reachable
-        run: |
-          curl --fail --silent --show-error --max-time 5 \
-            "${CHATGPT_CDP_ENDPOINT}/json/version" \
-            | head -c 300
-
-      - name: Install e2e deps
-        working-directory: e2e
-        run: npm install
-
-      - name: Run ChatGPT web smoke tests
-        working-directory: e2e
-        run: npm test
-
-      - name: Upload forensics bundle
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: e2e-chatgpt-web-${{ inputs.ref || github.event.workflow_run.head_sha }}
-          path: e2e/.artifacts/**
-          retention-days: 90
+          retention-days: 30
           if-no-files-found: warn
