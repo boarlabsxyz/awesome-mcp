@@ -6,7 +6,8 @@
 // the transport lands for every client at once.
 
 import { chromium, type Browser } from 'playwright';
-import { createBrowserbaseSession, usingBrowserbase, type BrowserbaseSession } from './browserbase.ts';
+import { createBrowserbaseSession, releaseSession, usingBrowserbase, type BrowserbaseSession } from './browserbase.ts';
+import type { ClientName } from './driver.ts';
 
 export interface Connection {
   browser: Browser;
@@ -16,13 +17,26 @@ export interface Connection {
   describe(): string;
 }
 
-export async function connectBrowser(localCdpEndpoint: string): Promise<Connection> {
-  const remote = usingBrowserbase() ? await createBrowserbaseSession() : null;
+export async function connectBrowser(
+  localCdpEndpoint: string,
+  /** Selects that client's seeded auth context. See contextIdFor(). */
+  client?: ClientName,
+): Promise<Connection> {
+  const remote = usingBrowserbase() ? await createBrowserbaseSession({ client }) : null;
   if (remote) {
     console.error(`[e2e] browserbase session ${remote.sessionId} — replay: ${remote.replayUrl}`);
   }
 
-  const browser = await chromium.connectOverCDP(remote ? remote.connectUrl : localCdpEndpoint);
+  let browser: Browser;
+  try {
+    browser = await chromium.connectOverCDP(remote ? remote.connectUrl : localCdpEndpoint);
+  } catch (err) {
+    // The session is already running and billing by this point. Without this it
+    // idles to api_timeout, and the failure people notice is the invoice rather
+    // than the connect error.
+    if (remote) await releaseSession(remote.sessionId);
+    throw err;
+  }
 
   return {
     browser,

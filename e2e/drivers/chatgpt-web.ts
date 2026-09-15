@@ -28,9 +28,9 @@ export async function createChatGptWebDriver(): Promise<Driver> {
   // often live in exactly one place. E2E_BROWSER=browserbase picks the cloud
   // path; anything else keeps the local warmed-profile behaviour that is the
   // default on the Mac Studio.
-  const conn = await connectBrowser(CDP_ENDPOINT);
+  const conn = await connectBrowser(CDP_ENDPOINT, 'chatgpt-web');
   const context = conn.browser.contexts()[0] ?? (await conn.browser.newContext());
-  let page: Page = context.pages()[0] ?? (await context.newPage());
+  const page: Page = context.pages()[0] ?? (await context.newPage());
 
   if (!page.url().includes('chatgpt.com')) {
     await page.goto(CHATGPT_URL, { waitUntil: 'domcontentloaded' });

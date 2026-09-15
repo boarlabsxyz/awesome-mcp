@@ -16,7 +16,13 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { chromium } from 'playwright';
-import { browserbaseClient, createBrowserbaseSession, liveViewUrl } from '../drivers/browserbase.ts';
+import type { ClientName } from '../drivers/driver.ts';
+import {
+  browserbaseClient,
+  createBrowserbaseSession,
+  liveViewUrl,
+  releaseSession,
+} from '../drivers/browserbase.ts';
 
 // Which site's login this context is for. One context per client — cookies for
 // claude.ai and chatgpt.com are unrelated, and mixing them in one context would
@@ -151,6 +157,7 @@ async function main(): Promise<void> {
   process.env.BROWSERBASE_CONTEXT_ID = contextId;
   const session = await createBrowserbaseSession({
     persist: true,
+    client: CLIENT as ClientName,
     // Generous: a human is logging in, possibly hunting for a 2FA code.
     timeoutSeconds: 1800,
     // NOT keepAlive. `persist` writes the cookie jar back when the SESSION
@@ -192,17 +199,12 @@ async function main(): Promise<void> {
   // only writes on completion — so this is the step that actually saves the
   // login. REQUEST_RELEASE is also what stops it billing until the timeout.
   await browser.close();
-  try {
-    await bb.sessions.update(session.sessionId, { status: 'REQUEST_RELEASE', projectId });
-  } catch (err: any) {
-    console.error(`[seed] could not release the session: ${err?.message ?? err}`);
-    console.error('[seed] the context may not have been written — re-run and check.');
-  }
+  await releaseSession(session.sessionId);
   await new Promise((r) => setTimeout(r, 5_000)); // docs: allow a few seconds to sync
 
   // Prove the cookies actually landed, rather than trusting the write. This is
   // the check whose absence let a silently-empty context reach a test run.
-  await verifyContextPersisted(contextId, target.url);
+  const persisted = await verifyContextPersisted(contextId, target.url);
 
   if (!loggedIn) {
     console.error('');
@@ -210,9 +212,19 @@ async function main(): Promise<void> {
     console.error('[seed] completed. The context was still saved — re-run to try again.');
   }
 
+  // Reporting "done" here would undo the verification: the operator's next move
+  // is to paste that id into CI secrets, and a context that failed to persist
+  // fails every smoke run afterwards as a selector problem.
+  if (!persisted) {
+    console.error('');
+    console.error('[seed] NOT seeded. The context id is deliberately not printed for pasting —');
+    console.error('[seed] re-run the seed and complete the login before it is worth saving.');
+    return;
+  }
+
   console.error('');
   console.error('[seed] done. Add to CI secrets / your shell:');
-  console.error(`    BROWSERBASE_CONTEXT_ID=${contextId}`);
+  console.error(`    BROWSERBASE_CONTEXT_ID_${CLIENT.toUpperCase().replace(/-/g, '_')}=${contextId}`);
   console.error('');
   console.error('Then run a test against it:');
   console.error(`    E2E_BROWSER=browserbase CLIENT=${CLIENT} \\`);
@@ -226,10 +238,10 @@ async function main(): Promise<void> {
  * evidence of failure was otherwise a smoke test landing on a sign-in page,
  * which reads as a broken selector rather than a broken context.
  */
-async function verifyContextPersisted(contextId: string, url: string): Promise<void> {
+async function verifyContextPersisted(contextId: string, url: string): Promise<boolean> {
   console.error('[seed] verifying the saved login by reopening the context…');
   process.env.BROWSERBASE_CONTEXT_ID = contextId;
-  const check = await createBrowserbaseSession({ persist: false, timeoutSeconds: 120 });
+  const check = await createBrowserbaseSession({ persist: false, timeoutSeconds: 120, client: CLIENT as ClientName });
   const browser = await chromium.connectOverCDP(check.connectUrl);
   try {
     const ctx = browser.contexts()[0] ?? (await browser.newContext());
@@ -247,16 +259,17 @@ async function verifyContextPersisted(contextId: string, url: string): Promise<v
       console.error('[seed] before pressing Enter.');
       console.error(`[seed] Replay of this check: ${check.replayUrl}`);
       process.exitCode = 1;
-      return;
+      return false;
     }
     console.error(`[seed] verified — reopened context loads "${title}".`);
+    return true;
   } finally {
     await browser.close();
-    try {
-      // Release rather than letting it idle to timeout — an unreleased check
-      // session bills for its full duration.
-      browserbaseClient().sessions.update(check.sessionId, { status: 'REQUEST_RELEASE' });
-    } catch { /* best-effort */ }
+    // Awaited. Un-awaited, the request could be cut short by the process exiting
+    // and a rejection would escape the catch as an unhandled rejection rather
+    // than the best-effort it is meant to be. releaseSession already swallows
+    // and reports its own failures.
+    await releaseSession(check.sessionId);
   }
 }
 

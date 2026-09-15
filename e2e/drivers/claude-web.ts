@@ -45,9 +45,9 @@ const ASSISTANT_SELECTORS = [
 ];
 
 export async function createClaudeWebDriver(): Promise<Driver> {
-  const conn = await connectBrowser(CDP_ENDPOINT);
+  const conn = await connectBrowser(CDP_ENDPOINT, 'claude-web');
   const context = conn.browser.contexts()[0] ?? (await conn.browser.newContext());
-  let page: Page = context.pages()[0] ?? (await context.newPage());
+  const page: Page = context.pages()[0] ?? (await context.newPage());
 
   if (!page.url().includes('claude.ai')) {
     await page.goto(CLAUDE_URL, { waitUntil: 'domcontentloaded' });

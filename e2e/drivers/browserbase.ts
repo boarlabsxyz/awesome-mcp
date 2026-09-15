@@ -13,6 +13,7 @@
 // thing most likely to decide whether this is usable at all.
 
 import Browserbase from '@browserbasehq/sdk';
+import type { ClientName } from './driver.ts';
 
 export interface BrowserbaseSession {
   /** Pass to chromium.connectOverCDP(). */
@@ -31,6 +32,46 @@ function required(name: string): string {
     );
   }
   return value;
+}
+
+/**
+ * The seeded context for one client.
+ *
+ * Contexts are per-client, not per-project: claude.ai and chatgpt.com are
+ * unrelated logins, and seedBrowserbaseContext.ts writes one context per client
+ * for that reason. A single shared BROWSERBASE_CONTEXT_ID therefore cannot serve
+ * both -- whichever client ran second would open the other one's cookie jar and
+ * land on a sign-in page, which reads as a broken selector.
+ *
+ * `BROWSERBASE_CONTEXT_ID_CLAUDE_WEB` / `..._CHATGPT_WEB` win; the unsuffixed
+ * form stays as the fallback so a single-client setup needs no change.
+ */
+export function contextIdFor(client?: ClientName): string {
+  const scoped = client ? process.env[`BROWSERBASE_CONTEXT_ID_${client.toUpperCase().replace(/-/g, '_')}`] : undefined;
+  const value = scoped || process.env.BROWSERBASE_CONTEXT_ID;
+  if (!value) {
+    throw new Error(
+      `No Browserbase context for ${client ?? 'this client'}. Set ` +
+        `BROWSERBASE_CONTEXT_ID_${(client ?? 'client').toUpperCase().replace(/-/g, '_')} ` +
+        'or BROWSERBASE_CONTEXT_ID -- see e2e/BROWSERBASE.md.',
+    );
+  }
+  return value;
+}
+
+/**
+ * End a session now rather than letting it idle to its api_timeout.
+ *
+ * Browserbase bills browser-minutes until the session actually ends, so an
+ * abandoned session is a silent cost, not just untidy. Best-effort on purpose:
+ * failing to release must never turn a passing run red.
+ */
+export async function releaseSession(sessionId: string): Promise<void> {
+  try {
+    await browserbaseClient().sessions.update(sessionId, { status: 'REQUEST_RELEASE' });
+  } catch (err: any) {
+    console.error(`[e2e] could not release browserbase session ${sessionId}: ${err?.message ?? err}`);
+  }
 }
 
 /** True when the harness has been asked to run against a cloud browser. */
@@ -53,11 +94,11 @@ export function browserbaseClient(): Browserbase {
  * persist: true, and it runs alone.
  */
 export async function createBrowserbaseSession(
-  opts: { persist?: boolean; timeoutSeconds?: number; keepAlive?: boolean } = {},
+  opts: { persist?: boolean; timeoutSeconds?: number; keepAlive?: boolean; client?: ClientName } = {},
 ): Promise<BrowserbaseSession> {
   const bb = browserbaseClient();
   const projectId = required('BROWSERBASE_PROJECT_ID');
-  const contextId = required('BROWSERBASE_CONTEXT_ID');
+  const contextId = contextIdFor(opts.client);
 
   const session = await bb.sessions.create({
     projectId,
