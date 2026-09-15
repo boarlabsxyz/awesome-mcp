@@ -914,3 +914,56 @@ function mkForbidden(): any {
   e.errors = [{ reason: 'rateLimitExceeded', message: 'Rate limit exceeded' }];
   return e;
 }
+
+describe('sorting versus fullText queries', () => {
+  // Drive: "Sorting is not supported for queries with fullText terms. Results
+  // are always in descending relevance order." Passing an orderBy anyway turns
+  // a working call into a 403, and for two rounds that 403 was mistaken for a
+  // permissions problem because the handler discarded Google's explanation.
+  it('listGoogleDocs does not sort a query', async () => {
+    const drive = mkDrive();
+    await handleListGoogleDocs(
+      drive,
+      { maxResults: 10, query: 'anything', orderBy: 'modifiedTime' } as any,
+      noopLog as any,
+    );
+    const params = drive.files.list.mock.calls[0].arguments[0];
+    assert.ok(params.q.includes('fullText contains'), 'the query should carry a fullText term');
+    assert.equal(params.orderBy, undefined);
+  });
+
+  it('listGoogleDocs still sorts when there is no query', async () => {
+    const drive = mkDrive();
+    await handleListGoogleDocs(drive, { maxResults: 10, orderBy: 'createdTime' } as any, noopLog as any);
+    const params = drive.files.list.mock.calls[0].arguments[0];
+    assert.ok(!params.q.includes('fullText'), 'no query means no fullText term');
+    assert.equal(params.orderBy, 'createdTime');
+  });
+
+  it('searchGoogleDocs sorts a name-only search and not the others', async () => {
+    for (const searchIn of ['name', 'content', 'both'] as const) {
+      const drive = mkDrive();
+      await handleSearchGoogleDocs(
+        drive,
+        { searchQuery: 'anything', searchIn, maxResults: 10 } as any,
+        noopLog as any,
+      );
+      const params = drive.files.list.mock.calls[0].arguments[0];
+      const usesFullText = params.q.includes('fullText contains');
+      assert.equal(usesFullText, searchIn !== 'name', `fullText expectation for searchIn=${searchIn}`);
+      assert.equal(
+        params.orderBy,
+        searchIn === 'name' ? 'modifiedTime desc' : undefined,
+        `orderBy for searchIn=${searchIn}`,
+      );
+    }
+  });
+
+  it('getRecentGoogleDocs still sorts — its query has no fullText term', async () => {
+    const drive = mkDrive();
+    await handleGetRecentGoogleDocs(drive, { maxResults: 10, daysBack: 7 } as any, noopLog as any);
+    const params = drive.files.list.mock.calls[0].arguments[0];
+    assert.ok(!params.q.includes('fullText'));
+    assert.equal(params.orderBy, 'modifiedTime desc');
+  });
+});

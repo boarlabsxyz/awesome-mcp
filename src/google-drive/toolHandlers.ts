@@ -125,17 +125,25 @@ export async function handleListGoogleDocs(
     const response = await drive.files.list({
       q: queryString,
       pageSize: args.maxResults,
-      orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
+      // No sort when a query is present. Drive answers 403 to any orderBy on a
+      // query containing a fullText term, and says so:
+      //
+      //   "Sorting is not supported for queries with fullText terms. Results
+      //    are always in descending relevance order."
+      //
+      // So orderBy was never honoured for a search anyway -- passing one only
+      // turned a working call into a 403. handleSearchGoogleDocs survived this
+      // for an unrelated reason: it happens to pass 'modifiedTime desc', which
+      // Drive tolerates where it rejects a bare 'modifiedTime'. That is a quirk,
+      // not a contract, so neither handler builds on it.
+      ...(args.query ? {} : { orderBy: args.orderBy === 'name' ? 'name' : args.orderBy }),
       // Same projection as handleSearchGoogleDocs, deliberately.
       //
-      // With this projection every `query` returned 403 "Permission denied" --
-      // on three separate accounts, one of them connected minutes earlier, under
-      // every corpora / includeSharedDrives / orderBy combination. The unqueried
-      // call was fine, and searchGoogleDocs with the identical query string
-      // (searchIn defaults to 'both') was fine, which rules out scopes, shared-
-      // drive parameters, orderBy and `fullText contains` itself and leaves the
-      // projection as the only difference between a call that works and one that
-      // does not.
+      // Aligned for consistency and a smaller payload, NOT as a fix: this was
+      // once believed to be the cause of the 403 above, on the reasoning that it
+      // was the only remaining difference between this call and the one in
+      // handleSearchGoogleDocs. It was not -- the cause was the orderBy, which
+      // Drive had reported all along in an error message this handler discarded.
       //
       // Nothing is lost: formatFileListEntry renders name, id, modifiedTime,
       // owners[0].displayName, driveId and webViewLink, and never reads `size`
@@ -175,7 +183,12 @@ export async function handleSearchGoogleDocs(
     const response = await drive.files.list({
       q: queryString,
       pageSize: args.maxResults,
-      orderBy: 'modifiedTime desc',
+      // Only a name-only search may be sorted. Drive rejects sorting on any
+      // query carrying a fullText term; this call has survived only because
+      // 'modifiedTime desc' is tolerated where a bare field name is not, which
+      // is not something to depend on. The sort is ignored for those searches
+      // regardless -- fullText results come back in relevance order.
+      ...(args.searchIn === 'name' ? { orderBy: 'modifiedTime desc' } : {}),
       fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName),parents,driveId)',
       ...buildSharedDriveParams(args),
     });
@@ -204,6 +217,8 @@ export async function handleGetRecentGoogleDocs(
     const response = await drive.files.list({
       q: queryString,
       pageSize: args.maxResults,
+      // Sortable: this query has no fullText term, only mimeType / trashed /
+      // modifiedTime, so Drive's no-sorting-with-fullText rule does not apply.
       orderBy: 'modifiedTime desc',
       fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName),lastModifyingUser(displayName),driveId)',
       ...buildSharedDriveParams(args),
