@@ -188,45 +188,21 @@ export function assertWritable(account: AccountName, tool: string): void {
 }
 
 /**
- * Turn a provider's own error text into something that names the account and the
- * fix.
+ * Name the account on a tool error, and otherwise get out of the way.
  *
- * The Drive 403 case is the reason this exists, and the message has been wrong
- * twice, so the evidence is recorded here rather than re-derived.
+ * This used to carry a paragraph of evidence about Drive 403s, because
+ * listGoogleDocs rendered every one of them as "Make sure you have granted
+ * Google Drive access" -- a single asserted cause for every 403, which sent
+ * people to reconnect a connection that was working. The server now reports
+ * Google's own reason and prose instead (describeDriveForbidden), and that is
+ * strictly better than anything this side can infer, so the harness no longer
+ * second-guesses it.
  *
- * `listGoogleDocs` renders every Drive 403 as "Permission denied. Make sure you
- * have granted Google Drive access to the application." Measured against three
- * separate accounts, including one connected minutes earlier:
- *
- *   listGoogleDocs, no query                      -> ok
- *   listGoogleDocs, any query                     -> 403, every account
- *   listGoogleDocs, query, includeSharedDrives:false / corpora:user / every
- *     orderBy                                     -> 403
- *   searchGoogleDocs, same term, searchIn 'name' | 'content' | 'both'
- *                                                 -> ok
- *
- * searchIn defaults to 'both', so searchGoogleDocs builds the *identical* query
- * string and succeeds. That rules out scopes (a fresh token fails too), shared-
- * drive parameters, orderBy, and `fullText contains` itself. The two calls now
- * differ only in their `fields` projection. So a 403 here is a bug in
- * listGoogleDocs, not a fault in the caller's connection, and the message must
- * not send anyone off to reconnect an account that is already fine.
+ * The lesson worth keeping: when a tool's error text and this function disagree,
+ * fix the tool. A test harness explaining a server's errors is a sign the server
+ * is not explaining them.
  */
 export function explainToolError(account: AccountName, tool: string, text: string): string {
-  if (text.includes('granted Google Drive access')) {
-    return (
-      `${tool} got a 403 from Drive on the '${account}' account.\n` +
-      'Do not take the wording at face value, and do not reconnect on account of it. ' +
-      'listGoogleDocs 403s on ANY query, for every account tested including freshly ' +
-      'connected ones, while an unqueried listGoogleDocs and searchGoogleDocs with the ' +
-      'same term both succeed -- so the connection is not the problem.\n' +
-      (tool.startsWith('listGoogleDocs')
-        ? 'Workaround: use searchGoogleDocs, which takes the same term and works.\n'
-        : 'That evidence is about listGoogleDocs specifically. For this tool, first ' +
-          `check whether Drive is connected at all: npm run check:auth -- ${account} google-drive\n`) +
-      `Original error: ${text}`
-    );
-  }
   return `${tool} failed on the '${account}' account: ${text}`;
 }
 
