@@ -34,10 +34,15 @@ describe('createWebOnlyApp routes', () => {
     assert.match(res.headers.location, /\/dashboard/);
   });
 
-  it('GET /login redirects to /auth/google', async () => {
+  it('GET /login serves the sign-in page rather than forcing Google', async () => {
+    // This used to redirect straight to /auth/google. With email+password
+    // accounts that is no longer a correct default — a hard redirect denies
+    // the page to every user who has no Google identity. publicDir resolves
+    // to src/public under tsx, so sendFile may 404 in test; what this pins is
+    // that the route does not redirect.
     const res = await request(app).get('/login');
-    assert.equal(res.status, 302);
-    assert.match(res.headers.location, /\/auth\/google/);
+    assert.ok([200, 404].includes(res.status), `unexpected status ${res.status}`);
+    assert.notEqual(res.status, 302);
   });
 
   // --- Auth-required endpoints return 401 without session ---
@@ -103,7 +108,9 @@ describe('createWebOnlyApp routes', () => {
   it('GET /connect/:slug sends an unauthenticated user to log in', async () => {
     const res = await request(app).get('/connect/google-docs');
     assert.equal(res.status, 302);
-    assert.equal(res.headers.location, '/auth/google');
+    // /login, not /auth/google: the login page offers both methods, so an
+    // email+password user can complete the parked intent too.
+    assert.equal(res.headers.location, '/login');
   });
 
   it('GET /connect/:slug parks the name so the intent survives login', async () => {
@@ -119,7 +126,7 @@ describe('createWebOnlyApp routes', () => {
     // the callback's "already connected" branch, and kept their stale token.
     const res = await request(app).get('/connect/google-docs?reconnect=inst-123');
     assert.equal(res.status, 302);
-    assert.equal(res.headers.location, '/auth/google');
+    assert.equal(res.headers.location, '/login');
     assert.match(parkedIntent(res), /reconnect=inst-123/);
   });
 

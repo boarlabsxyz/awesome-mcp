@@ -337,11 +337,15 @@
       background: #dc3545;
       color: #fff;
     }
+    /* The repair button is on every row now, so its resting state must read as
+       a normal action rather than a warning — a permanent amber button on a
+       healthy connection is what users learn to ignore. The health probe adds
+       .attention when the connection is actually broken. */
     .btn-reconnect {
       padding: 0.4rem 0.6rem;
       background: transparent;
-      color: #f0ad4e;
-      border: 1px solid rgba(240,173,78,0.3);
+      color: #888;
+      border: 1px solid rgba(255,255,255,0.15);
       border-radius: 5px;
       cursor: pointer;
       font-size: 0.75rem;
@@ -349,6 +353,14 @@
       touch-action: manipulation;
     }
     .btn-reconnect:hover {
+      background: #111;
+      color: #ededed;
+    }
+    .btn-reconnect.attention {
+      color: #f0ad4e;
+      border-color: rgba(240,173,78,0.3);
+    }
+    .btn-reconnect.attention:hover {
       background: #f0ad4e;
       color: #000;
     }
@@ -857,6 +869,15 @@
       width: 20px;
       height: 20px;
     }
+    .login-alt {
+      margin-top: 1.25rem;
+      font-size: 0.85rem;
+      color: #888;
+    }
+    .login-alt a {
+      color: #4f8df7;
+      text-decoration: underline;
+    }
     .login-footer {
       margin-top: 1.5rem;
       font-size: 0.8rem;
@@ -883,6 +904,10 @@
         width: 100%;
         margin-top: 0.5rem;
         padding-left: 3.5rem;
+        /* Every row now carries a repair button, so a Slack row is Copy URL +
+           Reconnect + Access Rules + Delete as its steady state rather than
+           only while broken — four buttons no longer fit one narrow line. */
+        flex-wrap: wrap;
       }
       .header {
         flex-wrap: wrap;
@@ -1070,11 +1095,16 @@
   <div id="loginOverlay" class="login-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="loginOverlayTitle">
     <div class="login-card">
       <h2 id="loginOverlayTitle">Sign in to continue</h2>
-      <p class="login-subtitle">Sign in with your <span translate="no">Google</span> account to access the MCP Dashboard.</p>
+      <p class="login-subtitle">Sign in to access the MCP Dashboard.</p>
+      <!-- google-signin:start -->
       <a href="/auth/google" class="btn-google-login">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
         Sign in with <span translate="no">Google</span>
       </a>
+      <!-- google-signin:end -->
+      <p class="login-alt">
+        or <a href="/login">sign in with email</a> &middot; <a href="/login?mode=register">create an account</a>
+      </p>
       <p class="login-footer">Your credentials are stored securely and used only for MCP tool access.</p>
     </div>
   </div>
@@ -1167,7 +1197,9 @@
       overlay.classList.remove('hidden');
       document.getElementById('loading').classList.add('hidden');
       setTimeout(() => {
-        const link = overlay.querySelector('.btn-google-login');
+        // The Google button may be stripped server-side (HIDE_GOOGLE_SIGNIN),
+        // so fall back to the email link rather than focusing nothing.
+        const link = overlay.querySelector('.btn-google-login, .login-alt a');
         if (link) link.focus();
       }, 0);
     }
@@ -1276,48 +1308,68 @@
     }
 
     // Health verdicts by instanceId, filled in after render. 'reauth' is the
-    // only value that shows the button.
+    // only value that highlights the button; it no longer decides whether the
+    // button exists.
     //
     // Whether re-consent is POSSIBLE (canReauthorize) and whether it is NEEDED
-    // are different questions, and the row must answer the second. Answering
-    // the first put a permanent amber warning on every healthy connector; going
-    // back to guessing from token fields is what hid the button on a revoked
-    // Gmail grant, because a revoked refresh token is indistinguishable from a
-    // live one until you actually use it. So the row waits for a probe.
+    // are different questions. The row draws the button on the first and uses
+    // the probe for the second, which is why the resting style is neutral: a
+    // permanent amber warning on every healthy connector is noise, but hiding
+    // the button until something is provably broken makes the repair
+    // unreachable exactly when the breakage is undetectable from stored state.
     const connectionHealth = new Map();
     // Bumped per sweep so a slow probe from a superseded sweep cannot overwrite
     // a newer verdict.
     let healthSweepGeneration = 0;
 
-    // Absent or 'unknown' both mean no button: an unreachable provider is not
-    // evidence that the user needs to reconnect, and prompting on every blip
-    // would train them to ignore it.
+    // Absent or 'unknown' both mean "no evidence of a problem": an unreachable
+    // provider is not proof the user must reconnect, and a row that shouts on
+    // every blip trains them to ignore it.
     function healthSaysReauth(instance) {
       return connectionHealth.get(instance.instanceId) === 'reauth';
     }
 
+    // Is the repair button drawn on this row? Yes wherever re-consent is
+    // possible at all — the probe no longer decides.
+    //
+    // Gating visibility on a 'reauth' verdict hid the repair in the two cases
+    // that need it most and detect it least: a scope added to the catalog
+    // (search:read, files:read, reactions:read) leaves the stored token working
+    // for everything except the new tools, so every probe reports 'healthy'
+    // while those tools fail; and a provider we cannot reach reports 'unknown'.
+    // In both, the tool output says "reconnect from the dashboard" and the
+    // dashboard offered no button — the same dead end the showReauthorize
+    // branch was originally added to remove. The verdict still does real work,
+    // it just picks the styling now (see reauthNeedsAttention).
     function needsReauthNow(instance, mcp) {
-      if (!canReauthorize(instance, mcp)) return false;
-      return healthSaysReauth(instance);
+      return canReauthorize(instance, mcp);
+    }
+
+    // Should the always-present repair button be highlighted as broken? Either
+    // the live probe rejected the credential, or the stored Google token is
+    // expired/refresh-less, which is conclusive without a probe.
+    function reauthNeedsAttention(instance) {
+      return healthSaysReauth(instance) || needsReconnect(instance);
     }
 
     /**
-     * Which repair this row is offering, if any.
+     * Which repair this row offers: 'reconnect' for anything that can re-run
+     * OAuth consent, 'reenter' for paste-token connections, 'none' only when
+     * neither is actually reachable (no catalog entry, so no authorize URL and
+     * no token form to point at — a button there would dead-end).
      *
-     * Both affordances are gated on the same probe verdict. Paste-token rows
-     * were previously ungated, so PeopleForce and Slack-bot connections kept
-     * the permanent amber button this change removes everywhere else — the same
-     * bug, just wearing a different label. Their verdict was already being
-     * computed and thrown away: checkConnectionHealth handles peopleforce
-     * conclusively (no refresh token, so a rejection is final) and slack-bot via
-     * auth.test.
+     * Both answers are unconditional now. Re-consent is a repair the user
+     * should be able to reach without first proving something is broken, and
+     * the two failure modes that most need it are invisible to the probe: a
+     * revoked-but-present refresh token, and a catalog scope the stored token
+     * predates.
      *
-     * Also the single value the health sweep compares against, so a re-render
-     * happens only when the row would actually look different.
+     * Still the value the health sweep compares against, so a verdict that
+     * changes nothing on screen does not trigger a re-render.
      */
     function reauthAffordance(instance, mcp) {
       if (needsReauthNow(instance, mcp)) return 'reconnect';
-      if (usesPastedToken(instance, mcp) && healthSaysReauth(instance)) return 'reenter';
+      if (usesPastedToken(instance, mcp)) return 'reenter';
       return 'none';
     }
 
@@ -1353,10 +1405,16 @@
           // undefined all draw the same row — so keying off the state string
           // meant N healthy connections triggered N full rebuilds producing
           // byte-identical HTML, discarding any focus or transient DOM state.
+          //
+          // The verdict now changes the button's emphasis rather than its
+          // existence, so the highlight has to be part of what is compared —
+          // otherwise the affordance is identical either way and a 'reauth'
+          // verdict would never repaint the row it applies to.
           const mcp = catalogs.find(c => c.slug === instance.mcpSlug);
-          const before = reauthAffordance(instance, mcp);
+          const rendered = (i) => `${reauthAffordance(i, mcp)}:${reauthNeedsAttention(i)}`;
+          const before = rendered(instance);
           connectionHealth.set(instance.instanceId, data.state);
-          if (before !== reauthAffordance(instance, mcp)) renderInstances();
+          if (before !== rendered(instance)) renderInstances();
         } catch {
           // Network trouble on our side is not the user's problem.
         }
@@ -1364,11 +1422,15 @@
       await Promise.all(checks);
     }
 
+    // Does the STORED record already prove this connection is broken? Feeds
+    // reauthNeedsAttention, so it now decides emphasis, not visibility — every
+    // row that can be repaired shows the button regardless.
     function needsReconnect(instance) {
       const ts = instance.tokenStatus;
-      // Non-Google providers (e.g. ClickUp) use long-lived tokens — no reconnect needed
+      // Non-Google providers (e.g. ClickUp) use long-lived tokens, so an
+      // expiry field means nothing for them; only the live probe can tell.
       if (instance.provider && instance.provider !== 'google') return false;
-      return ts && (ts.isExpired || !ts.hasRefreshToken);
+      return !!(ts && (ts.isExpired || !ts.hasRefreshToken));
     }
 
     // Image-upload help, shown as a "?" beside the ClickUp name (connected-instance
@@ -1403,20 +1465,15 @@
       const mcpIcon = safeIcon
         ? `<img src="${escapeAttr(safeIcon)}" alt="" width="24" height="24" loading="lazy">`
         : getIconForMcp({ slug: instance.mcpSlug });
-      const showReconnect = needsReconnect(instance);
-      // Shown alongside Copy URL, not instead of it: the connection may well
-      // still work, and re-consent is a repair the user should be able to
-      // reach without first proving something is broken. See canReauthorize.
-      const showReauthorize = !showReconnect && needsReauthNow(instance, mcp);
-      // Paste-token connections have no OAuth flow to re-run, so they get the
-      // equivalent repair: paste a fresh credential onto the SAME instance.
-      // Delete-and-re-add is not a substitute — the MCP URL embeds instanceId,
-      // so recreating means re-adding the connector in Claude.
-      //
-      // Stays mutually exclusive with Reconnect after canReauthorize widened:
-      // a paste provider is neither Google nor OAuth-capable, so canReauthorize
-      // returns false for exactly the rows this covers.
-      const showReenterToken = !showReauthorize && reauthAffordance(instance, mcp) === 'reenter';
+      // The repair sits alongside Copy URL, never instead of it: an expired
+      // token does not stop the URL being worth copying, and Reconnect used to
+      // REPLACE Copy URL on those rows, so the one row that needed both offered
+      // one. Paste-token connections have no OAuth flow to re-run, so they get
+      // the equivalent repair — paste a fresh credential onto the SAME
+      // instance. Delete-and-re-add is not a substitute: the MCP URL embeds
+      // instanceId, so recreating means re-adding the connector in Claude.
+      const affordance = reauthAffordance(instance, mcp);
+      const repairClass = reauthNeedsAttention(instance) ? 'btn-reconnect attention' : 'btn-reconnect';
       const tokenHtml = getTokenStatusHtml(instance);
       const eid = escapeAttr(instance.instanceId);
       const ename = escapeAttr(instance.instanceName);
@@ -1436,14 +1493,12 @@
             </div>
           </div>
           <div class="instance-row-actions">
-            ${showReconnect
-              ? `<button class="btn-reconnect" type="button" data-action="reconnect">Reconnect</button>`
-              : `<button class="btn-copy" type="button" data-action="copy">Copy URL</button>`}
-            ${showReauthorize
-              ? `<button class="btn-reconnect" type="button" data-action="reconnect" title="Re-run the OAuth consent flow. Needed after new permissions are added — your settings and access rules are preserved.">Reconnect</button>`
+            <button class="btn-copy" type="button" data-action="copy">Copy URL</button>
+            ${affordance === 'reconnect'
+              ? `<button class="${repairClass}" type="button" data-action="reconnect" title="Re-run the OAuth consent flow. Needed after new permissions are added, or if the connection stops working — your settings and access rules are preserved.">Reconnect</button>`
               : ''}
-            ${showReenterToken
-              ? `<button class="btn-reconnect" type="button" data-action="reenter-token" title="Paste a fresh API key or token for this connection. Replaces the credential in place, so the MCP URL you already configured keeps working.">Re-enter token</button>`
+            ${affordance === 'reenter'
+              ? `<button class="${repairClass}" type="button" data-action="reenter-token" title="Paste a fresh API key or token for this connection. Replaces the credential in place, so the MCP URL you already configured keeps working.">Re-enter token</button>`
               : ''}
             ${instance.provider === 'slack' ? `<button class="btn-rename" type="button" data-action="access-rules">Access Rules</button>` : ''}
             <button class="btn-delete" type="button" data-action="delete">Delete</button>
@@ -1746,6 +1801,8 @@
     let rulesState = { allowedOrgs: [], blacklistUsers: [], whitelistChannels: [], blacklistChannels: [], allowPublicOnly: false };
     let rulesBlacklistUserDetails = []; // { id, name } for display
     let rulesCurrentOrgId = null; // Always included in allowedOrgs
+    // Whether the server could enumerate every reachable org, plus why not.
+    let rulesOrgDiscovery = { truncated: false, notes: [] };
     let searchDebounce = null;
 
     async function openAccessRules(instanceId) {
@@ -1766,6 +1823,8 @@
         rulesBlacklistUserDetails = data.blacklistUserDetails || [];
         rulesCurrentOrgId = data.currentOrg?.id || null;
 
+        rulesOrgDiscovery = data.orgDiscovery || { truncated: false, notes: [] };
+
         renderAccessRulesForm(data.currentOrg, data.connectedOrgs);
       } catch (err) {
         document.getElementById('accessRulesContent').innerHTML = `<p style="color: #dc3545;" role="alert">Error: ${escapeHtml(err.message)}</p>`;
@@ -1778,13 +1837,31 @@
           <input type="checkbox" checked disabled style="width: 16px; height: 16px; accent-color: #4f8df7;" />
           <span>${escapeHtml(currentOrg.name)} <span style="color: #666; font-size: 11px;">(current)</span></span>
         </label>`,
-        ...connectedOrgs.map(org => `
+        ...connectedOrgs.map(org => {
+          // An unnamed org is normal, not an error: team.info on a foreign
+          // workspace fails even with team:read, so the ID is the only label
+          // Slack will give us. Say that rather than printing a bare T0… .
+          const label = org.nameResolved
+            ? escapeHtml(org.name)
+            : `${escapeHtml(org.id)} <span style="color: #666; font-size: 11px;">(external workspace)</span>`;
+          const savedNote = org.saved
+            ? ' <span style="color: #666; font-size: 11px;">(saved — not seen in this scan)</span>'
+            : '';
+          return `
           <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer;">
             <input type="checkbox" data-org-id="${escapeAttr(org.id)}" ${rulesState.allowedOrgs.includes(org.id) ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #4f8df7;" />
-            <span>${escapeHtml(org.name !== org.id ? org.name : org.id)}</span>
+            <span>${label}${savedNote}</span>
           </label>
-        `)
+        `;
+        })
       ].join('');
+
+      const orgWarningHtml = rulesOrgDiscovery.truncated
+        ? `<p role="status" style="color: #fbbf24; font-size: 11px; margin: 6px 0 0;">
+             Some organisations may be missing from this list:
+             <br />${rulesOrgDiscovery.notes.map(n => escapeHtml(n)).join('<br />')}
+           </p>`
+        : '';
 
       const blacklistHtml = rulesBlacklistUserDetails.map(u => `
         <span class="chip">
@@ -1818,6 +1895,7 @@
           <div class="rules-section">
             <div class="rules-section-label" style="color: #a78bfa;">Allowed Organisations</div>
             ${orgsHtml}
+            ${orgWarningHtml}
           </div>
 
           <div class="rules-section">
@@ -1992,6 +2070,17 @@
       const selectedOrgs = Array.from(orgCheckboxes).map(cb => cb.getAttribute('data-org-id'));
       if (rulesCurrentOrgId && !selectedOrgs.includes(rulesCurrentOrgId)) {
         selectedOrgs.unshift(rulesCurrentOrgId);
+      }
+      // Preserve orgs that are allowed but have no checkbox in this render.
+      // Rebuilding allowedOrgs from the DOM alone silently deleted any org the
+      // discovery pass happened to miss — opening the modal and pressing Save
+      // was enough to revoke access nobody asked to revoke.
+      const renderedOrgIds = new Set(
+        Array.from(document.querySelectorAll('#accessRulesContent input[data-org-id]'))
+          .map(cb => cb.getAttribute('data-org-id'))
+      );
+      for (const orgId of (rulesState.allowedOrgs || [])) {
+        if (!renderedOrgIds.has(orgId) && !selectedOrgs.includes(orgId)) selectedOrgs.push(orgId);
       }
       rulesState.allowedOrgs = selectedOrgs;
       rulesState.allowPublicOnly = document.getElementById('allowPublicOnly')?.checked || false;

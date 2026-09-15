@@ -803,3 +803,55 @@ describe('handleCheckPublicAccess', () => {
     await assert.rejects(handleCheckPublicAccess(drive, { fileId: 'f1' }, noopLog), /Permission denied/);
   });
 });
+
+describe('listGoogleDocs / searchGoogleDocs field projection', () => {
+  // A queried listGoogleDocs used to ask Drive for `size` and
+  // `owners(emailAddress)`, and every query came back 403 "Permission denied"
+  // -- across three accounts, one connected minutes earlier, under every
+  // corpora / includeSharedDrives / orderBy combination. The unqueried call
+  // worked, and searchGoogleDocs built the identical query string (searchIn
+  // defaults to 'both') and worked, which left the projection as the only
+  // difference between the two calls.
+  //
+  // This locks them together. If they drift again, the symptom is a 403 that
+  // reads as a permissions problem and sends people off to reconnect a
+  // connection that is already fine.
+  it('asks for the same fields as each other', async () => {
+    const listDrive = mkDrive();
+    await handleListGoogleDocs(
+      listDrive,
+      { maxResults: 10, query: 'anything', orderBy: 'modifiedTime' } as any,
+      noopLog as any,
+    );
+
+    const searchDrive = mkDrive();
+    await handleSearchGoogleDocs(
+      searchDrive,
+      { searchQuery: 'anything', searchIn: 'both', maxResults: 10 } as any,
+      noopLog as any,
+    );
+
+    const listFields = listDrive.files.list.mock.calls[0].arguments[0].fields;
+    const searchFields = searchDrive.files.list.mock.calls[0].arguments[0].fields;
+    assert.equal(listFields, searchFields);
+  });
+
+  it('does not request fields the list rendering never reads', async () => {
+    const drive = mkDrive();
+    await handleListGoogleDocs(
+      drive,
+      { maxResults: 10, query: 'anything', orderBy: 'modifiedTime' } as any,
+      noopLog as any,
+    );
+    const fields: string = drive.files.list.mock.calls[0].arguments[0].fields;
+
+    // formatFileListEntry renders name, id, modifiedTime, owners[0].displayName,
+    // driveId and webViewLink. Asking for more is not free: it is what the 403
+    // tracked to.
+    assert.ok(!fields.includes('size'), `fields should not request size: ${fields}`);
+    assert.ok(
+      !fields.includes('emailAddress'),
+      `fields should not request owner emailAddress: ${fields}`,
+    );
+  });
+});

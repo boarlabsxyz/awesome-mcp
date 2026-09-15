@@ -42,6 +42,26 @@ In your app service → **Variables** tab, add these variables one by one:
 | `GOOGLE_CREDENTIALS` | See below |
 | `COOKIE_SECRET` | Any random string, e.g. `my-super-secret-cookie-key-12345` |
 | `NODE_ENV` | `production` |
+| `RESEND_API_KEY` | See below — **required**, or email sign-up returns 503 |
+| `MAIL_FROM` | e.g. `Awesome MCP <noreply@yourdomain.com>` |
+| `HIDE_GOOGLE_SIGNIN` | *(optional)* `true` hides the Google button — see below |
+
+**How to get `RESEND_API_KEY`:**
+
+Email sign-up mails a confirmation link and only creates the account once it is
+clicked, so the app needs a way to send mail.
+
+1. Create an account at [resend.com](https://resend.com)
+2. Add and verify your sending domain (**Domains** → **Add Domain**, then add the
+   DNS records it gives you). Mail from an unverified domain will not deliver.
+3. Go to **API Keys** → **Create API Key**, with *Sending access*
+4. Paste it as `RESEND_API_KEY`, and set `MAIL_FROM` to an address at that domain
+
+With `NODE_ENV=production` and no `RESEND_API_KEY`, `POST /api/auth/register`
+returns **503** and creates nothing — deliberately, so a missing key surfaces
+rather than leaving people waiting for a link that was never sent. Outside
+production the link is printed to the server log instead, so local sign-up works
+with no mail provider at all. Google sign-in is unaffected either way.
 
 **How to get `GOOGLE_CREDENTIALS`:**
 
@@ -67,7 +87,21 @@ COOKIE_SECRET     = replace-with-random-string-at-least-32-chars
 NODE_ENV          = production
 ```
 
-**Note:** `DATABASE_URL` and `REDIS_URL` are automatically set by Railway when you add PostgreSQL and Redis databases.
+**Note:** `DATABASE_URL` and `REDIS_URL` are automatically set by Railway when you add PostgreSQL and Redis databases. Redis also holds pending sign-ups (those awaiting email confirmation); without it they live in process memory and are lost on restart, so a link sent before a deploy would stop working.
+
+**Optional: `HIDE_GOOGLE_SIGNIN`**
+
+Set it to `true` to take the "Sign in with Google" button off both the login page
+and the dashboard overlay, leaving email sign-up as the only visible route. The
+block is stripped server-side, so the button never reaches the browser. Unset (or
+anything other than `true`) leaves the button in place, which is the default.
+
+`GET /auth/google` keeps working either way, deliberately. An account created
+through Google has no password, so the email form cannot sign it in and there is
+no password reset yet — disabling the route as well would strand every such
+account. Anyone who needs it can still go to `/auth/google` directly.
+
+To bring the button back, remove the variable (or set it to `false`) and restart.
 
 ### Step 5: Update Google Cloud OAuth
 

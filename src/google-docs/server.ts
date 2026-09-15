@@ -118,6 +118,7 @@ const server = new FastMCP<UserSession>({
 
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
+import { sliceSafe, sanitizeDocText, assertTransportSafe, stringifySafe } from './textSafety.js';
 registerMintRestBearerForCurl(server);
 registerListRestEndpoints(server);
 
@@ -381,9 +382,13 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
         // Determine if we need tabs content
         const needsTabsContent = !!args.tabId;
 
+        // The text projection must name tables as well as paragraphs. It used to
+        // request paragraphs only, which meant the table-walking branch below
+        // could never fire and every table's text was silently missing from
+        // `format: 'text'` — a doc built out of tables read as nearly empty.
         const fields = args.format === 'json' || args.format === 'markdown'
             ? '*' // Get everything for structure analysis
-            : 'body(content(paragraph(elements(textRun(content)))))'; // Just text content
+            : 'body(content(paragraph(elements(textRun(content))),table(tableRows(tableCells(content(paragraph(elements(textRun(content)))))))))';
 
         const res = await docs.documents.get({
             documentId: args.documentId,
@@ -410,26 +415,43 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
         }
 
         if (args.format === 'json') {
-            const jsonContent = JSON.stringify(contentSource, null, 2);
-            // Apply length limit to JSON if specified
+            // stringifySafe, not JSON.stringify: once serialised, a lone
+            // surrogate in a textRun has become the escape `\udXXX`, which
+            // assertTransportSafe can no longer see and strict parsers reject.
+            const jsonContent = stringifySafe(contentSource, 2);
+            // Never slice serialised JSON and hand back the fragment: the result
+            // is a dangling string or brace, so anything that parses it fails
+            // with "EOF while parsing a string" — a truncation bug that reads
+            // like a transport bug. Wrap the partial in a valid envelope
+            // instead, the same contract truncateJsonByLength uses for the REST
+            // sibling (src/website/docContent.ts): the fragment travels as a
+            // *string field*, so the response as a whole always parses.
             if (args.maxLength && jsonContent.length > args.maxLength) {
-                return jsonContent.substring(0, args.maxLength) + `\n... [JSON truncated: ${jsonContent.length} total chars]`;
+                return JSON.stringify({
+                    truncated: true,
+                    originalLength: jsonContent.length,
+                    note: `Showing the first ${args.maxLength} characters of ${jsonContent.length}. "truncatedJson" is a fragment and is NOT itself parseable — raise maxLength or omit it to get the whole document.`,
+                    truncatedJson: sliceSafe(jsonContent, args.maxLength),
+                }, null, 2);
             }
             return jsonContent;
         }
 
         if (args.format === 'markdown') {
-            const markdownContent = convertDocsJsonToMarkdown(contentSource);
+            const markdownContent = sanitizeDocText(convertDocsJsonToMarkdown(contentSource));
             const totalLength = markdownContent.length;
             log.info(`Generated markdown: ${totalLength} characters`);
 
             // Apply length limit to markdown if specified
             if (args.maxLength && totalLength > args.maxLength) {
-                const truncatedContent = markdownContent.substring(0, args.maxLength);
-                return `${truncatedContent}\n\n... [Markdown truncated to ${args.maxLength} chars of ${totalLength} total. Use maxLength parameter to adjust limit or remove it to get full content.]`;
+                const truncatedContent = sliceSafe(markdownContent, args.maxLength);
+                return assertTransportSafe(
+                    `${truncatedContent}\n\n... [Markdown truncated to ${args.maxLength} chars of ${totalLength} total. Use maxLength parameter to adjust limit or remove it to get full content.]`,
+                    { documentId: args.documentId, what: 'markdown' },
+                );
             }
 
-            return markdownContent;
+            return assertTransportSafe(markdownContent, { documentId: args.documentId, what: 'markdown' });
         }
 
         // Default: Text format - extract all text content
@@ -467,19 +489,33 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
 
         if (!textContent.trim()) return "Document found, but appears empty.";
 
+        // Google Docs emits U+000B for shift-enter soft breaks and private-use
+        // characters as inline-object placeholders; neither survives a strict
+        // JSON reader on the other end.
+        textContent = sanitizeDocText(textContent);
+
         const totalLength = textContent.length;
         log.info(`Document contains ${totalLength} characters across ${elementCount} elements`);
         log.info(`maxLength parameter: ${args.maxLength || 'not specified'}`);
 
         // Apply length limit only if specified
         if (args.maxLength && totalLength > args.maxLength) {
-            const truncatedContent = textContent.substring(0, args.maxLength);
+            // sliceSafe, not substring: a cut between the halves of a surrogate
+            // pair (any emoji, most CJK extensions) leaves a lone surrogate that
+            // the caller's JSON parser rejects.
+            const truncatedContent = sliceSafe(textContent, args.maxLength);
             log.info(`Truncating content from ${totalLength} to ${args.maxLength} characters`);
-            return `Content (truncated to ${args.maxLength} chars of ${totalLength} total):\n---\n${truncatedContent}\n\n... [Document continues for ${totalLength - args.maxLength} more characters. Use maxLength parameter to adjust limit or remove it to get full content.]`;
+            return assertTransportSafe(
+                `Content (truncated to ${args.maxLength} chars of ${totalLength} total):\n---\n${truncatedContent}\n\n... [Document continues for ${totalLength - args.maxLength} more characters. Use maxLength parameter to adjust limit or remove it to get full content.]`,
+                { documentId: args.documentId, what: 'text' },
+            );
         }
 
         // Return full content
-        const fullResponse = `Content (${totalLength} characters):\n---\n${textContent}`;
+        const fullResponse = assertTransportSafe(
+            `Content (${totalLength} characters):\n---\n${textContent}`,
+            { documentId: args.documentId, what: 'text' },
+        );
         const responseLength = fullResponse.length;
         log.info(`Returning full content: ${responseLength} characters in response (${totalLength} content + ${responseLength - totalLength} metadata)`);
 
@@ -1612,6 +1648,9 @@ execute: async (args, { log, session }) => {
 
 // === INSPECT DOCUMENT STRUCTURE TOOL ===
 
+/** Elements listed by inspectDocStructure(detailed) before truncation kicks in. */
+const DEFAULT_MAX_STRUCTURE_ELEMENTS = 500;
+
 server.addTool({
 name: 'inspectDocStructure',
 annotations: { readOnlyHint: true },
@@ -1620,6 +1659,7 @@ parameters: z.object({
   documentId: z.string().describe('The ID of the Google Document.'),
   detailed: z.boolean().optional().default(false).describe('If true, returns element-by-element listing with type, position, and text previews.'),
   tabId: z.string().optional().describe('Optional tab ID to inspect (defaults to first tab).'),
+  maxElements: z.number().int().min(0).optional().describe(`Maximum elements to list in detailed mode (default ${DEFAULT_MAX_STRUCTURE_ELEMENTS}). Omitted elements are reported, never silently dropped.`),
 }),
 execute: async (args, { log, session }) => {
   const docs = await getDocsClient(session);
@@ -1635,8 +1675,27 @@ execute: async (args, { log, session }) => {
     throw new UserError(`Document not found (ID: ${args.documentId}).`);
   }
 
-  const structure = GDocsHelpers.parseDocStructure(doc, args.detailed ?? false, args.tabId);
-  return JSON.stringify(structure, null, 2);
+  const structure: any = GDocsHelpers.parseDocStructure(doc, args.detailed ?? false, args.tabId);
+
+  // Detailed mode had no bound at all: one element entry per paragraph across a
+  // whole document, in a single response. Cap it, and say what was left out —
+  // a silently short listing reads as "that is the whole document".
+  const limit = args.maxElements ?? DEFAULT_MAX_STRUCTURE_ELEMENTS;
+  if (Array.isArray(structure?.elements) && structure.elements.length > limit) {
+    const total = structure.elements.length;
+    structure.elements = structure.elements.slice(0, limit);
+    structure.elementsTruncated = {
+      shown: limit,
+      total,
+      note: `${total - limit} further element(s) were omitted. Raise maxElements, or inspect a single tab with tabId, to see them.`,
+    };
+  }
+  // Titles (document and tab) reach the output only through here, so this is
+  // the one place they can be sanitised.
+  return assertTransportSafe(stringifySafe(structure, 2), {
+    documentId: args.documentId,
+    what: 'structure',
+  });
 }
 });
 

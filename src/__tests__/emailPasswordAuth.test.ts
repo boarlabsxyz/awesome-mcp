@@ -1,0 +1,935 @@
+import assert from 'node:assert/strict';
+import { describe, it, beforeEach } from 'node:test';
+import request from 'supertest';
+import * as os from 'os';
+import * as path from 'path';
+import * as fs from 'fs';
+
+// Isolate the file-backed user store from the repo's ./data directory before
+// anything imports it — DATA_DIR is read at module load.
+process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-test-'));
+
+if (!process.env.GOOGLE_CREDENTIALS) {
+  process.env.GOOGLE_CREDENTIALS = JSON.stringify({
+    web: {
+      client_id: 'test-client-id.apps.googleusercontent.com',
+      client_secret: 'test-client-secret',
+      redirect_uris: ['http://localhost:8080/auth/callback'],
+    },
+  });
+}
+
+const { createWebOnlyApp } = await import('../website/webServer.js');
+const { __resetLoginRateLimitForTests, LOGIN_RATE_LIMIT } = await import('../website/loginRateLimit.js');
+const { getUserByEmail, getPasswordHashByEmail, createOrUpdateUser } = await import('../userStore.js');
+const { isValidEmail, verifyPassword, hashPassword, MAX_PASSWORD_BYTES } = await import('../auth/password.js');
+const { createPasswordUser, DuplicateEmailError } = await import('../userStore.js');
+const { __memoryKeyCountForTests, consumeLoginAttempt } = await import('../website/loginRateLimit.js');
+const { validatePassword } = await import('../auth/password.js');
+const { sendMail, isMailConfigured, MailNotConfiguredError, MailDeliveryError } =
+  await import('../website/mailer.js');
+const { createPendingRegistration, deletePendingRegistration, restorePendingRegistration } =
+  await import('../website/pendingRegistrationStore.js');
+const {
+  consumePendingRegistration,
+  __pendingCountForTests,
+  __seedExpiredPendingForTests,
+  PENDING_REGISTRATION,
+} = await import('../website/pendingRegistrationStore.js');
+
+const app = createWebOnlyApp();
+
+/** Pull the session cookie out of a Set-Cookie header list. */
+function sessionCookie(res: request.Response): string | undefined {
+  const raw = res.headers['set-cookie'] as unknown as string[] | undefined;
+  return raw?.find(c => c.startsWith('session='))?.split(';')[0];
+}
+
+/**
+ * Register, then redeem the emailed link — the only route to a real account.
+ *
+ * The verification token is never returned by the API (it exists only in the
+ * mail), so tests reach it the way the mailer's dev fallback exposes it: by
+ * capturing what would have been sent.
+ */
+async function registerAndVerify(email: string, password = GOOD_PASSWORD) {
+  const res = await request(app).post('/api/auth/register').send({ email, password });
+  assert.equal(res.status, 202, `registration should be accepted, got ${res.status}`);
+
+  const token = lastVerificationToken(email);
+  assert.ok(token, 'a verification link should have been sent');
+  return redeem(token!);
+}
+
+/**
+ * Redeem a token the way the confirmation page does: a form POST. The GET is
+ * deliberately inert, so it cannot stand in for this.
+ */
+function redeem(token: string) {
+  return request(app).post('/auth/verify').type('form').send({ token });
+}
+
+/**
+ * Pull the newest verification token for an address out of the mailer's
+ * dev-fallback output. Console noise is the seam here rather than a test hook
+ * in the mailer, so the production path stays free of test-only branches.
+ */
+function lastVerificationToken(email: string): string | undefined {
+  const forAddress = sentMail.filter(m => m.includes(`to=${email}`));
+  const latest = forAddress[forAddress.length - 1];
+  return latest?.match(/auth\/verify\?token=([A-Za-z0-9_-]+)/)?.[1];
+}
+
+// Capture what the unconfigured mailer prints instead of sending.
+const sentMail: string[] = [];
+const realConsoleError = console.error;
+console.error = (...args: unknown[]) => {
+  const line = args.map(String).join(' ');
+  if (line.startsWith('[mailer]')) sentMail.push(line);
+  realConsoleError(...args);
+};
+
+let emailCounter = 0;
+function freshEmail(): string {
+  emailCounter += 1;
+  return `user${emailCounter}-${process.pid}@example.com`;
+}
+
+const GOOD_PASSWORD = 'a-long-enough-pw';
+
+describe('Email + password authentication', () => {
+  beforeEach(() => {
+    // Every request consumes an ip: bucket, and supertest reuses 127.0.0.1 for
+    // all of them — without this the later tests trip the limiter set by the
+    // earlier ones.
+    __resetLoginRateLimitForTests();
+  });
+
+  describe('POST /api/auth/register', () => {
+    it('accepts the sign-up without creating an account or a session', async () => {
+      const email = freshEmail();
+      const res = await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+
+      assert.equal(res.status, 202);
+      assert.match(res.body.message, /sent a link/i);
+      assert.equal(sessionCookie(res), undefined, 'registering must not sign anyone in');
+      assert.equal(await getUserByEmail(email), undefined, 'no account until the link is clicked');
+    });
+
+    it('mails a verification link to the address given', async () => {
+      const email = freshEmail();
+      await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+
+      const mail = sentMail.filter(m => m.includes(`to=${email}`));
+      assert.equal(mail.length, 1, 'exactly one mail to that address');
+      assert.match(mail[0], /Confirm your email/);
+      assert.ok(lastVerificationToken(email), 'the mail carries a verification token');
+    });
+
+    it('never puts the password in the email', async () => {
+      const email = freshEmail();
+      await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+      const mail = sentMail.filter(m => m.includes(`to=${email}`)).join('\n');
+      assert.doesNotMatch(mail, new RegExp(GOOD_PASSWORD));
+    });
+
+    it('stores the pending password already hashed, never in the clear', async () => {
+      const email = freshEmail();
+      await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+
+      const pending = await consumePendingRegistration(lastVerificationToken(email)!);
+      assert.ok(pending);
+      assert.notEqual(pending!.passwordHash, GOOD_PASSWORD);
+      assert.match(pending!.passwordHash, /^\$2[aby]\$\d{2}\$/, 'should be a bcrypt hash');
+    });
+
+    it('rejects a malformed email', async () => {
+      const res = await request(app)
+        .post('/api/auth/register')
+        .send({ email: 'not-an-email', password: GOOD_PASSWORD });
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /valid email/i);
+    });
+
+    it('rejects a password below the minimum length', async () => {
+      const res = await request(app)
+        .post('/api/auth/register')
+        .send({ email: freshEmail(), password: 'short' });
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /at least 10 characters/);
+    });
+
+    it('rejects a password past bcrypt\'s 72-byte ceiling rather than truncating it', async () => {
+      const res = await request(app)
+        .post('/api/auth/register')
+        .send({ email: freshEmail(), password: 'x'.repeat(100) });
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /72 bytes/);
+    });
+
+    it('answers a taken address exactly as it answers a fresh one', async () => {
+      // The whole point of the neutral reply: this endpoint must not be an
+      // account-existence oracle. Status AND body have to match.
+      const taken = freshEmail();
+      await registerAndVerify(taken);
+
+      const onTaken = await request(app).post('/api/auth/register').send({ email: taken, password: GOOD_PASSWORD });
+      const onFresh = await request(app).post('/api/auth/register').send({ email: freshEmail(), password: GOOD_PASSWORD });
+
+      assert.equal(onTaken.status, onFresh.status);
+      assert.deepEqual(onTaken.body, onFresh.body);
+    });
+
+    it('warns the owner instead of minting a link for a taken address', async () => {
+      const email = freshEmail();
+      await registerAndVerify(email);
+      const before = sentMail.length;
+
+      await request(app).post('/api/auth/register').send({ email, password: 'a-different-password' });
+
+      const fresh = sentMail.slice(before).filter(m => m.includes(`to=${email}`));
+      assert.equal(fresh.length, 1);
+      assert.match(fresh[0], /Someone tried to sign up/);
+      assert.doesNotMatch(fresh[0], /auth\/verify\?token=/, 'no link that could re-create the account');
+    });
+
+    it('leaves the existing password untouched when the address is taken', async () => {
+      const email = freshEmail();
+      await registerAndVerify(email);
+      const originalHash = await getPasswordHashByEmail(email);
+
+      await request(app).post('/api/auth/register').send({ email, password: 'a-different-password' });
+
+      assert.equal(await getPasswordHashByEmail(email), originalHash);
+      const withNew = await request(app).post('/api/auth/login').send({ email, password: 'a-different-password' });
+      assert.equal(withNew.status, 401, 'the re-registration password must not work');
+    });
+
+    it('treats emails case-insensitively', async () => {
+      const email = freshEmail();
+      await registerAndVerify(email);
+
+      // Same account, so this is the taken path — and must still look neutral.
+      const res = await request(app)
+        .post('/api/auth/register')
+        .send({ email: email.toUpperCase(), password: GOOD_PASSWORD });
+      assert.equal(res.status, 202);
+      const mail = sentMail.filter(m => m.includes(`to=${email}`));
+      assert.match(mail[mail.length - 1], /Someone tried to sign up/);
+    });
+  });
+
+  describe('GET /auth/verify', () => {
+    it('creates the account and signs the person in', async () => {
+      const email = freshEmail();
+      const res = await registerAndVerify(email);
+
+      assert.equal(res.status, 302);
+      assert.equal(res.headers.location, '/dashboard');
+      assert.ok(sessionCookie(res), 'should establish a session');
+
+      const user = await getUserByEmail(email);
+      assert.ok(user, 'the account exists only now');
+      assert.equal(user!.googleId, null);
+      assert.equal(user!.authMethod, 'password');
+      assert.equal(user!.name, email, 'named after its email');
+      assert.ok(user!.apiKey);
+    });
+
+    it('lets the verified password sign in afterwards', async () => {
+      const email = freshEmail();
+      await registerAndVerify(email);
+      const res = await request(app).post('/api/auth/login').send({ email, password: GOOD_PASSWORD });
+      assert.equal(res.status, 200);
+    });
+
+    it('burns the link — a second click cannot create another account', async () => {
+      const email = freshEmail();
+      const token = (await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD }),
+        lastVerificationToken(email))!;
+
+      const first = await redeem(token);
+      assert.equal(first.headers.location, '/dashboard');
+
+      const second = await redeem(token);
+      assert.equal(second.headers.location, '/login?verify=invalid');
+    });
+
+    it('rejects an unknown or missing token the same way', async () => {
+      for (const token of ['totally-made-up', '']) {
+        const res = await redeem(token);
+        assert.equal(res.headers.location, '/login?verify=invalid', JSON.stringify(token));
+      }
+    });
+
+    it('rejects an expired link', async () => {
+      const email = freshEmail();
+      await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+      const token = lastVerificationToken(email)!;
+
+      // Wind the expiry into the past rather than waiting out the 24-hour TTL.
+      const pending = await consumePendingRegistration(token);
+      assert.ok(pending);
+      const expired = __seedExpiredPendingForTests(pending!.email, pending!.passwordHash);
+
+      const res = await redeem(expired);
+      assert.equal(res.headers.location, '/login?verify=invalid');
+      assert.equal(await getUserByEmail(email), undefined, 'no account from an expired link');
+    });
+
+    it('does not leak the token through the Referer header', async () => {
+      const email = freshEmail();
+      const res = await registerAndVerify(email);
+      assert.equal(res.headers['referrer-policy'], 'no-referrer');
+    });
+
+    it('sends the person to sign in when the address gained an account meanwhile', async () => {
+      const email = freshEmail();
+      await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+      const token = lastVerificationToken(email)!;
+
+      // Someone else claims the address before the link is clicked.
+      await createPasswordUser({ email, name: email, passwordHash: 'already-taken' });
+
+      const res = await redeem(token);
+      assert.equal(res.headers.location, '/login?verify=exists');
+    });
+  });
+
+  describe('POST /api/auth/login', () => {
+    it('signs in with the right password and sets a session', async () => {
+      const email = freshEmail();
+      await registerAndVerify(email);
+
+      const res = await request(app).post('/api/auth/login').send({ email, password: GOOD_PASSWORD });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.email, email);
+      assert.equal(res.body.redirectTo, '/dashboard');
+      assert.ok(sessionCookie(res));
+    });
+
+    it('rejects the wrong password', async () => {
+      const email = freshEmail();
+      await registerAndVerify(email);
+
+      const res = await request(app).post('/api/auth/login').send({ email, password: 'wrong-password-x' });
+      assert.equal(res.status, 401);
+      assert.equal(sessionCookie(res), undefined);
+    });
+
+    it('gives an unknown email the same response as a wrong password', async () => {
+      const wrongPw = await request(app)
+        .post('/api/auth/login')
+        .send({ email: freshEmail(), password: 'whatever-long' });
+      assert.equal(wrongPw.status, 401);
+      assert.match(wrongPw.body.error, /Incorrect email or password/);
+    });
+
+    it('accepts an uppercase spelling of a registered email', async () => {
+      const email = freshEmail();
+      await registerAndVerify(email);
+
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ email: `  ${email.toUpperCase()} `, password: GOOD_PASSWORD });
+      assert.equal(res.status, 200);
+    });
+
+    it('requires both fields', async () => {
+      const res = await request(app).post('/api/auth/login').send({ email: freshEmail() });
+      assert.equal(res.status, 400);
+    });
+
+    it('blocks further attempts once the limit is hit, with Retry-After', async () => {
+      const email = freshEmail();
+      await registerAndVerify(email);
+      __resetLoginRateLimitForTests();
+
+      let last = await request(app).post('/api/auth/login').send({ email, password: 'bad-password-01' });
+      for (let i = 0; i < LOGIN_RATE_LIMIT.MAX_ATTEMPTS + 2; i++) {
+        last = await request(app).post('/api/auth/login').send({ email, password: 'bad-password-01' });
+      }
+
+      assert.equal(last.status, 429);
+      assert.ok(last.headers['retry-after'], 'should tell the client when to retry');
+
+      // The ceiling must hold even for the correct password — otherwise it
+      // bounds nothing an attacker cares about.
+      const withGoodPassword = await request(app)
+        .post('/api/auth/login')
+        .send({ email, password: GOOD_PASSWORD });
+      assert.equal(withGoodPassword.status, 429);
+    });
+  });
+
+  describe('session works across the dashboard, not just at login', () => {
+    it('GET /api/me returns the email account behind a password session', async () => {
+      const email = freshEmail();
+      const cookie = sessionCookie(await registerAndVerify(email))!;
+
+      const res = await request(app).get('/api/me').set('Cookie', cookie);
+
+      assert.equal(res.status, 200, 'a googleId-keyed session lookup would 401 here');
+      assert.equal(res.body.email, email);
+      assert.equal(res.body.name, email);
+      assert.equal(res.body.authMethod, 'password');
+      assert.ok(res.body.apiKey);
+      assert.ok(Array.isArray(res.body.connections));
+    });
+
+    it('POST /api/regenerate-key rotates the key for a password account', async () => {
+      const email = freshEmail();
+      const cookie = sessionCookie(await registerAndVerify(email))!;
+
+      const before = (await request(app).get('/api/me').set('Cookie', cookie)).body.apiKey;
+      const res = await request(app).post('/api/regenerate-key').set('Cookie', cookie);
+
+      assert.equal(res.status, 200, 'the google_id-keyed rotation would find no rows here');
+      assert.ok(res.body.apiKey);
+      assert.notEqual(res.body.apiKey, before);
+    });
+
+    it('GET /api/me/instances is reachable with a password session', async () => {
+      const email = freshEmail();
+      const res = await request(app)
+        .get('/api/me/instances')
+        .set('Cookie', sessionCookie(await registerAndVerify(email))!);
+
+      assert.equal(res.status, 200);
+      assert.ok(Array.isArray(res.body.instances));
+    });
+
+    it('POST /api/logout ends the session', async () => {
+      const email = freshEmail();
+      const cookie = sessionCookie(await registerAndVerify(email))!;
+
+      await request(app).post('/api/logout').set('Cookie', cookie);
+      const after = await request(app).get('/api/me').set('Cookie', cookie);
+      assert.equal(after.status, 401);
+    });
+
+    it('rejects dashboard routes with no session at all', async () => {
+      const res = await request(app).get('/api/me');
+      assert.equal(res.status, 401);
+    });
+  });
+
+  describe('linking Google to an existing password account', () => {
+    it('reuses the account instead of creating a second one for the same email', async () => {
+      const email = freshEmail();
+      await registerAndVerify(email);
+      const before = await getUserByEmail(email);
+
+      // Simulate what /auth/callback does when this person later signs in
+      // with a Google account carrying the same address.
+      const linked = await createOrUpdateUser(
+        { email, googleId: `google-${email}`, name: 'Original' },
+        { access_token: 'a', refresh_token: 'r', scope: 'email', token_type: 'Bearer', expiry_date: Date.now() + 3600_000 },
+      );
+
+      assert.equal(linked.id, before!.id, 'must be the same account, not a duplicate');
+      assert.equal(linked.apiKey, before!.apiKey, 'API key must survive the link');
+      assert.equal(linked.googleId, `google-${email}`, 'Google identity is attached');
+    });
+
+    it('keeps the password working — and keeps saying so — after Google is linked', async () => {
+      const email = freshEmail();
+      await registerAndVerify(email);
+
+      await createOrUpdateUser(
+        { email, googleId: `google-${email}`, name: 'Linked' },
+        { access_token: 'a', refresh_token: 'r', scope: 'email', token_type: 'Bearer', expiry_date: Date.now() + 3600_000 },
+      );
+
+      const stillWorks = await request(app).post('/api/auth/login').send({ email, password: GOOD_PASSWORD });
+      assert.equal(stillWorks.status, 200, 'linking Google must not revoke the password');
+
+      // The dashboard renders authMethod verbatim, so relabelling this
+      // 'google' would tell the user a credential they can still use is gone.
+      const user = await getUserByEmail(email);
+      assert.equal(user!.authMethod, 'password');
+    });
+  });
+
+  describe('email validation is linear-time', () => {
+    it('accepts and rejects the same addresses the old regex did', () => {
+      for (const good of ['a@b.com', 'user.name+tag@sub.example.co.uk', 'A@B.CO']) {
+        assert.equal(isValidEmail(good), true, good);
+      }
+      // A leading dot in the local part is accepted by both — this is a
+      // permissive typo check, and matching the old behaviour is the point.
+      assert.equal(isValidEmail('.a@b.com'), true);
+      for (const bad of ['', 'a@b', '@b.com', 'a@.com', 'a@b.', 'a b@c.com', 'a@b c.com',
+                         'a@@b.com', 'a@b@c.com', 'ab.com', 'a\t@b.com',
+                         'x'.repeat(300) + '@b.com']) {
+        assert.equal(isValidEmail(bad), false, JSON.stringify(bad));
+      }
+    });
+
+    it('does not backtrack on a hostile input', () => {
+      // The pattern this replaced — /^[^\s@]+@[^\s@]+\.[^\s@]+$/ — is
+      // quadratic on this shape (4x length => 16x time), and it ran BEFORE the
+      // length check, so it saw unbounded unauthenticated input. Timing is a
+      // blunt assertion but the failure mode is seconds, not milliseconds.
+      const hostile = 'a@' + 'x.'.repeat(200_000) + ' ';
+      const started = process.hrtime.bigint();
+      assert.equal(isValidEmail(hostile), false);
+      const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+      assert.ok(elapsedMs < 50, `took ${elapsedMs.toFixed(1)}ms — backtracking regex is back?`);
+    });
+
+    it('rejects an oversized email at the route without hashing it', async () => {
+      const res = await request(app)
+        .post('/api/auth/register')
+        .send({ email: 'a@' + 'x.'.repeat(50_000) + 'com', password: GOOD_PASSWORD });
+      assert.equal(res.status, 400);
+    });
+  });
+
+  describe('the unknown-account comparison target', () => {
+    it('is not a literal in the source', () => {
+      // A checked-in bcrypt hash is indistinguishable from a leaked credential
+      // to a scanner, and would be identical across every deployment forever.
+      const src = fs.readFileSync(path.join(process.cwd(), 'src', 'auth', 'password.ts'), 'utf8');
+      assert.doesNotMatch(src, /\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}/, 'bcrypt hash literal in source');
+      assert.match(src, /randomBytes/, 'should derive the dummy hash from a CSPRNG');
+    });
+
+    it('keeps unknown-email and wrong-password costs equal', async () => {
+      const hash = await hashPassword(GOOD_PASSWORD);
+      const time = async (h: string | null) => {
+        const started = process.hrtime.bigint();
+        for (let i = 0; i < 4; i++) await verifyPassword('a-wrong-password', h);
+        return Number(process.hrtime.bigint() - started) / 1e6 / 4;
+      };
+      const wrongPassword = await time(hash);
+      const unknownEmail = await time(null);
+
+      // Equal cost is the whole point: a cheap null-hash path would let
+      // response time reveal which emails have accounts.
+      const ratio = unknownEmail / wrongPassword;
+      assert.ok(ratio > 0.5 && ratio < 2,
+        `unknown-email ${unknownEmail.toFixed(0)}ms vs wrong-password ${wrongPassword.toFixed(0)}ms`);
+    });
+
+    it('never authenticates against the dummy hash', async () => {
+      assert.equal(await verifyPassword('anything at all', null), false);
+      assert.equal(await verifyPassword('', undefined), false);
+    });
+  });
+
+  describe('hardening', () => {
+    it('rejects a password that only shares a stored password\'s first 72 bytes', async () => {
+      // bcrypt compares at most 72 bytes. Registration caps input there, so a
+      // password that IS exactly 72 bytes would otherwise be authenticated by
+      // every longer string starting with it.
+      const exact72 = 'p'.repeat(MAX_PASSWORD_BYTES);
+      const hash = await hashPassword(exact72);
+      assert.equal(await verifyPassword(exact72, hash), true, 'the real password still works');
+      assert.equal(await verifyPassword(exact72 + 'EXTRA', hash), false, 'a longer prefix-match must not authenticate');
+    });
+
+    it('does not create a second account when a duplicate slips past the pre-check', async () => {
+      // Goes straight at the store, bypassing the route's pre-check, which is
+      // exactly what two concurrent registrations do to each other.
+      const email = freshEmail();
+      await registerAndVerify(email);
+
+      await assert.rejects(
+        () => createPasswordUser({ email, name: 'Racer', passwordHash: 'irrelevant' }),
+        (err: unknown) => err instanceof DuplicateEmailError,
+        'the store itself must reject the duplicate',
+      );
+    });
+
+    it('lets only one of two outstanding links for the same address win', async () => {
+      // Registering twice before verifying mints two valid tokens — nothing
+      // exists yet to reject the second. Both links then race, and the store's
+      // uniqueness rule is what decides; the loser must land on sign-in rather
+      // than a 500.
+      const email = freshEmail();
+      await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+      const first = lastVerificationToken(email)!;
+      await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+      const second = lastVerificationToken(email)!;
+      assert.notEqual(first, second, 'each sign-up gets its own token');
+
+      const winner = await redeem(first);
+      const loser = await redeem(second);
+
+      assert.equal(winner.headers.location, '/dashboard');
+      assert.equal(loser.headers.location, '/login?verify=exists');
+    });
+
+    it('bounds the in-memory limiter instead of growing a key per email', async () => {
+      // Each distinct email used to mint an entry that was reclaimed only if
+      // that same key came back after expiring, so varying the email grew the
+      // map without limit.
+      const before = __memoryKeyCountForTests();
+      for (let i = 0; i < 40; i++) {
+        await request(app)
+          .post('/api/auth/login')
+          .send({ email: `flood-${i}-${process.pid}@example.com`, password: 'bad-password-x' });
+      }
+      const after = __memoryKeyCountForTests();
+      assert.ok(after <= LOGIN_RATE_LIMIT.MAX_MEMORY_KEYS,
+        `map grew to ${after}, past the ${LOGIN_RATE_LIMIT.MAX_MEMORY_KEYS} cap`);
+      assert.ok(after >= before, 'sanity: the limiter is actually recording attempts');
+    });
+
+    it('does not write an API-key fragment to the logs', () => {
+      const src = fs.readFileSync(path.join(process.cwd(), 'src', 'website', 'webServer.ts'), 'utf8');
+      const authLogs = src.split('\n').filter(l => /User (registered|signed in) via password/.test(l));
+      assert.ok(authLogs.length >= 2, 'expected both auth log lines');
+      for (const line of authLogs) {
+        assert.doesNotMatch(line, /apiKey/, `API-key fragment in log line: ${line.trim()}`);
+      }
+    });
+  });
+
+  describe('limiter and policy edges', () => {
+    it('reports a missing password distinctly from a too-short one', async () => {
+      assert.match(validatePassword('') ?? '', /required/);
+      assert.match(validatePassword(undefined as unknown as string) ?? '', /required/);
+      assert.match(validatePassword('short') ?? '', /at least/);
+
+      const res = await request(app)
+        .post('/api/auth/register')
+        .send({ email: freshEmail(), password: '' });
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /required/i);
+    });
+
+    it('evicts once the fallback map hits its cap, instead of growing forever', async () => {
+      // Drive the store directly: reaching the cap through HTTP would need
+      // 10k requests, and the behaviour under test is the map, not the route.
+      const cap = LOGIN_RATE_LIMIT.MAX_MEMORY_KEYS;
+      for (let i = 0; i <= cap + 50; i++) {
+        await consumeLoginAttempt(`prune-probe:${i}`, LOGIN_RATE_LIMIT.MAX_ATTEMPTS);
+      }
+      const size = __memoryKeyCountForTests();
+      assert.ok(size <= cap, `map holds ${size}, past the ${cap} cap`);
+      // Eviction targets 90% of the cap, so a full sweep must have run.
+      assert.ok(size < cap, 'expected eviction to have reclaimed space');
+    });
+
+    it('still limits when the client forges a different X-Forwarded-For each time', async () => {
+      const email = freshEmail();
+      await registerAndVerify(email);
+      __resetLoginRateLimitForTests();
+
+      let last: request.Response | undefined;
+      for (let i = 0; i < LOGIN_RATE_LIMIT.MAX_ATTEMPTS + 3; i++) {
+        last = await request(app)
+          .post('/api/auth/login')
+          .set('X-Forwarded-For', `203.0.113.${i}, 198.51.100.7`)
+          .send({ email, password: 'bad-password-x' });
+      }
+      // req.ip would read the leftmost (caller-supplied) hop and mint a fresh
+      // bucket per request; the email bucket holds regardless.
+      assert.equal(last!.status, 429);
+    });
+  });
+
+  describe('a link prefetch must not sign anyone up', () => {
+    it('GET /auth/verify creates nothing and leaves the token usable', async () => {
+      const email = freshEmail();
+      await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+      const token = lastVerificationToken(email)!;
+
+      // Exactly what a mail scanner does: follow the URL from the message.
+      const prefetch = await request(app).get('/auth/verify').query({ token });
+      // publicDir resolves to src/public under tsx, so sendFile may 404 here —
+      // same accommodation as the /login test. What matters is that the GET
+      // neither redeemed the token nor redirected anywhere.
+      assert.ok([200, 404].includes(prefetch.status), `unexpected status ${prefetch.status}`);
+      assert.notEqual(prefetch.status, 302, 'a prefetch must not be redirected into redeeming');
+      assert.equal(await getUserByEmail(email), undefined, 'a prefetch must not create the account');
+
+      // And the recipient's link still works afterwards.
+      const res = await redeem(token);
+      assert.equal(res.headers.location, '/dashboard');
+      assert.ok(await getUserByEmail(email), 'the real click still completes the sign-up');
+    });
+
+    it('serves a page that submits rather than a link that acts', async () => {
+      const html = fs.readFileSync(path.join(process.cwd(), 'public', 'verify.html'), 'utf8');
+      assert.match(html, /method="POST"/i);
+      assert.match(html, /action="\/auth\/verify"/);
+      assert.match(html, /name="token"/);
+    });
+
+    it('sends a tokenless GET straight to sign-in', async () => {
+      const res = await request(app).get('/auth/verify');
+      assert.equal(res.headers.location, '/login?verify=invalid');
+    });
+
+    it('keeps the token out of the Referer on both steps', async () => {
+      const email = freshEmail();
+      await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+      const token = lastVerificationToken(email)!;
+
+      assert.equal(
+        (await request(app).get('/auth/verify').query({ token })).headers['referrer-policy'],
+        'no-referrer',
+      );
+      assert.equal((await redeem(token)).headers['referrer-policy'], 'no-referrer');
+    });
+  });
+
+  describe('pending records survive our failures, not the user\'s', () => {
+    it('drops the record when the verification mail cannot be sent', async () => {
+      const email = freshEmail();
+      const realFetch = globalThis.fetch;
+      const previousKey = process.env.RESEND_API_KEY;
+      process.env.RESEND_API_KEY = 'test-key';
+      globalThis.fetch = (async () => new Response('boom', { status: 500 })) as typeof globalThis.fetch;
+
+      const before = __pendingCountForTests();
+      try {
+        const res = await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+        assert.equal(res.status, 500, 'a failed send must not report success');
+      } finally {
+        globalThis.fetch = realFetch;
+        if (previousKey === undefined) delete process.env.RESEND_API_KEY;
+        else process.env.RESEND_API_KEY = previousKey;
+      }
+
+      // The token existed only inside that request, so the record is
+      // unreachable and must not linger for its full TTL.
+      assert.equal(__pendingCountForTests(), before, 'undelivered record should be cleaned up');
+      assert.equal(await getUserByEmail(email), undefined);
+    });
+
+    it('puts the record back when account creation fails for our reasons', async () => {
+      // consume() deletes before returning, so an unrelated failure after it
+      // would otherwise spend a valid link on our outage.
+      const token = await createPendingRegistration('restore@example.com', 'hash');
+      const claimed = await consumePendingRegistration(token);
+      assert.ok(claimed);
+      assert.equal(await consumePendingRegistration(token), null, 'consumed');
+
+      await restorePendingRegistration(token, claimed!);
+      assert.equal((await consumePendingRegistration(token))?.email, 'restore@example.com');
+    });
+
+    it('will not restore a record that has already expired', async () => {
+      const token = 'expired-restore-token';
+      await restorePendingRegistration(token, {
+        email: 'stale@example.com',
+        passwordHash: 'hash',
+        expiresAt: Date.now() - 1000,
+      });
+      assert.equal(await consumePendingRegistration(token), null);
+    });
+
+    it('deletePendingRegistration is a no-op on an unknown token', async () => {
+      await deletePendingRegistration('never-existed');
+      await deletePendingRegistration('');
+    });
+  });
+
+  describe('mailer', () => {
+    it('reports itself unconfigured without RESEND_API_KEY', () => {
+      assert.equal(isMailConfigured(), false, 'tests must not be sending real mail');
+    });
+
+    it('refuses to silently drop mail in production', async () => {
+      // The dev fallback is what lets a developer finish sign-up with no
+      // provider. In production the same missing key has to surface, or the
+      // user waits forever for a link that was never sent.
+      const previous = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+      try {
+        await assert.rejects(
+          () => sendMail({ to: 'x@example.com', subject: 's', html: '<p>h</p>', text: 't' }),
+          (err: unknown) => err instanceof MailNotConfiguredError,
+        );
+      } finally {
+        process.env.NODE_ENV = previous;
+      }
+    });
+
+    it('treats a missing MAIL_FROM as unconfigured in production', async () => {
+      // The fallback sender is Resend's sandbox address. A deployment with a
+      // key but no MAIL_FROM used to pass preflight, build pending state, and
+      // only then fail at the provider — or send from an identity nobody chose.
+      const previousKey = process.env.RESEND_API_KEY;
+      const previousFrom = process.env.MAIL_FROM;
+      const previousEnv = process.env.NODE_ENV;
+      process.env.RESEND_API_KEY = 'test-key';
+      delete process.env.MAIL_FROM;
+      process.env.NODE_ENV = 'production';
+      try {
+        assert.equal(isMailConfigured(), false, 'a key alone is not enough in production');
+        await assert.rejects(
+          () => sendMail({ to: 'x@example.com', subject: 's', html: '<p>h</p>', text: 't' }),
+          (err: unknown) => err instanceof MailNotConfiguredError && /MAIL_FROM/.test((err as Error).message),
+        );
+      } finally {
+        process.env.NODE_ENV = previousEnv;
+        if (previousKey === undefined) delete process.env.RESEND_API_KEY;
+        else process.env.RESEND_API_KEY = previousKey;
+        if (previousFrom !== undefined) process.env.MAIL_FROM = previousFrom;
+      }
+    });
+
+    it('surfaces a provider failure rather than reporting success', async () => {
+      const previousKey = process.env.RESEND_API_KEY;
+      const realFetch = globalThis.fetch;
+      process.env.RESEND_API_KEY = 'test-key';
+      globalThis.fetch = (async () =>
+        new Response('nope', { status: 422 })) as typeof globalThis.fetch;
+      try {
+        await assert.rejects(
+          () => sendMail({ to: 'x@example.com', subject: 's', html: '<p>h</p>', text: 't' }),
+          (err: unknown) => err instanceof MailDeliveryError,
+        );
+      } finally {
+        globalThis.fetch = realFetch;
+        if (previousKey === undefined) delete process.env.RESEND_API_KEY;
+        else process.env.RESEND_API_KEY = previousKey;
+      }
+    });
+
+    it('sends through the provider when configured', async () => {
+      const previousKey = process.env.RESEND_API_KEY;
+      const realFetch = globalThis.fetch;
+      let captured: any;
+      process.env.RESEND_API_KEY = 'test-key';
+      globalThis.fetch = (async (_url: string, init: RequestInit) => {
+        captured = JSON.parse(String(init.body));
+        return new Response('{"id":"1"}', { status: 200 });
+      }) as unknown as typeof globalThis.fetch;
+      try {
+        await sendMail({ to: 'x@example.com', subject: 'Subj', html: '<p>h</p>', text: 't' });
+        assert.deepEqual(captured.to, ['x@example.com']);
+        assert.equal(captured.subject, 'Subj');
+      } finally {
+        globalThis.fetch = realFetch;
+        if (previousKey === undefined) delete process.env.RESEND_API_KEY;
+        else process.env.RESEND_API_KEY = previousKey;
+      }
+    });
+  });
+
+  describe('pending registrations', () => {
+    it('is redeemable exactly once', async () => {
+      const token = await createPendingRegistration('once@example.com', 'hash');
+      assert.equal((await consumePendingRegistration(token))?.email, 'once@example.com');
+      assert.equal(await consumePendingRegistration(token), null);
+    });
+
+    it('does not accept a token it never issued', async () => {
+      assert.equal(await consumePendingRegistration('made-up-token'), null);
+      assert.equal(await consumePendingRegistration(''), null);
+    });
+
+    it('bounds the pending map instead of growing per sign-up', async () => {
+      // Registration is unauthenticated, so an unbounded map here would be a
+      // way to exhaust the heap — the same shape as the login limiter's bug.
+      const cap = PENDING_REGISTRATION.MAX_MEMORY_ENTRIES;
+      for (let i = 0; i <= cap + 50; i++) {
+        await createPendingRegistration(`bulk-${i}@example.com`, 'hash');
+      }
+      const size = __pendingCountForTests();
+      assert.ok(size <= cap, `map holds ${size}, past the ${cap} cap`);
+      assert.ok(size < cap, 'expected eviction to have reclaimed space');
+    });
+  });
+
+  describe('hiding Google sign-in (HIDE_GOOGLE_SIGNIN)', () => {
+    // publicDir resolves to src/public under tsx, so the page routes may 404 in
+    // test. Exercise the strip against the real files instead, then assert the
+    // route wiring separately.
+    const pageSource = (name: string) =>
+      fs.readFileSync(path.join(process.cwd(), 'public', name), 'utf8');
+    const BLOCK = /[ \t]*<!-- google-signin:start -->[\s\S]*?<!-- google-signin:end -->\n?/g;
+
+    for (const page of ['login.html', 'dashboard.html']) {
+      it(`${page} marks the Google block so it can be stripped`, () => {
+        const html = pageSource(page);
+        assert.match(html, /<!-- google-signin:start -->/, 'needs an opening marker');
+        assert.match(html, /<!-- google-signin:end -->/, 'needs a closing marker');
+        // The marked region must actually contain the affordance, or stripping
+        // it would remove nothing.
+        const marked = html.match(BLOCK)?.join('') ?? '';
+        assert.match(marked, /<a href="\/auth\/google"/, 'the block must hold the button');
+      });
+
+      it(`${page} loses the button, and nothing else, when stripped`, () => {
+        const html = pageSource(page);
+        const stripped = html.replace(BLOCK, '');
+
+        assert.doesNotMatch(stripped, /<a href="\/auth\/google"/, 'button must be gone');
+        assert.doesNotMatch(stripped, /google-signin:/, 'markers must not linger');
+        // The email path is the whole point of hiding the other one.
+        assert.match(stripped, page === 'login.html' ? /id="authForm"/ : /sign in with email/);
+      });
+    }
+
+    it('drops the "or" divider along with the button', () => {
+      // The divider only makes sense between two options.
+      const stripped = pageSource('login.html').replace(BLOCK, '');
+      assert.doesNotMatch(stripped, /class="divider"/);
+    });
+
+    it('keeps the button by default', () => {
+      // Nothing changes for a deployment that never sets the variable.
+      assert.notEqual(process.env.HIDE_GOOGLE_SIGNIN, 'true');
+      assert.match(pageSource('login.html'), /<a href="\/auth\/google"/);
+    });
+
+    it('reports the flag through /api/config', async () => {
+      const res = await request(app).get('/api/config');
+      assert.equal(res.status, 200);
+      assert.equal(res.body.googleSigninHidden, false);
+    });
+
+    it('leaves GET /auth/google reachable', async () => {
+      // Load-bearing: a Google-created account has password_hash NULL, so the
+      // email form cannot sign it in and there is no reset yet. Removing the
+      // route would strand every such account.
+      const res = await request(app).get('/auth/google');
+      assert.equal(res.status, 302);
+      assert.match(res.headers.location, /accounts\.google\.com/);
+    });
+
+    it('focuses the email link when the button is absent', () => {
+      const html = pageSource('dashboard.html');
+      assert.match(html, /querySelector\('\.btn-google-login, \.login-alt a'\)/,
+        'overlay focus must fall back rather than focus nothing');
+    });
+  });
+
+  describe('GET /login', () => {
+    it('serves a page instead of bouncing straight to Google', async () => {
+      const res = await request(app).get('/login');
+      // publicDir resolves to src/public under tsx, so sendFile may 404 in
+      // test even though the route ran — same accommodation as the
+      // /integrations test in routes.test.ts. What matters here is that the
+      // route no longer redirects: a 302 to /auth/google would deny the page
+      // to every email+password account.
+      assert.ok([200, 404].includes(res.status), `unexpected status ${res.status}`);
+      assert.notEqual(res.status, 302);
+    });
+
+    it('ships a login page offering both sign-in methods', () => {
+      const html = fs.readFileSync(path.join(process.cwd(), 'public', 'login.html'), 'utf8');
+      assert.match(html, /\/auth\/google/, 'keeps the Google button');
+      // The endpoint is assembled at submit time from the form's mode, so
+      // match the prefix and both mode names rather than a whole URL.
+      assert.match(html, /'\/api\/auth\/' \+/, 'posts to the password endpoints');
+      assert.match(html, /'register'/);
+      assert.match(html, /id="authForm"/);
+      assert.doesNotMatch(html, /id="name"/, 'sign-up must not collect a display name');
+      assert.match(html, /Check your email/, 'sign-up must confirm a link was sent');
+      // Assert the copy a user actually reads, not just that the lookup table
+      // exists — the identifier surviving a rename says nothing about the text.
+      assert.match(html, /no longer valid/, 'must explain an expired or used link');
+      assert.match(html, /already has an account/, 'must explain a taken address');
+      assert.match(html, /hasOwnProperty\.call\(VERIFY_MESSAGES/,
+        'must not resolve verify= through the prototype chain');
+    });
+  });
+});

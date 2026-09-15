@@ -2,6 +2,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { timingSafeEqual } from 'crypto';
 import * as path from 'path';
+import * as fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
@@ -296,10 +297,15 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
 }
 import crypto from 'crypto';
 import cookieParser from 'cookie-parser';
-import { loadUsers, createOrUpdateUser, getUserByGoogleId, getUserByApiKey, getUserById, regenerateApiKey, getAllUsers, UserRecord } from '../userStore.js';
+import { loadUsers, createOrUpdateUser, getUserByGoogleId, getUserByApiKey, getUserById, getUserByEmail, createPasswordUser, getPasswordHashByEmail, regenerateApiKeyByUserId, getAllUsers, UserRecord, DuplicateEmailError } from '../userStore.js';
+import { normalizeEmail, isValidEmail, validatePassword, hashPassword, verifyPassword } from '../auth/password.js';
 import { loadClientCredentials } from '../auth.js';
 import { getOAuthState, deleteOAuthState, storeAuthCode, storeClient, getClient, exchangeAuthCode } from './oauthServer.js';
 import { createSession, getSession, deleteSession, Session } from './sessionStore.js';
+import { consumeLoginAttempt, resetLoginAttempts, RateLimitVerdict, LOGIN_RATE_LIMIT } from './loginRateLimit.js';
+import { sendMail, isMailConfigured, MailNotConfiguredError } from './mailer.js';
+import { verificationEmail, alreadyRegisteredEmail } from './authEmails.js';
+import { createPendingRegistration, consumePendingRegistration, deletePendingRegistration, restorePendingRegistration, PENDING_REGISTRATION } from './pendingRegistrationStore.js';
 import { lookupRestToken } from './restTokenStore.js';
 import { mapSlackErrorToHttpStatus } from './slackErrorMapper.js';
 import { negotiateFormat, respondNegotiated } from './restContent.js';
@@ -315,6 +321,7 @@ import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceN
 import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
 import { checkConnectionHealth, type ConnectionHealth } from './connectionHealth.js';
+import { discoverConnectedOrgs, type OrgDiscoveryResult } from '../slack-user/orgDiscovery.js';
 import { buildSimpleInstanceName, type ValidateResult } from '../util/pasteTokenValidation.js';
 import {
   listSpreadsheetFiles,
@@ -322,6 +329,7 @@ import {
   type SpreadsheetOrderBy,
 } from '../google-sheets/listHandlers.js';
 import { describeDriveError } from '../google-drive/driveErrors.js';
+import { sliceSafe, sanitizeDocText } from '../google-docs/textSafety.js';
 import {
   connectMcp,
   getMcpConnection,
@@ -370,6 +378,41 @@ export function computeEffectiveScopes(
 
 const BASE_URL = stripTrailingSlashes(process.env.BASE_URL || 'http://localhost:8080');
 const COOKIE_SECRET = process.env.COOKIE_SECRET || 'dev-secret-change-me';
+
+/**
+ * Temporarily take the Google sign-in button off the sign-in surfaces.
+ *
+ * Presentation only — `GET /auth/google` keeps working. That matters: a
+ * Google-created account has `password_hash` NULL, so the email form cannot
+ * sign it in, and there is no password reset yet. Removing the route as well
+ * would strand every such account with no way back in, so the affordance is
+ * hidden while the path stays open for anyone who knows it.
+ */
+function hideGoogleSignin(): boolean {
+  return process.env.HIDE_GOOGLE_SIGNIN === 'true';
+}
+
+/** Markers around the Google block in the sign-in pages. */
+const GOOGLE_SIGNIN_BLOCK = /[ \t]*<!-- google-signin:start -->[\s\S]*?<!-- google-signin:end -->\n?/g;
+
+/**
+ * Serve a sign-in page, dropping the Google block when it is hidden.
+ *
+ * Stripped server-side rather than hidden with CSS or by a script, so the
+ * button never reaches the browser and cannot flash before being removed.
+ * Falls back to a plain 404 when the file is missing, matching what sendFile
+ * did before.
+ */
+async function sendSigninPage(res: Response, fileName: string): Promise<void> {
+  let html: string;
+  try {
+    html = await fs.readFile(path.join(publicDir, fileName), 'utf8');
+  } catch {
+    res.sendStatus(404);
+    return;
+  }
+  res.type('html').send(hideGoogleSignin() ? html.replace(GOOGLE_SIGNIN_BLOCK, '') : html);
+}
 const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /** How long a pending "finish this after you log in" intent stays valid. */
@@ -783,13 +826,95 @@ export function registerImageBlobRoutes(app: express.Express): void {
 }
 
 /**
+ * Resolve the account behind a dashboard session.
+ *
+ * Every session-backed route used to do this inline as
+ * `getUserByGoogleId(req.session.googleId)`, which made the whole dashboard
+ * Google-only by construction: an email+password account has google_id NULL,
+ * so the lookup missed and the route answered 401 on a valid session.
+ *
+ * `userId` is the identity now. The googleId fallback is for sessions minted
+ * before that change — they are still live in Redis for up to their 7-day
+ * TTL and must keep working rather than logging everyone out on deploy.
+ */
+async function resolveSessionUser(session: Session | undefined): Promise<UserRecord | undefined> {
+  if (!session) return undefined;
+  if (typeof session.userId === 'number') {
+    return getUserById(session.userId);
+  }
+  if (session.googleId) {
+    return getUserByGoogleId(session.googleId);
+  }
+  return undefined;
+}
+
+/**
+ * Best available client address for rate-limiting purposes.
+ *
+ * Deliberately not `req.ip`. The app sets `trust proxy: true`, which makes
+ * Express believe the whole X-Forwarded-For chain, and a client controls
+ * everything it sends — so `req.ip` is whatever the caller claims. Each proxy
+ * *appends* the peer it actually saw, so the RIGHTMOST entry is the one
+ * written by the hop closest to us and is the only part a client cannot
+ * forge; anything injected lands to its left.
+ *
+ * This is exactly as trustworthy as "there is one proxy in front of us",
+ * which is true on Railway. It is a local hardening, not a fix for the
+ * repo-wide `trust proxy: true` — that setting deserves its own change, since
+ * narrowing it affects every consumer of req.ip.
+ */
+function rateLimitClientAddress(req: Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  const chain = Array.isArray(forwarded) ? forwarded.join(',') : forwarded;
+  if (chain) {
+    const hops = chain.split(',');
+    const nearest = hops[hops.length - 1]?.trim();
+    if (nearest) return nearest;
+  }
+  return req.socket.remoteAddress || 'unknown';
+}
+
+/**
+ * Buckets a credential attempt counts against, each with its own ceiling.
+ *
+ * Per-IP and per-email so neither dimension alone is a bypass: one address
+ * spraying many emails and many addresses hammering one email both accumulate.
+ *
+ * The global bucket exists because the other two are caller-influenced — the
+ * email is chosen outright and the address is only as trustworthy as the
+ * proxy assumption above — so an attacker who can rotate both would otherwise
+ * mint unlimited fresh buckets and spend ~190ms of bcrypt CPU per request
+ * forever. It is the only ceiling here that an attacker cannot route around.
+ */
+function attemptKeys(req: Request, email: string): Array<{ key: string; limit: number }> {
+  return [
+    { key: `ip:${rateLimitClientAddress(req)}`, limit: LOGIN_RATE_LIMIT.MAX_ATTEMPTS },
+    { key: `email:${email}`, limit: LOGIN_RATE_LIMIT.MAX_ATTEMPTS },
+    { key: 'global:credentials', limit: LOGIN_RATE_LIMIT.GLOBAL_MAX_ATTEMPTS },
+  ];
+}
+
+/** Consume one attempt on every bucket; returns a verdict for the caller. */
+async function guardAttempt(req: Request, email: string): Promise<RateLimitVerdict> {
+  const verdicts = await Promise.all(
+    attemptKeys(req, email).map(({ key, limit }) => consumeLoginAttempt(key, limit)),
+  );
+  const blocked = verdicts.find(v => !v.allowed);
+  return blocked ?? { allowed: true, retryAfter: 0 };
+}
+
+/**
  * Registers all shared routes used by both single-service and multi-service modes.
  * Includes: auth, dashboard, connect/reconnect OAuth, API endpoints, admin, catalogs.
  */
 function registerSharedRoutes(app: express.Express): void {
   // Serve config to frontend (BASE_URL, auth mode)
   app.get('/api/config', (_req, res) => {
-    res.json({ baseUrl: BASE_URL, authMode: process.env.DUAL_AUTH_MODE !== 'false' ? 'dual' : 'jwt' });
+    res.json({
+      baseUrl: BASE_URL,
+      authMode: process.env.DUAL_AUTH_MODE !== 'false' ? 'dual' : 'jwt',
+      googleSigninHidden: hideGoogleSignin(),
+    });
   });
 
   // Redirect to landing page on Vercel
@@ -797,14 +922,16 @@ function registerSharedRoutes(app: express.Express): void {
     res.redirect('/dashboard');
   });
 
-  // Login shortcut - redirect to Google OAuth
+  // Login page — offers Google OAuth and email+password side by side.
+  // This used to redirect straight to /auth/google, which is no longer a
+  // correct default now that an account can exist without a Google identity.
   app.get('/login', (_req, res) => {
-    res.redirect('/auth/google');
+    void sendSigninPage(res, 'login.html');
   });
 
   // Dashboard - always serve the page (JS handles auth via /api/me)
   app.get('/dashboard', (_req, res) => {
-    res.sendFile(path.join(publicDir, 'dashboard.html'));
+    void sendSigninPage(res, 'dashboard.html');
   });
 
   // Public changelog / release notes
@@ -957,8 +1084,10 @@ function registerSharedRoutes(app: express.Express): void {
         }
       }
 
-      // Direct registration flow — create session and redirect to dashboard
-      const sessionId = await createSession(profile.id);
+      // Direct registration flow — create session and redirect to dashboard.
+      // googleId rides along so a session minted here still resolves if the
+      // user row is ever looked up the old way.
+      const sessionId = await createSession({ userId: user.id, googleId: profile.id });
       res.cookie('session', sessionId, {
         signed: true,
         httpOnly: true,
@@ -982,6 +1111,249 @@ function registerSharedRoutes(app: express.Express): void {
     }
   });
 
+  // === Email + password authentication ===
+
+  const AUTH_COOKIE_OPTIONS = {
+    signed: true as const,
+    httpOnly: true as const,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax' as const,
+    maxAge: SESSION_MAX_AGE,
+  };
+
+  /**
+   * Finish a successful sign-in: mint the session cookie and hand back the
+   * post-login destination the user was parked at, if any.
+   */
+  async function completeSignIn(req: Request, res: Response, user: UserRecord): Promise<string> {
+    const sessionId = await createSession({ userId: user.id, googleId: user.googleId ?? undefined });
+    res.cookie('session', sessionId, AUTH_COOKIE_OPTIONS);
+
+    const parked = sanitizePostLoginRedirect(req.signedCookies?.[POST_LOGIN_REDIRECT_COOKIE]);
+    if (req.signedCookies?.[POST_LOGIN_REDIRECT_COOKIE]) {
+      res.clearCookie(POST_LOGIN_REDIRECT_COOKIE);
+    }
+    return parked || '/dashboard';
+  }
+
+  /**
+   * Identical answer whether or not the address is already taken.
+   *
+   * Registration used to reply 409 on a duplicate, which made it an
+   * account-existence oracle for anyone willing to ask. Now the address owner
+   * still learns what happened — by mail — while the caller cannot tell the
+   * two cases apart.
+   */
+  const REGISTRATION_ACCEPTED = {
+    message: "If that address can be registered, we've sent a link to it. " +
+      'Click the link in the email to finish creating your account.',
+  };
+
+  app.post('/api/auth/register', express.json(), async (req: Request, res: Response) => {
+    try {
+      const email = normalizeEmail(String(req.body?.email ?? ''));
+      const password = String(req.body?.password ?? '');
+
+      if (!isValidEmail(email)) {
+        res.status(400).json({ error: 'Enter a valid email address.' });
+        return;
+      }
+      const policyError = validatePassword(password);
+      if (policyError) {
+        res.status(400).json({ error: policyError });
+        return;
+      }
+
+      const gate = await guardAttempt(req, email);
+      if (!gate.allowed) {
+        res.set('Retry-After', String(gate.retryAfter));
+        res.status(429).json({ error: 'Too many attempts. Try again later.' });
+        return;
+      }
+
+      // Refuse before doing anything else if we could not deliver the link.
+      // Reporting "check your email" for a mail that was never sent strands
+      // the user waiting for something that is not coming.
+      if (!isMailConfigured() && process.env.NODE_ENV === 'production') {
+        throw new MailNotConfiguredError();
+      }
+
+      await loadUsers();
+      const existing = await getUserByEmail(email);
+
+      // Hash on both paths. It is the dominant cost of this request (~190ms),
+      // so skipping it for a known address would let response time answer the
+      // question the identical body refuses to.
+      const passwordHash = await hashPassword(password);
+
+      // Both branches log the same line, with no address in it. A log that
+      // says which branch ran — or which address asked — re-opens by another
+      // route exactly the question the identical response refuses to answer.
+      if (existing) {
+        await sendMail(alreadyRegisteredEmail(email, `${BASE_URL}/login`));
+        console.error('[register] sign-up request processed');
+        res.status(202).json(REGISTRATION_ACCEPTED);
+        return;
+      }
+
+      // No account yet — only a pending sign-up. `users` stays untouched until
+      // the link is clicked, so an unverified address can never hold an
+      // account, and an unreachable one leaves nothing behind to clean up.
+      const token = await createPendingRegistration(email, passwordHash);
+      const verifyUrl = `${BASE_URL}/auth/verify?token=${encodeURIComponent(token)}`;
+      try {
+        await sendMail(
+          verificationEmail(email, verifyUrl, PENDING_REGISTRATION.TTL_SECONDS / 3600),
+        );
+      } catch (sendErr) {
+        // The token only ever existed inside this request, so an undelivered
+        // record is unreachable by anyone and would just sit until its TTL.
+        await deletePendingRegistration(token).catch(() => {});
+        throw sendErr;
+      }
+
+      console.error('[register] sign-up request processed');
+      res.status(202).json(REGISTRATION_ACCEPTED);
+    } catch (err: any) {
+      if (err instanceof MailNotConfiguredError) {
+        console.error('Registration blocked: RESEND_API_KEY is not set');
+        res.status(503).json({
+          error: 'Email delivery is not configured, so sign-up is unavailable. Please try again later.',
+        });
+        return;
+      }
+      console.error('Registration error:', err);
+      res.status(500).json({ error: 'Registration failed. Please try again.' });
+    }
+  });
+
+  /**
+   * Show the confirmation page for a verification link. Deliberately inert.
+   *
+   * This used to redeem the token and create the account in one GET, which
+   * meant a mail scanner following the link did the sign-up on the
+   * recipient's behalf and burned their link — they would then click it and
+   * be told it was invalid. Nothing here touches the store; redemption
+   * happens on the POST below, which a prefetch will not make.
+   */
+  app.get('/auth/verify', (req: Request, res: Response) => {
+    // The token is in the query string, so it would otherwise ride along in
+    // the Referer of anything this page loads.
+    res.set('Referrer-Policy', 'no-referrer');
+
+    const token = typeof req.query.token === 'string' ? req.query.token : '';
+    if (!token) {
+      res.redirect('/login?verify=invalid');
+      return;
+    }
+    res.sendFile(path.join(publicDir, 'verify.html'));
+  });
+
+  /**
+   * Redeem a verification link. This is where the account is created.
+   *
+   * A POST, so that only a deliberate submission — never a link prefetch —
+   * can bring an account into existence.
+   */
+  app.post(
+    '/auth/verify',
+    express.urlencoded({ extended: false }),
+    async (req: Request, res: Response) => {
+      res.set('Referrer-Policy', 'no-referrer');
+
+      const failure = (reason: string) =>
+        res.redirect(`/login?verify=${encodeURIComponent(reason)}`);
+
+      const token = typeof req.body?.token === 'string' ? req.body.token : '';
+      const pending = await consumePendingRegistration(token);
+      if (!pending) {
+        // Unknown, already used, and expired are deliberately one answer:
+        // distinguishing them tells a probe which tokens once existed.
+        failure('invalid');
+        return;
+      }
+
+      try {
+        await loadUsers();
+        const user = await createPasswordUser({
+          email: pending.email,
+          name: pending.email,
+          passwordHash: pending.passwordHash,
+        });
+
+        console.error(`User registered via password: ${user.email}`);
+        await Promise.all(
+          attemptKeys(req, pending.email).map(({ key }) => resetLoginAttempts(key)),
+        );
+
+        const redirectTo = await completeSignIn(req, res, user);
+        res.redirect(redirectTo);
+      } catch (err: any) {
+        // The address gained an account between sending the link and
+        // redeeming it — a second verified sign-up, or a Google sign-in that
+        // claimed it. The link cannot mint a duplicate, and we must not sign
+        // anyone in on the strength of a password this request never proved.
+        // The record stays consumed: there is an account now, so the link has
+        // no further use.
+        if (err instanceof DuplicateEmailError) {
+          failure('exists');
+          return;
+        }
+
+        // Anything else — the database being unreachable, say — is not the
+        // link's fault, and no account was created. Put the record back so a
+        // valid link is not spent on our outage.
+        await restorePendingRegistration(token, pending).catch(() => {});
+        console.error('Verification error:', err);
+        failure('failed');
+      }
+    },
+  );
+
+  app.post('/api/auth/login', express.json(), async (req: Request, res: Response) => {
+    try {
+      const email = normalizeEmail(String(req.body?.email ?? ''));
+      const password = String(req.body?.password ?? '');
+
+      if (!email || !password) {
+        res.status(400).json({ error: 'Email and password are required.' });
+        return;
+      }
+
+      const gate = await guardAttempt(req, email);
+      if (!gate.allowed) {
+        res.set('Retry-After', String(gate.retryAfter));
+        res.status(429).json({ error: 'Too many attempts. Try again later.' });
+        return;
+      }
+
+      await loadUsers();
+      const storedHash = await getPasswordHashByEmail(email);
+
+      // Run the compare unconditionally — including when there is no account
+      // and when the account is Google-only (hash null). verifyPassword burns
+      // the same bcrypt cost either way, so response time does not reveal
+      // which emails are registered. See auth/password.ts.
+      const passwordOk = await verifyPassword(password, storedHash);
+      const user = passwordOk ? await getUserByEmail(email) : undefined;
+
+      if (!passwordOk || !user?.id) {
+        res.status(401).json({ error: 'Incorrect email or password.' });
+        return;
+      }
+
+      await Promise.all(attemptKeys(req, email).map(({ key }) => resetLoginAttempts(key)));
+      clearSessionCache(user.apiKey);
+
+      console.error(`User signed in via password: ${user.email}`);
+      const redirectTo = await completeSignIn(req, res, user);
+      res.json({ email: user.email, name: user.name, redirectTo });
+    } catch (err: any) {
+      console.error('Login error:', err);
+      res.status(500).json({ error: 'Sign-in failed. Please try again.' });
+    }
+  });
+
   // Authentication middleware for protected routes
   async function requireAuth(
     req: AuthenticatedRequest,
@@ -996,7 +1368,7 @@ function registerSharedRoutes(app: express.Express): void {
       return;
     }
     const session = await getSession(sessionId);
-    console.error(`[requireAuth] session found=${!!session}, googleId=${session?.googleId || 'none'}`);
+    console.error(`[requireAuth] session found=${!!session}, userId=${session?.userId ?? 'none'}, googleId=${session?.googleId || 'none'}`);
     if (!session || session.expiresAt < Date.now()) {
       console.error(`[requireAuth] Session expired or not found`);
       res.clearCookie('session');
@@ -1061,7 +1433,9 @@ function registerSharedRoutes(app: express.Express): void {
         sameSite: 'lax',
         maxAge: POST_LOGIN_REDIRECT_MAX_AGE,
       });
-      res.redirect('/auth/google');
+      // /login, not /auth/google: with two sign-in methods, hard-redirecting
+      // to Google would deny the page to every email+password account.
+      res.redirect('/login');
     };
 
     if (!sessionId) {
@@ -1070,6 +1444,13 @@ function registerSharedRoutes(app: express.Express): void {
     }
     const session = await getSession(sessionId);
     if (!session || session.expiresAt < Date.now()) {
+      res.clearCookie('session');
+      parkIntentAndLogin();
+      return;
+    }
+
+    const connectingUser = await resolveSessionUser(session);
+    if (!connectingUser?.id) {
       res.clearCookie('session');
       parkIntentAndLogin();
       return;
@@ -1104,6 +1485,11 @@ function registerSharedRoutes(app: express.Express): void {
       const stateData = JSON.stringify({
         sessionId,
         mcpSlug,
+        // userId is what the callback resolves on. googleId used to be the
+        // only identity here, which meant an email+password user could start
+        // a connect flow and get "User not found" on the way back — after
+        // consenting at the provider.
+        userId: connectingUser.id,
         googleId: session.googleId,
         instanceName: instanceName || null, // null means legacy single-instance mode
         reconnectInstanceId: reconnectInstanceId || null,
@@ -1224,8 +1610,15 @@ function registerSharedRoutes(app: express.Express): void {
 
       const redirectUri = `${BASE_URL}/connect/${mcpSlug}/callback`;
 
-      // Get user from session
-      const user = await getUserByGoogleId(stateData.googleId);
+      // Get user from the state we stored when the flow started. Prefer
+      // userId; fall back to googleId for flows started before that field
+      // existed and still inside their 10-minute state TTL.
+      const user = await resolveSessionUser({
+        userId: stateData.userId,
+        googleId: stateData.googleId,
+        createdAt: 0,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      });
       if (!user?.id) {
         res.status(401).send('User not found. Please log in again.');
         return;
@@ -1700,10 +2093,8 @@ function registerSharedRoutes(app: express.Express): void {
         return;
       }
 
-      const googleId = (req as any).session?.googleId;
-      if (!googleId) { res.status(401).json({ error: 'Not authenticated' }); return; }
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
+      const user = await resolveSessionUser((req as any).session);
+      if (!user?.id) { res.status(401).json({ error: 'Not authenticated' }); return; }
       const userId = user.id;
 
       /**
@@ -1885,14 +2276,43 @@ function registerSharedRoutes(app: express.Express): void {
     }
   });
 
+  // Org discovery sweeps several paged Slack endpoints, so a modal open/close
+  // cycle should not re-run it. Keyed by instance *and* saved allowlist, since
+  // a saved org that discovery misses is injected into the result — which also
+  // means a rules change mints a new key, so entries must be evicted rather
+  // than left to accumulate one per allowlist the user ever saved.
+  const orgDiscoveryCache = new Map<string, { result: OrgDiscoveryResult; expiresAt: number }>();
+  const ORG_DISCOVERY_TTL_MS = 5 * 60 * 1000;
+  const ORG_DISCOVERY_CACHE_MAX = 500;
+
+  /** Drop expired entries, then the oldest ones until the cache is under its cap. */
+  function pruneOrgDiscoveryCache(): void {
+    const now = Date.now();
+    for (const [key, entry] of [...orgDiscoveryCache]) {
+      if (entry.expiresAt <= now) orgDiscoveryCache.delete(key);
+    }
+    // Map iterates in insertion order, so the first keys are the oldest writes.
+    while (orgDiscoveryCache.size > ORG_DISCOVERY_CACHE_MAX) {
+      const oldest = orgDiscoveryCache.keys().next();
+      if (oldest.done) break;
+      orgDiscoveryCache.delete(oldest.value);
+    }
+  }
+
+  /** Forget every cached sweep for one instance. Its rules just changed. */
+  function invalidateOrgDiscoveryCache(instanceId: string): void {
+    const prefix = `${instanceId}:`;
+    for (const key of [...orgDiscoveryCache.keys()]) {
+      if (key.startsWith(prefix)) orgDiscoveryCache.delete(key);
+    }
+  }
+
   // GET /api/instances/:instanceId/access-rules - Get current access rules + org info
   app.get('/api/instances/:instanceId/access-rules', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const instanceId = req.params.instanceId as string;
-      const googleId = (req as any).session?.googleId;
-      if (!googleId) { res.status(401).json({ error: 'Not authenticated' }); return; }
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
+      const user = await resolveSessionUser((req as any).session);
+      if (!user?.id) { res.status(401).json({ error: 'Not authenticated' }); return; }
 
       const connection = await getMcpConnectionByInstanceId(instanceId);
       if (!connection || connection.userId !== user.id || connection.provider !== 'slack') {
@@ -1913,53 +2333,34 @@ function registerSharedRoutes(app: express.Express): void {
         currentOrg = { id: team.id, name: team.name };
       } catch { /* skip */ }
 
-      // Discover connected orgs from shared channels
-      const connectedOrgs: Array<{ id: string; name: string }> = [];
-      const seenOrgIds = new Set<string>([currentOrg.id]);
-
-      // Find shared channels first
-      const sharedChannelIds: string[] = [];
-      let cursor: string | undefined;
-      do {
-        const result = await client.conversationsListAll(cursor, 'public_channel,private_channel');
-        for (const ch of result.channels) {
-          if (ch.is_ext_shared || ch.is_org_shared) {
-            sharedChannelIds.push(ch.id);
-          }
-        }
-        cursor = result.response_metadata?.next_cursor || undefined;
-      } while (cursor);
-
-      // Get shared_team_ids from conversations.info (limited to first 10 shared channels, sequential to avoid rate limits)
-      for (const chId of sharedChannelIds.slice(0, 10)) {
-        try {
-          const { channel: info } = await client.conversationsInfo(chId);
-          if (info.shared_team_ids) {
-            for (const tid of info.shared_team_ids) {
-              if (!seenOrgIds.has(tid)) {
-                seenOrgIds.add(tid);
-                connectedOrgs.push({ id: tid, name: tid });
-              }
-            }
-          }
-        } catch { /* skip — rate limit or other error */ }
-      }
-
-      // Resolve org names: try team.info for each external org, fall back to user names
-      for (const org of connectedOrgs) {
-        if (org.name === org.id) {
-          try {
-            const { team } = await client.teamInfo(org.id);
-            org.name = team.name;
-          } catch {
-            // team.info failed for external org — keep ID as fallback
-          }
-        }
-      }
-
       // Migrate old format
       const { migrateSlackTokens } = await import('../mcpConnectionStore.js');
       const tokens = migrateSlackTokens(connection.providerTokens);
+
+      // Discover every org this connection can reach: shared channels, Slack
+      // Connect DMs, external users, plus anything already saved. See
+      // src/slack-user/orgDiscovery.ts for why each source is needed — an org
+      // missing here has no checkbox, and without a checkbox it can never be
+      // allowed, so its conversations stay invisible.
+      const savedOrgIds = (tokens.accessRules?.allowedOrgs || []).filter(id => id && id !== currentOrg.id);
+      // Sorted so the key is canonical regardless of the order the allowlist
+      // was stored in. Explicit comparator — a bare sort() is implementation-defined.
+      const sortedSavedOrgIds = [...savedOrgIds].sort((a, b) => a.localeCompare(b));
+      const cacheKey = `${instanceId}:${sortedSavedOrgIds.join(',')}`;
+      const cached = orgDiscoveryCache.get(cacheKey);
+      let discovery: OrgDiscoveryResult;
+      if (cached && cached.expiresAt > Date.now()) {
+        discovery = cached.result;
+      } else {
+        if (cached) orgDiscoveryCache.delete(cacheKey);
+        discovery = await discoverConnectedOrgs(client, { currentOrgId: currentOrg.id, savedOrgIds });
+        orgDiscoveryCache.set(cacheKey, { result: discovery, expiresAt: Date.now() + ORG_DISCOVERY_TTL_MS });
+        pruneOrgDiscoveryCache();
+      }
+      const connectedOrgs = discovery.orgs;
+      if (discovery.truncated) {
+        console.error(`[access-rules] org discovery incomplete for ${instanceId}: ${discovery.notes.join(' | ')}`);
+      }
 
       // Get blacklisted user names for display (sequential to avoid rate limits)
       const blacklistUserDetails: Array<{ id: string; name: string }> = [];
@@ -1978,6 +2379,10 @@ function registerSharedRoutes(app: express.Express): void {
         currentRules: tokens.accessRules,
         currentOrg,
         connectedOrgs,
+        // The UI warns when the org list may be short. A silently truncated
+        // list reads as "that org isn't connected", which is the bug this
+        // endpoint used to have.
+        orgDiscovery: { truncated: discovery.truncated, notes: discovery.notes },
         blacklistUserDetails,
       });
     } catch (err) {
@@ -2009,10 +2414,8 @@ function registerSharedRoutes(app: express.Express): void {
         }
       }
 
-      const googleId = (req as any).session?.googleId;
-      if (!googleId) { res.status(401).json({ error: 'Not authenticated' }); return; }
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
+      const user = await resolveSessionUser((req as any).session);
+      if (!user?.id) { res.status(401).json({ error: 'Not authenticated' }); return; }
 
       const connection = await getMcpConnectionByInstanceId(instanceId);
       if (!connection || connection.userId !== user.id || connection.provider !== 'slack') {
@@ -2036,6 +2439,9 @@ function registerSharedRoutes(app: express.Express): void {
       // Clear session cache so new rules take effect
       const { clearMcpSessionCache } = await import('../userSession.js');
       clearMcpSessionCache(user.apiKey, instanceId);
+      // Saved orgs are baked into a cached sweep, so a stale entry would show
+      // the previous allowlist's rows on the next modal open.
+      invalidateOrgDiscoveryCache(instanceId);
 
       console.error(`User ${user.id} updated Slack access rules for ${instanceId}: ${updatedTokens.accessRules.whitelistChannels.length} whitelist, ${updatedTokens.accessRules.blacklistChannels.length} blacklist, ${updatedTokens.accessRules.blacklistUsers.length} blocked users, ${updatedTokens.accessRules.allowedOrgs.length} orgs`);
       res.json({ success: true });
@@ -2054,10 +2460,8 @@ function registerSharedRoutes(app: express.Express): void {
       const query = ((req.query.q as string) || '').toLowerCase().trim();
       if (!query) { res.json({ users: [] }); return; }
 
-      const googleId = (req as any).session?.googleId;
-      if (!googleId) { res.status(401).json({ error: 'Not authenticated' }); return; }
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) { res.status(401).json({ error: 'User not found' }); return; }
+      const user = await resolveSessionUser((req as any).session);
+      if (!user?.id) { res.status(401).json({ error: 'Not authenticated' }); return; }
 
       const connection = await getMcpConnectionByInstanceId(instanceId);
       if (!connection || connection.userId !== user.id || connection.provider !== 'slack') {
@@ -2199,16 +2603,10 @@ function registerSharedRoutes(app: express.Express): void {
       const mcpSlug = req.params.mcpSlug as string;
 
       // Get user from session
-      const googleId = req.session!.googleId;
-      if (!googleId) {
+      const user = await resolveSessionUser(req.session);
+      if (!user?.id) {
         res.clearCookie('session');
         res.status(401).json({ error: 'Session invalid' });
-        return;
-      }
-
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) {
-        res.status(401).json({ error: 'User not found' });
         return;
       }
 
@@ -2232,18 +2630,11 @@ function registerSharedRoutes(app: express.Express): void {
       await loadUsers();
 
       // Get user from session - handle old sessions that might not have googleId
-      const googleId = req.session!.googleId;
-      if (!googleId) {
-        console.error('/api/me: Session missing googleId, clearing session');
+      const user = await resolveSessionUser(req.session);
+      if (!user) {
+        console.error('/api/me: session resolved to no account, clearing session');
         res.clearCookie('session');
         res.status(401).json({ error: 'Session invalid, please sign in again' });
-        return;
-      }
-
-      const user = await getUserByGoogleId(googleId);
-      if (!user) {
-        console.error(`/api/me: User not found for googleId=${googleId}`);
-        res.status(404).json({ error: 'User not found' });
         return;
       }
 
@@ -2296,16 +2687,10 @@ function registerSharedRoutes(app: express.Express): void {
   app.get('/api/me/connections', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       // Get user from session
-      const googleId = req.session!.googleId;
-      if (!googleId) {
+      const user = await resolveSessionUser(req.session);
+      if (!user?.id) {
         res.clearCookie('session');
         res.status(401).json({ error: 'Session invalid' });
-        return;
-      }
-
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) {
-        res.status(404).json({ error: 'User not found' });
         return;
       }
 
@@ -2338,8 +2723,7 @@ function registerSharedRoutes(app: express.Express): void {
    */
   app.get('/api/me/connections/:instanceId/health', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const googleId = req.session!.googleId;
-      const user = googleId ? await getUserByGoogleId(googleId) : null;
+      const user = await resolveSessionUser(req.session);
       if (!user?.id) {
         res.status(401).json({ error: 'Not authenticated' });
         return;
@@ -2385,16 +2769,10 @@ function registerSharedRoutes(app: express.Express): void {
   // API endpoint to get user's MCP instances (new multi-instance API)
   app.get('/api/me/instances', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const googleId = req.session!.googleId;
-      if (!googleId) {
+      const user = await resolveSessionUser(req.session);
+      if (!user?.id) {
         res.clearCookie('session');
         res.status(401).json({ error: 'Session invalid' });
-        return;
-      }
-
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) {
-        res.status(404).json({ error: 'User not found' });
         return;
       }
 
@@ -2426,16 +2804,10 @@ function registerSharedRoutes(app: express.Express): void {
         return;
       }
 
-      const googleId = req.session!.googleId;
-      if (!googleId) {
+      const user = await resolveSessionUser(req.session);
+      if (!user?.id) {
         res.clearCookie('session');
         res.status(401).json({ error: 'Session invalid' });
-        return;
-      }
-
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) {
-        res.status(401).json({ error: 'User not found' });
         return;
       }
 
@@ -2469,16 +2841,10 @@ function registerSharedRoutes(app: express.Express): void {
     try {
       const instanceId = req.params.instanceId as string;
 
-      const googleId = req.session!.googleId;
-      if (!googleId) {
+      const user = await resolveSessionUser(req.session);
+      if (!user?.id) {
         res.clearCookie('session');
         res.status(401).json({ error: 'Session invalid' });
-        return;
-      }
-
-      const user = await getUserByGoogleId(googleId);
-      if (!user?.id) {
-        res.status(401).json({ error: 'User not found' });
         return;
       }
 
@@ -2510,14 +2876,17 @@ function registerSharedRoutes(app: express.Express): void {
   // Regenerate API key endpoint (protected)
   app.post('/api/regenerate-key', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const googleId = req.session!.googleId;
-      if (!googleId) {
+      const current = await resolveSessionUser(req.session);
+      if (!current?.id) {
         res.clearCookie('session');
         res.status(401).json({ error: 'Session invalid' });
         return;
       }
 
-      const user = await regenerateApiKey(googleId);
+      // Rotate by user id, not google_id: that column is NULL for
+      // email+password accounts, so the googleId-keyed rotation matched zero
+      // rows and reported "user not found" on a perfectly valid account.
+      const user = await regenerateApiKeyByUserId(current.id);
       if (!user) {
         res.status(404).json({ error: 'User not found' });
         return;
@@ -2552,13 +2921,12 @@ function registerSharedRoutes(app: express.Express): void {
     });
     if (res.headersSent) return;
 
-    const googleId = req.session?.googleId;
-    if (!googleId) {
+    const user = await resolveSessionUser(req.session);
+    if (!user) {
       res.status(401).json({ error: 'Not authenticated' });
       return;
     }
-    const user = await getUserByGoogleId(googleId);
-    if (!user || !ADMIN_EMAILS.includes(user.email.toLowerCase())) {
+    if (!ADMIN_EMAILS.includes(user.email.toLowerCase())) {
       res.status(403).json({ error: 'Access denied' });
       return;
     }
@@ -3176,8 +3544,11 @@ function registerRestApiRoutes(app: express.Express): void {
       }
 
       if (wantText) {
-        let text = extractDocBodyText(selection.content as any);
-        if (maxLength > 0 && text.length > maxLength) text = text.substring(0, maxLength);
+        // Same treatment the MCP readGoogleDoc tool gives this text, so the two
+        // surfaces cannot drift: strip the Docs control/private-use artifacts,
+        // and cut on whole characters rather than UTF-16 code units.
+        let text = sanitizeDocText(extractDocBodyText(selection.content as any));
+        if (maxLength > 0 && text.length > maxLength) text = sliceSafe(text, maxLength);
         res.type('text/plain; charset=utf-8').send(text);
         return;
       }

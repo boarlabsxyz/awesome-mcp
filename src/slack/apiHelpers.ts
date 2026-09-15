@@ -61,6 +61,89 @@ export function fileShareTargets(file: SlackFileInfo): Set<string> {
   return targets;
 }
 
+/**
+ * The fields Slack can put a team (workspace/org) ID into on a channel payload.
+ *
+ * Everything here used to read `shared_team_ids` alone. That is the wrong field
+ * on its own for Slack Connect: the external orgs routinely arrive in
+ * `connected_team_ids` (and in `pending_connected_team_ids` while an invite is
+ * still outstanding) while `shared_team_ids` carries only the internal side.
+ * Reading one field made an external org invisible to org discovery *and* made
+ * `assertAccess` reject a channel as "organisation could not be verified" that
+ * was in fact shared with an allowed org. Both callers go through
+ * `channelTeamIds` so they cannot disagree about which orgs a channel touches.
+ */
+export interface SlackChannelTeamFields {
+  shared_team_ids?: string[];
+  internal_team_ids?: string[];
+  connected_team_ids?: string[];
+  pending_connected_team_ids?: string[];
+  /** Older sibling of `pending_connected_team_ids`; Slack still sends it. */
+  pending_shared?: string[];
+  /**
+   * The team whose *view* the payload was rendered for — normally the caller's
+   * own workspace. It says nothing about who the channel is shared with, which
+   * is why `channelSharedTeamIds` excludes it.
+   */
+  context_team_id?: string;
+}
+
+/**
+ * The orgs a channel is actually shared with, from Slack's team-ID *lists*.
+ *
+ * Deliberately excludes `context_team_id`: that is the viewing workspace, so a
+ * Slack Connect payload carrying nothing but `context_team_id` names no partner
+ * at all. Discovery gates its `conversations.info` enrichment on this — gating
+ * on `channelTeamIds` treated such a payload as already resolved and dropped
+ * the external org.
+ */
+export function channelSharedTeamIds(
+  channel: SlackChannelTeamFields | undefined | null,
+  options?: { includePending?: boolean },
+): string[] {
+  if (!channel) return [];
+  const ids = new Set<string>();
+  const lists = [channel.shared_team_ids, channel.internal_team_ids, channel.connected_team_ids];
+  if (options?.includePending) lists.push(channel.pending_connected_team_ids, channel.pending_shared);
+  for (const list of lists) {
+    for (const id of list || []) if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
+/**
+ * Every team ID a channel payload mentions, de-duplicated — the shared lists
+ * plus `context_team_id`.
+ *
+ * `includePending` covers orgs that have been *invited* to the channel but have
+ * not accepted. Discovery wants them (so the org is tickable before the invite
+ * lands); access enforcement does not (an outstanding invite must not deny a
+ * channel that org cannot read yet).
+ */
+export function channelTeamIds(
+  channel: SlackChannelTeamFields | undefined | null,
+  options?: { includePending?: boolean },
+): string[] {
+  if (!channel) return [];
+  const ids = new Set<string>(channelSharedTeamIds(channel, options));
+  if (channel.context_team_id) ids.add(channel.context_team_id);
+  return [...ids];
+}
+
+/** Channel flags that mean "this conversation reaches beyond this workspace". */
+export interface SlackChannelSharedFlags {
+  is_shared?: boolean;
+  is_ext_shared?: boolean;
+  is_org_shared?: boolean;
+  /** Slack Connect invite sent but not yet accepted — `is_ext_shared` is still false. */
+  is_pending_ext_shared?: boolean;
+}
+
+/** True when a channel is shared with (or pending sharing with) another org. */
+export function isSharedChannel(channel: SlackChannelSharedFlags): boolean {
+  return !!(channel.is_shared || channel.is_ext_shared || channel.is_org_shared || channel.is_pending_ext_shared);
+}
+
 // === Search ===
 
 export interface SlackSearchOptions {
@@ -229,9 +312,11 @@ export class SlackClient {
   // === Conversations ===
 
   async conversationsList(cursor?: string, types?: string): Promise<{
-    channels: Array<{
+    channels: Array<SlackChannelTeamFields & {
       id: string; name: string; is_private: boolean; is_archived: boolean;
-      is_ext_shared?: boolean; is_org_shared?: boolean; is_im?: boolean; is_mpim?: boolean;
+      is_shared?: boolean; is_ext_shared?: boolean; is_org_shared?: boolean;
+      is_pending_ext_shared?: boolean;
+      is_im?: boolean; is_mpim?: boolean;
       user?: string; // DM partner user ID (for im type)
       topic?: { value: string }; purpose?: { value: string }; num_members?: number;
     }>;
@@ -249,9 +334,11 @@ export class SlackClient {
 
   /** List ALL channels in the workspace (not just joined). Uses conversations.list. */
   async conversationsListAll(cursor?: string, types?: string): Promise<{
-    channels: Array<{
+    channels: Array<SlackChannelTeamFields & {
       id: string; name: string; is_private: boolean; is_archived: boolean;
-      is_ext_shared?: boolean; is_org_shared?: boolean; is_im?: boolean; is_mpim?: boolean;
+      is_shared?: boolean; is_ext_shared?: boolean; is_org_shared?: boolean;
+      is_pending_ext_shared?: boolean;
+      is_im?: boolean; is_mpim?: boolean;
       user?: string;
       topic?: { value: string }; purpose?: { value: string }; num_members?: number;
     }>;
@@ -335,9 +422,10 @@ export class SlackClient {
   // === Conversations (extended) ===
 
   async conversationsInfo(channel: string): Promise<{
-    channel: {
+    channel: SlackChannelTeamFields & {
       id: string; name: string; is_private: boolean;
       is_shared: boolean; is_ext_shared: boolean; is_org_shared: boolean;
+      is_pending_ext_shared?: boolean;
       is_im: boolean; is_mpim: boolean;
       /**
        * Whether this installation is in the channel. Slack does not deliver
@@ -346,7 +434,6 @@ export class SlackClient {
        */
       is_member?: boolean;
       user?: string;
-      shared_team_ids?: string[];
       topic?: { value: string }; purpose?: { value: string };
       num_members?: number;
     };

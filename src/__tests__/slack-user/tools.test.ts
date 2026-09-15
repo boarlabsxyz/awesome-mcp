@@ -46,10 +46,11 @@ describe('slack-user tool registry', () => {
     assert.equal(registrations.length, toolMap.size, 'duplicate tool name registered');
   });
 
-  it('registers the 8 original tools, 2 search tools, 5 event tools and 2 shared tools', () => {
+  it('registers the 8 original tools, diagnoseChannelAccess, 2 search tools, 5 event tools and 2 shared tools', () => {
     const expected = [
       'listChannels', 'readChannelHistory', 'readThreadReplies', 'downloadFile',
       'postMessage', 'replyInThread', 'listUsers', 'openDm',
+      'diagnoseChannelAccess',
       ...SEARCH_TOOLS,
       ...EVENT_TOOLS,
       'mintRestBearerForCurl', 'listRestEndpoints',
@@ -58,7 +59,7 @@ describe('slack-user tool registry', () => {
   });
 
   it('marks reads read-only and writes not', () => {
-    for (const name of ['searchMessages', 'searchFiles', 'listChannelEventSubscriptions', 'getChannelEventHistory', 'debugChannelEventSubscription']) {
+    for (const name of ['searchMessages', 'searchFiles', 'listChannelEventSubscriptions', 'getChannelEventHistory', 'debugChannelEventSubscription', 'diagnoseChannelAccess']) {
       assert.equal(toolMap.get(name).annotations.readOnlyHint, true, `${name} should be read-only`);
     }
     assert.equal(toolMap.get('subscribeToChannelEvents').annotations.readOnlyHint, false);

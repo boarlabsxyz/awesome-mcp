@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { matchGlob, assertAccess, filterChannelList, filterDmsByOrg, filterGroupDmsByRules, fetchChannelMeta } from '../../slack-user/accessControl.js';
+import { matchGlob, assertAccess, filterChannelList, filterDmsByOrg, filterGroupDmsByRules, fetchChannelMeta, classifyChannelList, toChannelMeta, assertNonOrgAccess, SlackAccessDenied, uncheckedGroupDmCount, GROUP_DM_CHECK_MAX } from '../../slack-user/accessControl.js';
 import type { SlackAccessRules } from '../../mcpConnectionStore.js';
 import type { ChannelMeta } from '../../slack-user/accessControl.js';
+import { channelSharedTeamIds, channelTeamIds } from '../../slack/apiHelpers.js';
 
 // === fetchChannelMeta ===
 
@@ -17,14 +18,16 @@ describe('fetchChannelMeta', () => {
     const client = mockClient({
       id: 'C_META_1', name: 'test-channel', is_private: false,
       is_shared: false, is_ext_shared: false, is_org_shared: false,
-      is_im: false, is_mpim: false, user: undefined, shared_team_ids: ['T1'],
+      is_im: false, is_mpim: false, user: undefined,
+      shared_team_ids: ['T1'], connected_team_ids: ['T2'],
     });
     const meta = await fetchChannelMeta(client, 'C_META_1', 'meta-test-token-' + Date.now());
     assert.equal(meta.id, 'C_META_1');
     assert.equal(meta.name, 'test-channel');
     assert.equal(meta.is_private, false);
     assert.equal(meta.is_shared, false);
-    assert.deepEqual(meta.shared_team_ids, ['T1']);
+    // The union of Slack's team-ID fields, not the raw shared_team_ids array.
+    assert.deepEqual(meta.shared_team_ids, ['T1', 'T2']);
   });
 
   it('should detect shared channels from is_ext_shared', async () => {
@@ -219,12 +222,25 @@ describe('assertAccess', () => {
     );
   });
 
-  it('should allow shared channel from allowed org', () => {
+  it('should allow shared channel when every org on it is allowed', () => {
     assert.doesNotThrow(() => assertAccess(defaultRules, makeMeta({
       name: 'shared-channel',
       is_shared: true,
-      shared_team_ids: ['T_BOARLABS', 'T_OTHER'],
+      shared_team_ids: ['T_BOARLABS'],
     })));
+  });
+
+  it('should block a shared channel that mixes an allowed org with a non-allowed one', () => {
+    // The old rule was `some`, so a channel shared with your own workspace
+    // (always in allowedOrgs) plus an unapproved partner passed the check.
+    assert.throws(
+      () => assertAccess(defaultRules, makeMeta({
+        name: 'shared-channel',
+        is_shared: true,
+        shared_team_ids: ['T_BOARLABS', 'T_OTHER'],
+      })),
+      { message: /T_OTHER/ }
+    );
   });
 
   it('should block shared channel when org cannot be verified', () => {
@@ -311,6 +327,32 @@ describe('filterChannelList', () => {
   it('should allow shared channels when org is in allowedOrgs', () => {
     const sharedChannels = [
       { id: 'CS1', name: 'awesome-shared', is_private: false, is_ext_shared: true, shared_team_ids: ['T_BOARLABS'] },
+    ];
+    const result = filterChannelList(rules, sharedChannels);
+    assert.equal(result.length, 1);
+  });
+
+  it('should block a shared channel whose external org is in connected_team_ids', () => {
+    // Slack Connect puts the partner org here, not in shared_team_ids. Reading
+    // only shared_team_ids made this channel look purely internal.
+    const sharedChannels = [
+      {
+        id: 'CS1', name: 'awesome-shared', is_private: false, is_ext_shared: true,
+        shared_team_ids: ['T_BOARLABS'], connected_team_ids: ['T_OTHER'],
+      },
+    ];
+    const result = filterChannelList(rules, sharedChannels);
+    assert.equal(result.length, 0);
+  });
+
+  it('should ignore a pending invite when enforcing access', () => {
+    // An org that was invited but has not joined cannot read the channel, so it
+    // must not retroactively deny one. Discovery still lists it as tickable.
+    const sharedChannels = [
+      {
+        id: 'CS1', name: 'awesome-shared', is_private: false, is_ext_shared: true,
+        shared_team_ids: ['T_BOARLABS'], pending_connected_team_ids: ['T_INVITED'],
+      },
     ];
     const result = filterChannelList(rules, sharedChannels);
     assert.equal(result.length, 1);
@@ -412,5 +454,221 @@ describe('filterGroupDmsByRules', () => {
     const channels = [{ id: 'C1', name: 'general', is_private: false }];
     const result = await filterGroupDmsByRules(mockClient({}), rules, channels);
     assert.equal(result.length, 1);
+  });
+});
+
+// === channelSharedTeamIds / channelTeamIds ===
+
+describe('channelSharedTeamIds', () => {
+  it('excludes context_team_id — it names the viewer, not a partner org', () => {
+    assert.deepEqual(channelSharedTeamIds({ context_team_id: 'T_HOME' }), []);
+    assert.deepEqual(channelTeamIds({ context_team_id: 'T_HOME' }), ['T_HOME']);
+  });
+
+  it('unions the shared lists', () => {
+    const channel = { shared_team_ids: ['T1'], internal_team_ids: ['T1'], connected_team_ids: ['T2'] };
+    assert.deepEqual(channelSharedTeamIds(channel).sort((a, b) => a.localeCompare(b)), ['T1', 'T2']);
+  });
+
+  it('includes pending_shared and pending_connected_team_ids only when asked', () => {
+    const channel = { pending_shared: ['T_A'], pending_connected_team_ids: ['T_B'] };
+    assert.deepEqual(channelSharedTeamIds(channel), []);
+    assert.deepEqual(
+      channelSharedTeamIds(channel, { includePending: true }).sort((a, b) => a.localeCompare(b)),
+      ['T_A', 'T_B'],
+    );
+  });
+});
+
+// === Typed denials ===
+
+describe('SlackAccessDenied', () => {
+  const rules: SlackAccessRules = {
+    allowedOrgs: ['T_MINE'],
+    blacklistUsers: ['U_BLOCKED'],
+    whitelistChannels: ['eng-*'],
+    blacklistChannels: ['eng-secret-*'],
+    allowPublicOnly: false,
+  };
+
+  function meta(overrides: Partial<ChannelMeta>): ChannelMeta {
+    return {
+      id: 'C1', name: 'eng-general', is_private: false,
+      is_shared: false, is_im: false, is_mpim: false,
+      ...overrides,
+    };
+  }
+
+  function denialFor(m: ChannelMeta, r: SlackAccessRules = rules): SlackAccessDenied {
+    try {
+      assertAccess(r, m);
+    } catch (err) {
+      assert.ok(err instanceof SlackAccessDenied, 'expected a SlackAccessDenied');
+      return err;
+    }
+    throw new Error('expected a denial');
+  }
+
+  it('carries the disallowed org IDs so the message can name them', () => {
+    const denial = denialFor(meta({ is_shared: true, shared_team_ids: ['T_MINE', 'T_OTHER'] }));
+    assert.equal(denial.reason, 'org-not-allowed');
+    assert.deepEqual(denial.orgIds, ['T_OTHER']);
+    // Only the orgs that actually failed — not every org on the channel.
+    assert.ok(!denial.orgIds!.includes('T_MINE'));
+  });
+
+  it('distinguishes an unverifiable org from a disallowed one', () => {
+    assert.equal(denialFor(meta({ is_shared: true, shared_team_ids: [] })).reason, 'org-unverified');
+  });
+
+  it('carries the user\'s own patterns on a whitelist miss, so the fix can be named', () => {
+    const denial = denialFor(meta({ name: 'random' }));
+    assert.equal(denial.reason, 'whitelist-miss');
+    assert.deepEqual(denial.patterns, ['eng-*']);
+    assert.equal(denial.channelName, 'random');
+  });
+
+  it('reports a blacklist hit separately from a whitelist miss', () => {
+    const denial = denialFor(meta({ name: 'eng-secret-plans' }));
+    assert.equal(denial.reason, 'blacklist-channel');
+    assert.deepEqual(denial.patterns, ['eng-secret-*']);
+  });
+
+  it('reports the empty-whitelist case distinctly — the fix is different', () => {
+    assert.equal(denialFor(meta({}), { ...rules, whitelistChannels: [] }).reason, 'whitelist-empty');
+  });
+
+  it('reports allowPublicOnly and blocked users', () => {
+    assert.equal(
+      denialFor(meta({ is_private: true }), { ...rules, allowPublicOnly: true }).reason,
+      'public-only',
+    );
+    assert.equal(denialFor(meta({ is_im: true, user: 'U_BLOCKED' })).reason, 'blacklist-user');
+  });
+
+  it('keeps the original message text, so callers that only print it are unaffected', () => {
+    assert.match(
+      denialFor(meta({ is_shared: true, shared_team_ids: ['T_OTHER'] })).message,
+      /not in your allowed list \(T_OTHER\)/,
+    );
+  });
+});
+
+// === classifyChannelList / list-vs-read parity ===
+
+describe('classifyChannelList', () => {
+  const rules: SlackAccessRules = {
+    allowedOrgs: ['T_MINE'],
+    blacklistUsers: [],
+    whitelistChannels: ['eng-*'],
+    blacklistChannels: [],
+    allowPublicOnly: false,
+  };
+
+  it('flags a shared channel with no team IDs for backfill rather than denying it', () => {
+    // conversations.list routinely omits team IDs that conversations.info has.
+    // "Unknown" must not be conflated with "denied" at this layer.
+    const [row] = classifyChannelList(rules, [
+      { id: 'C1', name: 'eng-partners', is_private: false, is_ext_shared: true },
+    ]);
+    assert.equal(row.allowed, true);
+    assert.equal(row.needsOrgBackfill, true);
+  });
+
+  it('does NOT let an unresolved org bypass the channel whitelist', () => {
+    // assertAccess checks orgs before patterns, so without the extra pass a
+    // channel excluded by the user's own whitelist rode through on the org
+    // check bailing early.
+    const [row] = classifyChannelList(rules, [
+      { id: 'C2', name: 'marketing', is_private: false, is_ext_shared: true },
+    ]);
+    assert.equal(row.allowed, false);
+    assert.equal(row.denial?.reason, 'whitelist-miss');
+  });
+
+  it('denies a shared channel whose org is known and not allowed', () => {
+    const [row] = classifyChannelList(rules, [
+      { id: 'C3', name: 'eng-partners', is_private: false, is_ext_shared: true, connected_team_ids: ['T_OTHER'] },
+    ]);
+    assert.equal(row.allowed, false);
+    assert.equal(row.denial?.reason, 'org-not-allowed');
+    assert.deepEqual(row.denial?.orgIds, ['T_OTHER']);
+  });
+
+  it('agrees with assertAccess on every channel it does not flag for backfill', () => {
+    // The regression this whole refactor exists to prevent: a channel that
+    // lists as available and then fails every read of it.
+    const channels = [
+      { id: 'C1', name: 'eng-general', is_private: false },
+      { id: 'C2', name: 'marketing', is_private: false },
+      { id: 'C3', name: 'eng-secret', is_private: true },
+      { id: 'C4', name: 'eng-partners', is_private: false, is_ext_shared: true, connected_team_ids: ['T_MINE'] },
+      { id: 'C5', name: 'eng-external', is_private: false, is_ext_shared: true, connected_team_ids: ['T_OTHER'] },
+    ];
+    for (const row of classifyChannelList(rules, channels)) {
+      if (row.needsOrgBackfill) continue;
+      let readAllows = true;
+      try { assertAccess(rules, toChannelMeta(row.ch)); } catch { readAllows = false; }
+      assert.equal(row.allowed, readAllows, `list and read disagree about ${row.ch.id}`);
+    }
+  });
+});
+
+describe('assertNonOrgAccess', () => {
+  const rules: SlackAccessRules = {
+    allowedOrgs: ['T_MINE'], blacklistUsers: [],
+    whitelistChannels: ['eng-*'], blacklistChannels: [], allowPublicOnly: false,
+  };
+  const shared = {
+    id: 'C1', name: 'eng-partners', is_private: false,
+    is_shared: true, is_im: false, is_mpim: false, shared_team_ids: ['T_OTHER'],
+  };
+
+  it('ignores the org rule but still applies the channel rules', () => {
+    assert.doesNotThrow(() => assertNonOrgAccess(rules, shared));
+    assert.throws(() => assertNonOrgAccess(rules, { ...shared, name: 'marketing' }), /whitelist/);
+  });
+});
+
+// === uncheckedGroupDmCount ===
+
+describe('uncheckedGroupDmCount', () => {
+  const withRules: SlackAccessRules = {
+    allowedOrgs: ['T_MINE'], blacklistUsers: [],
+    whitelistChannels: ['*'], blacklistChannels: [], allowPublicOnly: false,
+  };
+  const mpims = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `G${i}`, is_mpim: true }));
+
+  it('is zero when no member rules apply, since nothing is skipped', () => {
+    const none: SlackAccessRules = { ...withRules, allowedOrgs: [], blacklistUsers: [] };
+    assert.equal(uncheckedGroupDmCount(none, mpims(100)), 0);
+  });
+
+  it('is zero while the group DMs fit inside the cap', () => {
+    assert.equal(uncheckedGroupDmCount(withRules, mpims(GROUP_DM_CHECK_MAX)), 0);
+  });
+
+  it('counts only the overflow, so the note can name it', () => {
+    assert.equal(uncheckedGroupDmCount(withRules, mpims(GROUP_DM_CHECK_MAX + 7)), 7);
+  });
+
+  it('ignores non-group-DM channels', () => {
+    const plain = Array.from({ length: 50 }, (_, i) => ({ id: `C${i}`, is_mpim: false }));
+    const mixed = [...mpims(GROUP_DM_CHECK_MAX + 2), ...plain];
+    assert.equal(uncheckedGroupDmCount(withRules, mixed), 2);
+  });
+
+  it('matches what filterGroupDmsByRules actually skips', async () => {
+    // The count is only useful if it tracks the real cap.
+    const channels = mpims(GROUP_DM_CHECK_MAX + 5);
+    const checked: string[] = [];
+    const client: any = {
+      conversationsMembers: async (id: string) => { checked.push(id); return { members: ['U1'] }; },
+      usersInfo: async () => ({ user: { id: 'U1', team_id: 'T_MINE' } }),
+    };
+    await filterGroupDmsByRules(client, withRules, channels as any);
+    assert.equal(checked.length, GROUP_DM_CHECK_MAX);
+    assert.equal(uncheckedGroupDmCount(withRules, channels), channels.length - checked.length);
   });
 });
