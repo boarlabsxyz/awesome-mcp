@@ -41,13 +41,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Separate contexts on purpose: claude.ai and chatgpt.com are
-          # unrelated logins, and seedBrowserbaseContext.ts keeps one per client.
-          - client: claude-web
-            context_secret: BROWSERBASE_CONTEXT_ID_CLAUDE_WEB
-          - client: chatgpt-web
-            context_secret: BROWSERBASE_CONTEXT_ID_CHATGPT_WEB
+        client: [claude-web, chatgpt-web]
     env:
       CLIENT: ${{ matrix.client }}
       E2E_BROWSER: browserbase
@@ -55,7 +49,13 @@ jobs:
       RESPONSE_TIMEOUT_MS: '120000'
       BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
       BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
-      BROWSERBASE_CONTEXT_ID: ${{ secrets[matrix.context_secret] }}
+      # Both go to both jobs; contextIdFor() picks the one matching CLIENT.
+      # Separate contexts are not an optimisation: claude.ai and chatgpt.com are
+      # unrelated logins, so one shared context sends whichever client runs
+      # second to a sign-in page -- which looks like a broken selector rather
+      # than the wrong cookie jar.
+      BROWSERBASE_CONTEXT_ID_CLAUDE_WEB: ${{ secrets.BROWSERBASE_CONTEXT_ID_CLAUDE_WEB }}
+      BROWSERBASE_CONTEXT_ID_CHATGPT_WEB: ${{ secrets.BROWSERBASE_CONTEXT_ID_CHATGPT_WEB }}
       E2E_FIXTURE_DOC_ID: ${{ vars.E2E_FIXTURE_DOC_ID }}
       E2E_FIXTURE_DOC_NEEDLE: ${{ vars.E2E_FIXTURE_DOC_NEEDLE }}
     steps:
@@ -72,13 +72,14 @@ jobs:
         # SDK call. A missing context secret is the likely mistake: there is one
         # per client and they are easy to mix up.
         run: |
-          for var in BROWSERBASE_API_KEY BROWSERBASE_PROJECT_ID BROWSERBASE_CONTEXT_ID; do
+          CONTEXT_VAR="BROWSERBASE_CONTEXT_ID_$(echo "$CLIENT" | tr 'a-z-' 'A-Z_')"
+          for var in BROWSERBASE_API_KEY BROWSERBASE_PROJECT_ID "$CONTEXT_VAR"; do
             if [ -z "${!var}" ]; then
-              echo "::error::$var is empty. For the context, this job reads ${{ matrix.context_secret }}."
+              echo "::error::$var is empty. Seed it with: CLIENT=$CLIENT npm run seed:browserbase"
               exit 1
             fi
           done
-          echo "Browserbase configured for ${CLIENT}."
+          echo "Browserbase configured for ${CLIENT} (context from ${CONTEXT_VAR})."
 
       - name: Install e2e deps
         working-directory: e2e
