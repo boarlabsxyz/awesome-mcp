@@ -49,6 +49,10 @@ async function loadDriver(client: ClientName): Promise<Driver> {
     const { createClaudeDesktopDriver } = await import('./drivers/claude-desktop.ts');
     return createClaudeDesktopDriver();
   }
+  if (client === 'claude-web') {
+    const { createClaudeWebDriver } = await import('./drivers/claude-web.ts');
+    return createClaudeWebDriver();
+  }
   const { createChatGptWebDriver } = await import('./drivers/chatgpt-web.ts');
   return createChatGptWebDriver();
 }

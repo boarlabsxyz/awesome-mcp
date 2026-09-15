@@ -13,9 +13,11 @@
     "check:auth": "node --import tsx scripts/checkAuth.ts",
     "sweep:sandbox": "node --import tsx scripts/sweepSandbox.ts",
     "seed:account": "node --import tsx scripts/seedAccount.ts",
+    "seed:browserbase": "node --import tsx scripts/seedBrowserbaseContext.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@browserbasehq/sdk": "^2.19.0",
     "playwright": "^1.49.0",
     "webdriverio": "^9.5.0"
   },
