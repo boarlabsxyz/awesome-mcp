@@ -153,3 +153,61 @@ function hex(code: number): string {
 function truncate(s: string, n = 600): string {
   return s.length > n ? `${s.slice(0, n)}...(truncated)` : s;
 }
+
+/**
+ * Patterns for a model reporting that a tool let it down.
+ *
+ * This is the assertion that only exists for live-client tests, and it covers a
+ * failure mode nothing else can see. A direct tool check gets a 403 and fails
+ * loudly. A model gets the same 403 and says "I don't have permission to search
+ * your Drive" -- or quietly falls back to another tool and answers anyway. Both
+ * read as success to anything watching the transport, and in production nobody
+ * files a bug for the first one, because the assistant sounded like it was
+ * working as intended.
+ *
+ * Every loose verb is QUALIFIED by what it could not do, and that is the whole
+ * design. "I was unable to find a matching document" is a correct answer to a
+ * search with no matches; "I was unable to access your documents" is a tool
+ * failure. A bare /unable to/ cannot tell them apart and would fail a passing
+ * task on the model's choice of wording -- which is the same reason
+ * "I couldn't find" is absent entirely.
+ */
+export const REPORTED_FAILURE_PATTERNS: readonly RegExp[] = [
+  /i (?:don't|do not) have (?:the )?(?:permission|access)/i,
+  /permission denied/i,
+  /not authorized/i,
+  /insufficient permissions?/i,
+  // Qualified by an ACCESS verb, never "find".
+  /i (?:was|am) (?:unable|not able) to (?:access|read|list|search|retrieve|open|reach|connect)/i,
+  /i (?:wasn't|couldn't|could not) (?:able to )?(?:access|read|list|retrieve|open|reach|connect)/i,
+  /(?:an )?error (?:occurred|occurred while)/i,
+  /encountered an error/i,
+  /something went wrong/i,
+  /failed to (?:retrieve|access|read|list|search|open)/i,
+];
+
+/**
+ * The text of the first reported-failure match, or null.
+ *
+ * `extra` takes strings (matched literally, case-insensitively) or regexes, for
+ * a phrase that only counts as a failure in one task's context.
+ */
+export function findReportedFailure(
+  text: string,
+  extra: readonly (string | RegExp)[] = [],
+): string | null {
+  for (const pattern of REPORTED_FAILURE_PATTERNS) {
+    const hit = text.match(pattern);
+    if (hit) return hit[0];
+  }
+  for (const item of extra) {
+    if (typeof item === 'string') {
+      const at = text.toLowerCase().indexOf(item.toLowerCase());
+      if (at !== -1) return text.slice(at, at + item.length);
+    } else {
+      const hit = text.match(item);
+      if (hit) return hit[0];
+    }
+  }
+  return null;
+}

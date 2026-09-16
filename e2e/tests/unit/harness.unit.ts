@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkInvariants, findLoneSurrogate, findUnsafeChar } from '../../assertions.ts';
+import {
+  checkInvariants,
+  findLoneSurrogate,
+  findReportedFailure,
+  findUnsafeChar,
+} from '../../assertions.ts';
 import { scratchTitle, sweepScratch } from '../../setup/docsScratch.ts';
 import type { McpClient, ToolResult } from '../../transports/mcpHttp.ts';
 
@@ -127,4 +132,47 @@ test('sweepScratch reaches for each tool on the server that registers it', async
 
   assert.deepEqual(asked.docs, ['listGoogleDocs']);
   assert.deepEqual(asked.drive, ['deleteFile']);
+});
+
+// The live-client tier's whole value rests on this detector, and a detector that
+// silently matches nothing passes every test it guards. These are the replies a
+// model actually produced against the broken listGoogleDocs.
+test('findReportedFailure catches a model explaining a tool failure', () => {
+  const refusals = [
+    "I don't have permission to search your Google Drive.",
+    'I was unable to access your documents.',
+    'It looks like an error occurred while searching.',
+    'Permission denied when listing your files.',
+    'I do not have access to that folder.',
+    'I failed to retrieve the document list.',
+    "I couldn't access your Drive.",
+  ];
+  for (const reply of refusals) {
+    assert.notEqual(findReportedFailure(reply), null, `should have flagged: ${reply}`);
+  }
+});
+
+// The distinction the whole detector turns on. "Unable to FIND" is a correct
+// answer to a search with no matches; "unable to ACCESS" is a tool failure. A
+// bare /unable to/ cannot tell them apart, and would fail a passing task purely
+// on the model's choice of wording.
+test('findReportedFailure leaves a genuine no-match reply alone', () => {
+  const noMatches = [
+    "I couldn't find any document mentioning that.",
+    'I was unable to find a matching document.',
+    'I am unable to find anything with that name.',
+    "I wasn't able to find a doc about Q3 planning.",
+    'No documents matched your search.',
+    'OUTPUT_BEGINNeedleOUTPUT_END',
+  ];
+  for (const reply of noMatches) {
+    assert.equal(findReportedFailure(reply), null, `should NOT have flagged: ${reply}`);
+  }
+});
+
+test('findReportedFailure is case-insensitive and takes extra phrases', () => {
+  assert.notEqual(findReportedFailure('I DO NOT HAVE ACCESS'), null);
+  assert.equal(findReportedFailure('the connector is not configured'), null);
+  assert.notEqual(findReportedFailure('the connector is not configured', ['not configured']), null);
+  assert.notEqual(findReportedFailure('no connector present', [/no connector/i]), null);
 });

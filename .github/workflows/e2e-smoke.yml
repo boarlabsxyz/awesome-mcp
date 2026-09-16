@@ -58,6 +58,8 @@ jobs:
       BROWSERBASE_CONTEXT_ID_CHATGPT_WEB: ${{ secrets.BROWSERBASE_CONTEXT_ID_CHATGPT_WEB }}
       E2E_FIXTURE_DOC_ID: ${{ vars.E2E_FIXTURE_DOC_ID }}
       E2E_FIXTURE_DOC_NEEDLE: ${{ vars.E2E_FIXTURE_DOC_NEEDLE }}
+      # Required by the task tests, which read it at import time.
+      E2E_FIXTURE_DOC_TITLE: ${{ vars.E2E_FIXTURE_DOC_TITLE }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -88,6 +90,14 @@ jobs:
       - name: Run ${{ matrix.client }} smoke tests
         working-directory: e2e
         run: npm test
+
+      # Separate step, and separate script: the task tests read their fixtures at
+      # import time, so a missing variable breaks discovery rather than failing
+      # one test. Keeping them out of `npm test` means that cannot take the
+      # smokes down with them, and a red step here names which tier broke.
+      - name: Run ${{ matrix.client }} task tests
+        working-directory: e2e
+        run: npm run test:tasks
 
       - name: Upload forensics bundle
         if: always()

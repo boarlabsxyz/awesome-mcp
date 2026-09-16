@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --import tsx --test tests/*.smoke.ts",
+    "test:tasks": "node --import tsx --test tests/tasks/*.task.ts",
     "test:unit": "node --import tsx --test tests/unit/*.unit.ts",
     "check": "node --import tsx --test tests/tools/*/*.check.ts",
     "check:needle": "node --import tsx --test tests/tools/needle/*.check.ts",
