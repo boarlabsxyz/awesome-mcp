@@ -18,6 +18,7 @@
 import type { Page } from 'playwright';
 import type { Driver } from './driver.ts';
 import { connectBrowser } from './connect.ts';
+import { gotoTolerantly } from './navigate.ts';
 
 const CDP_ENDPOINT = process.env.CLAUDE_CDP_ENDPOINT ?? 'http://127.0.0.1:9222';
 const CLAUDE_URL = process.env.CLAUDE_URL ?? 'https://claude.ai/new';
@@ -50,12 +51,12 @@ export async function createClaudeWebDriver(): Promise<Driver> {
   const page: Page = context.pages()[0] ?? (await context.newPage());
 
   if (!page.url().includes('claude.ai')) {
-    await page.goto(CLAUDE_URL, { waitUntil: 'domcontentloaded' });
+    await gotoTolerantly(page, CLAUDE_URL);
   }
 
   return {
     async newConversation() {
-      await page.goto(CLAUDE_URL, { waitUntil: 'domcontentloaded' });
+      await gotoTolerantly(page, CLAUDE_URL);
       await firstMatching(page, COMPOSER_SELECTORS, 'composer', 30_000);
     },
 
