@@ -17,6 +17,7 @@
 import { type Page } from 'playwright';
 import type { Driver } from './driver.ts';
 import { connectBrowser } from './connect.ts';
+import { gotoTolerantly } from './navigate.ts';
 
 const CDP_ENDPOINT = process.env.CHATGPT_CDP_ENDPOINT ?? 'http://127.0.0.1:9222';
 const CHATGPT_URL = process.env.CHATGPT_URL ?? 'https://chatgpt.com/';
@@ -33,7 +34,7 @@ export async function createChatGptWebDriver(): Promise<Driver> {
   const page: Page = context.pages()[0] ?? (await context.newPage());
 
   if (!page.url().includes('chatgpt.com')) {
-    await page.goto(CHATGPT_URL, { waitUntil: 'domcontentloaded' });
+    await gotoTolerantly(page, CHATGPT_URL);
   }
 
   return {
@@ -41,7 +42,7 @@ export async function createChatGptWebDriver(): Promise<Driver> {
       // Navigating to the root URL starts a fresh conversation.
       // SELECTOR-TODO: alternatively click the "New chat" button by data-testid
       // if URL navigation triggers a Cloudflare interstitial.
-      await page.goto(CHATGPT_URL, { waitUntil: 'domcontentloaded' });
+      await gotoTolerantly(page, CHATGPT_URL);
       await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {
         // Networkidle is best-effort on ChatGPT; long-polling connections
         // never idle. Continue regardless.
