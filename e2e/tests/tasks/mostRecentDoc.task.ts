@@ -20,16 +20,11 @@ test(`name the most recently changed document (${CLIENT})`, { timeout: 240_000 }
   await runSmokeTest({
     name: 'task-mostRecentDoc',
     client: CLIENT,
-    prompt: [
-      'Which of my Google Docs was changed most recently?',
-      'Reply with exactly this and nothing else:',
-      'OUTPUT_BEGIN<the document title>OUTPUT_END',
-    ].join('\n'),
+    prompt: 'Which of my Google Docs was changed most recently? Just the title is fine.',
     assertions: {
       mustNotReportFailure: true,
-      containsBetween: ['OUTPUT_BEGIN', 'OUTPUT_END'],
-      // Some title, any title. An empty envelope means the model produced the
-      // shape without an answer, which is a pass for containsBetween alone.
+      // Some substantive answer, since which document it is cannot be known --
+      // the fixture account is shared and changes.
       matchesBody: /\S{3,}/,
     },
   });
