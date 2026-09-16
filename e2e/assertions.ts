@@ -155,7 +155,7 @@ function truncate(s: string, n = 600): string {
 }
 
 /**
- * Phrases a model uses when a tool let it down.
+ * Patterns for a model reporting that a tool let it down.
  *
  * This is the assertion that only exists for live-client tests, and it covers a
  * failure mode nothing else can see. A direct tool check gets a 403 and fails
@@ -165,32 +165,49 @@ function truncate(s: string, n = 600): string {
  * files a bug for the first one, because the assistant sounded like it was
  * working as intended.
  *
- * Deliberately excluded: "I couldn't find". That is the correct answer to a
- * search with no matches, so a task that expects an empty result opts in
- * separately rather than having it banned by default.
+ * Every loose verb is QUALIFIED by what it could not do, and that is the whole
+ * design. "I was unable to find a matching document" is a correct answer to a
+ * search with no matches; "I was unable to access your documents" is a tool
+ * failure. A bare /unable to/ cannot tell them apart and would fail a passing
+ * task on the model's choice of wording -- which is the same reason
+ * "I couldn't find" is absent entirely.
  */
-export const REPORTED_FAILURE_PHRASES = [
-  "i don't have permission",
-  'i do not have permission',
-  "i don't have access",
-  'i do not have access',
-  'permission denied',
-  "i wasn't able to",
-  'i was unable to',
-  'i encountered an error',
-  'something went wrong',
-  'an error occurred',
-  'failed to retrieve',
-  'failed to access',
-  'not authorized',
-  'insufficient permission',
-] as const;
+export const REPORTED_FAILURE_PATTERNS: readonly RegExp[] = [
+  /i (?:don't|do not) have (?:the )?(?:permission|access)/i,
+  /permission denied/i,
+  /not authorized/i,
+  /insufficient permissions?/i,
+  // Qualified by an ACCESS verb, never "find".
+  /i (?:was|am) (?:unable|not able) to (?:access|read|list|search|retrieve|open|reach|connect)/i,
+  /i (?:wasn't|couldn't|could not) (?:able to )?(?:access|read|list|retrieve|open|reach|connect)/i,
+  /(?:an )?error (?:occurred|occurred while)/i,
+  /encountered an error/i,
+  /something went wrong/i,
+  /failed to (?:retrieve|access|read|list|search|open)/i,
+];
 
-/** The first failure phrase present in `text`, or null. Case-insensitive. */
-export function findReportedFailure(text: string, extra: readonly string[] = []): string | null {
-  const haystack = text.toLowerCase();
-  for (const phrase of [...REPORTED_FAILURE_PHRASES, ...extra]) {
-    if (haystack.includes(phrase.toLowerCase())) return phrase;
+/**
+ * The text of the first reported-failure match, or null.
+ *
+ * `extra` takes strings (matched literally, case-insensitively) or regexes, for
+ * a phrase that only counts as a failure in one task's context.
+ */
+export function findReportedFailure(
+  text: string,
+  extra: readonly (string | RegExp)[] = [],
+): string | null {
+  for (const pattern of REPORTED_FAILURE_PATTERNS) {
+    const hit = text.match(pattern);
+    if (hit) return hit[0];
+  }
+  for (const item of extra) {
+    if (typeof item === 'string') {
+      const at = text.toLowerCase().indexOf(item.toLowerCase());
+      if (at !== -1) return text.slice(at, at + item.length);
+    } else {
+      const hit = text.match(item);
+      if (hit) return hit[0];
+    }
   }
   return null;
 }

@@ -144,24 +144,35 @@ test('findReportedFailure catches a model explaining a tool failure', () => {
     'It looks like an error occurred while searching.',
     'Permission denied when listing your files.',
     'I do not have access to that folder.',
+    'I failed to retrieve the document list.',
+    "I couldn't access your Drive.",
   ];
   for (const reply of refusals) {
     assert.notEqual(findReportedFailure(reply), null, `should have flagged: ${reply}`);
   }
 });
 
-test('findReportedFailure leaves a genuine empty result alone', () => {
-  // "I couldn't find" is the CORRECT answer to a search with no matches. Banning
-  // it by default would make every zero-state task unpassable.
-  assert.equal(findReportedFailure("I couldn't find any document mentioning that."), null);
-  assert.equal(findReportedFailure('OUTPUT_BEGINE2E Smoke Fixture DocOUTPUT_END'), null);
+// The distinction the whole detector turns on. "Unable to FIND" is a correct
+// answer to a search with no matches; "unable to ACCESS" is a tool failure. A
+// bare /unable to/ cannot tell them apart, and would fail a passing task purely
+// on the model's choice of wording.
+test('findReportedFailure leaves a genuine no-match reply alone', () => {
+  const noMatches = [
+    "I couldn't find any document mentioning that.",
+    'I was unable to find a matching document.',
+    'I am unable to find anything with that name.',
+    "I wasn't able to find a doc about Q3 planning.",
+    'No documents matched your search.',
+    'OUTPUT_BEGINNeedleOUTPUT_END',
+  ];
+  for (const reply of noMatches) {
+    assert.equal(findReportedFailure(reply), null, `should NOT have flagged: ${reply}`);
+  }
 });
 
 test('findReportedFailure is case-insensitive and takes extra phrases', () => {
   assert.notEqual(findReportedFailure('I DO NOT HAVE ACCESS'), null);
   assert.equal(findReportedFailure('the connector is not configured'), null);
-  assert.notEqual(
-    findReportedFailure('the connector is not configured', ['not configured']),
-    null,
-  );
+  assert.notEqual(findReportedFailure('the connector is not configured', ['not configured']), null);
+  assert.notEqual(findReportedFailure('no connector present', [/no connector/i]), null);
 });
