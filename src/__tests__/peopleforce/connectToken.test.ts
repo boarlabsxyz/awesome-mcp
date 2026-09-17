@@ -94,6 +94,12 @@ describe('validatePeopleForceToken — network responses', () => {
     if (!r.ok) {
       assert.equal(r.status, 400);
       assert.match(r.userMessage, /rejected the API key/);
+      // A service-account key (v4-only) 401s here identically to a revoked
+      // Company key, so the message has to name the key type — otherwise the
+      // user re-issues a perfectly good key and gets the same rejection.
+      assert.match(r.userMessage, /Service account/);
+      assert.match(r.userMessage, /v4/);
+      assert.match(r.userMessage, /Company API key/);
     }
   });
 
