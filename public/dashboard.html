@@ -1659,8 +1659,10 @@
         tokenLabel.textContent = 'API Key';
         tokenInput.placeholder = 'Your PeopleForce API key';
         tokenHint.innerHTML =
-          'In PeopleForce: <strong>Settings → Integrations → API</strong>. ' +
-          'Create a new API key and paste it here. The key inherits the permissions of the user who created it.';
+          'In PeopleForce: <strong>Settings → API keys → Generate API key</strong>. ' +
+          'Choose the <strong>Company</strong> key type — a <strong>Service account</strong> key only works with ' +
+          'PeopleForce API v4, which this connector does not use, so it will be rejected. ' +
+          'Paste the key here; any compensation / candidate / IP restrictions set on the key still apply.';
         urlSection.style.display = 'none';
         // Match Outline's UX: no user-entered name — backend falls back to the
         // service name via buildPeopleForceInstanceName.
