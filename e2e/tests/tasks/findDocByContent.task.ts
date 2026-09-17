@@ -32,14 +32,15 @@ test(`find a document by its content (${CLIENT})`, { timeout: 240_000 }, async (
     name: 'task-findDocByContent',
     client: CLIENT,
     // No tool named, no parameters given. That is the point.
-    prompt: [
-      `I have a Google Doc somewhere that mentions ${NEEDLE}. Find it and tell me its title.`,
-      'Reply with exactly this and nothing else:',
-      'OUTPUT_BEGIN<the document title>OUTPUT_END',
-    ].join('\n'),
+    prompt: `I have a Google Doc somewhere that mentions ${NEEDLE}. Find it and tell me its title.`,
+    // No output envelope, and that is a correction learned from running these.
+    // Demanding "reply with exactly this and nothing else" makes the test fail
+    // on FORMAT COMPLIANCE, which varies run to run and says nothing about the
+    // server -- a real run answered correctly and then declined the wrapper:
+    // "I won't reproduce it wrapped in the exact OUTPUT_BEGIN/OUTPUT_END format
+    // you specified". A task test asserts the outcome; the answer is in there.
     assertions: {
       mustNotReportFailure: true,
-      containsBetween: ['OUTPUT_BEGIN', 'OUTPUT_END'],
       includes: [TITLE],
     },
   });

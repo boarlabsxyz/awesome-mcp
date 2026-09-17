@@ -17,14 +17,9 @@ test(`read a document the user names by id (${CLIENT})`, { timeout: 240_000 }, a
   await runSmokeTest({
     name: 'task-readDocContent',
     client: CLIENT,
-    prompt: [
-      `What does this Google Doc say? https://docs.google.com/document/d/${DOC_ID}/edit`,
-      'Reply with exactly this and nothing else:',
-      'OUTPUT_BEGIN<the verbatim text of the document>OUTPUT_END',
-    ].join('\n'),
+    prompt: `What does this Google Doc say? https://docs.google.com/document/d/${DOC_ID}/edit`,
     assertions: {
       mustNotReportFailure: true,
-      containsBetween: ['OUTPUT_BEGIN', 'OUTPUT_END'],
       includes: [NEEDLE],
     },
   });
