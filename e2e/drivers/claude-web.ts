@@ -188,7 +188,7 @@ async function firstMatching(
  * The trade-off is honest — a long pause mid-stream could settle early. Hence
  * SETTLE_MS is generous and tunable, and it still refuses to return empty.
  */
-async function waitForResponseComplete(page: Page): Promise<string> {
+export async function waitForResponseComplete(page: Page): Promise<string> {
   const deadline = Date.now() + RESPONSE_TIMEOUT_MS;
   let lastText = '';
   let stableSince = 0;
@@ -210,8 +210,23 @@ async function waitForResponseComplete(page: Page): Promise<string> {
     // then blames the assistant selectors -- which is exactly what happened on
     // the first real run, twice.
     if (await approvePendingToolUse(page)) {
-      textAtApproval = lastText;
+      // Baseline read AFTER the click, not from the previous poll.
+      //
+      // The previous poll's value is stale by exactly the interval where this
+      // goes wrong: if a preamble renders in the same gap the dialog appears in,
+      // the baseline is the older empty string, the very next read differs from
+      // it, the guard clears itself, and the unchanged preamble then satisfies
+      // SETTLE_MS -- returning text from before the tool ran, which is the
+      // failure the guard exists to prevent.
+      //
+      // Reading here instead captures the text at the instant the turn resumes.
+      // Whatever the tool produces must come after that, so the guard holds
+      // until it does.
+      textAtApproval = await lastAssistantText(page);
+      lastText = textAtApproval;
       stableSince = 0;
+      await page.waitForTimeout(POLL_MS);
+      continue;
     }
 
     const text = await lastAssistantText(page);
