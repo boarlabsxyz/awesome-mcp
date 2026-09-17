@@ -1,7 +1,7 @@
 // src/mcpAuthenticate.ts
 // Shared authenticate handler for all MCP servers.
 import http from 'http';
-import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession, createSlackBotSession, createSlackUserSession, createOutlineSession, createPeopleForceSession, createHubSpotSession } from './userSession.js';
+import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession, createSlackBotSession, createSlackUserSession, createOutlineSession, createPeopleForceSession, createPeopleForceV4Session, createHubSpotSession } from './userSession.js';
 import { loadUsers, getUserByApiKey, getUserById } from './userStore.js';
 import { loadClientCredentials } from './auth.js';
 import { getMcpConnection, getMcpConnectionByInstanceId } from './mcpConnectionStore.js';
@@ -23,6 +23,7 @@ export interface AuthDeps {
   createSlackUserSession: (user: any, conn: any) => UserSession;
   createOutlineSession: (user: any, conn: any) => UserSession;
   createPeopleForceSession: (user: any, conn: any) => UserSession;
+  createPeopleForceV4Session: (user: any, conn: any) => UserSession;
   createHubSpotSession: (user: any, conn: any) => UserSession;
 }
 
@@ -42,6 +43,7 @@ const defaultDeps: AuthDeps = {
   createSlackUserSession,
   createOutlineSession,
   createPeopleForceSession,
+  createPeopleForceV4Session,
   createHubSpotSession,
 };
 
@@ -61,6 +63,9 @@ async function sessionFromConnection(user: any, connection: any, deps: AuthDeps)
   }
   if (connection.provider === 'peopleforce') {
     return deps.createPeopleForceSession(user, connection);
+  }
+  if (connection.provider === 'peopleforce-v4') {
+    return deps.createPeopleForceV4Session(user, connection);
   }
   if (connection.provider === 'hubspot') {
     return deps.createHubSpotSession(user, connection);

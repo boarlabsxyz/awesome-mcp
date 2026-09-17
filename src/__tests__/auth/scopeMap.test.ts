@@ -72,6 +72,17 @@ describe('scopeMap', () => {
       assert.equal(getRequiredScope('/peopleforce-sse'), 'mcp:peopleforce');
     });
 
+    it('should return mcp:peopleforce-v4 for /peopleforce-v4', () => {
+      assert.equal(getRequiredScope('/peopleforce-v4'), 'mcp:peopleforce-v4');
+    });
+
+    // The -sse strip must not turn the versioned slug back into the v2/v3 one:
+    // the two connectors hold different credentials, so a route that resolved
+    // to the wrong scope would hand a request the wrong PeopleForce key.
+    it('should return mcp:peopleforce-v4 for /peopleforce-v4-sse', () => {
+      assert.equal(getRequiredScope('/peopleforce-v4-sse'), 'mcp:peopleforce-v4');
+    });
+
     it('should return mcp:hubspot for /hubspot', () => {
       assert.equal(getRequiredScope('/hubspot'), 'mcp:hubspot');
     });
@@ -93,8 +104,8 @@ describe('scopeMap', () => {
   });
 
   describe('ALL_SCOPES', () => {
-    it('should contain all 12 scopes', () => {
-      assert.equal(ALL_SCOPES.length, 12);
+    it('should contain all 13 scopes', () => {
+      assert.equal(ALL_SCOPES.length, 13);
       assert.ok(ALL_SCOPES.includes('mcp:docs'));
       assert.ok(ALL_SCOPES.includes('mcp:calendar'));
       assert.ok(ALL_SCOPES.includes('mcp:sheets'));
@@ -106,6 +117,7 @@ describe('scopeMap', () => {
       assert.ok(ALL_SCOPES.includes('mcp:slack'));
       assert.ok(ALL_SCOPES.includes('mcp:outline'));
       assert.ok(ALL_SCOPES.includes('mcp:peopleforce'));
+      assert.ok(ALL_SCOPES.includes('mcp:peopleforce-v4'));
       assert.ok(ALL_SCOPES.includes('mcp:hubspot'));
     });
   });
@@ -123,6 +135,7 @@ describe('scopeMap', () => {
       assert.deepEqual(getScopesForSlug('slack'), ['mcp:slack']);
       assert.deepEqual(getScopesForSlug('outline'), ['mcp:outline']);
       assert.deepEqual(getScopesForSlug('peopleforce'), ['mcp:peopleforce']);
+      assert.deepEqual(getScopesForSlug('peopleforce-v4'), ['mcp:peopleforce-v4']);
       assert.deepEqual(getScopesForSlug('hubspot'), ['mcp:hubspot']);
     });
 
