@@ -192,6 +192,16 @@ async function waitForResponseComplete(page: Page): Promise<string> {
   const deadline = Date.now() + RESPONSE_TIMEOUT_MS;
   let lastText = '';
   let stableSince = 0;
+  // Assistant text as it stood when a tool use was approved.
+  //
+  // Settling on text-stability alone is wrong across an approval. A model that
+  // says "Let me search your Drive" and then blocks on the permission dialog has
+  // text that does not change for SETTLE_MS, so the wait would return the
+  // PREAMBLE -- text from before the tool ran -- and the assertion would judge
+  // an answer the model had not given yet. A silent wrong answer is worse than
+  // a timeout, so until the text moves past this mark, "unchanged" means "the
+  // tool is still running".
+  let textAtApproval: string | null = null;
 
   while (Date.now() < deadline) {
     // A first-ever call to a tool opens "Claude wants to use X" and the turn
@@ -199,10 +209,15 @@ async function waitForResponseComplete(page: Page): Promise<string> {
     // from a slow reply, so without this the run burns its whole timeout and
     // then blames the assistant selectors -- which is exactly what happened on
     // the first real run, twice.
-    await approvePendingToolUse(page);
-    const text = await lastAssistantText(page);
+    if (await approvePendingToolUse(page)) {
+      textAtApproval = lastText;
+      stableSince = 0;
+    }
 
-    if (text && text === lastText) {
+    const text = await lastAssistantText(page);
+    if (textAtApproval !== null && text !== textAtApproval) textAtApproval = null;
+
+    if (text && text === lastText && textAtApproval === null) {
       if (stableSince === 0) stableSince = Date.now();
       if (Date.now() - stableSince >= SETTLE_MS) return text;
     } else {
@@ -273,15 +288,26 @@ async function assertComposerMatches(composer: Locator, intended: string): Promi
  * buttons -- 2 is "Always allow", 3 is "Allow once" -- with a text locator
  * behind it in case that attribute is an implementation detail that moves.
  */
-async function approvePendingToolUse(page: Page): Promise<boolean> {
+export async function approvePendingToolUse(page: Page): Promise<boolean> {
   const approve = page
     .locator('[data-approval-digit="2"], button:has-text("Always allow")')
     .first();
 
   if (!(await approve.isVisible().catch(() => false))) return false;
 
-  const label = await approve.innerText().catch(() => 'Always allow');
-  await approve.click().catch(() => {});
-  console.error(`[e2e] claude-web: approved a pending tool use (${label.trim()})`);
+  try {
+    await approve.click({ timeout: 5_000 });
+  } catch (err) {
+    // One benign case: the dialog was answered between the visibility check and
+    // the click, so the control detached. Everything else means the dialog is
+    // STILL UP and the turn is still blocked -- and swallowing that produces a
+    // response timeout blaming the reply, when the real story is a prompt nobody
+    // answered. That is the exact misdirection this handler exists to remove, so
+    // it must not reintroduce it one layer down.
+    if (await approve.isVisible().catch(() => false)) throw err;
+    return false;
+  }
+
+  console.error('[e2e] claude-web: approved a pending tool use');
   return true;
 }
