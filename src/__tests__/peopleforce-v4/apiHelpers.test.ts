@@ -5,6 +5,8 @@ import { UserError } from 'fastmcp';
 import {
   PeopleForceV4Client,
   resolveV4BaseUrl,
+  insecureBaseUrlReason,
+  pathId,
   rangeParams,
   formatPaginationFooter,
   formatPerson,
@@ -67,6 +69,52 @@ describe('resolveV4BaseUrl', () => {
 
   test('strips trailing slashes from an override', () => {
     assert.equal(resolveV4BaseUrl('https://t.example.com/api/v4///'), 'https://t.example.com/api/v4');
+  });
+
+  test('refuses a non-loopback http base — the API key rides in a header on every call', () => {
+    assert.throws(() => resolveV4BaseUrl('http://tenant.example.com/api/v4'), /not HTTPS/);
+    assert.match(insecureBaseUrlReason('http://tenant.example.com')!, /cleartext/);
+  });
+
+  test('allows loopback http so a local mock stays testable', () => {
+    assert.equal(insecureBaseUrlReason('http://localhost:8080/api/v4'), null);
+    assert.equal(insecureBaseUrlReason('http://127.0.0.1:8080/api/v4'), null);
+    assert.equal(resolveV4BaseUrl('http://localhost:8080/api/v4'), 'http://localhost:8080/api/v4');
+  });
+
+  test('rejects a string that is not a URL at all', () => {
+    assert.match(insecureBaseUrlReason('not a url')!, /not a valid URL/);
+  });
+});
+
+describe('pathId', () => {
+  test('keeps an ordinary id in one path segment', async () => {
+    assert.equal(pathId(42), '42');
+    assert.equal((await (async () => { await client().getPerson(42); return lastUrl(); })()).pathname, '/api/v4/people/42');
+  });
+
+  test('an id carrying / ? or # cannot escape its segment', async () => {
+    // Unencoded, `1/assets` would silently call a DIFFERENT endpoint and `1?x=`
+    // would truncate the path into a query — an authenticated request quietly
+    // sent somewhere the caller did not ask for.
+    assert.equal(pathId('1/assets'), '1%2Fassets');
+    assert.equal(pathId('1?x=2'), '1%3Fx%3D2');
+    assert.equal(pathId('1#frag'), '1%23frag');
+    const url = await (async () => { await client().getPerson('1/assets'); return lastUrl(); })();
+    assert.equal(url.pathname, '/api/v4/people/1%2Fassets');
+  });
+
+  test('rejects the traversal ids encoding cannot neutralise', () => {
+    // `.` and `..` survive encodeURIComponent and are resolved by the URL
+    // parser, so `/people/..` normalises onto `/api/v4/`.
+    assert.throws(() => pathId('..'), /Invalid PeopleForce ID/);
+    assert.throws(() => pathId('.'), /Invalid PeopleForce ID/);
+    assert.throws(() => pathId('   '), /Invalid PeopleForce ID/);
+  });
+
+  test('nested paths encode every id, not just the first', async () => {
+    await client().getPersonSalary('7/x', '9/y');
+    assert.equal(lastUrl().pathname, '/api/v4/people/7%2Fx/compensation/salaries/9%2Fy');
   });
 });
 

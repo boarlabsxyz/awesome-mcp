@@ -10,12 +10,19 @@ import {
   type ValidateResult,
 } from '../util/pasteTokenValidation.js';
 
+import { insecureBaseUrlReason } from './apiHelpers.js';
+
 export type { ValidateOk, ValidateErr, ValidateResult, FetchImpl } from '../util/pasteTokenValidation.js';
 
 const DEFAULT_BASE_URL = 'https://app.peopleforce.io/api/v4';
 
 export interface ValidateInput extends ValidateInputBaseUrl {
   token: string;
+}
+
+/** Per-connection override > env > public default, trailing slashes stripped. */
+function resolveBaseUrl(provided?: string): string {
+  return (provided?.trim() || process.env.PEOPLEFORCE_V4_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
 }
 
 /**
@@ -33,6 +40,21 @@ export interface ValidateInput extends ValidateInputBaseUrl {
  * key is perfectly valid on the other PeopleForce connector.
  */
 export function validatePeopleForceV4Token(input: ValidateInput): Promise<ValidateResult> {
+  // Scheme is checked HERE rather than inside `resolveBaseUrl`, which
+  // validatePasteToken calls outside its try block: throwing from there would
+  // break that function's "never throws" contract and 500 the connect route.
+  // Refusing before the request also means the key is never put on the wire.
+  const baseUrl = resolveBaseUrl(input.baseUrl);
+  const insecure = insecureBaseUrlReason(baseUrl);
+  if (insecure) {
+    return Promise.resolve({
+      ok: false,
+      status: 400,
+      userMessage: `PeopleForce v4 base URL rejected: ${insecure}`,
+      logMessage: `PeopleForce v4 validation refused a non-HTTPS base URL: ${baseUrl}`,
+    });
+  }
+
   return validatePasteToken({
     token: input.token,
     baseUrl: input.baseUrl,
@@ -44,7 +66,7 @@ export function validatePeopleForceV4Token(input: ValidateInput): Promise<Valida
       'Company or Career API key is rejected here (use the PeopleForce connector for those). In PeopleForce go to ' +
       'Settings → API keys → Generate API key and choose the Service account type, then check the key is still ' +
       'enabled and was copied in full.',
-    resolveBaseUrl: provided => (provided?.trim() || process.env.PEOPLEFORCE_V4_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, ''),
+    resolveBaseUrl,
     validationUrl: baseUrl => `${baseUrl}/people?per_page=1`,
     headers: token => ({ 'X-API-KEY': token, Accept: 'application/json' }),
   });

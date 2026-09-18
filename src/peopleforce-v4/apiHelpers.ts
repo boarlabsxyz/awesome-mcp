@@ -31,9 +31,61 @@ import { appendQueryParams, type PeopleForceQueryParams } from '../peopleforce/a
 /** v4 lives on its own version segment — NOT under /api/public/ like v1–v3. */
 const DEFAULT_BASE_URL = 'https://app.peopleforce.io/api/v4';
 
-/** Resolve the effective v4 base URL for a connection. Exported for tests. */
+/**
+ * Why a non-loopback `http://` base is refused rather than merely discouraged:
+ * every request carries the service-account key in `X-API-KEY`, and that key is
+ * a bearer credential — anyone holding it is the service account until it is
+ * revoked. Over plain HTTP it is readable by anything on the path, so a
+ * mistyped scheme in `PEOPLEFORCE_V4_BASE_URL` would quietly leak the
+ * credential on every single call. PeopleForce rejects plain HTTP anyway
+ * ("calls over plain HTTP will fail"), so the only thing this forbids is
+ * shipping the key somewhere it was never going to work.
+ *
+ * Loopback stays allowed so a local mock/proxy is still testable — that traffic
+ * does not leave the machine.
+ */
+export function insecureBaseUrlReason(baseUrl: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return `"${baseUrl}" is not a valid URL.`;
+  }
+  if (url.protocol === 'https:') return null;
+  if (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname)) return null;
+  return (
+    `"${baseUrl}" is not HTTPS. The PeopleForce service-account key travels in the X-API-KEY header on every ` +
+    `request and would be sent in cleartext. Use an https:// base URL (http:// is allowed for loopback only).`
+  );
+}
+
+/**
+ * Resolve the effective v4 base URL for a connection. Throws on a non-HTTPS
+ * base — see {@link insecureBaseUrlReason}. Exported for tests.
+ */
 export function resolveV4BaseUrl(baseUrl?: string): string {
-  return (baseUrl?.trim() || process.env.PEOPLEFORCE_V4_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
+  const resolved = (baseUrl?.trim() || process.env.PEOPLEFORCE_V4_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
+  const insecure = insecureBaseUrlReason(resolved);
+  if (insecure) throw new UserError(`PeopleForce v4 base URL rejected: ${insecure}`);
+  return resolved;
+}
+
+/**
+ * Encode an ID for interpolation into a URL path.
+ *
+ * `idArg` in the tool schemas accepts an arbitrary string, and an unencoded one
+ * does not stay in its path segment: `a/b` adds a segment, `?`/`#` truncate the
+ * path into a query or fragment, and `..` normalises the request onto a
+ * different endpoint entirely. The result is a silently misrouted authenticated
+ * call, so every interpolated ID goes through here — the same convention the
+ * v2/v3 client already follows.
+ */
+export function pathId(id: string | number): string {
+  const raw = String(id).trim();
+  if (!raw || raw === '.' || raw === '..') {
+    throw new UserError(`Invalid PeopleForce ID: "${raw}".`);
+  }
+  return encodeURIComponent(raw);
 }
 
 // ---------------------------------------------------------------------------
@@ -390,7 +442,7 @@ export class PeopleForceV4Client {
   }
 
   getPerson(id: number | string, includeHistoricalValues?: boolean): Promise<V4Person> {
-    return this.request('GET', `/people/${id}`, undefined, {
+    return this.request('GET', `/people/${pathId(id)}`, undefined, {
       include_historical_values: includeHistoricalValues ? 'true' : undefined,
     });
   }
@@ -417,19 +469,19 @@ export class PeopleForceV4Client {
   }
 
   listPersonAssets(personId: number | string): Promise<V4ListResponse<V4Named>> {
-    return this.request('GET', `/people/${personId}/assets`);
+    return this.request('GET', `/people/${pathId(personId)}/assets`);
   }
 
   listPersonSalaries(personId: number | string): Promise<V4ListResponse<V4Salary>> {
-    return this.request('GET', `/people/${personId}/compensation/salaries`);
+    return this.request('GET', `/people/${pathId(personId)}/compensation/salaries`);
   }
 
   getPersonSalary(personId: number | string, id: number | string): Promise<V4Salary> {
-    return this.request('GET', `/people/${personId}/compensation/salaries/${id}`);
+    return this.request('GET', `/people/${pathId(personId)}/compensation/salaries/${pathId(id)}`);
   }
 
   listPersonLifecycles(personId: number | string): Promise<V4ListResponse<V4Lifecycle>> {
-    return this.request('GET', `/people/${personId}/lifecycles`);
+    return this.request('GET', `/people/${pathId(personId)}/lifecycles`);
   }
 
   createPerson(body: Record<string, unknown>): Promise<V4Person> {
@@ -437,7 +489,7 @@ export class PeopleForceV4Client {
   }
 
   updatePerson(id: number | string, body: Record<string, unknown>): Promise<V4Person> {
-    return this.request('PUT', `/people/${id}`, body);
+    return this.request('PUT', `/people/${pathId(id)}`, body);
   }
 
   // === Core (org structure) ===
@@ -447,7 +499,7 @@ export class PeopleForceV4Client {
   }
 
   getDepartment(id: number | string): Promise<V4Department> {
-    return this.request('GET', `/departments/${id}`);
+    return this.request('GET', `/departments/${pathId(id)}`);
   }
 
   createDepartment(body: Record<string, unknown>): Promise<V4Department> {
@@ -455,7 +507,7 @@ export class PeopleForceV4Client {
   }
 
   updateDepartment(id: number | string, body: Record<string, unknown>): Promise<V4Department> {
-    return this.request('PUT', `/departments/${id}`, body);
+    return this.request('PUT', `/departments/${pathId(id)}`, body);
   }
 
   listDivisions(input: V4PageInput = {}): Promise<V4ListResponse<V4Named>> {
@@ -463,7 +515,7 @@ export class PeopleForceV4Client {
   }
 
   getDivision(id: number | string): Promise<V4Named> {
-    return this.request('GET', `/divisions/${id}`);
+    return this.request('GET', `/divisions/${pathId(id)}`);
   }
 
   createDivision(body: Record<string, unknown>): Promise<V4Named> {
@@ -471,7 +523,7 @@ export class PeopleForceV4Client {
   }
 
   updateDivision(id: number | string, body: Record<string, unknown>): Promise<V4Named> {
-    return this.request('PUT', `/divisions/${id}`, body);
+    return this.request('PUT', `/divisions/${pathId(id)}`, body);
   }
 
   listWorkTypes(input: V4PageInput = {}): Promise<V4ListResponse<V4Named>> {
@@ -479,7 +531,7 @@ export class PeopleForceV4Client {
   }
 
   getWorkType(id: number | string): Promise<V4Named> {
-    return this.request('GET', `/work_types/${id}`);
+    return this.request('GET', `/work_types/${pathId(id)}`);
   }
 
   createWorkType(body: Record<string, unknown>): Promise<V4Named> {
@@ -487,7 +539,7 @@ export class PeopleForceV4Client {
   }
 
   updateWorkType(id: number | string, body: Record<string, unknown>): Promise<V4Named> {
-    return this.request('PUT', `/work_types/${id}`, body);
+    return this.request('PUT', `/work_types/${pathId(id)}`, body);
   }
 
   listJobLevels(input: V4PageInput = {}): Promise<V4ListResponse<V4Named>> {
@@ -499,7 +551,7 @@ export class PeopleForceV4Client {
   }
 
   updateJobLevel(id: number | string, body: Record<string, unknown>): Promise<V4Named> {
-    return this.request('PUT', `/job_levels/${id}`, body);
+    return this.request('PUT', `/job_levels/${pathId(id)}`, body);
   }
 
   listLocations(input: V4PageInput = {}): Promise<V4ListResponse<V4Location>> {
@@ -511,7 +563,7 @@ export class PeopleForceV4Client {
   }
 
   updateLocation(id: number | string, body: Record<string, unknown>): Promise<V4Location> {
-    return this.request('PUT', `/locations/${id}`, body);
+    return this.request('PUT', `/locations/${pathId(id)}`, body);
   }
 
   listJobTitles(input: V4PageInput = {}): Promise<V4ListResponse<V4Named>> {
@@ -523,7 +575,7 @@ export class PeopleForceV4Client {
   }
 
   updateJobTitle(id: number | string, body: Record<string, unknown>): Promise<V4Named> {
-    return this.request('PUT', `/job_titles/${id}`, body);
+    return this.request('PUT', `/job_titles/${pathId(id)}`, body);
   }
 
   // === Perform ===
@@ -556,7 +608,7 @@ export class PeopleForceV4Client {
   }
 
   getObjective(id: number | string): Promise<V4Objective> {
-    return this.request('GET', `/perform/objectives/${id}`);
+    return this.request('GET', `/perform/objectives/${pathId(id)}`);
   }
 
   listReviewCycles(input: V4PageInput & {
@@ -645,7 +697,7 @@ export class PeopleForceV4Client {
   }
 
   getComplianceCase(id: number | string): Promise<V4ComplianceCase> {
-    return this.request('GET', `/compliance/compliance_cases/${id}`);
+    return this.request('GET', `/compliance/compliance_cases/${pathId(id)}`);
   }
 
   listComplianceCaseDocuments(input: V4PageInput & {
@@ -664,7 +716,7 @@ export class PeopleForceV4Client {
   }
 
   getComplianceCaseDocument(id: number | string): Promise<V4ComplianceDocument> {
-    return this.request('GET', `/compliance/compliance_case_documents/${id}`);
+    return this.request('GET', `/compliance/compliance_case_documents/${pathId(id)}`);
   }
 }
 
