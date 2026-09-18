@@ -19,10 +19,11 @@ import type { Locator, Page } from 'playwright';
 import type { Driver } from './driver.ts';
 import { connectBrowser } from './connect.ts';
 import { gotoTolerantly } from './navigate.ts';
+import { TIMEOUTS } from '../budget.ts';
 
 const CDP_ENDPOINT = process.env.CLAUDE_CDP_ENDPOINT ?? 'http://127.0.0.1:9222';
 const CLAUDE_URL = process.env.CLAUDE_URL ?? 'https://claude.ai/new';
-const RESPONSE_TIMEOUT_MS = Number(process.env.RESPONSE_TIMEOUT_MS ?? 120_000);
+const RESPONSE_TIMEOUT_MS = TIMEOUTS.response;
 
 /** How long the reply text must stop changing before it counts as finished. */
 const SETTLE_MS = Number(process.env.CLAUDE_SETTLE_MS ?? 2_500);
@@ -60,17 +61,17 @@ export async function createClaudeWebDriver(): Promise<Driver> {
   const page: Page = context.pages()[0] ?? (await context.newPage());
 
   if (!page.url().includes('claude.ai')) {
-    await gotoTolerantly(page, CLAUDE_URL);
+    await gotoTolerantly(page, CLAUDE_URL, TIMEOUTS.navigate);
   }
 
   return {
     async newConversation() {
-      await gotoTolerantly(page, CLAUDE_URL);
-      await firstMatching(page, COMPOSER_SELECTORS, 'composer', 30_000);
+      await gotoTolerantly(page, CLAUDE_URL, TIMEOUTS.navigate);
+      await firstMatching(page, COMPOSER_SELECTORS, 'composer', TIMEOUTS.composer);
     },
 
     async sendAndWait(prompt) {
-      const composer = await firstMatching(page, COMPOSER_SELECTORS, 'composer', 30_000);
+      const composer = await firstMatching(page, COMPOSER_SELECTORS, 'composer', TIMEOUTS.composer);
       await composer.click();
 
       // Clear first. claude.ai keeps a per-conversation draft, so a run that

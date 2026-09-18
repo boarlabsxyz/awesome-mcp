@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import { runSmokeTest } from '../../runSmokeTest.ts';
 import { required } from '../../env.ts';
 import type { ClientName } from '../../drivers/driver.ts';
+import { taskTimeoutMs } from '../../budget.ts';
 
 // The chain canary: client → connector → OAuth → tool → render, with an id the
 // user pasted. Unlike tests/readGoogleDoc.smoke.ts it does not name the tool or
@@ -13,7 +14,7 @@ const DOC_ID = required('E2E_FIXTURE_DOC_ID');
 const NEEDLE = required('E2E_FIXTURE_DOC_NEEDLE');
 const CLIENT = (process.env.CLIENT ?? 'claude-web') as ClientName;
 
-test(`read a document the user names by id (${CLIENT})`, { timeout: 240_000 }, async () => {
+test(`read a document the user names by id (${CLIENT})`, { timeout: taskTimeoutMs() }, async () => {
   await runSmokeTest({
     name: 'task-readDocContent',
     client: CLIENT,

@@ -14,6 +14,7 @@
 
 import Browserbase from '@browserbasehq/sdk';
 import type { ClientName } from './driver.ts';
+import { taskTimeoutMs } from '../budget.ts';
 
 export interface BrowserbaseSession {
   /** Pass to chromium.connectOverCDP(). */
@@ -107,10 +108,15 @@ export async function createBrowserbaseSession(
     },
     // `api_timeout`, not `timeout` — the Node SDK carries the Python parameter
     // name here (SessionCreateParams in @browserbasehq/sdk), and `timeout` is
-    // silently rejected as an unknown property. Bounded so a hung ChatGPT
-    // stream cannot burn browser-minutes up to the 6h ceiling; comfortably
-    // above RESPONSE_TIMEOUT_MS (120s).
-    api_timeout: opts.timeoutSeconds ?? 300,
+    // silently rejected as an unknown property.
+    //
+    // Derived from the test's own budget rather than a flat 300. When node:test
+    // abandons a timed-out test it never runs dispose(), so nothing releases the
+    // session and it bills until this fires. Tying it to the test timeout means
+    // an abandoned session outlives its test by a known margin instead of an
+    // arbitrary one -- which matters on a plan measured in browser-minutes per
+    // month.
+    api_timeout: opts.timeoutSeconds ?? Math.ceil(taskTimeoutMs() / 1000) + 30,
     ...(opts.keepAlive ? { keepAlive: true } : {}),
   });
 
