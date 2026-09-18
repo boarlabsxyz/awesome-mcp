@@ -552,6 +552,31 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
+  // PeopleForce v4 MCP (paste-token provider — user pastes a SERVICE ACCOUNT key).
+  // A separate catalog entry rather than a mode of the one above because the
+  // credentials are mutually exclusive: a service-account key only works
+  // against /api/v4 and a Company key only against v1-v3, so a user who wants
+  // both surfaces connects both. The v4 surface is also a different set, not a
+  // superset — no recruitment, leave, knowledge base, skills or KPIs.
+  const peopleForceV4McpUrl = normalizeUrl(process.env.PEOPLEFORCE_V4_MCP_URL, '/peopleforce-v4');
+
+  await createMcpCatalog({
+    slug: 'peopleforce-v4',
+    name: 'PeopleForce v4 MCP',
+    description: 'PeopleForce Company API v4 (service account key): people, terminations, org structure, objectives, reviews, surveys and compliance cases',
+    iconUrl: 'https://intercom.help/peopleforce/assets/favicon',
+    mcpUrl: peopleForceV4McpUrl,
+    provider: 'peopleforce-v4',
+    scopes: [],
+    googleClientId: null,
+    googleClientSecret: null,
+    oauthAuthorizationUrl: '',
+    oauthTokenUrl: '',
+    oauthScopes: [],
+    isLocal: !process.env.PEOPLEFORCE_V4_MCP_URL,
+    isActive: true,
+  });
+
   // HubSpot MCP — OAuth 2.0 ("Connect with HubSpot") by default. The catalog
   // always advertises the OAuth endpoints so the dashboard shows the Connect
   // button (never the paste-token form). The client_id/secret come from a

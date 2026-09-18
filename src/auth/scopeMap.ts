@@ -13,6 +13,7 @@ const ROUTE_SCOPE_MAP: Record<string, string> = {
   slack: 'mcp:slack',
   outline: 'mcp:outline',
   peopleforce: 'mcp:peopleforce',
+  'peopleforce-v4': 'mcp:peopleforce-v4',
   hubspot: 'mcp:hubspot',
 };
 
@@ -32,6 +33,7 @@ const SLUG_SCOPE_MAP: Record<string, string> = {
   'slack': 'mcp:slack',
   'outline': 'mcp:outline',
   'peopleforce': 'mcp:peopleforce',
+  'peopleforce-v4': 'mcp:peopleforce-v4',
   'hubspot': 'mcp:hubspot',
 };
 

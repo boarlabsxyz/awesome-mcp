@@ -18,11 +18,12 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Slack (user)](#slack-user-) (16)
 - [Outline](#outline) (27)
 - [PeopleForce](#peopleforce) (45)
+- [PeopleForce v4](#peopleforce-v4) (44)
 - [HubSpot](#hubspot) (23)
 
 ## Shared (opt-in per server)
 
-Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 10 of 12 servers; not on Outline, HubSpot).
+Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 10 of 13 servers; not on Outline, PeopleForce v4, HubSpot).
 
 | Tool | Description | REST |
 |---|---|---|
@@ -330,6 +331,57 @@ Source: `src/peopleforce/server.ts` — 45 tools.
 | `disqualifyVacancyApplication` | Disqualifies a vacancy application with a reason. Needs the vacancy ID, application ID (from listVacancyApplications), and a `disqualifyReasonId` (from listDisqualifyReasons); an optional comment is recorded. | `POST /api/v1/peopleforce/recruitment/vacancies/{vacancyId}/applications/{applicationId}/disqualify` |
 | `addCandidateNote` | Adds a note to a candidate — e.g. to record the AI's assessment or interview feedback back into PeopleForce. The note appears on the candidate card. | `POST /api/v1/peopleforce/recruitment/candidates/{candidateId}/notes` |
 
+## PeopleForce v4
+
+Source: `src/peopleforce-v4/server.ts` — 44 tools.
+
+| Tool | Description | REST |
+|---|---|---|
+| `listPeople` | List people in PeopleForce. Unlike the v2/v3 connector — where omitting the status filter silently returned active employees only and no "everyone" value existed — v4 defaults to status=all, so this returns the whole directory (including terminated people) unless you filter. Supports filtering by status, IDs, emails, person numbers, manager, legal entity, hire date and creation date. | — |
+| `getPerson` | Get one person by ID, including position, department, manager, hire date and (for departed people) termination date, type and reason. Fields the service account's role does not grant are absent from v4's response rather than empty; this tool lists which ones were withheld so a missing value is never read as "no value". | — |
+| `listTerminatedPeople` | List people who have left, with their termination date, type and reason. This is the v4 answer to a question the v2/v3 API could not answer at all: it exposes no termination date anywhere, so "who left and when" (and anything derived from it, such as whether someone left during probation) was not computable there. | — |
+| `listBirthdays` | List upcoming birthdays. Defaults upstream to today through 30 days out when no date range is given. | — |
+| `listWorkAnniversaries` | List upcoming work anniversaries. Defaults upstream to today through 30 days out when no date range is given. | — |
+| `listPersonAssets` | List the company assets assigned to a person (laptops, phones, access cards). | — |
+| `listPersonSalaries` | List a person's salary history (amount, currency, pay period, effective date). Needs Compensation granted on the service account's role — without it the call 403s rather than returning an empty list. | — |
+| `getPersonSalary` | Get a single salary record for a person. Needs Compensation granted on the service account's role. | — |
+| `listPersonLifecycles` | List a person's lifecycle records — hire date, prior experience, last working day, last day in office, and termination type/reason/comment plus rehire eligibility. This is where a departure is dated in detail. | — |
+| `listDepartments` | List departments, with parent department and manager IDs where set. | — |
+| `getDepartment` | Get a single department by ID. | — |
+| `listDivisions` | List divisions. | — |
+| `getDivision` | Get a single division by ID. | — |
+| `listWorkTypes` | List work types (v4's name for what the v2/v3 connector calls employment types). | — |
+| `getWorkType` | Get a single work type by ID. | — |
+| `listJobLevels` | List job levels. Note v4 exposes no get-by-id for job levels — list and filter client-side. | — |
+| `listLocations` | List locations with country, time zone and address. v4 exposes no get-by-id for locations. | — |
+| `listJobTitles` | List job titles (v4's name for what the v2/v3 connector calls positions). v4 exposes no get-by-id for job titles. | — |
+| `listObjectives` | List objectives (OKRs) with their key results, progress and owner. v4 adds the server-side filters v3 lacked entirely — status, state, type, owner, department/division/location/team, and start/end date ranges — so period filtering no longer has to happen client-side. | — |
+| `getObjective` | Get a single objective by ID, including every key result with its current and target values. | — |
+| `listReviewCycles` | List performance review cycles with their schedule, deadline and review period. | — |
+| `listReviewResponses` | List individual review responses (one row per participant per review), including the submitted answers. Filter by cycle, review, or reviewee. | — |
+| `listLifecycleSurveys` | List Pulse lifecycle surveys (onboarding, exit, and other lifecycle-triggered surveys). | — |
+| `listLifecycleSurveyResponses` | List responses to lifecycle surveys. Anonymous surveys return user_id: null by design — the respondent is not identifiable and is reported as anonymous rather than as an unknown employee. | — |
+| `listEngagementSurveys` | List Pulse engagement surveys with their schedule and status. | — |
+| `listEngagementSurveyResponses` | List responses to engagement surveys, with the demographic breakdown fields (department, division, work type, tenure). Anonymous surveys omit position/location/gender and return user_id: null by design. | — |
+| `listComplianceCases` | List compliance cases with their attached documents. Use documentPendingUpload to find cases still waiting on a file. | — |
+| `getComplianceCase` | Get a single compliance case with every attached document. | — |
+| `listComplianceCaseDocuments` | List compliance case documents across cases. Download URLs on attachments are short-lived — the expiry is reported next to each one, and a stale URL fails in a way that looks like a missing document. | — |
+| `getComplianceCaseDocument` | Get a single compliance case document, including its short-lived download URL and expiry. | — |
+| `createPerson` | Create a person in PeopleForce. v4 accepts identity and contact details only — department, job title, job level, location, work type and manager CANNOT be set through the API and must be assigned in the PeopleForce UI. Requires Edit permission on the relevant fields via the service account's role. | — |
+| `updatePerson` | Update a person's identity or contact details. Only the fields you pass are changed. Department, job title, job level, location, work type and manager are not writable through v4. Requires Edit (not View) on each field via the service account's role. | — |
+| `createDepartment` | Create a department, optionally nested under a parent and with a manager. Requires the "Manage departments" permission on the service account's role (Company tab). | — |
+| `updateDepartment` | Update a department's name, parent or manager. v4 requires `name` on this PUT even when only the parent or manager is changing, so pass the current name to keep it. Requires "Manage departments" on the role. | — |
+| `createLocation` | Create a location. v4 accepts name and time zone only — country code and address are set in the PeopleForce UI. Requires the "Manage locations" permission on the service account's role. | — |
+| `updateLocation` | Update a location's name or time zone. `name` is required by the API even when only the time zone changes. Requires "Manage locations" on the role. | — |
+| `createDivision` | Create a division in PeopleForce. Requires the "Manage divisions" permission on the service account's role (Roles & permissions → Company tab). | — |
+| `updateDivision` | Rename an existing division. Requires the "Manage divisions" permission on the service account's role (Roles & permissions → Company tab). | — |
+| `createJobTitle` | Create a job title in PeopleForce. Requires the "Manage job titles" permission on the service account's role (Roles & permissions → Company tab). | — |
+| `updateJobTitle` | Rename an existing job title. Requires the "Manage job titles" permission on the service account's role (Roles & permissions → Company tab). | — |
+| `createJobLevel` | Create a job level in PeopleForce. Requires the "Manage job levels" permission on the service account's role (Roles & permissions → Company tab). | — |
+| `updateJobLevel` | Rename an existing job level. Requires the "Manage job levels" permission on the service account's role (Roles & permissions → Company tab). | — |
+| `createWorkType` | Create a work type in PeopleForce. Requires the "Manage work types" permission on the service account's role (Roles & permissions → Company tab). | — |
+| `updateWorkType` | Rename an existing work type. Requires the "Manage work types" permission on the service account's role (Roles & permissions → Company tab). | — |
+
 ## HubSpot
 
 Source: `src/hubspot/server.ts` — 23 tools.
@@ -362,4 +414,4 @@ Source: `src/hubspot/server.ts` — 23 tools.
 
 ---
 
-**Grand total: 249 tools across 13 sections.**
+**Grand total: 293 tools across 14 sections.**

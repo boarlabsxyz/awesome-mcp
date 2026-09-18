@@ -39,6 +39,7 @@ const SERVICES = [
   ['src/slack-user/server.ts',            'Slack (user)',          null],
   ['src/outline/server.ts',               'Outline',               'outline'],
   ['src/peopleforce/server.ts',           'PeopleForce',           'peopleforce'],
+  ['src/peopleforce-v4/server.ts',        'PeopleForce v4',        null],
   ['src/hubspot/server.ts',               'HubSpot',               'hubspot'],
 ];
 
@@ -103,6 +104,12 @@ const REGISTRATION_OPENERS = [
   'addPaginatedListTool',
   'addEmployeeScopedListTool',
   'addCandidateScopedListTool',
+  // PeopleForce v4's equivalents.
+  'addListTool',
+  'addGetTool',
+  'addPersonScopedListTool',
+  'addNamedCreateTool',
+  'addNamedUpdateTool',
 ];
 
 function findAddToolBlocks(src) {
