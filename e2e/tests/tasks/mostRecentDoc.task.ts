@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import { runSmokeTest } from '../../runSmokeTest.ts';
 import type { ClientName } from '../../drivers/driver.ts';
+import { taskTimeoutMs } from '../../budget.ts';
 
 // Ordering, asked for in the way a person asks for it.
 //
@@ -16,7 +17,7 @@ import type { ClientName } from '../../drivers/driver.ts';
 
 const CLIENT = (process.env.CLIENT ?? 'claude-web') as ClientName;
 
-test(`name the most recently changed document (${CLIENT})`, { timeout: 240_000 }, async () => {
+test(`name the most recently changed document (${CLIENT})`, { timeout: taskTimeoutMs() }, async () => {
   await runSmokeTest({
     name: 'task-mostRecentDoc',
     client: CLIENT,

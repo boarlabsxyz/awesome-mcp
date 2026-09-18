@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import { runSmokeTest } from '../../runSmokeTest.ts';
 import { required } from '../../env.ts';
 import type { ClientName } from '../../drivers/driver.ts';
+import { taskTimeoutMs } from '../../budget.ts';
 
 // THE test this tier exists for.
 //
@@ -27,7 +28,7 @@ const NEEDLE = required('E2E_FIXTURE_DOC_NEEDLE');
 const TITLE = required('E2E_FIXTURE_DOC_TITLE');
 const CLIENT = (process.env.CLIENT ?? 'claude-web') as ClientName;
 
-test(`find a document by its content (${CLIENT})`, { timeout: 240_000 }, async () => {
+test(`find a document by its content (${CLIENT})`, { timeout: taskTimeoutMs() }, async () => {
   await runSmokeTest({
     name: 'task-findDocByContent',
     client: CLIENT,
