@@ -9,7 +9,7 @@ is [accounts.md](accounts.md). This file is for running and repairing.
 
 | Suite | Command | Runs on | Needs |
 |---|---|---|---|
-| Tool checks | `npm run check` | `ubuntu-latest` | three account API keys |
+| Tool checks | `npm run check` | `ubuntu-latest` | `E2E_BASE_URL` and three account API keys |
 | Harness units | `npm run test:unit` | anywhere | nothing |
 | Live clients | `npm test`, `npm run test:tasks` | `ubuntu-latest` + Browserbase | a seeded browser context |
 
