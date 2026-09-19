@@ -1,165 +1,204 @@
 ---
 name: add-e2e-test
-description: Scaffold live-client e2e smoke tests for MCP tools in this repo's e2e/ harness. Accepts either a single tool name (e.g. `insertText`) or a freeform scope phrase that expands to many tools (e.g. "make tests for the whole google docs service", "all read tools", "everything for sheets except batchUpdateSpreadsheet"). Use this skill whenever the user wants to add, write, generate, or scaffold e2e tests, smoke tests, integration tests, or live-client tests for the MCP tools in this repo — even when phrased indirectly ("cover the new endpoint", "test the sheets tools"). Also use when invoked as `/add-e2e-test <args>`.
+description: Scaffold e2e tests for MCP tools in this repo's e2e/ harness. Accepts a single tool name (e.g. `insertText`) or a freeform scope phrase that expands to many tools ("make tests for the whole google docs service", "all read tools", "everything for sheets except batchUpdateSpreadsheet"). Use this skill whenever the user wants to add, write, generate, or scaffold e2e tests, smoke tests, integration tests, or live-client tests for the MCP tools in this repo — even when phrased indirectly ("cover the new endpoint", "test the sheets tools"). Also use when invoked as `/add-e2e-test <args>`.
 metadata:
   argument-hint: <toolName | scope-phrase>
 ---
 
 # Add E2E Test
 
-Scaffolds `runSmokeTest`-based test files that mirror the patterns in `e2e/tests/read/readGoogleDoc.smoke.ts` and `e2e/tests/write/appendToGoogleDoc.smoke.ts`.
+## Pick the tier first
 
-The e2e harness is a thin wrapper around `node:test` plus an Appium-driven client (Claude Desktop or ChatGPT-web). The harness handles driver lifecycle, forensics, and teardown; each test file's job is just to declare a mode, set up fixtures, write a prompt, and assert on the response. That makes test files highly repetitive, which is what this skill exploits.
+The harness has three tiers. Choosing wrong is the most expensive mistake here,
+because a test in the wrong tier is slow, flaky, or asserts nothing.
+
+| Tier | Path | Transport | For |
+|---|---|---|---|
+| **Tool check** | `e2e/tests/tools/<shape>/<tool>.check.ts` | direct MCP over HTTPS | **per-tool coverage — the default** |
+| **Task test** | `e2e/tests/tasks/<name>.task.ts` | real client in a browser | a handful per service, never per tool |
+| **Harness unit** | `e2e/tests/unit/<name>.unit.ts` | none | the harness's own logic |
+
+**Default to a tool check.** A direct check runs in about a second, passes exact
+arguments, and asserts exact output. A task test costs a full LLM conversation
+and a browser session — 227 tools at ~2 minutes each is about 17 hours per
+client, which is the arithmetic that produced this split.
+
+Write a **task test** only when the thing under test is *how a model uses the
+tools*, not what a tool returns. See `references/task-tests.md`; the bar is high
+and the existing three are close to sufficient for Docs.
+
+If the user explicitly asks for a live-client or browser test, give them a task
+test and say why it is not per-tool.
 
 ## Inputs
 
-The args after the slash command are freeform. The skill maps them to a tool list:
+Freeform args, mapped to a tool list:
 
-- A single tool name from `e2e/tools.ts` → just that tool. Example: `/add-e2e-test insertText`.
-- A scope phrase → all matching tools. Examples:
-  - `/add-e2e-test make tests for the whole google docs service`
-  - `/add-e2e-test all docs read tools`
-  - `/add-e2e-test google-sheets`
-  - `/add-e2e-test everything for calendar except deleteEvent`
-- Empty args → ask the user.
+- A single tool name → just that tool. `/add-e2e-test insertText`
+- A scope phrase → all matching tools. `/add-e2e-test all docs read tools`
+- Empty → ask.
 
-Service names are matched liberally — `docs`, `google docs`, `google-docs`, `the docs service`, `google-docs-mcp` all resolve to the docs server. Same liberal aliasing for sheets / calendar / gmail / drive / clickup.
+Service names match liberally: `docs`, `google docs`, `google-docs` all resolve
+to the docs server. Same for sheets / calendar / gmail / drive / clickup / slack.
 
-If the phrase is ambiguous (`tests`, `everything`, `all tools`) ask the user to narrow before resolving — guessing here produces a wrong batch that wastes their review attention.
-
-## Scope resolution
-
-1. **Parse service** from the phrase. If no service name appears and the phrase isn't a tool name, ask.
-2. **Parse kind filter** — `read` / `write` / both. Default: both.
-3. **Parse exclusions** from `except X, Y` or `excluding X` clauses.
-4. **Build the candidate set**: read `e2e/tools.ts` (`READ_TOOLS`, `WRITE_TOOLS`, `NOT_IMPLEMENTED`). For services other than docs (which `tools.ts` doesn't list yet), grep `src/<service>/server.ts` for `addTool({ name: '...'` to discover the surface, and ask the user before generating whether to extend `tools.ts` — `tools.ts` is the runbook's source of truth for which tools are write-tools, and adding entries silently changes operational guidance.
-5. **Filter**: drop `NOT_IMPLEMENTED`, drop tools that already have a test file, apply user exclusions.
-6. **Print the plan** before writing anything when the batch has more than one tool:
-
-   ```
-   Will generate <N> tests for <service>:
-     read:  <count> — <first 8 names, then "...and K more">
-     write: <count> — <first 8 names, then "...and K more">
-   Skipping:
-     <count> NOT_IMPLEMENTED — <names>
-     <count> already have tests — <names>
-     <count> excluded by user — <names>
-   ```
-
-7. **Confirm with the user** when N > 1. Single-tool invocations skip the confirm.
-8. **Cap with explicit confirm** when N > 30 — that's a large diff and worth pausing for.
+If the phrase is ambiguous (`tests`, `everything`), ask before resolving — a
+wrong service guess produces a large diff in the wrong directory.
 
 ## Procedure
 
 ### 1. Resolve the tool list
 
-Run scope resolution above and tag each remaining tool as `read` or `write` with its destination path. Single-tool invocations end up with a list of length 1.
+Read `e2e/tools.ts` for the docs surface. For other services, grep
+`src/<service>/server.ts` for `addTool({ name: '...'` — and note that `tools.ts`
+currently covers docs only, so extending it is part of the job when you scaffold
+another service. Its `kind` column is **read off each tool's `annotations`**
+(`readOnlyHint` / `destructiveHint`), not hand-decided; keep it that way, and
+prefer a generator over typing 227 entries.
 
-### 2. Locate each tool in source
+Drop anything in `NOT_IMPLEMENTED` — CLAUDE.md's "Known Limitations" lists tools
+that are registered but unusable, and scaffolding those produces red nobody can
+fix.
 
-For each tool, find the `addTool({ ... })` block in `src/<provider>/server.ts`. On bulk runs, read each server file once and match multiple tools in memory rather than re-grepping per tool — much faster on a 20-tool batch.
+Print the plan and confirm when N > 1. Confirm explicitly when N > 30.
 
-Extract the Zod parameter schema and the tool description. If a tool listed in `tools.ts` isn't found in source, flag it in the report and skip — don't abort the batch over one missing tool.
+### 2. Read the tool in source
 
-### 3. Determine required parameters
+Find the `addTool({ ... })` block in `src/<provider>/server.ts`. Extract the Zod
+schema and the description. On bulk runs read each server file once and match in
+memory.
 
-For each tool, walk the Zod schema:
+**Read the handler too, not just the schema.** Checks assert on real output, so
+you need the actual strings: `handleListGoogleDocs` returns
+`"Found N Google Document(s):"` and `"No Google Docs found matching your
+criteria."`, and a check asserting a paraphrase of those will fail. Follow the
+`execute:` line to its handler and read what it returns.
 
-- `.optional()` fields → omit from the prompt.
-- Required `documentId` / `spreadsheetId` / `fileId` → fixture env var (read) or scratch resource (write).
-- Required indices, tab ids, range params → `<TODO: ...>` placeholder. These are doc-specific; the skill cannot pick a sensible value.
-- Other required strings/numbers/enums → an obvious literal default (e.g. `format: "text"`) when there is one, otherwise a TODO placeholder.
+### 3. Choose shapes
 
-In bulk mode the skill never asks per-tool questions — defaults plus TODO placeholders. Every TODO ends up in the final report so the user knows what to fill in. See `references/param-rendering.md` for how each Zod type renders into the natural-language prompt.
+Shapes describe **the data**, not the account:
 
-If the tool doesn't fit the default write-and-read-back pattern (range-targeted writes, comment tools, result-returning tools), see `references/special-cases.md` before generating.
+| Shape | Account | Asserts |
+|---|---|---|
+| `needle` | `fixture` | frozen content, exact substring |
+| `volume` | `rich` (read-only) | caps, paging, truncation are observable |
+| `zero` | `sandbox` | the empty-state answer |
 
-### 4. Ask shared questions ONCE
+- **Read tools** → all three.
+- **Write tools** → `volume` and `zero` only, both in the sandbox. A write has no
+  frozen output to match; its needle is the marker it writes.
 
-A single AskUserQuestion call at the start of the batch. Defaults are strong; in most cases the user just accepts them.
+`references/shapes.md` covers what to assert in each. The zero shape is the one
+people skip and the one that finds things — "no results" is the half of the
+contract that silently reads as "that thing does not exist".
 
-For batches that include read tests, confirm:
-- Fixture id env var (default `E2E_FIXTURE_DOC_ID` for docs, `E2E_FIXTURE_SHEET_ID` for sheets).
-- Fixture needle env var (default `E2E_FIXTURE_DOC_NEEDLE`).
+### 4. Ask once, at the start of the batch
 
-For batches that include write tests, confirm:
-- Marker prefix (default `BANANA-<UPPERCASE_TOOL>` per tool, derived automatically).
-- Readback on/off (default on; readback tool picked per provider — `readGoogleDoc` for docs, `readSpreadsheet` for sheets).
+One `AskUserQuestion` for the whole run, not per tool. Defaults are strong:
 
-Single-tool invocations may additionally need tool-specific literals (e.g. what to insert for `insertText`). Don't prompt for these in bulk — substituting BANANA-markers everywhere is the right behavior.
+- fixture env vars (`E2E_FIXTURE_DOC_ID`, `E2E_FIXTURE_DOC_NEEDLE`)
+- for write batches: readback tool (`readGoogleDoc` for docs, `readSpreadsheet`
+  for sheets)
 
-### 5. Generate the test files
+In bulk mode never ask per tool — use defaults and `<TODO:>` placeholders, and
+list every TODO in the final report.
 
-Templates live in `assets/`:
+### 5. Generate
 
-- `assets/read.smoke.ts.tmpl` → `e2e/tests/read/<toolName>.smoke.ts`
-- `assets/write.smoke.ts.tmpl` → `e2e/tests/write/<toolName>.smoke.ts`
+| Template | Destination |
+|---|---|
+| `assets/read.check.ts.tmpl` | `e2e/tests/tools/<shape>/<tool>.check.ts` |
+| `assets/write.check.ts.tmpl` | `e2e/tests/tools/<shape>/<tool>.check.ts` |
+| `assets/task.ts.tmpl` | `e2e/tests/tasks/<name>.task.ts` |
 
-Substitute placeholders: `{{toolName}}`, `{{FIXTURE_ID_ENV}}`, `{{FIXTURE_NEEDLE_ENV}}`, `{{paramCallSpec}}`, `{{scratchFactoryFn}}`, `{{resourceIdField}}`, `{{initialContent}}`, `{{markerPrefix}}`, `{{readbackTool}}`, `{{readbackParamSpec}}`, `{{writeParamCallSpec}}`, `{{behaviorLine}}`.
+Arguments are a **JSON object**, not prose — `runToolCheck` calls the tool
+directly. There is no natural-language rendering to get right and no model to
+misinterpret them.
 
-A note on imports: the e2e/ folder uses TS imports with explicit `.ts` extensions, not `.js`. Match the existing files — the typechecker is strict about this.
+Imports use explicit `.ts` extensions. Match the existing files.
 
 ### 6. Verify
 
-Run once at the end of the batch, not per file:
-
-```
-cd e2e && npx tsc --noEmit
+```bash
+cd e2e && npx tsc --noEmit && npm run test:unit
 ```
 
-Group errors by file. The most common failure modes are listed in the report section below.
-
-Don't try to run the smoke tests themselves — they need the Mac Studio runner, Appium, and live connector login per `e2e/runbook.md`.
+Run the checks themselves only if the account credentials are present
+(`npm run check:auth -- fixture` tells you in one second). Never run task tests
+in a scaffolding pass — they need a browser and a seeded context.
 
 ### 7. Report
 
-Single template, regardless of single vs bulk:
-
 ```
-Generated <N> test files:
-  read:  <count> at e2e/tests/read/
-  write: <count> at e2e/tests/write/
-
+Generated <N> checks:
+  needle: <n>   volume: <n>   zero: <n>
 Skipped:
   <count> NOT_IMPLEMENTED: <names>
   <count> already had tests: <names>
-  <count> not found in source: <names>
-
-TODO placeholders in <K> files (need values before they'll pass):
-  <file>: <param1>, <param2>
-  ...
-
-Env vars to set before running locally:
-  - E2E_FIXTURE_DOC_ID (see e2e/fixtures/read.md)
-  - E2E_FIXTURE_DOC_NEEDLE
-  - <write account vars if any write tests — see fixtures/write.md>
-
-tools.ts: <unchanged | added X to READ_TOOLS | added Y to WRITE_TOOLS>
-
-Typecheck: <pass | N errors — see above>
+TODO placeholders in <K> files: <file>: <params>
+tools.ts: <unchanged | added X>
+Typecheck: <pass | N errors>
 ```
+
+## Rules that exist because they were broken
+
+Each of these cost real debugging time in this harness.
+
+**Never let a check pass vacuously.** An invariant satisfied by an empty or
+trivial response asserts nothing while reporting green. `parsesAsJson` passes on
+any document too small to truncate; `containsBetween` passes on an empty
+envelope. Assert the *precondition* too — that truncation happened, that the
+account has enough data — and fail with a message naming the fixture to fix.
+
+**Assert on a read-back, not on the write's own reply.** A write tool's response
+is its own claim that it worked. `runToolCheck`'s `readback` exists for this.
+
+**Reach for each tool on the server that registers it.** `listGoogleDocs` is on
+the docs server; `createDocument` and `deleteFile` are on **drive**. They are
+separate deployed hosts, so one client cannot serve both — use
+`c.service('google-drive')` via `setup/clients.ts`. Getting this wrong fails with
+`Unknown tool`, which reads like a broken deployment.
+
+**A write check must declare `writes: true`.** `accounts.ts` then refuses to hand
+it fixture or rich credentials. That guard is the only thing protecting the rich
+account, whose corruption is silent and surfaces weeks later.
+
+**Teardown always runs, including after a failed assertion.** Trash scratch
+resources in `teardown`; the scheduled sweeper is a backstop, not the plan.
+
+**A gap in the tool is a `todo`, not a red assertion.** If a check documents
+something the tool does not do yet (`listGoogleDocs` not reporting its scan
+extent), write `test('...', { todo: '<why>' }, () => {})` and flip it to a real
+assertion in the commit that fixes the tool. A permanently red check trains
+people to ignore the suite.
 
 ## Failure modes
 
-These cases each abort a single-tool run but soft-skip in bulk and surface in the final report — that way one bad tool doesn't waste a 20-tool batch.
+Single-tool runs abort; bulk runs soft-skip and surface it in the report.
 
-- **Tool not found in any server file** — skip / abort. Inventing parameters from imagination produces a green test against a phantom contract.
-- **Tool is in `NOT_IMPLEMENTED`** — skip / abort. The runbook treats these as not-real-tools.
-- **Destination file exists** — skip / abort. Overwriting a passing test is worse than refusing to scaffold.
-- **Required params can't be derived** — write with TODO placeholders and list the tool + missing params in the report. The scaffold is still useful: setup, teardown, and prompt shape are locked in.
-- **`tools.ts` lists the tool in the wrong array** — flag the inconsistency in the report; don't silently move it. That's a runbook-level decision.
-- **Scope phrase ambiguous** — ask before guessing. A wrong service guess produces a 20-file diff in the wrong directory.
-- **Batch resolves to more than 30 tools** — confirm explicitly with the count.
+- **Tool not found in source** — skip. Inventing parameters produces a green test
+  against a phantom contract.
+- **In `NOT_IMPLEMENTED`** — skip.
+- **Destination exists** — skip. Overwriting a passing test is worse than
+  refusing.
+- **Required params underivable** — write with `<TODO:>` and report. The scaffold
+  still locks in setup, teardown and shape.
+- **Scope ambiguous** — ask.
+- **More than 30 tools** — confirm with the count.
 
-## File layout
+## Layout
 
 ```
 add-e2e-test/
 ├── SKILL.md
 ├── assets/
-│   ├── read.smoke.ts.tmpl
-│   └── write.smoke.ts.tmpl
+│   ├── read.check.ts.tmpl
+│   ├── write.check.ts.tmpl
+│   └── task.ts.tmpl
 └── references/
-    ├── param-rendering.md   ← Zod-type → prompt rendering rules
-    └── special-cases.md     ← when the default write template doesn't fit
+    ├── shapes.md         ← what to assert per shape
+    ├── task-tests.md     ← when a live-client test is justified
+    └── special-cases.md  ← when the default write pattern does not fit
 ```
+
+Background on the tiers and accounts: `e2e/accounts.md`, `e2e/SETUP.md`,
+`e2e/runbook.md`.

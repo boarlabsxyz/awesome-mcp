@@ -1,0 +1,21 @@
+import { test } from 'node:test';
+import { runToolCheck } from '../../../runToolCheck.ts';
+import { required } from '../../../env.ts';
+
+// {{whyThisShape}}
+
+const FIXTURE_ID = required('{{FIXTURE_ID_ENV}}');
+const NEEDLE = required('{{FIXTURE_NEEDLE_ENV}}');
+
+test('{{testName}}', { timeout: 30_000 }, async () => {
+  await runToolCheck({
+    tool: '{{toolName}}',
+    service: '{{service}}',
+    account: '{{account}}',
+    shape: '{{shape}}',
+    args: {{argsJson}},
+    invariants: {
+      {{invariants}}
+    },
+  });
+});

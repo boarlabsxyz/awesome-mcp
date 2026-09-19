@@ -1,0 +1,32 @@
+import { test } from 'node:test';
+import { runSmokeTest } from '../../runSmokeTest.ts';
+import { required } from '../../env.ts';
+import { taskTimeoutMs } from '../../budget.ts';
+import type { ClientName } from '../../drivers/driver.ts';
+
+// {{whyThisTask}}
+//
+// The prompt names NO tool and NO parameters. That is the point: the model
+// chooses, and the argument combinations it chooses are what this tier exists to
+// exercise. A prompt that dictates the call tests the client's dispatch, which
+// runToolCheck already covers in about a second.
+
+const NEEDLE = required('{{FIXTURE_NEEDLE_ENV}}');
+const CLIENT = (process.env.CLIENT ?? 'claude-web') as ClientName;
+
+test(`{{testName}} (${CLIENT})`, { timeout: taskTimeoutMs() }, async () => {
+  await runSmokeTest({
+    name: 'task-{{taskName}}',
+    client: CLIENT,
+    prompt: `{{prompt}}`,
+    assertions: {
+      // The canary: a model that cannot use a tool explains itself rather than
+      // failing, and that reads as success to anything watching the transport.
+      mustNotReportFailure: true,
+      includes: [{{expected}}],
+      // No output envelope. Demanding an exact reply shape makes the test fail
+      // on format compliance, which varies per run and says nothing about the
+      // server. Assert the outcome.
+    },
+  });
+});

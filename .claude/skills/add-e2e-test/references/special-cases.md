@@ -1,41 +1,86 @@
-# Special-case test patterns
+# When the default write pattern does not fit
 
-Read this only when the default write template (write → readback → assert marker round-trip) does not fit the tool you are scaffolding. The default pattern works for tools that visibly mutate doc content; this doc covers the cases where it doesn't.
+The default write check is: seed a scratch resource → call the tool → read it
+back with a different tool → assert the marker. Read this when that shape is
+wrong for the tool you are scaffolding.
 
-For any of these cases, write the test with the closest available pattern and leave a single `// TODO` comment naming the case. Silently weakening the assertion to "always passes" is the failure mode this doc exists to prevent.
+For any of these, write the closest available pattern and leave one `// TODO`
+naming the case. **Silently weakening an assertion until it always passes is the
+failure mode this file exists to prevent** — a green check that asserts nothing
+is worse than no check, because it is counted as coverage.
 
 ## Tools that operate on a range
 
-Examples: `deleteRange`, `applyTextStyle`, `formatMatchingText`.
+`deleteRange`, `applyTextStyle`, `formatMatchingText`.
 
-The marker the test injects must land *inside* the range the tool targets, otherwise the assertion is meaningless. Two options:
+The marker must land *inside* the range the tool targets, or the assertion is
+meaningless. Either seed the content with the marker already at the offset the
+tool will touch and assert on the effect (marker present after styling, absent
+after deletion), or pick a unique anchor in the seeded content and target
+relative to it.
 
-- Have setup write the initial content with the marker already embedded at the offset the tool will touch, then assert on the *effect* (marker present for styling, marker absent for deletion).
-- Use `findAndReplace`-style targeting: pick a unique anchor in the initial content and have the prompt ask the tool to operate relative to that anchor.
+## Tools whose effect is invisible in the document text
 
-## Tools that don't surface in doc text
+`addComment`, `applyParagraphStyle`, `resolveComment`.
 
-Examples: `addComment`, `applyParagraphStyle`, `resolveComment`.
+A `readGoogleDoc` read-back shows neither comments nor paragraph-level styling,
+so the marker round-trip is the wrong verification. Use the matching read tool:
 
-A `readGoogleDoc` readback won't show comments or paragraph-level styling, so the marker round-trip pattern is wrong. Use the corresponding read tool for verification:
+- comment tools → read back with `listComments`
+- structural style tools → read back with `inspectDocStructure`, asserting on the
+  field the tool actually affects
 
-- Comment tools → readback via `listComments`, assert the marker appears in the listed comment text.
-- Structural style tools → readback via `inspectDocStructure`, assert on the field the tool actually affects.
+`runToolCheck`'s `readback` takes any tool on any service, so this is a one-line
+change, not a different pattern.
 
 ## Tools that return a result rather than mutating
 
-Examples: `findElement`, `findAndReplace` (when used in dry-run / count mode).
+`findElement`, `findAndReplace` in count mode.
 
-Treat as read-flavored even if registered in `WRITE_TOOLS` — assert on the tool's own response, not on a readback. Skip the scratch resource entirely; use a fixture doc instead, the same way `readGoogleDoc.smoke.ts` does.
+Treat as read-flavoured even when `annotations` says otherwise: assert on the
+tool's own response, skip the scratch resource, use a fixture document. These can
+take all three shapes.
 
-## Tools that operate across multiple resources
+## Tools spanning multiple resources
 
-Examples: `importDocx`, `copyFile`, `moveFile`.
+`importDocx`, `copyFile`, `moveFile`.
 
-Setup needs more than one scratch resource. The current `scratchFactory.ts` only exposes `createScratchDoc` and `createScratchSheet`; if the test needs a folder or a binary file, extend the factory first, then come back to scaffold the test. Don't inline ad-hoc setup logic in the test file — that's where flake comes from.
+Setup needs more than one scratch resource. `setup/docsScratch.ts` exposes
+`createScratchDoc` and `trashFile` only. **Extend the factory first**, then
+scaffold — ad-hoc setup inlined in a test file is where flake comes from, and a
+second copy of the create/trash logic will drift from the sweeper that cleans up
+after it.
 
-## Tools that depend on prior state in the doc
+Whatever you add must produce a **run-scoped, self-dating** name
+(`scratchTitle()` → `e2e-<epochMs>-<run>-<tool>`). `sweepScratch` dates a
+resource from its title; anything named otherwise is either never swept or, worse,
+matched by a broader pattern later and deleted when it should not be.
 
-Examples: tools that take `startIndex` / `endIndex` / `tabId` — the indices only mean anything for a specific doc structure.
+## Tools needing indices or ids from a specific document
 
-The skill cannot derive these. Generate the test with `<TODO: startIndex>` placeholders, and list the tool + the missing fields in the final report. The scaffold is still useful because it locks in setup, teardown, and the prompt shape; the user just fills in the indices.
+Anything taking `startIndex`, `endIndex`, `tabId`.
+
+These only mean something for one document's structure and cannot be derived.
+Generate with `<TODO: startIndex>` and list the tool plus the missing fields in
+the report. The scaffold still locks in setup, teardown and shape.
+
+Better where possible: have setup seed known content and **derive** the indices
+from it in the test, rather than hard-coding numbers that break the first time
+the fixture changes.
+
+## Destructive tools
+
+`deleteRange`, `deleteComment`, `deleteFile`, and anything with
+`destructiveHint: true`.
+
+These need the opposite of an empty account: **something to delete**. Seed it,
+delete it, then assert it is gone — asserting absence is the whole point, so
+`excludes` carries the check rather than `includes`.
+
+Never point one at a fixture or rich resource. `writes: true` prevents resolving
+those credentials, but a delete that takes an id from an env var can still be
+handed the wrong id by a misconfigured run; prefer ids that came from `setup`.
+
+Some destructive operations are not safely repeatable in CI at all — CLAUDE.md
+flags `disqualifyVacancyApplication` as non-idempotent. Scaffold those, mark them
+`todo` with the reason, and leave them out of the scheduled run.

@@ -1,0 +1,33 @@
+import { test } from 'node:test';
+import { runToolCheck } from '../../../runToolCheck.ts';
+import { createScratchDoc, trashFile{{bulkTextImport}} } from '../../../setup/docsScratch.ts';
+import { scratchClients } from '../../../setup/clients.ts';
+
+// {{whyThisShape}}
+
+test('{{testName}}', { timeout: 120_000 }, async () => {
+  await runToolCheck<{ documentId: string; marker: string }>({
+    tool: '{{toolName}}',
+    service: '{{service}}',
+    account: 'sandbox',
+    // Gates credential resolution: accounts.ts refuses fixture/rich for this.
+    writes: true,
+    setup: async (c) => ({
+      marker: `{{markerPrefix}}-${Date.now()}`,
+      // createScratchDoc needs BOTH clients: the file is created on the drive
+      // server, its content written on the docs server.
+      documentId: await createScratchDoc(await scratchClients(c), '{{toolName}}-{{shape}}'{{seedArg}}),
+    }),
+    args: ({ documentId, marker }) => ({ documentId, {{writeArgs}} }),
+    // Assert on the document, not on the tool's own reply -- that reply is only
+    // the tool's claim that it worked.
+    readback: async (c, { documentId }) =>
+      (await c.mcp.callTool('{{readbackTool}}', { documentId, format: 'text' })).text,
+    invariants: ({ marker }) => ({
+      includes: [marker],
+      transportSafe: true,
+      {{extraInvariants}}
+    }),
+    teardown: async (c, { documentId }) => trashFile(await c.service('google-drive'), documentId),
+  });
+});
