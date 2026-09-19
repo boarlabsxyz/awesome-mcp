@@ -1,86 +1,124 @@
 # E2E Runbook
 
-Operational procedures for the live-client e2e suite. Covers the Mac Studio runner, test accounts, and recovery paths.
+Operational procedures for the e2e suites. Start here when something is red.
 
-## Mac Studio runner state
+Setup from scratch is [SETUP.md](SETUP.md); what each account and variable means
+is [accounts.md](accounts.md). This file is for running and repairing.
 
-| Concern | Procedure |
-|---|---|
-| Auto-login | System Settings → Users & Groups → Automatic login enabled for the e2e user. |
-| FileVault | Unlock-at-boot configured so the runner survives reboots without manual unlock. |
-| Sleep / lock | `caffeinate -dimsu` running as a launch agent. Screensaver + screen lock disabled. Display-off allowed; screen-lock is what kills automation. |
-| GHA runner | Installed as a **launch agent** in the e2e user GUI session (`~/Library/LaunchAgents/`). Not a launch daemon — daemons cannot drive windowserver. Verify with `launchctl print gui/$(id -u)/actions.runner.*`. |
-| Accessibility permission | Granted to the Appium server binary in System Settings → Privacy & Security → Accessibility. Re-grant after every Appium or Node upgrade — the grant is keyed to the binary signature and is invalidated by updates. |
-| Claude Desktop version pin | Auto-update disabled (block the Sparkle update endpoint at `/etc/hosts` or via Claude's settings). Current pinned version: _record here_. Forensics bundles include `CFBundleShortVersionString` for correlation. |
-| Chrome profile | Real Google Chrome (not Playwright's bundled Chromium), launched with `--user-data-dir=$HOME/e2e-chrome-profile` and `--remote-debugging-port=9222`. Profile must be manually logged into ChatGPT once. |
+## The three suites
 
-## Starting the test infrastructure (Mac Studio)
+| Suite | Command | Runs on | Needs |
+|---|---|---|---|
+| Tool checks | `npm run check` | `ubuntu-latest` | three account API keys |
+| Harness units | `npm run test:unit` | anywhere | nothing |
+| Live clients | `npm test`, `npm run test:tasks` | `ubuntu-latest` + Browserbase | a seeded browser context |
 
-```bash
-# 1. Appium (foreground or via launchd)
-appium
+Only the third opens a browser. That is the distinction that decides where a
+failure comes from: a red tool check is about the server, a red live-client test
+is usually about the client, the browser, or the harness.
 
-# 2. Chrome with persistent profile + CDP
-open -na "Google Chrome" --args \
-  --remote-debugging-port=9222 \
-  --user-data-dir="$HOME/e2e-chrome-profile" \
-  https://chatgpt.com/
+**Live-client tests are not per-tool coverage and must not grow that way.** Their
+job is the two things nothing else can see: the argument combinations a *model*
+chooses, and whether a tool failure surfaces as the assistant politely explaining
+itself. Per-tool coverage belongs on the direct transport, which is faster,
+exact, and needs no browser.
 
-# 3. Verify
-curl -sS http://127.0.0.1:4723/status   # Appium
-curl -sS http://127.0.0.1:9222/json/version   # Chrome CDP
-```
+## Where the live clients run
 
-The GHA runner expects (1) and (2) to be running before a job fires.
+**Browserbase cloud browsers, on GitHub-hosted runners.** `E2E_BROWSER=browserbase`
+is the switch; unset it and the same drivers attach to a local Chrome over CDP
+instead, which is the right mode for debugging selectors.
 
-## Local smoke run
+`claude-desktop` is the exception and always will be: it drives a signed Electron
+app through Appium and macOS Accessibility because CDP is fused off by Electron
+Fuses. Browserbase runs browsers, not desktop apps. That job is gated behind
+`E2E_MAC_STUDIO` and is **off**; see [mac-studio/README.md](mac-studio/README.md)
+if it ever needs reviving.
+
+What is lost while it is off, stated plainly: nothing exercises the desktop app
+many people actually use. The web clients are a proxy for it, not a replacement.
+
+## Running locally
 
 ```bash
 cd e2e
-npm ci
-E2E_FIXTURE_DOC_ID="<your-fixture-doc-id-from-fixtures.md>" \
-E2E_FIXTURE_DOC_NEEDLE="BANANA-PHONE-7714" \
-CLIENT=claude-desktop npm test
+npm install
+npm run test:unit          # no credentials
 
-# Artifacts in e2e/.artifacts/local/claude-desktop/readGoogleDoc/
+# Live clients against a local Chrome — best for selector work, since you can
+# watch the window and open devtools.
+open -na "Google Chrome" --args \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/e2e-chrome-profile" \
+  https://claude.ai/new
+CLIENT=claude-web npm run test:tasks
+
+# Live clients against Browserbase — what CI does.
+E2E_BROWSER=browserbase CLIENT=claude-web npm run test:tasks
 ```
 
-Repeat with `CLIENT=chatgpt-web` to validate the web path.
-
-## Account rotation (Anthropic / OpenAI / Google)
-
-| Trigger | Action |
-|---|---|
-| Session expired / sign-in challenge in Claude Desktop | Manually re-log on the Mac Studio with the e2e account. Confirm the dev MCP connector is still listed. |
-| ChatGPT session expired in the warmed Chrome profile | Log back in via the real Chrome window. Do **not** start a new profile — fingerprint drift will re-trigger Cloudflare. |
-| Google OAuth refresh token revoked / expired | Re-run the dev MCP server's OAuth flow with the e2e Google account. Update `GOOGLE_TOKEN` env var on the **dev** Railway service. Do not touch prod. |
-| Plan tier change required on ChatGPT for MCP | Upgrade the e2e ChatGPT account; verify connectors UI still shows the dev URL. |
+Real Chrome, not Playwright's bundled Chromium: the bundled fingerprint is more
+likely to draw a Cloudflare challenge.
 
 ## Failure triage
 
-1. **Find the forensics bundle**: GHA run page → Artifacts → `e2e-<client>-<sha>.zip`. Expires after 90 days.
-2. Open `summary.json` — check `passed`, `error`, `appVersion`. If `appVersion` doesn't match the pinned version, that's likely the cause.
-3. Compare `snapshot.txt` against a known-good snapshot to find selector drift.
-4. Cross-check `screenshot.png` for unexpected modals (auth challenge, permission prompt, paywall).
-5. If selectors drifted, update the corresponding driver file's `SELECTOR-TODO`-marked locator with the new value from `snapshot.txt`.
+Every run writes a bundle to `.artifacts/<sha|local>/<client>/<test>/`. Start
+with `summary.json`, then `response.txt`. Browser clients also capture
+`screenshot.png` and `snapshot.txt` — **read the screenshot early**, it has
+repeatedly been faster than reading the DOM.
 
-## Promoting ChatGPT smoke to blocking
+Work down this list. It is ordered by how often each has actually been the cause.
 
-Currently advisory (`continue-on-error: true`). Promotion criteria:
-- 30 consecutive runs with no false-positive failures.
-- ChatGPT MCP/Connectors surface stable (no UI rewrite in the last 30 days).
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `test timed out after Nms` with no other detail | the outer bound is below the driver's inner budget, so every diagnostic was preempted | `budget.ts` derives it; if you raised an inner timeout by hand, raise it there instead |
+| `no assistant message … SELECTOR-TODO` | rarely the selectors. Check the screenshot for a permission dialog, a sign-in page, or a paused message | see the three rows below |
+| screenshot shows "Claude wants to use X" | a tool needs approval and the turn is blocked | `approvePendingToolUse` handles it; if it did not fire, the dialog markup moved |
+| screenshot shows a sign-in page | the browser context has no valid login | re-seed: `CLIENT=<client> npm run seed:browserbase` |
+| screenshot shows a mangled prompt | two tests sharing one browser tab | `--test-concurrency=1` in the npm script; check it survived an edit |
+| the model answered but the assertion failed | usually a format expectation, not a bug | assert on the outcome; do not demand an exact reply shape |
+| `BROWSERBASE_CONTEXT_ID_… is empty` | that client's context was never seeded | `CLIENT=<client> npm run seed:browserbase` |
 
-When ready: remove `continue-on-error` from the `chatgpt-web` job in `.github/workflows/e2e-smoke.yml`, and add the check name to the required list in `create-tag.yml` (see below).
+**A red live-client run is more often the harness than the thing it tests.**
+That has been true of every failure this suite has produced so far. Confirm the
+server independently with `npm run check` before hunting in the driver.
 
-## Wiring the prod-tag gate (deferred — do not flip yet)
+## Selector repair
 
-`create-tag.yml` currently requires `['lint', 'typecheck', 'test', 'build']`. To gate prod tags on e2e, add the e2e check name. **Do not flip this until the Mac Studio runner is online and producing green runs reliably**, otherwise every prod tag will be blocked.
+Every selector in the web drivers is a liability; claude.ai and chatgpt.com both
+move. When one breaks:
 
-The edit, when ready:
+1. Open `snapshot.txt` from the failing bundle — it is the full DOM.
+2. Find the text of the reply, then walk up to the nearest element carrying a
+   stable-looking attribute. Prefer `data-*` hooks over classes.
+3. Confirm the candidate does **not** also match the user's turn. On claude.ai
+   the user turn is `data-cds="UserMessage"`; the assistant reply currently
+   carries `data-perf-reply-text`.
+4. Put verified selectors first and leave the old guess last — a selector that
+   matched nothing in a real capture costs nothing to keep for one cycle, and
+   should be deleted the next time someone reads a snapshot.
+
+## Rotation
+
+| Trigger | Action |
+|---|---|
+| A browser context stops authenticating | Re-seed it. The seeder verifies by reopening the context and refuses to report success if the login did not stick. |
+| An account API key is rotated | `POST /api/regenerate-key` on the dashboard, then `gh secret set E2E_<ACCOUNT>_API_KEY`. |
+| Google OAuth revoked for a test account | Reconnect on the **dev** dashboard. Never point these at prod. |
+| The fixture doc is edited | Update `E2E_FIXTURE_DOC_NEEDLE` in the same change — the doc and the variable are one fixture in two places. |
+
+## Gating a release on the checks
+
+`create-tag.yml` reads check runs on the SHA being tagged, so gating is one line:
 
 ```js
-// .github/workflows/create-tag.yml, "Check CI passed on commit" step
-const required = ['lint', 'typecheck', 'test', 'build', 'claude-desktop'];
+const required = ['lint', 'typecheck', 'test', 'build', 'tool-checks'];
 ```
 
-(The check name `claude-desktop` comes from the job name in `e2e-smoke.yml`.)
+Name `tool-checks`, the aggregator job — never the matrix legs, whose names
+change when a shape is added.
+
+**Not yet.** `Deploy → Dev` is dispatch-only, so a commit has no `tool-checks`
+result unless that commit was deployed to dev first; adding this makes
+"deploy the candidate before tagging" a mandatory release step. Criteria are in
+[SETUP.md](SETUP.md) step 10.
