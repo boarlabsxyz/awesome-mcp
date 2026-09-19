@@ -33,15 +33,24 @@ jobs:
     if: ${{ vars.E2E_BROWSER == 'browserbase' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    # ADVISORY until the drivers have been verified against a live DOM. Every
-    # selector in claude-web.ts is marked SELECTOR-TODO, and ChatGPT's DOM moves
-    # often enough that e2e-smoke has never been a trustworthy red/green signal.
-    # Remove once a client has produced 10+ consecutive true results.
+    # ADVISORY, but no longer for the original reason. The claude-web selectors
+    # WERE unverified SELECTOR-TODO guesses; they are now read off a live DOM and
+    # the suite has passed 4/4 in CI and 3/3 locally. What is still unknown is the
+    # flake rate: claude.ai's markup moves, and one green run is not a rate.
+    # Remove after ~10 consecutive true results.
     continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
-        client: [claude-web, chatgpt-web]
+        # claude-web only, for now.
+        #
+        # chatgpt-web is not deleted -- the driver, the seeding target and the
+        # secret all remain, because the expensive part of a web client is the
+        # selectors and the login, not the matrix entry. Re-enabling it is this
+        # line plus an interactive `CLIENT=chatgpt-web npm run seed:browserbase`,
+        # whose context exists but has never been seeded; that is why its first
+        # and only CI run failed.
+        client: [claude-web]
     env:
       CLIENT: ${{ matrix.client }}
       E2E_BROWSER: browserbase
@@ -49,9 +58,12 @@ jobs:
       RESPONSE_TIMEOUT_MS: '120000'
       BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
       BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
-      # Both go to both jobs; contextIdFor() picks the one matching CLIENT.
+      # contextIdFor() picks the one matching CLIENT. The chatgpt-web line is
+      # kept while that client is out of the matrix, so re-enabling it needs no
+      # change here.
+      #
       # Separate contexts are not an optimisation: claude.ai and chatgpt.com are
-      # unrelated logins, so one shared context sends whichever client runs
+      # unrelated logins, so one shared context would send whichever client ran
       # second to a sign-in page -- which looks like a broken selector rather
       # than the wrong cookie jar.
       BROWSERBASE_CONTEXT_ID_CLAUDE_WEB: ${{ secrets.BROWSERBASE_CONTEXT_ID_CLAUDE_WEB }}
