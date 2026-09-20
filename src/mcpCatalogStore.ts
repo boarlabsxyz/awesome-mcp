@@ -628,5 +628,68 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
+  // Redmine MCP
+  //
+  // Env-gated dual mode, same shape as Outline above, and for a stronger
+  // reason: Redmine is ALWAYS self-hosted, so the OAuth endpoints are derived
+  // from REDMINE_BASE_URL rather than being constants, and the OAuth
+  // application behind REDMINE_CLIENT_ID is registered by an administrator on
+  // that one instance (<base>/oauth/applications). One client_id therefore
+  // serves exactly one Redmine.
+  //
+  //   OAuth flow    — Redmine 6.1+ only (the Doorkeeper provider landed in
+  //                   6.1.0). Admin registers the app with redirect URI
+  //                   <BASE_URL>/connect/redmine/callback and sets
+  //                   REDMINE_CLIENT_ID + REDMINE_CLIENT_SECRET +
+  //                   REDMINE_BASE_URL. Dashboard shows "Connect".
+  //   Paste-token   — every other case: Redmine older than 6.1, or any second
+  //                   instance whose admin has not registered our app. Each
+  //                   user pastes { baseUrl, API key } and the router
+  //                   validates via GET <baseUrl>/users/current.json.
+  //
+  // The paste fallback is not optional garnish — without it the connector is
+  // unusable against any Redmine but the one named in env, and 6.1 is recent
+  // enough that most installs in the wild cannot do OAuth at all.
+  const redmineClientId     = process.env.REDMINE_CLIENT_ID || null;
+  const redmineClientSecret = process.env.REDMINE_CLIENT_SECRET || null;
+  const redmineOauthEnabled = !!(redmineClientId && redmineClientSecret && process.env.REDMINE_BASE_URL);
+  const redmineOauthBaseUrl = (process.env.REDMINE_BASE_URL || '').replace(/\/+$/, '');
+  const redmineMcpUrl       = normalizeUrl(process.env.REDMINE_MCP_URL, '/redmine');
+
+  await createMcpCatalog({
+    slug: 'redmine',
+    name: 'Redmine MCP',
+    description: 'Read and manage Redmine issues, projects, time entries, wiki pages and versions',
+    iconUrl: 'https://www.redmine.org/favicon.ico',
+    mcpUrl: redmineMcpUrl,
+    provider: 'redmine',
+    scopes: [],
+    googleClientId: redmineClientId,
+    googleClientSecret: redmineClientSecret,
+    oauthAuthorizationUrl: redmineOauthEnabled ? `${redmineOauthBaseUrl}/oauth/authorize` : '',
+    oauthTokenUrl:         redmineOauthEnabled ? `${redmineOauthBaseUrl}/oauth/token`     : '',
+    // Redmine uses its own PERMISSION names as OAuth scopes, not OAuth-style
+    // strings — these must exist on the instance and be ticked on the
+    // registered application, or the authorize request errors instead of
+    // showing a consent screen.
+    //
+    // Note these are a usability boundary, not a security one: Redmine defect
+    // #44271 reports that issue edit, notes and delete are authorised from the
+    // user's roles alone, with Doorkeeper's scope filter not applying on those
+    // paths. Do not rely on a narrow scope to prevent a write.
+    oauthScopes: redmineOauthEnabled
+      ? [
+          'view_project',
+          'view_issues', 'add_issues', 'edit_issues', 'delete_issues',
+          'manage_issue_relations',
+          'view_time_entries', 'log_time', 'edit_time_entries',
+          'view_wiki_pages', 'edit_wiki_pages', 'delete_wiki_pages',
+          'manage_versions', 'manage_categories', 'manage_members',
+        ]
+      : [],
+    isLocal: !process.env.REDMINE_MCP_URL,
+    isActive: true,
+  });
+
   console.error('Default MCP catalog entries seeded.');
 }

@@ -317,10 +317,12 @@ import { clearSessionCache, createUserSession, createUserSessionFromConnection, 
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
 import { exchangeOutlineOauthCode, buildOutlineInstanceName } from '../outline/oauthCallback.js';
 import { exchangeHubSpotOauthCode, buildHubSpotOauthInstanceName, HUBSPOT_TOKEN_URL } from '../hubspot/oauthCallback.js';
+import { exchangeRedmineOauthCode, redmineOauthUrls } from '../redmine/oauthCallback.js';
 import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceNameFromToken } from '../outline/connectToken.js';
 import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
 import { validatePeopleForceV4Token } from '../peopleforce-v4/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
+import { validateRedmineToken, buildRedmineInstanceName } from '../redmine/connectToken.js';
 import { checkConnectionHealth, type ConnectionHealth } from './connectionHealth.js';
 import { discoverConnectedOrgs, type OrgDiscoveryResult } from '../slack-user/orgDiscovery.js';
 import { buildSimpleInstanceName, type ValidateResult } from '../util/pasteTokenValidation.js';
@@ -1982,6 +1984,79 @@ function registerSharedRoutes(app: express.Express): void {
           'hubspot', hubspotProviderTokens, exchange.email
         );
         console.error(`User ${user.id} connected HubSpot MCP: ${connection.instanceId}`);
+      } else if (provider === 'redmine') {
+        // Redmine OAuth 2.0 authorization_code exchange (Doorkeeper, Redmine
+        // 6.1+). Unlike HubSpot there is no constant token URL — the endpoint
+        // belongs to the instance, so it comes from the catalog (seeded from
+        // REDMINE_BASE_URL) and we fall back to deriving it from the same env
+        // var if the catalog row predates that.
+        //
+        // The base URL is persisted with the tokens and is the ONLY way the
+        // tools later locate the instance, so it must not end up empty. The
+        // catalog row was seeded from REDMINE_BASE_URL, so when the env var is
+        // missing on this process the token URL still carries the host — strip
+        // the /oauth/token suffix back off rather than storing ''.
+        const redmineEnvBaseUrl = (process.env.REDMINE_BASE_URL || '').replace(/\/+$/, '');
+        const redmineBaseUrl = redmineEnvBaseUrl
+          || (mcp.oauthTokenUrl || '').replace(/\/oauth\/token\/*$/, '').replace(/\/+$/, '');
+        if (!redmineBaseUrl) {
+          console.error('[MCP Connect] Redmine OAuth attempted with no REDMINE_BASE_URL and no usable catalog token URL');
+          res.status(500).send('Redmine OAuth is not configured on this deployment. Ask an administrator to set REDMINE_BASE_URL, REDMINE_CLIENT_ID and REDMINE_CLIENT_SECRET, or connect with a Redmine API key instead.');
+          return;
+        }
+        const exchange = await exchangeRedmineOauthCode({
+          tokenUrl: mcp.oauthTokenUrl || redmineOauthUrls(redmineBaseUrl).tokenUrl,
+          code,
+          clientId: client_id,
+          clientSecret: client_secret,
+          redirectUri,
+          baseUrl: redmineBaseUrl,
+        });
+        if (!exchange.ok) {
+          console.error(`[MCP Connect] ${exchange.logMessage}`);
+          res.status(exchange.status).send(exchange.userMessage);
+          return;
+        }
+        console.error(`[MCP Connect] Redmine user: ${exchange.login ?? exchange.email ?? 'unknown'}`);
+
+        // baseUrl is persisted alongside the tokens for the same reason as the
+        // paste flow: the tools have no other way to find the instance. The
+        // refresh token is stored because Doorkeeper expires access tokens
+        // (~2h) AND rotates the refresh token on use.
+        const redmineProviderTokens = {
+          access_token: exchange.accessToken,
+          refresh_token: exchange.refreshToken ?? undefined,
+          expiry_date: exchange.expiresIn ? Date.now() + exchange.expiresIn * 1000 : undefined,
+          baseUrl: redmineBaseUrl,
+        };
+        const emptyGoogleTokensForRedmine = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        const redmineInstanceName = buildRedmineInstanceName({
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          providedInstanceName: stateData.instanceName,
+          baseUrl: redmineBaseUrl,
+          login: exchange.login,
+          email: exchange.email,
+        });
+
+        if (stateData.reconnectInstanceId) {
+          const reconnected = await applyProviderReconnect(redmineProviderTokens, 'Redmine');
+          if (!reconnected) return;
+          res.redirect(`/dashboard?reconnected=${encodeURIComponent(reconnected.instanceName || mcpSlug)}`);
+          return;
+        }
+
+        const redmineConnections = await getUserConnectedMcps(user.id);
+        const existingRedmine = redmineConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === redmineInstanceName);
+        if (existingRedmine) {
+          console.error(`User ${user.id} already has ${mcpSlug} for ${redmineBaseUrl}: ${existingRedmine.instanceId}`);
+          res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingRedmine.instanceName));
+          return;
+        }
+        connection = await createMcpInstance(
+          user.id, mcpSlug, redmineInstanceName, emptyGoogleTokensForRedmine, null,
+          'redmine', redmineProviderTokens, exchange.email
+        );
+        console.error(`User ${user.id} connected Redmine MCP: ${connection.instanceId}`);
       } else {
         // Google OAuth (default)
         const oauthClient = new OAuth2Client(client_id, client_secret, redirectUri);
@@ -2250,6 +2325,37 @@ function registerSharedRoutes(app: express.Express): void {
           // a different Outline host, and it is re-validated above either way.
           providerTokens: { access_token: token, baseUrl: validate.baseUrl },
           providerEmail,
+        });
+        return;
+      }
+
+      if (mcpSlug === 'redmine') {
+        // Redmine paste-token flow: the body carries { token, baseUrl,
+        // instanceName? }. Shaped like Outline rather than the two-line
+        // connectPasteToken helper because that helper stores only the token,
+        // and a Redmine connection without its instance URL is unusable —
+        // there is no public Redmine to fall back to.
+        const { baseUrl } = req.body as { baseUrl?: string };
+        const validate = await validateRedmineToken({ baseUrl: baseUrl ?? '', token });
+        if (!validate.ok) {
+          console.error(`[connect-token] ${validate.logMessage}`);
+          res.status(validate.status).json({ error: validate.userMessage });
+          return;
+        }
+
+        await persistPasteConnection({
+          provider: 'redmine',
+          serviceLogName: `Redmine (${validate.baseUrl})`,
+          name: buildRedmineInstanceName({
+            serviceName: mcp.name.replace(' MCP', '').trim(),
+            providedInstanceName: instanceName,
+            baseUrl: validate.baseUrl,
+          }),
+          // baseUrl rides along for the same reason it does for Outline: a
+          // re-auth can legitimately move the connection to a different host,
+          // and it was re-validated just above either way.
+          providerTokens: { access_token: token, baseUrl: validate.baseUrl },
+          providerEmail: null,
         });
         return;
       }
@@ -3132,6 +3238,11 @@ function registerSharedRoutes(app: express.Express): void {
       'Find the Acme Corp company and summarize its recent activity',
       'Update the lifecycle stage for contact jane@acme.com',
       'List open tickets modified this week',
+    ],
+    'redmine': [
+      'What issues are assigned to me and still open?',
+      'Log 3 hours against issue #1482 for today',
+      'Show the wiki page "Release Process" in the platform project',
     ],
   };
 

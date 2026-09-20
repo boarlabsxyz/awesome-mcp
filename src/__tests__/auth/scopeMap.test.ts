@@ -104,8 +104,8 @@ describe('scopeMap', () => {
   });
 
   describe('ALL_SCOPES', () => {
-    it('should contain all 13 scopes', () => {
-      assert.equal(ALL_SCOPES.length, 13);
+    it('should contain all 14 scopes', () => {
+      assert.equal(ALL_SCOPES.length, 14);
       assert.ok(ALL_SCOPES.includes('mcp:docs'));
       assert.ok(ALL_SCOPES.includes('mcp:calendar'));
       assert.ok(ALL_SCOPES.includes('mcp:sheets'));
@@ -119,6 +119,7 @@ describe('scopeMap', () => {
       assert.ok(ALL_SCOPES.includes('mcp:peopleforce'));
       assert.ok(ALL_SCOPES.includes('mcp:peopleforce-v4'));
       assert.ok(ALL_SCOPES.includes('mcp:hubspot'));
+      assert.ok(ALL_SCOPES.includes('mcp:redmine'));
     });
   });
 
@@ -137,6 +138,7 @@ describe('scopeMap', () => {
       assert.deepEqual(getScopesForSlug('peopleforce'), ['mcp:peopleforce']);
       assert.deepEqual(getScopesForSlug('peopleforce-v4'), ['mcp:peopleforce-v4']);
       assert.deepEqual(getScopesForSlug('hubspot'), ['mcp:hubspot']);
+      assert.deepEqual(getScopesForSlug('redmine'), ['mcp:redmine']);
     });
 
     it('should return all scopes for unknown slugs', () => {

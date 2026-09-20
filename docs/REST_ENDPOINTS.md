@@ -209,9 +209,36 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `getTicketConversationThreads` | `GET /api/v1/hubspot/tickets/{ticketId}/conversation-threads` | planned | Get conversation threads for a HubSpot ticket |
 | `getProperty` | `GET /api/v1/hubspot/properties/{objectType}/{propertyName}` | planned | Get a HubSpot property definition |
 
+### Redmine (`redmine`)
+
+| MCP tool | REST endpoint | Status | Summary |
+|---|---|---|---|
+| `listIssues` | `GET /api/v1/redmine/issues` | planned | Search and filter Redmine issues |
+| `getIssue` | `GET /api/v1/redmine/issues/{issueId}` | planned | Get a single Redmine issue |
+| `listIssueRelations` | `GET /api/v1/redmine/issues/{issueId}/relations` | planned | List the relations on a Redmine issue |
+| `listProjects` | `GET /api/v1/redmine/projects` | planned | List Redmine projects |
+| `getProject` | `GET /api/v1/redmine/projects/{projectId}` | planned | Get a single Redmine project |
+| `listUsers` | `GET /api/v1/redmine/users` | planned | List Redmine users (admin only) |
+| `getCurrentUser` | `GET /api/v1/redmine/users/current` | planned | Get the Redmine account this connection authenticates as |
+| `getUser` | `GET /api/v1/redmine/users/{userId}` | planned | Get a single Redmine user |
+| `listTimeEntries` | `GET /api/v1/redmine/time-entries` | planned | List Redmine time entries |
+| `getTimeEntry` | `GET /api/v1/redmine/time-entries/{timeEntryId}` | planned | Get a single Redmine time entry |
+| `listWikiPages` | `GET /api/v1/redmine/projects/{projectId}/wiki` | planned | List the wiki page titles of a Redmine project |
+| `getWikiPage` | `GET /api/v1/redmine/projects/{projectId}/wiki/{title}` | planned | Get one Redmine wiki page with its text |
+| `listVersions` | `GET /api/v1/redmine/projects/{projectId}/versions` | planned | List the versions of a Redmine project |
+| `getVersion` | `GET /api/v1/redmine/versions/{versionId}` | planned | Get a single Redmine version |
+| `listIssueCategories` | `GET /api/v1/redmine/projects/{projectId}/issue-categories` | planned | List the issue categories of a Redmine project |
+| `listMemberships` | `GET /api/v1/redmine/projects/{projectId}/memberships` | planned | List the members of a Redmine project with their roles |
+| `listTrackers` | `GET /api/v1/redmine/trackers` | planned | List Redmine trackers with their IDs |
+| `listIssueStatuses` | `GET /api/v1/redmine/issue-statuses` | planned | List Redmine issue statuses with their IDs |
+| `listIssuePriorities` | `GET /api/v1/redmine/issue-priorities` | planned | List Redmine issue priorities with their IDs |
+| `listTimeEntryActivities` | `GET /api/v1/redmine/time-entry-activities` | planned | List Redmine time entry activities with their IDs |
+| `listCustomFields` | `GET /api/v1/redmine/custom-fields` | planned | List Redmine custom fields and their cf_id filter keys |
+| `searchRedmine` | `GET /api/v1/redmine/search?q={query}` | planned | Full text search across Redmine |
+
 ## Status legend
 
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 124 endpoints.
+Catalog size: 146 endpoints.

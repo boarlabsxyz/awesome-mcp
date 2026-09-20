@@ -58,6 +58,22 @@ export interface UserSession {
   hubspotOauthClientSecret?: string;
   /** Connection instance id, so a refresh can persist rotated tokens back to the store. */
   hubspotInstanceId?: string;
+  redmineAccessToken?: string;
+  /**
+   * Redmine instance URL. REQUIRED, not optional-with-a-default: Redmine is
+   * always self-hosted, so there is no public host to fall back to and a
+   * connection without this is broken rather than merely unconfigured.
+   */
+  redmineBaseUrl?: string;
+  /** OAuth refresh token (Redmine 6.1+ Doorkeeper only; absent for pasted API keys). */
+  redmineRefreshToken?: string;
+  /** Access-token expiry as ms-epoch; absent = non-expiring (paste-token flow). */
+  redmineTokenExpiry?: number;
+  /** OAuth client credentials (from env) used to drive the refresh_token grant. */
+  redmineOauthClientId?: string;
+  redmineOauthClientSecret?: string;
+  /** Connection instance id, so a refresh can persist rotated tokens back to the store. */
+  redmineInstanceId?: string;
 }
 
 // Cache sessions to avoid recreating clients per request
@@ -470,6 +486,72 @@ export function createHubSpotSession(
     hubspotOauthClientSecret: oauthClientSecret,
     hubspotInstanceId: connection.instanceId,
     // Null placeholders for Google clients (HubSpot MCP won't use them)
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
+  };
+
+  mcpSessionCache.set(cacheKey, session);
+  return session;
+}
+
+/**
+ * Create a user session for Redmine connections.
+ *
+ * Redmine has two credential types and this handles both. A pasted personal
+ * API key carries no refresh token or expiry; an OAuth connection (Redmine
+ * 6.1+, Doorkeeper) carries both. `getRedmineClient` reads the presence of a
+ * refresh token to decide which auth header to send, so nothing else needs to
+ * know which flow produced the connection.
+ *
+ * Unlike every other connector here, `baseUrl` has no env fallback beyond
+ * REDMINE_BASE_URL: there is no public Redmine, so guessing a host would send
+ * the credential somewhere the user never named.
+ */
+export function createRedmineSession(
+  user: UserRecord,
+  connection: McpConnection,
+): UserSession {
+  const providerTokens = connection.providerTokens as {
+    access_token?: string;
+    refresh_token?: string;
+    expiry_date?: number;
+    baseUrl?: string;
+  } | undefined;
+  const accessToken = providerTokens?.access_token;
+  if (!accessToken) {
+    throw new Error(`Redmine access token missing for connection ${connection.instanceId}. Please reconnect.`);
+  }
+  const baseUrl = providerTokens?.baseUrl || process.env.REDMINE_BASE_URL || undefined;
+
+  const cacheKey = `${user.apiKey}:${connection.instanceId}`;
+  const cached = cachedSessionFor(cacheKey, accessToken, s => s.redmineAccessToken);
+  if (cached) return cached;
+
+  // OAuth client credentials live in env (the same vars the catalog seed reads
+  // to enable the OAuth flow). Absent on paste-token deployments, where the
+  // refresh path in withRedmineClient no-ops.
+  const oauthClientId = process.env.REDMINE_CLIENT_ID || undefined;
+  const oauthClientSecret = process.env.REDMINE_CLIENT_SECRET || undefined;
+
+  const session: UserSession = {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: connection.mcpSlug,
+    redmineAccessToken: accessToken,
+    redmineBaseUrl: baseUrl,
+    // Refresh plumbing — only populated for OAuth connections.
+    redmineRefreshToken: providerTokens?.refresh_token,
+    redmineTokenExpiry: providerTokens?.expiry_date,
+    redmineOauthClientId: oauthClientId,
+    redmineOauthClientSecret: oauthClientSecret,
+    redmineInstanceId: connection.instanceId,
+    // Null placeholders for Google clients (Redmine MCP won't use them)
     googleDocs: null as any,
     googleDrive: null as any,
     googleSheets: null as any,

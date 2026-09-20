@@ -50,6 +50,7 @@ import { outlineServer } from '../outline/server.js';
 import { peopleForceServer } from '../peopleforce/server.js';
 import { peopleForceV4Server } from '../peopleforce-v4/server.js';
 import { hubspotServer } from '../hubspot/server.js';
+import { redmineServer } from '../redmine/server.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 
 // Global clients for stdio (single-user) mode
@@ -1941,6 +1942,7 @@ async function startServer() {
                          : MCP_SLUG === "peopleforce"     ? peopleForceServer
                          : MCP_SLUG === "peopleforce-v4"  ? peopleForceV4Server
                          : MCP_SLUG === "hubspot"         ? hubspotServer
+                         : MCP_SLUG === "redmine"         ? redmineServer
                          : server; // default: google-docs
 
         mcpToStart.start({

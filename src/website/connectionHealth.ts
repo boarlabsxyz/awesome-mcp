@@ -27,6 +27,7 @@ import type { McpConnection } from '../mcpConnectionStore.js';
 import { validateOutlineToken } from '../outline/connectToken.js';
 import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
+import { validateRedmineToken } from '../redmine/connectToken.js';
 
 /**
  * `healthy`  — credential works.
@@ -266,6 +267,27 @@ export async function checkConnectionHealth(
         return fromValidateResult(await validateHubSpotToken({
           token: accessToken, baseUrl: providerTokens.baseUrl, fetchImpl,
         } as any), !!providerTokens.refresh_token);
+      }
+
+      case 'redmine': {
+        if (!accessToken) return { state: 'reauth', reason: 'No Redmine credential stored.' };
+        // Guarded before probing for the same reason as Outline: Redmine is
+        // self-hosted, validateRedmineToken reports a missing base URL with
+        // status 400 — the same status a rejected credential gets — so it
+        // would otherwise render a Reconnect button that cannot possibly fix
+        // a missing URL. Our configuration is not the user's credential.
+        const redmineBaseUrl = providerTokens.baseUrl || process.env.REDMINE_BASE_URL || '';
+        if (!redmineBaseUrl) {
+          return { state: 'unknown', reason: 'No Redmine instance URL configured for this connection.' };
+        }
+        // A refresh token is what distinguishes an OAuth connection from a
+        // pasted API key, and it decides which auth header the probe must use
+        // — same rule getRedmineClient applies.
+        const redmineIsOauth = !!providerTokens.refresh_token;
+        return fromValidateResult(await validateRedmineToken({
+          token: accessToken, baseUrl: redmineBaseUrl, fetchImpl,
+          authMode: redmineIsOauth ? 'oauth' : 'apiKey',
+        } as any), redmineIsOauth);
       }
 
       default:
