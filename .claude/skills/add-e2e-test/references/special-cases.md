@@ -60,13 +60,17 @@ matched by a broader pattern later and deleted when it should not be.
 
 Anything taking `startIndex`, `endIndex`, `tabId`.
 
-These only mean something for one document's structure and cannot be derived.
-Generate with `<TODO: startIndex>` and list the tool plus the missing fields in
-the report. The scaffold still locks in setup, teardown and shape.
+These mean something only for one document's structure, so they cannot be derived
+**from the tool name alone**. That is not the same as underivable.
 
-Better where possible: have setup seed known content and **derive** the indices
-from it in the test, rather than hard-coding numbers that break the first time
-the fixture changes.
+**Try setup first.** If setup seeds the content, the indices follow from it and
+can be computed in the test — `bulkText(3, 'SEED')` has a known shape, and an
+index derived from seeded content stays correct when the fixture changes.
+Prefer that to any literal number.
+
+Fall back to `<TODO: startIndex>` only when the value depends on a document the
+test does not create, and list the tool plus the missing fields in the report.
+The scaffold still locks in setup, teardown and shape.
 
 ## Destructive tools
 

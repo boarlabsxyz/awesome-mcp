@@ -16,12 +16,14 @@ because a test in the wrong tier is slow, flaky, or asserts nothing.
 |---|---|---|---|
 | **Tool check** | `e2e/tests/tools/<shape>/<tool>.check.ts` | direct MCP over HTTPS | **per-tool coverage — the default** |
 | **Task test** | `e2e/tests/tasks/<name>.task.ts` | real client in a browser | a handful per service, never per tool |
-| **Harness unit** | `e2e/tests/unit/<name>.unit.ts` | none | the harness's own logic |
+| **Harness unit** | `e2e/tests/unit/<name>.unit.ts` | none | the harness's own logic — **not generated here** |
 
 **Default to a tool check.** A direct check runs in about a second, passes exact
 arguments, and asserts exact output. A task test costs a full LLM conversation
-and a browser session — 227 tools at ~2 minutes each is about 17 hours per
-client, which is the arithmetic that produced this split.
+and a browser session: at ~2 minutes each, one per tool across the repo's 227
+tools is **~7.6 hours per client** — and the three shapes a tool check gives you
+for free would be **~23 hours**. The same coverage on the direct transport takes
+minutes. That is the arithmetic behind the split.
 
 Write a **task test** only when the thing under test is *how a model uses the
 tools*, not what a tool returns. See `references/task-tests.md`; the bar is high
@@ -29,6 +31,16 @@ and the existing three are close to sufficient for Docs.
 
 If the user explicitly asks for a live-client or browser test, give them a task
 test and say why it is not per-tool.
+
+**This skill does not scaffold harness units.** They test the harness's own
+logic — an invariant, a sweeper's date arithmetic, a driver's error handling —
+which has no tool to resolve, no shape to choose and no account to reach, so
+none of the procedure below applies. Write them by hand next to the code they
+cover, as `e2e/tests/unit/*.unit.ts`. They are listed above so the tier is
+visible when you are deciding, not because this skill produces them.
+
+They are worth writing whenever the harness gains logic that can silently
+succeed: an assertion that matches nothing passes every test it guards.
 
 ## Inputs
 
@@ -58,6 +70,14 @@ prefer a generator over typing 227 entries.
 Drop anything in `NOT_IMPLEMENTED` — CLAUDE.md's "Known Limitations" lists tools
 that are registered but unusable, and scaffolding those produces red nobody can
 fix.
+
+**Reclassify result-returning tools here, before shapes are chosen.** A tool that
+computes an answer rather than mutating — `findElement`, `findAndReplace` in
+count mode — is **read-flavoured whatever its annotations say**. Left as a write
+it gets sandbox scaffolding, a scratch resource it does not need, and a read-back
+assertion on a document it never changed. Classify it as a read and it takes all
+three shapes against a fixture, asserting on its own response. See
+`references/special-cases.md`.
 
 Print the plan and confirm when N > 1. Confirm explicitly when N > 30.
 
@@ -119,12 +139,24 @@ Imports use explicit `.ts` extensions. Match the existing files.
 ### 6. Verify
 
 ```bash
-cd e2e && npx tsc --noEmit && npm run test:unit
+cd e2e && npm run typecheck && npm run test:unit
 ```
 
-Run the checks themselves only if the account credentials are present
-(`npm run check:auth -- fixture` tells you in one second). Never run task tests
-in a scaffolding pass — they need a browser and a seeded context.
+Run the generated checks only if that shape's account is reachable. Each shape
+uses a **different** account, so preflight the one you are about to run:
+
+```bash
+npm run check:auth -- fixture    # needle
+npm run check:auth -- rich       # volume
+npm run check:auth -- sandbox    # zero, and every write check
+npm run check:auth -- sandbox google-drive   # write checks create scratch docs
+```
+
+That last one catches a sandbox account connected to Docs but not Drive, which
+passes every other preflight and then fails every write check at setup.
+
+Never run task tests in a scaffolding pass — they need a browser and a seeded
+context.
 
 ### 7. Report
 
