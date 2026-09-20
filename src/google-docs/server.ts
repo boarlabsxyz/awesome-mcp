@@ -48,6 +48,7 @@ import { slackBotServer } from '../slack/server.js';
 import { slackUserServer } from '../slack-user/server.js';
 import { outlineServer } from '../outline/server.js';
 import { peopleForceServer } from '../peopleforce/server.js';
+import { peopleForceV4Server } from '../peopleforce-v4/server.js';
 import { hubspotServer } from '../hubspot/server.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 
@@ -1938,6 +1939,7 @@ async function startServer() {
                          : MCP_SLUG === "slack"           ? slackUserServer
                          : MCP_SLUG === "outline"         ? outlineServer
                          : MCP_SLUG === "peopleforce"     ? peopleForceServer
+                         : MCP_SLUG === "peopleforce-v4"  ? peopleForceV4Server
                          : MCP_SLUG === "hubspot"         ? hubspotServer
                          : server; // default: google-docs
 

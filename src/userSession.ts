@@ -37,6 +37,15 @@ export interface UserSession {
   peopleForceAccessToken?: string;
   /** Optional per-connection PeopleForce base URL; falls back to PEOPLEFORCE_BASE_URL or the public default. */
   peopleForceBaseUrl?: string;
+  /**
+   * PeopleForce API **v4** service-account key. Deliberately a separate field
+   * from `peopleForceAccessToken`: a service-account key only works against v4
+   * and a Company key only against v1-v3, so one credential can never serve
+   * both connectors and sharing the field would let a tool pick the wrong one.
+   */
+  peopleForceV4AccessToken?: string;
+  /** Optional per-connection v4 base URL; falls back to PEOPLEFORCE_V4_BASE_URL or the public default. */
+  peopleForceV4BaseUrl?: string;
   hubspotAccessToken?: string;
   /** Optional per-connection HubSpot base URL; falls back to HUBSPOT_BASE_URL or the public default. */
   hubspotBaseUrl?: string;
@@ -357,6 +366,49 @@ export function createPeopleForceSession(
     peopleForceAccessToken: accessToken,
     peopleForceBaseUrl: baseUrl,
     // Null placeholders for Google clients (PeopleForce MCP won't use them)
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
+  };
+
+  mcpSessionCache.set(cacheKey, session);
+  return session;
+}
+
+/**
+ * Create a user session for PeopleForce **v4** connections.
+ *
+ * Separate from {@link createPeopleForceSession} because the credentials are
+ * not interchangeable: v4 accepts a service-account key only, and that key
+ * cannot call v1-v3. A user who wants both surfaces connects both slugs.
+ */
+export function createPeopleForceV4Session(
+  user: UserRecord,
+  connection: McpConnection,
+): UserSession {
+  const providerTokens = connection.providerTokens as { access_token?: string; baseUrl?: string } | undefined;
+  const accessToken = providerTokens?.access_token;
+  if (!accessToken) {
+    throw new Error(`PeopleForce v4 access token missing for connection ${connection.instanceId}. Please reconnect.`);
+  }
+  const baseUrl = providerTokens?.baseUrl || process.env.PEOPLEFORCE_V4_BASE_URL || undefined;
+
+  const cacheKey = `${user.apiKey}:${connection.instanceId}`;
+  const cached = cachedSessionFor(cacheKey, accessToken, s => s.peopleForceV4AccessToken);
+  if (cached) return cached;
+
+  const session: UserSession = {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: connection.mcpSlug,
+    peopleForceV4AccessToken: accessToken,
+    peopleForceV4BaseUrl: baseUrl,
+    // Null placeholders for Google clients (the PeopleForce v4 MCP won't use them)
     googleDocs: null as any,
     googleDrive: null as any,
     googleSheets: null as any,

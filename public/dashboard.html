@@ -1534,7 +1534,7 @@
       const provider = instance.provider;
       const pasteCapable =
         provider === 'slack-bot' || provider === 'outline' ||
-        provider === 'peopleforce' || provider === 'hubspot';
+        provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot';
       return pasteCapable && !mcp.oauthAuthorizationUrl;
     }
 
@@ -1612,7 +1612,8 @@
       // authorize URL (OUTLINE_CLIENT_ID/SECRET/BASE_URL), otherwise it falls
       // back to the URL + API key paste form.
       const isTokenProvider =
-        (provider === 'slack-bot' || provider === 'outline' || provider === 'peopleforce' || provider === 'hubspot')
+        (provider === 'slack-bot' || provider === 'outline' || provider === 'peopleforce'
+          || provider === 'peopleforce-v4' || provider === 'hubspot')
         && !selectedMcpType.oauthAuthorizationUrl;
 
       // For OAuth providers, skip naming step — name is auto-generated on the backend
@@ -1666,6 +1667,18 @@
         urlSection.style.display = 'none';
         // Match Outline's UX: no user-entered name — backend falls back to the
         // service name via buildPeopleForceInstanceName.
+        nameSection.style.display = 'none';
+        nameInput.value = '';
+        tokenInput.focus();
+      } else if (provider === 'peopleforce-v4') {
+        tokenLabel.textContent = 'Service Account API Key';
+        tokenInput.placeholder = 'Your PeopleForce service account key';
+        tokenHint.innerHTML =
+          'In PeopleForce: <strong>Settings &rarr; API keys &rarr; Generate API key</strong>, type ' +
+          '<strong>Service account</strong> (a Company key will not work &mdash; it cannot call API v4). ' +
+          'The key has <strong>no permissions of its own</strong>: attach it to a Service account role under ' +
+          '<strong>Settings &rarr; Roles &amp; permissions</strong>, or every list comes back empty.';
+        urlSection.style.display = 'none';
         nameSection.style.display = 'none';
         nameInput.value = '';
         tokenInput.focus();
@@ -1732,7 +1745,7 @@
       // still asks the user because bot tokens don't carry workspace metadata
       // we can display.
       const isOutline = provider === 'outline';
-      const autoName = isOutline || provider === 'peopleforce' || provider === 'hubspot';
+      const autoName = isOutline || provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot';
       const name = autoName ? '' : document.getElementById('instanceNameInput').value.trim();
       if (!autoName && !name) { alert('Please enter a name for this instance'); return; }
       const token = document.getElementById('tokenInput').value.trim();
@@ -1740,6 +1753,7 @@
         const provider = selectedMcpType.provider;
         const msg = provider === 'outline' ? 'Please enter your Outline API key'
                   : provider === 'peopleforce' ? 'Please enter your PeopleForce API key'
+                  : provider === 'peopleforce-v4' ? 'Please enter your PeopleForce service account API key'
                   : provider === 'hubspot' ? 'Please enter your HubSpot access token'
                   : 'Please enter a bot token';
         alert(msg);

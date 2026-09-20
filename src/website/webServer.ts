@@ -319,6 +319,7 @@ import { exchangeOutlineOauthCode, buildOutlineInstanceName } from '../outline/o
 import { exchangeHubSpotOauthCode, buildHubSpotOauthInstanceName, HUBSPOT_TOKEN_URL } from '../hubspot/oauthCallback.js';
 import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceNameFromToken } from '../outline/connectToken.js';
 import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
+import { validatePeopleForceV4Token } from '../peopleforce-v4/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
 import { checkConnectionHealth, type ConnectionHealth } from './connectionHealth.js';
 import { discoverConnectedOrgs, type OrgDiscoveryResult } from '../slack-user/orgDiscovery.js';
@@ -2261,6 +2262,14 @@ function registerSharedRoutes(app: express.Express): void {
         return;
       }
 
+      if (mcpSlug === 'peopleforce-v4') {
+        // Validated against /api/v4/people — v4 renamed the resource, so the
+        // v2/v3 probe path would 404 here and be reported as an upstream
+        // failure rather than a bad key.
+        await connectPasteToken('peopleforce-v4', 'PeopleForce v4', () => validatePeopleForceV4Token({ token }));
+        return;
+      }
+
       if (mcpSlug === 'hubspot') {
         // Validate the private-app access token against the public CRM API
         // (/crm/v3/objects/companies?limit=1), then store the access_token.
@@ -3113,6 +3122,11 @@ function registerSharedRoutes(app: express.Express): void {
       'Who\'s out on leave next week?',
       'List everyone in the Engineering department',
       'Show me the skills on Jane Doe\'s profile',
+    ],
+    'peopleforce-v4': [
+      'Who left the company this quarter, and what reason was recorded?',
+      'List everyone whose probation ends in the next 30 days',
+      'Show the open objectives for the Engineering department with their key results',
     ],
     'hubspot': [
       'Find the Acme Corp company and summarize its recent activity',

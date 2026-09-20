@@ -12,6 +12,7 @@ import { z } from 'zod';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
+import { isoDate } from '../util/isoDate.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 import {
@@ -164,18 +165,11 @@ function addCandidateScopedListTool<T>(config: {
 
 /**
  * ISO-date string (YYYY-MM-DD) whose value is also a real calendar date.
- * Rejects 2026-02-31, 2026-13-01, etc. The regex-only check the tools used
- * to have accepted those and only failed downstream on the PeopleForce API.
- * Exported for unit tests.
+ * Moved to ../util/isoDate.js so the v4 connector validates dates the same
+ * way; re-exported here because the tools below and the unit tests both
+ * import it from this module.
  */
-export const isoDate = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use ISO date format YYYY-MM-DD.')
-  .refine((s) => {
-    const [y, m, d] = s.split('-').map(Number);
-    const dt = new Date(Date.UTC(y, m - 1, d));
-    return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
-  }, 'Not a valid calendar date.');
+export { isoDate };
 
 /**
  * Full Zod schema for `createLeaveRequest`. Exported so the calendar-validity
