@@ -76,6 +76,15 @@ function sliceFunction(source: string, signature: string): string {
   return source.slice(start, end);
 }
 
+/** Return the source text of a top-level `const NAME = ...;` declaration. */
+function sliceConst(source: string, declaration: string): string {
+  const start = source.indexOf(declaration);
+  if (start === -1) throw new Error(`${declaration} not found — was it renamed?`);
+  const end = source.indexOf('\n};\n', start);
+  if (end === -1) throw new Error(`end of ${declaration} not found`);
+  return source.slice(start, end);
+}
+
 // The server half is still asserted by source shape rather than by calling it:
 // the route handler is a long inline Express closure. These are coarse on
 // purpose — they catch a regression that reverts any branch to an
@@ -107,24 +116,25 @@ describe('/api/connect-token supports in-place re-authentication', () => {
     assert.match(handler, /const \{ mcpSlug, token, instanceName, instanceId \}/);
   });
 
-  it('routes every paste provider through the shared persist helper', () => {
-    // slack-bot, outline and redmine build their own names/emails but must not
-    // keep their own create call, or they silently lose re-auth again.
-    //
-    // Matches any call form, not just an inline object literal: outline and
-    // redmine now hand in a record built by buildOutlinePasteConnection /
-    // buildRedminePasteConnection (both need a per-connection base URL, which
-    // the shared connectPasteToken helper cannot carry). They still delegate,
-    // which is the property this guards.
-    const calls = handler.match(/persistPasteConnection\(/g) || [];
-    assert.ok(calls.length >= 3, `expected every paste branch to delegate, found ${calls.length}`);
+  it('never creates a connection itself, so no branch can skip re-auth', () => {
+    // This is the regression that produced the original bug: a branch that
+    // calls createMcpInstance directly always creates, so re-entering a
+    // credential silently made a second connection instead of repairing the
+    // named one. Only persistPasteConnectionFor may create, and it checks
+    // instanceId first.
+    assert.doesNotMatch(handler, /createMcpInstance\(/);
+    assert.match(handler, /persistPasteConnection\(/);
   });
 
-  it('keeps the self-hosted providers on their dedicated builders', () => {
-    // A base URL that never reaches providerTokens produces a connection no
-    // tool can use, so these two must not fall back to connectPasteToken.
-    assert.match(handler, /buildOutlinePasteConnection\(/);
-    assert.match(handler, /buildRedminePasteConnection\(/);
+  it('keeps the self-validating providers on their dedicated builders', () => {
+    // Slack names the instance from auth.test; Outline and Redmine are
+    // self-hosted and must persist a base URL. connectPasteToken stores only
+    // { access_token }, so a fall back to it would produce a connection no
+    // tool can use.
+    const table = sliceConst(source, 'const PASTE_CONNECTION_BUILDERS');
+    assert.match(table, /buildSlackBotPasteConnection/);
+    assert.match(table, /buildOutlinePasteConnection/);
+    assert.match(table, /buildRedminePasteConnection/);
   });
 
   it('verifies ownership and slug before writing to a named instance', () => {

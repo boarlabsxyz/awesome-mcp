@@ -910,6 +910,19 @@ async function guardAttempt(req: Request, email: string): Promise<RateLimitVerdi
  * Registers all shared routes used by both single-service and multi-service modes.
  * Includes: auth, dashboard, connect/reconnect OAuth, API endpoints, admin, catalogs.
  */
+/** A builder's answer: the connection to persist, or the error to report. */
+type PasteConnectionBuildResult =
+  | { ok: true; connection: PasteConnectionOpts }
+  | { ok: false; status: number; userMessage: string; logMessage: string };
+
+/** Everything a paste-token builder may need. `baseUrl` is ignored by providers that are not self-hosted. */
+interface PasteConnectionInput {
+  token: string;
+  baseUrl?: string;
+  serviceName: string;
+  instanceName?: string;
+}
+
 /** What a paste-token branch hands to persistPasteConnectionFor. */
 interface PasteConnectionOpts {
   provider: string;
@@ -982,14 +995,7 @@ async function persistPasteConnectionFor(
  * under the cognitive-complexity budget. Slack is the one that owns its own
  * fetch, because it names the workspace from the auth.test response.
  */
-async function buildSlackBotPasteConnection(input: {
-  token: string;
-  serviceName: string;
-  instanceName?: string;
-}): Promise<
-  | { ok: true; connection: PasteConnectionOpts }
-  | { ok: false; status: number; userMessage: string; logMessage: string }
-> {
+async function buildSlackBotPasteConnection(input: PasteConnectionInput): Promise<PasteConnectionBuildResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
   try {
@@ -1036,15 +1042,7 @@ async function buildSlackBotPasteConnection(input: {
  * carry, and keeping both out of the route handler keeps it under the
  * cognitive-complexity budget.
  */
-async function buildOutlinePasteConnection(input: {
-  token: string;
-  baseUrl?: string;
-  serviceName: string;
-  instanceName?: string;
-}): Promise<
-  | { ok: true; connection: { provider: string; serviceLogName: string; name: string; providerTokens: Record<string, any>; providerEmail: string | null } }
-  | { ok: false; status: number; userMessage: string; logMessage: string }
-> {
+async function buildOutlinePasteConnection(input: PasteConnectionInput): Promise<PasteConnectionBuildResult> {
   const validate = await validateOutlineToken({ baseUrl: input.baseUrl ?? '', token: input.token });
   if (!validate.ok) return validate;
   return {
@@ -1075,15 +1073,7 @@ async function buildOutlinePasteConnection(input: {
  * { access_token } and a Redmine connection without its instance URL is
  * unusable — there is no public Redmine to fall back to.
  */
-async function buildRedminePasteConnection(input: {
-  token: string;
-  baseUrl?: string;
-  serviceName: string;
-  instanceName?: string;
-}): Promise<
-  | { ok: true; connection: { provider: string; serviceLogName: string; name: string; providerTokens: Record<string, any>; providerEmail: string | null } }
-  | { ok: false; status: number; userMessage: string; logMessage: string }
-> {
+async function buildRedminePasteConnection(input: PasteConnectionInput): Promise<PasteConnectionBuildResult> {
   const validate = await validateRedmineToken({ baseUrl: input.baseUrl ?? '', token: input.token });
   if (!validate.ok) return validate;
   return {
@@ -1105,6 +1095,17 @@ async function buildRedminePasteConnection(input: {
     },
   };
 }
+
+/**
+ * Providers that validate their own credential and build their own connection
+ * record. Everything else goes through the simpler connectPasteToken helper,
+ * which stores only { access_token }.
+ */
+const PASTE_CONNECTION_BUILDERS: Record<string, (input: PasteConnectionInput) => Promise<PasteConnectionBuildResult>> = {
+  'slack-bot': buildSlackBotPasteConnection,
+  outline: buildOutlinePasteConnection,
+  redmine: buildRedminePasteConnection,
+};
 
 function registerSharedRoutes(app: express.Express): void {
   // Serve config to frontend (BASE_URL, auth mode)
@@ -2420,39 +2421,14 @@ function registerSharedRoutes(app: express.Express): void {
         });
       };
 
-      if (mcpSlug === 'slack-bot') {
-        const built = await buildSlackBotPasteConnection({
-          token,
-          serviceName: mcp.name.replace(' MCP', '').trim(),
-          instanceName,
-        });
-        if (!built.ok) {
-          console.error(`[connect-token] ${built.logMessage}`);
-          res.status(built.status).json({ error: built.userMessage });
-          return;
-        }
-        await persistPasteConnection(built.connection);
-        return;
-      }
-
-      if (mcpSlug === 'outline') {
-        const built = await buildOutlinePasteConnection({
-          token,
-          baseUrl: (req.body as { baseUrl?: string }).baseUrl,
-          serviceName: mcp.name.replace(' MCP', '').trim(),
-          instanceName,
-        });
-        if (!built.ok) {
-          console.error(`[connect-token] ${built.logMessage}`);
-          res.status(built.status).json({ error: built.userMessage });
-          return;
-        }
-        await persistPasteConnection(built.connection);
-        return;
-      }
-
-      if (mcpSlug === 'redmine') {
-        const built = await buildRedminePasteConnection({
+      // The three self-validating providers are identical once their builder
+      // has run, so they dispatch off a table rather than three copies of the
+      // same five lines. They cannot use connectPasteToken below: Slack names
+      // the instance from auth.test, and Outline and Redmine are self-hosted,
+      // so all three produce fields that helper does not carry.
+      const buildPasteConnection = PASTE_CONNECTION_BUILDERS[mcpSlug];
+      if (buildPasteConnection) {
+        const built = await buildPasteConnection({
           token,
           baseUrl: (req.body as { baseUrl?: string }).baseUrl,
           serviceName: mcp.name.replace(' MCP', '').trim(),
