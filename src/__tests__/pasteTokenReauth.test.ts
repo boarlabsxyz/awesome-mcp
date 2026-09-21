@@ -63,6 +63,19 @@ describe('dashboard usesPastedToken()', () => {
   });
 });
 
+/**
+ * Return the source text of a top-level function, from its signature to the
+ * closing brace in column 0. Throws — rather than asserting — so it can be
+ * called while building the suite.
+ */
+function sliceFunction(source: string, signature: string): string {
+  const start = source.indexOf(signature);
+  if (start === -1) throw new Error(`${signature} not found — was it renamed?`);
+  const end = source.indexOf('\n}\n', start);
+  if (end === -1) throw new Error(`end of ${signature} not found`);
+  return source.slice(start, end);
+}
+
 // The server half is still asserted by source shape rather than by calling it:
 // the route handler is a long inline Express closure. These are coarse on
 // purpose — they catch a regression that reverts any branch to an
@@ -84,12 +97,11 @@ describe('/api/connect-token supports in-place re-authentication', () => {
   assert.notEqual(end, -1, 'handler end marker not found — did the fallthrough change?');
   const handler = source.slice(start, end);
 
-  // The extracted helper that every branch above delegates to.
-  const helperStart = source.indexOf('async function persistPasteConnectionFor(');
-  assert.notEqual(helperStart, -1, 'persistPasteConnectionFor not found — was it renamed?');
-  const helperEnd = source.indexOf('\n}\n', helperStart);
-  assert.notEqual(helperEnd, -1, 'persistPasteConnectionFor end not found');
-  const persistHelper = source.slice(helperStart, helperEnd);
+  // The extracted helper that every branch above delegates to. Sliced by a
+  // function that throws rather than by describe-level assertions, which Sonar
+  // (rightly) flags: an assertion outside a test reports as a suite error with
+  // no name attached to it.
+  const persistHelper = sliceFunction(source, 'async function persistPasteConnectionFor(');
 
   it('accepts instanceId from the request body', () => {
     assert.match(handler, /const \{ mcpSlug, token, instanceName, instanceId \}/);

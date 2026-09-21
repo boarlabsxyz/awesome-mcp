@@ -975,6 +975,61 @@ async function persistPasteConnectionFor(
 }
 
 /**
+ * Validate an xoxb- bot token against Slack auth.test and shape the connection.
+ *
+ * Extracted alongside the Outline and Redmine builders so all three
+ * self-validating providers read the same way and the route handler stays
+ * under the cognitive-complexity budget. Slack is the one that owns its own
+ * fetch, because it names the workspace from the auth.test response.
+ */
+async function buildSlackBotPasteConnection(input: {
+  token: string;
+  serviceName: string;
+  instanceName?: string;
+}): Promise<
+  | { ok: true; connection: PasteConnectionOpts }
+  | { ok: false; status: number; userMessage: string; logMessage: string }
+> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch('https://slack.com/api/auth.test', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${input.token}`, 'Content-Type': 'application/json' },
+      signal: controller.signal,
+    });
+    const data = await response.json() as { ok: boolean; error?: string; team?: string };
+    if (!data.ok) {
+      return {
+        ok: false,
+        status: 400,
+        userMessage: `Invalid Slack token: ${data.error}`,
+        logMessage: `Slack auth.test rejected the token: ${data.error}`,
+      };
+    }
+    return {
+      ok: true,
+      connection: {
+        provider: 'slack-bot',
+        serviceLogName: 'Slack Bot',
+        name: input.instanceName || `${input.serviceName} (${data.team || 'workspace'})`,
+        providerTokens: { access_token: input.token },
+        providerEmail: null, // Slack bot tokens have no associated email
+      },
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      status: 502,
+      userMessage: 'Failed to validate Slack token. Check the token and try again.',
+      logMessage: `Slack token validation failed: ${err?.message ?? err}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
  * Validate a pasted Outline URL + API key and shape the connection record.
  * Sibling of buildRedminePasteConnection — both self-hosted connectors need a
  * per-connection base URL, which the shared connectPasteToken helper cannot
@@ -2366,35 +2421,17 @@ function registerSharedRoutes(app: express.Express): void {
       };
 
       if (mcpSlug === 'slack-bot') {
-        // Validate the xoxb- bot token by calling auth.test
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10_000);
-        try {
-          const response = await fetch('https://slack.com/api/auth.test', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-            signal: controller.signal,
-          });
-          clearTimeout(timeout);
-          const data = await response.json() as { ok: boolean; error?: string; team?: string; user_id?: string; bot_id?: string };
-          if (!data.ok) {
-            res.status(400).json({ error: `Invalid Slack token: ${data.error}` });
-            return;
-          }
-
-          const botServiceName = mcp.name.replace(' MCP', '').trim();
-          await persistPasteConnection({
-            provider: 'slack-bot',
-            serviceLogName: 'Slack Bot',
-            name: instanceName || `${botServiceName} (${data.team || 'workspace'})`,
-            providerTokens: { access_token: token },
-            providerEmail: null, // Slack bot tokens have no associated email
-          });
-        } catch (err: any) {
-          clearTimeout(timeout);
-          console.error('[connect-token] Slack token validation failed:', err);
-          res.status(502).json({ error: 'Failed to validate Slack token. Check the token and try again.' });
+        const built = await buildSlackBotPasteConnection({
+          token,
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          instanceName,
+        });
+        if (!built.ok) {
+          console.error(`[connect-token] ${built.logMessage}`);
+          res.status(built.status).json({ error: built.userMessage });
+          return;
         }
+        await persistPasteConnection(built.connection);
         return;
       }
 
