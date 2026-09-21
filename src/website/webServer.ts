@@ -911,6 +911,43 @@ async function guardAttempt(req: Request, email: string): Promise<RateLimitVerdi
  * Includes: auth, dashboard, connect/reconnect OAuth, API endpoints, admin, catalogs.
  */
 /**
+ * Validate a pasted Outline URL + API key and shape the connection record.
+ * Sibling of buildRedminePasteConnection — both self-hosted connectors need a
+ * per-connection base URL, which the shared connectPasteToken helper cannot
+ * carry, and keeping both out of the route handler keeps it under the
+ * cognitive-complexity budget.
+ */
+async function buildOutlinePasteConnection(input: {
+  token: string;
+  baseUrl?: string;
+  serviceName: string;
+  instanceName?: string;
+}): Promise<
+  | { ok: true; connection: { provider: string; serviceLogName: string; name: string; providerTokens: Record<string, any>; providerEmail: string | null } }
+  | { ok: false; status: number; userMessage: string; logMessage: string }
+> {
+  const validate = await validateOutlineToken({ baseUrl: input.baseUrl ?? '', token: input.token });
+  if (!validate.ok) return validate;
+  return {
+    ok: true,
+    connection: {
+      provider: 'outline',
+      serviceLogName: `Outline (${validate.baseUrl})`,
+      name: buildOutlineInstanceNameFromToken({
+        serviceName: input.serviceName,
+        providedInstanceName: input.instanceName,
+        teamName: validate.teamName,
+        email: validate.email,
+      }),
+      // baseUrl rides along: a re-auth can legitimately move an instance to a
+      // different Outline host, and it is re-validated above either way.
+      providerTokens: { access_token: input.token, baseUrl: validate.baseUrl },
+      providerEmail: validate.email,
+    },
+  };
+}
+
+/**
  * Validate a pasted Redmine URL + API key and shape the connection record.
  *
  * Lives outside the /api/connect-token handler so that handler stays under the
@@ -2342,33 +2379,18 @@ function registerSharedRoutes(app: express.Express): void {
       }
 
       if (mcpSlug === 'outline') {
-        // Outline paste-token flow: the request body carries { token, baseUrl,
-        // instanceName? }. We validate the pair by calling <baseUrl>/api/auth.info,
-        // then store baseUrl alongside the access_token so tool calls hit the
-        // right instance.
-        const { baseUrl } = req.body as { baseUrl?: string };
-        const validate = await validateOutlineToken({ baseUrl: baseUrl ?? '', token });
-        if (!validate.ok) {
-          console.error(`[connect-token] ${validate.logMessage}`);
-          res.status(validate.status).json({ error: validate.userMessage });
+        const built = await buildOutlinePasteConnection({
+          token,
+          baseUrl: (req.body as { baseUrl?: string }).baseUrl,
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          instanceName,
+        });
+        if (!built.ok) {
+          console.error(`[connect-token] ${built.logMessage}`);
+          res.status(built.status).json({ error: built.userMessage });
           return;
         }
-
-        const providerEmail = validate.email;
-        await persistPasteConnection({
-          provider: 'outline',
-          serviceLogName: `Outline (${validate.baseUrl})`,
-          name: buildOutlineInstanceNameFromToken({
-            serviceName: mcp.name.replace(' MCP', '').trim(),
-            providedInstanceName: instanceName,
-            teamName: validate.teamName,
-            email: providerEmail,
-          }),
-          // baseUrl rides along: a re-auth can legitimately move an instance to
-          // a different Outline host, and it is re-validated above either way.
-          providerTokens: { access_token: token, baseUrl: validate.baseUrl },
-          providerEmail,
-        });
+        await persistPasteConnection(built.connection);
         return;
       }
 

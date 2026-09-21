@@ -72,8 +72,10 @@ import {
   createMembershipSchema,
   deleteMembershipSchema,
   searchRedmineSchema,
+  createIssueSchema,
+  updateIssueSchema,
+  createTimeEntrySchema,
 } from './schemas.js';
-import { createIssueSchema, updateIssueSchema, createTimeEntrySchema } from './schemas.js';
 
 /** Strip undefined values so a PUT body never clears a field the caller left out. */
 function compact(obj: Record<string, unknown>): Record<string, unknown> {

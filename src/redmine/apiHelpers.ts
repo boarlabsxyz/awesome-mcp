@@ -650,46 +650,45 @@ function issueHeaderLines(issue: RedmineIssue): string[] {
   return parts;
 }
 
+function subtaskLines(children?: RedmineIssue[]): string[] {
+  if (!children?.length) return [];
+  return ['', '## Subtasks', '', ...children.map(child => {
+    const status = child.status?.name ? ` [${child.status.name}]` : '';
+    return `- #${child.id ?? '?'} ${child.subject ?? ''}${status}`;
+  })];
+}
+
+function relationLines(relations?: RedmineRelation[]): string[] {
+  if (!relations?.length) return [];
+  return ['', '## Relations', '', ...relations.map(r =>
+    `- #${r.id ?? '?'}: issue #${r.issue_id} ${r.relation_type ?? 'relates'} issue #${r.issue_to_id}`)];
+}
+
+/** A one-line `Label: a, b, c` for a list of associations, or nothing. */
+function refSummaryLines(label: string, refs?: RedmineRef[]): string[] {
+  if (!refs?.length) return [];
+  return ['', `${label}: ${refs.map(refName).filter(Boolean).join(', ')}`];
+}
+
+function attachmentLines(attachments?: RedmineAttachment[]): string[] {
+  if (!attachments?.length) return [];
+  return ['', '## Attachments', '', ...attachments.map(a => {
+    const size = a.filesize !== undefined ? `, ${a.filesize} bytes` : '';
+    return `- #${a.id ?? '?'} ${a.filename ?? ''} (${a.content_type ?? 'unknown type'}${size})`;
+  })];
+}
+
 /** Subtasks, relations, watchers and allowed statuses — each omitted when absent. */
 function issueAssociationLines(issue: RedmineIssue): string[] {
-  const parts: string[] = [];
-
-  if (issue.children?.length) {
-    parts.push('', '## Subtasks', '');
-    for (const child of issue.children) {
-      const status = child.status?.name ? ` [${child.status.name}]` : '';
-      parts.push(`- #${child.id ?? '?'} ${child.subject ?? ''}${status}`);
-    }
-  }
-
-  if (issue.relations?.length) {
-    parts.push('', '## Relations', '');
-    for (const relation of issue.relations) {
-      parts.push(`- #${relation.id ?? '?'}: issue #${relation.issue_id} ${relation.relation_type ?? 'relates'} issue #${relation.issue_to_id}`);
-    }
-  }
-
-  if (issue.watchers?.length) {
-    const names = issue.watchers.map(refName).filter(Boolean).join(', ');
-    parts.push('', `Watchers: ${names}`);
-  }
-
-  // The statuses this issue may legally move to — what updateIssue needs, and
-  // not derivable from the global status list, which ignores workflow rules.
-  if (issue.allowed_statuses?.length) {
-    const names = issue.allowed_statuses.map(refName).filter(Boolean).join(', ');
-    parts.push('', `Allowed next statuses: ${names}`);
-  }
-
-  if (issue.attachments?.length) {
-    parts.push('', '## Attachments', '');
-    for (const attachment of issue.attachments) {
-      const size = attachment.filesize !== undefined ? `, ${attachment.filesize} bytes` : '';
-      parts.push(`- #${attachment.id ?? '?'} ${attachment.filename ?? ''} (${attachment.content_type ?? 'unknown type'}${size})`);
-    }
-  }
-
-  return parts;
+  return [
+    ...subtaskLines(issue.children),
+    ...relationLines(issue.relations),
+    ...refSummaryLines('Watchers', issue.watchers),
+    // The statuses this issue may legally move to — what updateIssue needs, and
+    // not derivable from the global status list, which ignores workflow rules.
+    ...refSummaryLines('Allowed next statuses', issue.allowed_statuses),
+    ...attachmentLines(issue.attachments),
+  ];
 }
 
 /** The journal (comment + field-change history) Redmine returns for include=journals. */
@@ -719,8 +718,7 @@ export function formatIssue(issue: RedmineIssue): string {
 
   if (issue.description) parts.push('', '## Description', '', issue.description);
 
-  parts.push(...issueAssociationLines(issue));
-  parts.push(...issueHistoryLines(issue.journals));
+  parts.push(...issueAssociationLines(issue), ...issueHistoryLines(issue.journals));
 
   return parts.join('\n').trimEnd();
 }

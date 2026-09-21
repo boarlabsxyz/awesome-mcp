@@ -84,10 +84,23 @@ describe('/api/connect-token supports in-place re-authentication', () => {
   });
 
   it('routes every paste provider through the shared persist helper', () => {
-    // slack-bot and outline build their own names/emails but must not keep
-    // their own create call, or they silently lose re-auth again.
-    const calls = handler.match(/persistPasteConnection\(\{/g) || [];
+    // slack-bot, outline and redmine build their own names/emails but must not
+    // keep their own create call, or they silently lose re-auth again.
+    //
+    // Matches any call form, not just an inline object literal: outline and
+    // redmine now hand in a record built by buildOutlinePasteConnection /
+    // buildRedminePasteConnection (both need a per-connection base URL, which
+    // the shared connectPasteToken helper cannot carry). They still delegate,
+    // which is the property this guards.
+    const calls = handler.match(/persistPasteConnection\(/g) || [];
     assert.ok(calls.length >= 3, `expected every paste branch to delegate, found ${calls.length}`);
+  });
+
+  it('keeps the self-hosted providers on their dedicated builders', () => {
+    // A base URL that never reaches providerTokens produces a connection no
+    // tool can use, so these two must not fall back to connectPasteToken.
+    assert.match(handler, /buildOutlinePasteConnection\(/);
+    assert.match(handler, /buildRedminePasteConnection\(/);
   });
 
   it('verifies ownership and slug before writing to a named instance', () => {
