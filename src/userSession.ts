@@ -3,6 +3,7 @@ import { google, docs_v1, drive_v3, sheets_v4, calendar_v3, gmail_v1, slides_v1 
 import { OAuth2Client } from 'google-auth-library';
 import { UserRecord, updateTokens } from './userStore.js';
 import { McpConnection, GoogleTokens, updateMcpInstanceTokens, clearMcpInstanceTokensCache } from './mcpConnectionStore.js';
+import { resolveRedmineAuthMode } from './redmine/authMode.js';
 
 export interface UserSession {
   [key: string]: unknown;
@@ -74,6 +75,12 @@ export interface UserSession {
   redmineOauthClientSecret?: string;
   /** Connection instance id, so a refresh can persist rotated tokens back to the store. */
   redmineInstanceId?: string;
+  /**
+   * Which credential this connection holds: 'oauth' (Bearer) or 'apiKey'
+   * (X-Redmine-API-Key). Stored rather than inferred — see
+   * resolveRedmineAuthMode in src/redmine/authMode.ts.
+   */
+  redmineAuthMode?: 'oauth' | 'apiKey';
 }
 
 // Cache sessions to avoid recreating clients per request
@@ -521,15 +528,26 @@ export function createRedmineSession(
     refresh_token?: string;
     expiry_date?: number;
     baseUrl?: string;
+    authMode?: string;
   } | undefined;
   const accessToken = providerTokens?.access_token;
   if (!accessToken) {
     throw new Error(`Redmine access token missing for connection ${connection.instanceId}. Please reconnect.`);
   }
   const baseUrl = providerTokens?.baseUrl || process.env.REDMINE_BASE_URL || undefined;
+  const authMode = resolveRedmineAuthMode(providerTokens?.authMode, !!providerTokens?.refresh_token);
 
+  // The cache identity spans the base URL and auth mode, not just the token.
+  // A reconnect can legitimately re-point a connection at a different Redmine
+  // host while keeping the same API key, and comparing the token alone would
+  // then hand back a cached session still aimed at the old instance.
   const cacheKey = `${user.apiKey}:${connection.instanceId}`;
-  const cached = cachedSessionFor(cacheKey, accessToken, s => s.redmineAccessToken);
+  const cacheCredential = [accessToken, baseUrl ?? '', authMode].join('\u0000');
+  const cached = cachedSessionFor(cacheKey, cacheCredential, s =>
+    s.redmineAccessToken
+      ? [s.redmineAccessToken, s.redmineBaseUrl ?? '', s.redmineAuthMode ?? ''].join('\u0000')
+      : undefined,
+  );
   if (cached) return cached;
 
   // OAuth client credentials live in env (the same vars the catalog seed reads
@@ -551,6 +569,7 @@ export function createRedmineSession(
     redmineOauthClientId: oauthClientId,
     redmineOauthClientSecret: oauthClientSecret,
     redmineInstanceId: connection.instanceId,
+    redmineAuthMode: authMode,
     // Null placeholders for Google clients (Redmine MCP won't use them)
     googleDocs: null as any,
     googleDrive: null as any,

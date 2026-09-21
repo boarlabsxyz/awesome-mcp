@@ -17,7 +17,12 @@
 
 import { UserError } from 'fastmcp';
 import { UserSession } from '../userSession.js';
+import { stripTrailingSlashes } from '../util/url.js';
+import { resolveRedmineAuthMode, type RedmineAuthMode } from './authMode.js';
 import { redmineOauthUrls, refreshRedmineToken } from './oauthCallback.js';
+
+export { resolveRedmineAuthMode };
+export type { RedmineAuthMode };
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -244,8 +249,6 @@ export function mergeCustomFieldFilters(
 
 // ==================== Client ====================
 
-export type RedmineAuthMode = 'apiKey' | 'oauth';
-
 /**
  * Thin client over the Redmine REST API. One instance per tool call — it holds
  * only a token and a base URL, so construction is free.
@@ -254,11 +257,11 @@ export class RedmineClient {
   public readonly baseUrl: string;
 
   constructor(
-    private token: string,
+    private readonly token: string,
     baseUrl: string,
-    private authMode: RedmineAuthMode = 'apiKey',
+    private readonly authMode: RedmineAuthMode = 'apiKey',
   ) {
-    this.baseUrl = baseUrl.trim().replace(/\/+$/, '');
+    this.baseUrl = stripTrailingSlashes(baseUrl.trim());
   }
 
   private authHeaders(): Record<string, string> {
@@ -291,6 +294,12 @@ export class RedmineClient {
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: controller.signal,
+        // Node's fetch strips `Authorization` across an origin change but
+        // keeps custom headers, so a redirect off the configured instance
+        // would hand X-Redmine-API-Key to the Location host. Refuse instead
+        // of following — the same stance validatePasteToken takes at connect
+        // time, which is also why a redirecting base URL never gets stored.
+        redirect: 'error',
       });
     } catch (err: any) {
       if (err?.name === 'AbortError') {
@@ -499,8 +508,13 @@ function refName(ref?: RedmineRef | null): string {
   return ref.id ? `#${ref.id}` : '';
 }
 
-/** Push `Label: value` onto `parts` unless the value is empty. */
-function pushKV(parts: string[], label: string, value: unknown): void {
+/**
+ * Push `Label: value` onto `parts` unless the value is empty.
+ *
+ * Deliberately narrower than `unknown`: an object reaching here would render as
+ * "[object Object]", which looks like data rather than like a bug.
+ */
+function pushKV(parts: string[], label: string, value: string | number | null | undefined): void {
   if (value === undefined || value === null || value === '') return;
   parts.push(`${label}: ${value}`);
 }
@@ -513,7 +527,7 @@ function pushKV(parts: string[], label: string, value: unknown): void {
  * what stops a partial answer being reported as the complete one.
  */
 export function renderPageLine(page: RedminePage | undefined, shown: number): string | null {
-  if (!page || page.total_count === undefined) {
+  if (page?.total_count === undefined) {
     return shown > 0 ? `${shown} returned.` : null;
   }
   const total = page.total_count;
@@ -540,6 +554,19 @@ function renderEmptyList(title: string, noun: string, page?: RedminePage): strin
 }
 
 /** Render Redmine custom-field values as `Label: value` lines. */
+/**
+ * Render one custom-field cell. Redmine types these loosely (string, number,
+ * bool, or an array of any of those), so an object is serialized rather than
+ * allowed to stringify to "[object Object]" — a silent wrong value reads as
+ * data, while visible JSON reads as something to look at.
+ */
+function stringifyCell(raw: unknown): string {
+  if (raw === undefined || raw === null) return '';
+  if (typeof raw === 'string') return raw;
+  if (typeof raw === 'number' || typeof raw === 'boolean') return String(raw);
+  return JSON.stringify(raw);
+}
+
 export function formatCustomFields(fields?: RedmineCustomField[]): string[] {
   if (!Array.isArray(fields) || fields.length === 0) return [];
   const lines: string[] = [];
@@ -547,7 +574,9 @@ export function formatCustomFields(fields?: RedmineCustomField[]): string[] {
     if (!field?.name) continue;
     const raw = field.value;
     if (raw === undefined || raw === null || raw === '') continue;
-    const value = Array.isArray(raw) ? raw.filter(v => v !== '' && v !== null).join(', ') : String(raw);
+    const value = Array.isArray(raw)
+      ? raw.filter(v => v !== '' && v !== null && v !== undefined).map(stringifyCell).join(', ')
+      : stringifyCell(raw);
     if (!value) continue;
     lines.push(`  ${field.name}: ${value}`);
   }
@@ -569,8 +598,7 @@ function renderList<T>(
     parts.push(pageLine, '');
   }
   items.forEach((item, index) => {
-    parts.push(...renderItem(item, index));
-    parts.push('');
+    parts.push(...renderItem(item, index), '');
   });
   return parts.join('\n').trimEnd();
 }
@@ -594,8 +622,13 @@ export function formatIssueList(items: RedmineIssue[], page?: RedminePage): stri
   });
 }
 
-export function formatIssue(issue: RedmineIssue): string {
-  const parts = [`# Issue #${issue.id ?? '?'}: ${issue.subject ?? '(no subject)'}`, ''];
+/**
+ * The scalar header of an issue: everything that is one key and one value.
+ * Split from the association sections below purely so each piece stays small
+ * enough to read in one go.
+ */
+function issueHeaderLines(issue: RedmineIssue): string[] {
+  const parts: string[] = [];
   pushKV(parts, 'Project', refName(issue.project));
   pushKV(parts, 'Tracker', refName(issue.tracker));
   pushKV(parts, 'Status', refName(issue.status));
@@ -614,35 +647,41 @@ export function formatIssue(issue: RedmineIssue): string {
   pushKV(parts, 'Created', issue.created_on);
   pushKV(parts, 'Updated', issue.updated_on);
   pushKV(parts, 'Closed', issue.closed_on);
+  return parts;
+}
 
-  const customLines = formatCustomFields(issue.custom_fields);
-  if (customLines.length) parts.push('', 'Custom fields:', ...customLines);
+/** Subtasks, relations, watchers and allowed statuses — each omitted when absent. */
+function issueAssociationLines(issue: RedmineIssue): string[] {
+  const parts: string[] = [];
 
-  if (issue.description) parts.push('', '## Description', '', issue.description);
-
-  if (Array.isArray(issue.children) && issue.children.length) {
+  if (issue.children?.length) {
     parts.push('', '## Subtasks', '');
     for (const child of issue.children) {
-      parts.push(`- #${child.id ?? '?'} ${child.subject ?? ''}${child.status?.name ? ` [${child.status.name}]` : ''}`);
+      const status = child.status?.name ? ` [${child.status.name}]` : '';
+      parts.push(`- #${child.id ?? '?'} ${child.subject ?? ''}${status}`);
     }
   }
 
-  if (Array.isArray(issue.relations) && issue.relations.length) {
+  if (issue.relations?.length) {
     parts.push('', '## Relations', '');
     for (const relation of issue.relations) {
       parts.push(`- #${relation.id ?? '?'}: issue #${relation.issue_id} ${relation.relation_type ?? 'relates'} issue #${relation.issue_to_id}`);
     }
   }
 
-  if (Array.isArray(issue.watchers) && issue.watchers.length) {
-    parts.push('', `Watchers: ${issue.watchers.map(w => refName(w)).filter(Boolean).join(', ')}`);
+  if (issue.watchers?.length) {
+    const names = issue.watchers.map(refName).filter(Boolean).join(', ');
+    parts.push('', `Watchers: ${names}`);
   }
 
-  if (Array.isArray(issue.allowed_statuses) && issue.allowed_statuses.length) {
-    parts.push('', `Allowed next statuses: ${issue.allowed_statuses.map(s => refName(s)).filter(Boolean).join(', ')}`);
+  // The statuses this issue may legally move to — what updateIssue needs, and
+  // not derivable from the global status list, which ignores workflow rules.
+  if (issue.allowed_statuses?.length) {
+    const names = issue.allowed_statuses.map(refName).filter(Boolean).join(', ');
+    parts.push('', `Allowed next statuses: ${names}`);
   }
 
-  if (Array.isArray(issue.attachments) && issue.attachments.length) {
+  if (issue.attachments?.length) {
     parts.push('', '## Attachments', '');
     for (const attachment of issue.attachments) {
       const size = attachment.filesize !== undefined ? `, ${attachment.filesize} bytes` : '';
@@ -650,19 +689,38 @@ export function formatIssue(issue: RedmineIssue): string {
     }
   }
 
-  if (Array.isArray(issue.journals) && issue.journals.length) {
-    parts.push('', '## History', '');
-    for (const journal of issue.journals) {
-      const who = refName(journal.user) || 'unknown';
-      const privateFlag = journal.private_notes ? ' [private]' : '';
-      parts.push(`### ${journal.created_on ?? ''} — ${who}${privateFlag}`);
-      for (const detail of journal.details ?? []) {
-        parts.push(`  - ${detail.name ?? detail.property ?? 'field'}: ${detail.old_value ?? '(none)'} → ${detail.new_value ?? '(none)'}`);
-      }
-      if (journal.notes) parts.push('', journal.notes);
-      parts.push('');
+  return parts;
+}
+
+/** The journal (comment + field-change history) Redmine returns for include=journals. */
+function issueHistoryLines(journals?: RedmineJournal[]): string[] {
+  if (!journals?.length) return [];
+  const parts = ['', '## History', ''];
+  for (const journal of journals) {
+    const who = refName(journal.user) || 'unknown';
+    const privateFlag = journal.private_notes ? ' [private]' : '';
+    parts.push(`### ${journal.created_on ?? ''} — ${who}${privateFlag}`);
+    for (const detail of journal.details ?? []) {
+      const field = detail.name ?? detail.property ?? 'field';
+      parts.push(`  - ${field}: ${detail.old_value ?? '(none)'} → ${detail.new_value ?? '(none)'}`);
     }
+    if (journal.notes) parts.push('', journal.notes);
+    parts.push('');
   }
+  return parts;
+}
+
+export function formatIssue(issue: RedmineIssue): string {
+  const parts = [`# Issue #${issue.id ?? '?'}: ${issue.subject ?? '(no subject)'}`, ''];
+  parts.push(...issueHeaderLines(issue));
+
+  const customLines = formatCustomFields(issue.custom_fields);
+  if (customLines.length) parts.push('', 'Custom fields:', ...customLines);
+
+  if (issue.description) parts.push('', '## Description', '', issue.description);
+
+  parts.push(...issueAssociationLines(issue));
+  parts.push(...issueHistoryLines(issue.journals));
 
   return parts.join('\n').trimEnd();
 }
@@ -673,7 +731,7 @@ export function formatProjectList(items: RedmineProject[], page?: RedminePage): 
     pushKV(parts, 'ID', project.id);
     pushKV(parts, 'Identifier', project.identifier);
     pushKV(parts, 'Parent', refName(project.parent));
-    pushKV(parts, 'Visibility', project.is_public === undefined ? '' : project.is_public ? 'public' : 'private');
+    pushKV(parts, 'Visibility', visibilityLabel(project.is_public));
     pushKV(parts, 'Status', projectStatusName(project.status));
     pushKV(parts, 'Updated', project.updated_on);
     return parts;
@@ -686,7 +744,7 @@ export function formatProject(project: RedmineProject): string {
   pushKV(parts, 'Identifier', project.identifier);
   pushKV(parts, 'Parent', refName(project.parent));
   pushKV(parts, 'Homepage', project.homepage);
-  pushKV(parts, 'Visibility', project.is_public === undefined ? '' : project.is_public ? 'public' : 'private');
+  pushKV(parts, 'Visibility', visibilityLabel(project.is_public));
   pushKV(parts, 'Status', projectStatusName(project.status));
   pushKV(parts, 'Created', project.created_on);
   pushKV(parts, 'Updated', project.updated_on);
@@ -697,6 +755,12 @@ export function formatProject(project: RedmineProject): string {
   const customLines = formatCustomFields(project.custom_fields);
   if (customLines.length) parts.push('', 'Custom fields:', ...customLines);
   return parts.join('\n').trimEnd();
+}
+
+/** Redmine reports visibility as a tri-state: true, false, or absent. */
+function visibilityLabel(isPublic?: boolean): string {
+  if (isPublic === undefined) return '';
+  return isPublic ? 'public' : 'private';
 }
 
 /** Redmine encodes project status as an integer; 1/5/9 are the documented values. */
@@ -751,7 +815,8 @@ export function formatUser(user: RedmineUser): string {
     parts.push('', '## Project memberships', '');
     for (const membership of user.memberships) {
       const roles = (membership.roles ?? []).map(r => r.name ?? '').filter(Boolean).join(', ');
-      parts.push(`- ${refName(membership.project)}${roles ? ` — ${roles}` : ''}`);
+      const roleSuffix = roles ? ` — ${roles}` : '';
+      parts.push(`- ${refName(membership.project)}${roleSuffix}`);
     }
   }
   return parts.join('\n').trimEnd();
@@ -809,7 +874,8 @@ export function formatWikiPage(wiki: RedmineWikiPage): string {
   pushKV(parts, 'Created', wiki.created_on);
   pushKV(parts, 'Updated', wiki.updated_on);
   if (wiki.attachments?.length) {
-    parts.push('', `Attachments: ${wiki.attachments.map(a => a.filename ?? `#${a.id}`).join(', ')}`);
+    const names = wiki.attachments.map(a => a.filename ?? `#${a.id}`).join(', ');
+    parts.push('', `Attachments: ${names}`);
   }
   if (wiki.text) parts.push('', '## Content', '', wiki.text);
   return parts.join('\n').trimEnd();
@@ -858,7 +924,10 @@ export function formatMembershipList(items: RedmineMembership[], page?: RedmineP
     const parts = [`## ${i + 1}. ${who} [${kind}]`];
     pushKV(parts, 'Membership ID', membership.id);
     const roles = (membership.roles ?? [])
-      .map(r => `${r.name ?? `#${r.id}`}${r.inherited ? ' (inherited)' : ''}`)
+      .map(r => {
+        const name = r.name ?? `#${r.id}`;
+        return r.inherited ? `${name} (inherited)` : name;
+      })
       .filter(Boolean)
       .join(', ');
     pushKV(parts, 'Roles', roles);
@@ -886,7 +955,8 @@ export function formatRefList(
 ): string {
   return renderList(title, noun, items, page, (ref, i) => {
     const flags = [ref.is_default ? 'default' : '', ref.is_closed ? 'closed status' : ''].filter(Boolean);
-    return [`${i + 1}. ${ref.name ?? '(unnamed)'} — ID: ${ref.id ?? '?'}${flags.length ? ` [${flags.join(', ')}]` : ''}`];
+    const flagSuffix = flags.length ? ` [${flags.join(', ')}]` : '';
+    return [`${i + 1}. ${ref.name ?? '(unnamed)'} — ID: ${ref.id ?? '?'}${flagSuffix}`];
   });
 }
 
@@ -940,7 +1010,7 @@ export function getRedmineClient(session?: UserSession): RedmineClient {
     // is a broken connection, not something to paper over with a guess.
     throw new UserError('Redmine connection is missing its instance URL. Reconnect from the dashboard and enter your Redmine URL.');
   }
-  const authMode: RedmineAuthMode = session.redmineRefreshToken ? 'oauth' : 'apiKey';
+  const authMode = resolveRedmineAuthMode(session.redmineAuthMode, !!session.redmineRefreshToken);
   return new RedmineClient(session.redmineAccessToken, session.redmineBaseUrl, authMode);
 }
 
@@ -950,7 +1020,7 @@ function redmineValidationErrors(body: unknown): string[] {
   try {
     const parsed = JSON.parse(body) as { errors?: unknown };
     if (!Array.isArray(parsed?.errors)) return [];
-    return parsed.errors.map(e => String(e)).filter(Boolean);
+    return parsed.errors.map(String).filter(Boolean);
   } catch {
     return [];
   }
@@ -1080,7 +1150,10 @@ async function performRedmineRefresh(session: UserSession, log: RedmineToolLog):
         refresh_token: newRefresh,
         expiry_date: newExpiry,
         baseUrl: session.redmineBaseUrl,
-      });
+        // Carried through explicitly: a refresh that dropped this would leave
+        // the row looking like a pasted API key.
+        authMode: 'oauth',
+      } as any);
     } catch (err: any) {
       log.error(`Failed to persist refreshed Redmine tokens for ${instanceId}: ${err?.message ?? err}`);
     }

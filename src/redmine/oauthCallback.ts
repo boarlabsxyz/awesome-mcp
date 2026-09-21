@@ -24,6 +24,7 @@
 //     `admin`, not OAuth-style strings.
 
 import { postTokenGrant, type FetchImpl } from '../util/oauthTokenGrant.js';
+import { stripTrailingSlashes } from '../util/url.js';
 
 const TOKEN_EXCHANGE_TIMEOUT_MS = 15_000;
 const USERINFO_TIMEOUT_MS = 10_000;
@@ -32,8 +33,24 @@ export type { FetchImpl };
 
 /** Build the Doorkeeper endpoint URLs for a given Redmine base URL. */
 export function redmineOauthUrls(baseUrl: string): { authorizeUrl: string; tokenUrl: string } {
-  const base = baseUrl.trim().replace(/\/+$/, '');
+  const base = stripTrailingSlashes(baseUrl.trim());
   return { authorizeUrl: `${base}/oauth/authorize`, tokenUrl: `${base}/oauth/token` };
+}
+
+/**
+ * Recover the instance base URL from a catalog token URL.
+ *
+ * The catalog row is seeded from REDMINE_BASE_URL, so when that env var is
+ * missing on the process handling the callback the token URL is the only place
+ * the host survives. Returns '' when there is nothing usable — the caller
+ * refuses rather than storing an empty base URL, which would produce a
+ * connection no tool can use.
+ */
+export function redmineBaseFromTokenUrl(tokenUrl?: string | null): string {
+  const trimmed = stripTrailingSlashes((tokenUrl || '').trim());
+  const suffix = '/oauth/token';
+  if (!trimmed.endsWith(suffix)) return '';
+  return stripTrailingSlashes(trimmed.slice(0, -suffix.length));
 }
 
 export type ExchangeOk = {
@@ -156,7 +173,7 @@ export async function fetchRedmineCurrentUser(
   accessToken: string,
   fetchImpl: FetchImpl = fetch,
 ): Promise<{ login: string | null; email: string | null }> {
-  const base = baseUrl.trim().replace(/\/+$/, '');
+  const base = stripTrailingSlashes(baseUrl.trim());
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), USERINFO_TIMEOUT_MS);
   try {

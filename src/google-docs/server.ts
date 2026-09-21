@@ -1929,21 +1929,25 @@ async function startServer() {
         // NOTE: We skip seedDefaultCatalogs() here - the website service manages the catalog
         const INTERNAL_MCP_PORT = 3001;
 
-        // Pick the right MCP server based on MCP_SLUG
-        const mcpToStart = MCP_SLUG === "google-calendar" ? calendarServer
-                         : MCP_SLUG === "google-sheets"   ? sheetsServer
-                         : MCP_SLUG === "google-gmail"    ? gmailServer
-                         : MCP_SLUG === "google-slides"   ? slidesServer
-                         : MCP_SLUG === "google-drive"    ? driveServer
-                         : MCP_SLUG === "clickup"         ? clickUpServer
-                         : MCP_SLUG === "slack-bot"        ? slackBotServer
-                         : MCP_SLUG === "slack"           ? slackUserServer
-                         : MCP_SLUG === "outline"         ? outlineServer
-                         : MCP_SLUG === "peopleforce"     ? peopleForceServer
-                         : MCP_SLUG === "peopleforce-v4"  ? peopleForceV4Server
-                         : MCP_SLUG === "hubspot"         ? hubspotServer
-                         : MCP_SLUG === "redmine"         ? redmineServer
-                         : server; // default: google-docs
+        // Pick the right MCP server based on MCP_SLUG. A lookup table rather
+        // than a ternary chain: adding a connector is one line, and an
+        // unmatched slug falls through to google-docs exactly as before.
+        const MCP_SERVERS_BY_SLUG: Record<string, typeof server> = {
+          "google-calendar": calendarServer,
+          "google-sheets":   sheetsServer,
+          "google-gmail":    gmailServer,
+          "google-slides":   slidesServer,
+          "google-drive":    driveServer,
+          "clickup":         clickUpServer,
+          "slack-bot":       slackBotServer,
+          "slack":           slackUserServer,
+          "outline":         outlineServer,
+          "peopleforce":     peopleForceServer,
+          "peopleforce-v4":  peopleForceV4Server,
+          "hubspot":         hubspotServer,
+          "redmine":         redmineServer,
+        };
+        const mcpToStart = MCP_SERVERS_BY_SLUG[MCP_SLUG] ?? server; // default: google-docs
 
         mcpToStart.start({
           transportType: "httpStream",

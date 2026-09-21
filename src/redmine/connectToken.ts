@@ -5,6 +5,7 @@
 // table lives in ../util/baseUrlGuard.
 
 import { checkBaseUrl } from '../util/baseUrlGuard.js';
+import { stripTrailingSlashes } from '../util/url.js';
 import {
   validatePasteToken,
   type ValidateInputBaseUrl,
@@ -73,7 +74,7 @@ export function validateRedmineToken(input: ValidateInput): Promise<ValidateResu
       logMessage: `Rejected Redmine base URL: ${badUrl}`,
     });
   }
-  const baseUrl = (input.baseUrl as string).trim().replace(/\/+$/, '');
+  const baseUrl = stripTrailingSlashes((input.baseUrl as string).trim());
 
   return validatePasteToken({
     token: input.token,

@@ -28,6 +28,7 @@ import { validateOutlineToken } from '../outline/connectToken.js';
 import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
 import { validateRedmineToken } from '../redmine/connectToken.js';
+import { resolveRedmineAuthMode } from '../redmine/authMode.js';
 
 /**
  * `healthy`  — credential works.
@@ -280,14 +281,19 @@ export async function checkConnectionHealth(
         if (!redmineBaseUrl) {
           return { state: 'unknown', reason: 'No Redmine instance URL configured for this connection.' };
         }
-        // A refresh token is what distinguishes an OAuth connection from a
-        // pasted API key, and it decides which auth header the probe must use
-        // — same rule getRedmineClient applies.
-        const redmineIsOauth = !!providerTokens.refresh_token;
+        // The probe must use the header the credential actually is: an OAuth
+        // token sent as X-Redmine-API-Key is rejected, which would report a
+        // healthy connection as a bad key. Read the stored mode, not the
+        // refresh token — Redmine may issue an OAuth token without one.
+        const redmineAuthMode = resolveRedmineAuthMode(
+          (providerTokens as { authMode?: string }).authMode,
+          !!providerTokens.refresh_token,
+        );
+        // canSelfHeal stays tied to the refresh token: an OAuth connection
+        // with no refresh token genuinely cannot renew itself.
         return fromValidateResult(await validateRedmineToken({
-          token: accessToken, baseUrl: redmineBaseUrl, fetchImpl,
-          authMode: redmineIsOauth ? 'oauth' : 'apiKey',
-        } as any), redmineIsOauth);
+          token: accessToken, baseUrl: redmineBaseUrl, fetchImpl, authMode: redmineAuthMode,
+        } as any), !!providerTokens.refresh_token);
       }
 
       default:

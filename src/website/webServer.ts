@@ -317,7 +317,7 @@ import { clearSessionCache, createUserSession, createUserSessionFromConnection, 
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
 import { exchangeOutlineOauthCode, buildOutlineInstanceName } from '../outline/oauthCallback.js';
 import { exchangeHubSpotOauthCode, buildHubSpotOauthInstanceName, HUBSPOT_TOKEN_URL } from '../hubspot/oauthCallback.js';
-import { exchangeRedmineOauthCode, redmineOauthUrls } from '../redmine/oauthCallback.js';
+import { exchangeRedmineOauthCode, redmineOauthUrls, redmineBaseFromTokenUrl } from '../redmine/oauthCallback.js';
 import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceNameFromToken } from '../outline/connectToken.js';
 import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
 import { validatePeopleForceV4Token } from '../peopleforce-v4/connectToken.js';
@@ -910,6 +910,46 @@ async function guardAttempt(req: Request, email: string): Promise<RateLimitVerdi
  * Registers all shared routes used by both single-service and multi-service modes.
  * Includes: auth, dashboard, connect/reconnect OAuth, API endpoints, admin, catalogs.
  */
+/**
+ * Validate a pasted Redmine URL + API key and shape the connection record.
+ *
+ * Lives outside the /api/connect-token handler so that handler stays under the
+ * cognitive-complexity budget. Shaped like the Outline branch rather than the
+ * two-line connectPasteToken helper, because that helper stores only
+ * { access_token } and a Redmine connection without its instance URL is
+ * unusable — there is no public Redmine to fall back to.
+ */
+async function buildRedminePasteConnection(input: {
+  token: string;
+  baseUrl?: string;
+  serviceName: string;
+  instanceName?: string;
+}): Promise<
+  | { ok: true; connection: { provider: string; serviceLogName: string; name: string; providerTokens: Record<string, any>; providerEmail: string | null } }
+  | { ok: false; status: number; userMessage: string; logMessage: string }
+> {
+  const validate = await validateRedmineToken({ baseUrl: input.baseUrl ?? '', token: input.token });
+  if (!validate.ok) return validate;
+  return {
+    ok: true,
+    connection: {
+      provider: 'redmine',
+      serviceLogName: `Redmine (${validate.baseUrl})`,
+      name: buildRedmineInstanceName({
+        serviceName: input.serviceName,
+        providedInstanceName: input.instanceName,
+        baseUrl: validate.baseUrl,
+      }),
+      // baseUrl rides along for the same reason it does for Outline: a re-auth
+      // can legitimately move the connection to a different host, and it was
+      // re-validated just above either way. authMode is explicit so nothing
+      // downstream has to infer it from the absent refresh token.
+      providerTokens: { access_token: input.token, baseUrl: validate.baseUrl, authMode: 'apiKey' },
+      providerEmail: null,
+    },
+  };
+}
+
 function registerSharedRoutes(app: express.Express): void {
   // Serve config to frontend (BASE_URL, auth mode)
   app.get('/api/config', (_req, res) => {
@@ -1996,9 +2036,8 @@ function registerSharedRoutes(app: express.Express): void {
         // catalog row was seeded from REDMINE_BASE_URL, so when the env var is
         // missing on this process the token URL still carries the host — strip
         // the /oauth/token suffix back off rather than storing ''.
-        const redmineEnvBaseUrl = (process.env.REDMINE_BASE_URL || '').replace(/\/+$/, '');
-        const redmineBaseUrl = redmineEnvBaseUrl
-          || (mcp.oauthTokenUrl || '').replace(/\/oauth\/token\/*$/, '').replace(/\/+$/, '');
+        const redmineEnvBaseUrl = stripTrailingSlashes(process.env.REDMINE_BASE_URL || '');
+        const redmineBaseUrl = redmineEnvBaseUrl || redmineBaseFromTokenUrl(mcp.oauthTokenUrl);
         if (!redmineBaseUrl) {
           console.error('[MCP Connect] Redmine OAuth attempted with no REDMINE_BASE_URL and no usable catalog token URL');
           res.status(500).send('Redmine OAuth is not configured on this deployment. Ask an administrator to set REDMINE_BASE_URL, REDMINE_CLIENT_ID and REDMINE_CLIENT_SECRET, or connect with a Redmine API key instead.');
@@ -2028,6 +2067,10 @@ function registerSharedRoutes(app: express.Express): void {
           refresh_token: exchange.refreshToken ?? undefined,
           expiry_date: exchange.expiresIn ? Date.now() + exchange.expiresIn * 1000 : undefined,
           baseUrl: redmineBaseUrl,
+          // Explicit, because Redmine may return an access token with no
+          // refresh token — inferring the mode from refresh_token would then
+          // send this Bearer token as X-Redmine-API-Key and read as a bad key.
+          authMode: 'oauth',
         };
         const emptyGoogleTokensForRedmine = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
         const redmineInstanceName = buildRedmineInstanceName({
@@ -2330,33 +2373,18 @@ function registerSharedRoutes(app: express.Express): void {
       }
 
       if (mcpSlug === 'redmine') {
-        // Redmine paste-token flow: the body carries { token, baseUrl,
-        // instanceName? }. Shaped like Outline rather than the two-line
-        // connectPasteToken helper because that helper stores only the token,
-        // and a Redmine connection without its instance URL is unusable —
-        // there is no public Redmine to fall back to.
-        const { baseUrl } = req.body as { baseUrl?: string };
-        const validate = await validateRedmineToken({ baseUrl: baseUrl ?? '', token });
-        if (!validate.ok) {
-          console.error(`[connect-token] ${validate.logMessage}`);
-          res.status(validate.status).json({ error: validate.userMessage });
+        const built = await buildRedminePasteConnection({
+          token,
+          baseUrl: (req.body as { baseUrl?: string }).baseUrl,
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          instanceName,
+        });
+        if (!built.ok) {
+          console.error(`[connect-token] ${built.logMessage}`);
+          res.status(built.status).json({ error: built.userMessage });
           return;
         }
-
-        await persistPasteConnection({
-          provider: 'redmine',
-          serviceLogName: `Redmine (${validate.baseUrl})`,
-          name: buildRedmineInstanceName({
-            serviceName: mcp.name.replace(' MCP', '').trim(),
-            providedInstanceName: instanceName,
-            baseUrl: validate.baseUrl,
-          }),
-          // baseUrl rides along for the same reason it does for Outline: a
-          // re-auth can legitimately move the connection to a different host,
-          // and it was re-validated just above either way.
-          providerTokens: { access_token: token, baseUrl: validate.baseUrl },
-          providerEmail: null,
-        });
+        await persistPasteConnection(built.connection);
         return;
       }
 
