@@ -63,10 +63,15 @@ describe('dashboard usesPastedToken()', () => {
   });
 });
 
-// The server half is a long inline Express handler with no seam to import, so
-// these assert the shape that makes in-place repair possible at all. They are
-// coarse on purpose: they catch a regression that reverts any branch to an
+// The server half is still asserted by source shape rather than by calling it:
+// the route handler is a long inline Express closure. These are coarse on
+// purpose — they catch a regression that reverts any branch to an
 // unconditional create, which is exactly how this bug existed.
+//
+// The re-auth logic itself now lives in the module-level
+// persistPasteConnectionFor, so the two halves are sliced separately: the
+// handler for "every branch delegates", the helper for "delegating actually
+// repairs in place".
 describe('/api/connect-token supports in-place re-authentication', () => {
   const source = fs.readFileSync(webServerPath, 'utf8');
   const start = source.indexOf("app.post('/api/connect-token'");
@@ -78,6 +83,13 @@ describe('/api/connect-token supports in-place re-authentication', () => {
   const end = source.indexOf(endMarker, start);
   assert.notEqual(end, -1, 'handler end marker not found — did the fallthrough change?');
   const handler = source.slice(start, end);
+
+  // The extracted helper that every branch above delegates to.
+  const helperStart = source.indexOf('async function persistPasteConnectionFor(');
+  assert.notEqual(helperStart, -1, 'persistPasteConnectionFor not found — was it renamed?');
+  const helperEnd = source.indexOf('\n}\n', helperStart);
+  assert.notEqual(helperEnd, -1, 'persistPasteConnectionFor end not found');
+  const persistHelper = source.slice(helperStart, helperEnd);
 
   it('accepts instanceId from the request body', () => {
     assert.match(handler, /const \{ mcpSlug, token, instanceName, instanceId \}/);
@@ -106,16 +118,16 @@ describe('/api/connect-token supports in-place re-authentication', () => {
   it('verifies ownership and slug before writing to a named instance', () => {
     // Without this an instanceId from another account would be writable.
     assert.match(
-      handler,
+      persistHelper,
       /existing\.userId !== userId \|\| existing\.mcpSlug !== mcpSlug/,
     );
   });
 
   it('updates in place rather than creating when instanceId is present', () => {
-    assert.match(handler, /if \(instanceId\)[\s\S]{0,600}updateMcpInstanceProviderTokens/);
+    assert.match(persistHelper, /if \(instanceId\)[\s\S]{0,900}updateMcpInstanceProviderTokens/);
   });
 
   it('reports the reauthenticated case distinctly from a fresh connect', () => {
-    assert.match(handler, /reauthenticated: true/);
+    assert.match(persistHelper, /reauthenticated: true/);
   });
 });

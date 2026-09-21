@@ -910,6 +910,70 @@ async function guardAttempt(req: Request, email: string): Promise<RateLimitVerdi
  * Registers all shared routes used by both single-service and multi-service modes.
  * Includes: auth, dashboard, connect/reconnect OAuth, API endpoints, admin, catalogs.
  */
+/** What a paste-token branch hands to persistPasteConnectionFor. */
+interface PasteConnectionOpts {
+  provider: string;
+  serviceLogName: string;
+  name: string;
+  providerTokens: Record<string, any>;
+  providerEmail: string | null;
+}
+
+/**
+ * Create a paste-token connection, or repair an existing one in place when the
+ * request named an instanceId.
+ *
+ * Hoisted out of the /api/connect-token handler: it is the whole re-auth
+ * contract for the paste flow, it was the largest thing keeping that handler
+ * over the cognitive-complexity budget, and it is worth reading on its own
+ * rather than buried three levels into a route.
+ */
+async function persistPasteConnectionFor(
+  ctx: { instanceId?: string; userId: number; mcpSlug: string; userApiKey: string; res: express.Response },
+  opts: PasteConnectionOpts,
+): Promise<void> {
+  const { instanceId, userId, mcpSlug, res } = ctx;
+  if (instanceId) {
+    const existing = await getMcpConnectionByInstanceId(instanceId);
+    if (!existing || existing.userId !== userId || existing.mcpSlug !== mcpSlug) {
+      res.status(404).json({ error: 'Instance not found or access denied.' });
+      return;
+    }
+    // A straight replace, not a merge: unlike the OAuth reconnect path there is
+    // nothing partial to preserve, because the paste flow produces every field
+    // it stores (access_token, plus baseUrl for the self-hosted providers). No
+    // refresh tokens and no access rules live here.
+    await updateMcpInstanceProviderTokens(existing.instanceId, opts.providerTokens as any);
+
+    // Drop the cached session, or the replaced credential changes nothing that
+    // matters: the session cache memoises by `${apiKey}:${instanceId}` in a
+    // plain Map with no TTL, so a session built from the token the user just
+    // replaced would otherwise be served for the life of the process —
+    // defeating the entire point of re-entering it. Same reason the
+    // access-rules endpoint clears it after writing.
+    const { clearMcpSessionCache } = await import('../userSession.js');
+    clearMcpSessionCache(ctx.userApiKey, existing.instanceId);
+    await clearConnectionHealthCache(existing.instanceId);
+
+    console.error(`User ${userId} re-authenticated ${opts.serviceLogName} MCP: ${existing.instanceId}`);
+    res.json({
+      success: true,
+      instanceId: existing.instanceId,
+      instanceName: existing.instanceName,
+      reauthenticated: true,
+    });
+    return;
+  }
+
+  const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+  const connection = await createMcpInstance(
+    userId, mcpSlug, opts.name, emptyGoogleTokens, null,
+    opts.provider, opts.providerTokens as any, opts.providerEmail,
+  );
+  console.error(`User ${userId} connected ${opts.serviceLogName} MCP: ${connection.instanceId}`);
+  res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
+}
+
 /**
  * Validate a pasted Outline URL + API key and shape the connection record.
  * Sibling of buildRedminePasteConnection — both self-hosted connectors need a
@@ -2272,52 +2336,8 @@ function registerSharedRoutes(app: express.Express): void {
        * for a DIFFERENT account is a new connection, not a repair, and silently
        * relabelling the user's instance would hide that.
        */
-      const persistPasteConnection = async (opts: {
-        provider: string;
-        serviceLogName: string;
-        name: string;
-        providerTokens: Record<string, any>;
-        providerEmail: string | null;
-      }): Promise<void> => {
-        if (instanceId) {
-          const existing = await getMcpConnectionByInstanceId(instanceId);
-          if (!existing || existing.userId !== userId || existing.mcpSlug !== mcpSlug) {
-            res.status(404).json({ error: 'Instance not found or access denied.' });
-            return;
-          }
-          // A straight replace, not a merge: unlike the OAuth reconnect path
-          // there is nothing partial to preserve, because the paste flow
-          // produces every field it stores (access_token, plus baseUrl for
-          // Outline). No refresh tokens and no access rules live here.
-          await updateMcpInstanceProviderTokens(existing.instanceId, opts.providerTokens as any);
-
-          // Drop the cached session, or the replaced credential changes nothing
-          // that matters: buildMcpSession memoises by `${apiKey}:${instanceId}`
-          // in a plain Map with no TTL, so a session built from the token the
-          // user just replaced would otherwise be served for the life of the
-          // process — defeating the entire point of re-entering it. Same reason
-          // the access-rules endpoint clears it after writing.
-          const { clearMcpSessionCache } = await import('../userSession.js');
-          clearMcpSessionCache(user.apiKey, existing.instanceId);
-          await clearConnectionHealthCache(existing.instanceId);
-
-          console.error(`User ${userId} re-authenticated ${opts.serviceLogName} MCP: ${existing.instanceId}`);
-          res.json({
-            success: true,
-            instanceId: existing.instanceId,
-            instanceName: existing.instanceName,
-            reauthenticated: true,
-          });
-          return;
-        }
-        const emptyGoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
-        const connection = await createMcpInstance(
-          userId, mcpSlug, opts.name, emptyGoogleTokens, null,
-          opts.provider, opts.providerTokens as any, opts.providerEmail,
-        );
-        console.error(`User ${userId} connected ${opts.serviceLogName} MCP: ${connection.instanceId}`);
-        res.json({ success: true, instanceId: connection.instanceId, instanceName: connection.instanceName });
-      };
+      const persistPasteConnection = (opts: PasteConnectionOpts): Promise<void> =>
+        persistPasteConnectionFor({ instanceId, userId, mcpSlug, userApiKey: user.apiKey, res }, opts);
 
       // Shared paste-token connect flow for simple bearer/API-key providers:
       // validate the pasted credential, then store just { access_token }. Each
