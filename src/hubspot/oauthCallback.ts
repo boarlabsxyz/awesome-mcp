@@ -11,6 +11,8 @@
 //   - Token metadata: GET /oauth/v1/access-tokens/{token} → { hub_domain, user, ... }
 //     used only to name the connection.
 
+import { postTokenGrant as postOauthTokenGrant, type TokenGrantOk } from '../util/oauthTokenGrant.js';
+
 const TOKEN_EXCHANGE_TIMEOUT_MS = 15_000;
 const TOKENINFO_TIMEOUT_MS = 10_000;
 
@@ -118,59 +120,26 @@ export async function refreshHubSpotToken(input: {
   return { ok: true, accessToken: result.accessToken, refreshToken: result.refreshToken, expiresIn: result.expiresIn };
 }
 
-type TokenOk = { ok: true; accessToken: string; refreshToken: string | null; expiresIn: number | null };
+type TokenOk = TokenGrantOk;
 
-/** POST the token endpoint under a timeout; the caller maps thrown errors. */
-function fetchTokenGrant(tokenUrl: string, params: Record<string, string>, fetchImpl: FetchImpl): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TOKEN_EXCHANGE_TIMEOUT_MS);
-  return fetchImpl(tokenUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(params).toString(),
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timeout));
-}
-
-/** Map a thrown fetch failure (timeout / network) to a discriminated error. */
-function grantNetworkError(err: any, label: string, tokenUrl: string): ExchangeErr {
-  const timedOut = err?.name === 'AbortError';
-  return {
-    ok: false,
-    status: 502,
-    userMessage: `${label} ${timedOut ? 'timed out' : 'failed'}. Please try again.`,
-    logMessage: timedOut ? `${label} timed out: POST ${tokenUrl}` : `${label} fetch failed: ${err?.message ?? err}`,
-  };
-}
-
-/** Turn a token-endpoint Response into a normalized token result. */
-async function readGrantResponse(response: Response, label: string): Promise<TokenOk | ExchangeErr> {
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    return { ok: false, status: response.status, userMessage: `${label} failed. Please try again.`, logMessage: `${label} failed: ${response.status} ${body}` };
-  }
-  const parsed = (await response.json().catch(() => null)) as { access_token?: string; refresh_token?: string; expires_in?: number } | null;
-  if (!parsed?.access_token) {
-    return { ok: false, status: 500, userMessage: `${label} returned no access token. Please try again.`, logMessage: `${label} response missing access_token: ${JSON.stringify(parsed)}` };
-  }
-  return { ok: true, accessToken: parsed.access_token, refreshToken: parsed.refresh_token ?? null, expiresIn: typeof parsed.expires_in === 'number' ? parsed.expires_in : null };
-}
-
-/** Shared POST for both grant types. `phase` only shapes the log/user messages. */
-async function postTokenGrant(
+/**
+ * Shared POST for both grant types. `phase` only shapes the log/user messages;
+ * the timeout, network mapping and access_token check live in
+ * src/util/oauthTokenGrant.ts so Redmine's exchange isn't a copy of this one.
+ */
+function postTokenGrant(
   tokenUrl: string,
   params: Record<string, string>,
   fetchImpl: FetchImpl,
   phase: 'exchange' | 'refresh',
 ): Promise<TokenOk | ExchangeErr> {
-  const label = phase === 'exchange' ? 'HubSpot token exchange' : 'HubSpot token refresh';
-  let response: Response;
-  try {
-    response = await fetchTokenGrant(tokenUrl, params, fetchImpl);
-  } catch (err: any) {
-    return grantNetworkError(err, label, tokenUrl);
-  }
-  return readGrantResponse(response, label);
+  return postOauthTokenGrant({
+    tokenUrl,
+    params,
+    fetchImpl,
+    label: phase === 'exchange' ? 'HubSpot token exchange' : 'HubSpot token refresh',
+    timeoutMs: TOKEN_EXCHANGE_TIMEOUT_MS,
+  });
 }
 
 /**

@@ -17,7 +17,7 @@ const BASE_URL = stripTrailingSlashes(process.env.BASE_URL || 'http://localhost:
 // though it has entries in REST_CATALOG. (restCatalog.test.ts guards the drift.)
 export const SERVICE_VALUES: [RestService, ...RestService[]] = [
   'docs', 'sheets', 'calendar', 'drive', 'gmail', 'slides', 'clickup', 'slack',
-  'outline', 'peopleforce', 'hubspot',
+  'outline', 'peopleforce', 'hubspot', 'redmine',
 ];
 
 export function registerListRestEndpoints(server: FastMCP<UserSession>): void {

@@ -63,10 +63,37 @@ describe('dashboard usesPastedToken()', () => {
   });
 });
 
-// The server half is a long inline Express handler with no seam to import, so
-// these assert the shape that makes in-place repair possible at all. They are
-// coarse on purpose: they catch a regression that reverts any branch to an
+/**
+ * Return the source text of a top-level function, from its signature to the
+ * closing brace in column 0. Throws — rather than asserting — so it can be
+ * called while building the suite.
+ */
+function sliceFunction(source: string, signature: string): string {
+  const start = source.indexOf(signature);
+  if (start === -1) throw new Error(`${signature} not found — was it renamed?`);
+  const end = source.indexOf('\n}\n', start);
+  if (end === -1) throw new Error(`end of ${signature} not found`);
+  return source.slice(start, end);
+}
+
+/** Return the source text of a top-level `const NAME = ...;` declaration. */
+function sliceConst(source: string, declaration: string): string {
+  const start = source.indexOf(declaration);
+  if (start === -1) throw new Error(`${declaration} not found — was it renamed?`);
+  const end = source.indexOf('\n};\n', start);
+  if (end === -1) throw new Error(`end of ${declaration} not found`);
+  return source.slice(start, end);
+}
+
+// The server half is still asserted by source shape rather than by calling it:
+// the route handler is a long inline Express closure. These are coarse on
+// purpose — they catch a regression that reverts any branch to an
 // unconditional create, which is exactly how this bug existed.
+//
+// The re-auth logic itself now lives in the module-level
+// persistPasteConnectionFor, so the two halves are sliced separately: the
+// handler for "every branch delegates", the helper for "delegating actually
+// repairs in place".
 describe('/api/connect-token supports in-place re-authentication', () => {
   const source = fs.readFileSync(webServerPath, 'utf8');
   const start = source.indexOf("app.post('/api/connect-token'");
@@ -79,30 +106,50 @@ describe('/api/connect-token supports in-place re-authentication', () => {
   assert.notEqual(end, -1, 'handler end marker not found — did the fallthrough change?');
   const handler = source.slice(start, end);
 
+  // The extracted helper that every branch above delegates to. Sliced by a
+  // function that throws rather than by describe-level assertions, which Sonar
+  // (rightly) flags: an assertion outside a test reports as a suite error with
+  // no name attached to it.
+  const persistHelper = sliceFunction(source, 'async function persistPasteConnectionFor(');
+
   it('accepts instanceId from the request body', () => {
     assert.match(handler, /const \{ mcpSlug, token, instanceName, instanceId \}/);
   });
 
-  it('routes every paste provider through the shared persist helper', () => {
-    // slack-bot and outline build their own names/emails but must not keep
-    // their own create call, or they silently lose re-auth again.
-    const calls = handler.match(/persistPasteConnection\(\{/g) || [];
-    assert.ok(calls.length >= 3, `expected every paste branch to delegate, found ${calls.length}`);
+  it('never creates a connection itself, so no branch can skip re-auth', () => {
+    // This is the regression that produced the original bug: a branch that
+    // calls createMcpInstance directly always creates, so re-entering a
+    // credential silently made a second connection instead of repairing the
+    // named one. Only persistPasteConnectionFor may create, and it checks
+    // instanceId first.
+    assert.doesNotMatch(handler, /createMcpInstance\(/);
+    assert.match(handler, /persistPasteConnection\(/);
+  });
+
+  it('keeps the self-validating providers on their dedicated builders', () => {
+    // Slack names the instance from auth.test; Outline and Redmine are
+    // self-hosted and must persist a base URL. connectPasteToken stores only
+    // { access_token }, so a fall back to it would produce a connection no
+    // tool can use.
+    const table = sliceConst(source, 'const PASTE_CONNECTION_BUILDERS');
+    assert.match(table, /buildSlackBotPasteConnection/);
+    assert.match(table, /buildOutlinePasteConnection/);
+    assert.match(table, /buildRedminePasteConnection/);
   });
 
   it('verifies ownership and slug before writing to a named instance', () => {
     // Without this an instanceId from another account would be writable.
     assert.match(
-      handler,
+      persistHelper,
       /existing\.userId !== userId \|\| existing\.mcpSlug !== mcpSlug/,
     );
   });
 
   it('updates in place rather than creating when instanceId is present', () => {
-    assert.match(handler, /if \(instanceId\)[\s\S]{0,600}updateMcpInstanceProviderTokens/);
+    assert.match(persistHelper, /if \(instanceId\)[\s\S]{0,900}updateMcpInstanceProviderTokens/);
   });
 
   it('reports the reauthenticated case distinctly from a fresh connect', () => {
-    assert.match(handler, /reauthenticated: true/);
+    assert.match(persistHelper, /reauthenticated: true/);
   });
 });

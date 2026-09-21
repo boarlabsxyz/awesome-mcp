@@ -42,8 +42,14 @@ export interface PasteTokenValidationConfig {
   serviceLabel: string;
   /** Credential noun, e.g. "API key" or "access token". */
   credentialLabel: string;
-  /** Full user-facing message for a 401/403 rejection (provider-specific). */
-  rejectedMessage: string;
+  /**
+   * Full user-facing message for a 401/403 rejection (provider-specific).
+   * Pass a function to vary the wording by status — Redmine needs this because
+   * 403 means "the REST API is switched off" while 401 means "bad credential",
+   * and telling someone to re-issue a key that was never the problem is worse
+   * than saying nothing.
+   */
+  rejectedMessage: string | ((status: number) => string);
   /** Resolve the effective base URL (must return it with trailing slashes stripped). */
   resolveBaseUrl: (provided?: string) => string;
   /** Build the GET URL to probe, given the resolved base URL. */
@@ -115,7 +121,10 @@ export async function validatePasteToken(cfg: PasteTokenValidationConfig): Promi
     }
 
     if (response.status === 401 || response.status === 403) {
-      return err(400, cfg.rejectedMessage, `${label} validation unauthorized: ${response.status}`);
+      const message = typeof cfg.rejectedMessage === 'function'
+        ? cfg.rejectedMessage(response.status)
+        : cfg.rejectedMessage;
+      return err(400, message, `${label} validation unauthorized: ${response.status}`);
     }
 
     if (!response.ok) {

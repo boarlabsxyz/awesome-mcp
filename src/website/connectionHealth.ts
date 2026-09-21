@@ -27,6 +27,8 @@ import type { McpConnection } from '../mcpConnectionStore.js';
 import { validateOutlineToken } from '../outline/connectToken.js';
 import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
+import { validateRedmineToken } from '../redmine/connectToken.js';
+import { resolveRedmineAuthMode } from '../redmine/authMode.js';
 
 /**
  * `healthy`  — credential works.
@@ -265,6 +267,32 @@ export async function checkConnectionHealth(
         if (!accessToken) return { state: 'reauth', reason: 'No HubSpot token stored.' };
         return fromValidateResult(await validateHubSpotToken({
           token: accessToken, baseUrl: providerTokens.baseUrl, fetchImpl,
+        } as any), !!providerTokens.refresh_token);
+      }
+
+      case 'redmine': {
+        if (!accessToken) return { state: 'reauth', reason: 'No Redmine credential stored.' };
+        // Guarded before probing for the same reason as Outline: Redmine is
+        // self-hosted, validateRedmineToken reports a missing base URL with
+        // status 400 — the same status a rejected credential gets — so it
+        // would otherwise render a Reconnect button that cannot possibly fix
+        // a missing URL. Our configuration is not the user's credential.
+        const redmineBaseUrl = providerTokens.baseUrl || process.env.REDMINE_BASE_URL || '';
+        if (!redmineBaseUrl) {
+          return { state: 'unknown', reason: 'No Redmine instance URL configured for this connection.' };
+        }
+        // The probe must use the header the credential actually is: an OAuth
+        // token sent as X-Redmine-API-Key is rejected, which would report a
+        // healthy connection as a bad key. Read the stored mode, not the
+        // refresh token — Redmine may issue an OAuth token without one.
+        const redmineAuthMode = resolveRedmineAuthMode(
+          (providerTokens as { authMode?: string }).authMode,
+          !!providerTokens.refresh_token,
+        );
+        // canSelfHeal stays tied to the refresh token: an OAuth connection
+        // with no refresh token genuinely cannot renew itself.
+        return fromValidateResult(await validateRedmineToken({
+          token: accessToken, baseUrl: redmineBaseUrl, fetchImpl, authMode: redmineAuthMode,
         } as any), !!providerTokens.refresh_token);
       }
 

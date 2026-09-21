@@ -23,7 +23,8 @@ export type RestService =
   | 'slack'
   | 'outline'
   | 'peopleforce'
-  | 'hubspot';
+  | 'hubspot'
+  | 'redmine';
 
 /**
  * Which `src/<dir>/server.ts` implements each service's MCP tools.
@@ -48,6 +49,7 @@ export const SERVICE_SERVER_PATH: Record<RestService, string> = {
   outline: 'src/outline/server.ts',
   peopleforce: 'src/peopleforce/server.ts',
   hubspot: 'src/hubspot/server.ts',
+  redmine: 'src/redmine/server.ts',
 };
 
 export interface RestEndpoint {
@@ -219,6 +221,33 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/tickets', summary: 'Get HubSpot tickets by criteria', mcpToolName: 'getTickets', openapiOperationId: 'getHubSpotTickets', status: 'planned' },
   { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/tickets/{ticketId}/conversation-threads', summary: 'Get conversation threads for a HubSpot ticket', mcpToolName: 'getTicketConversationThreads', openapiOperationId: 'getHubSpotTicketConversationThreads', status: 'planned' },
   { service: 'hubspot', method: 'GET', path: '/api/v1/hubspot/properties/{objectType}/{propertyName}', summary: 'Get a HubSpot property definition', mcpToolName: 'getProperty', openapiOperationId: 'getHubSpotProperty', status: 'planned' },
+
+  // -------- Redmine --------
+  // Planned: the MCP tools exist, the /api/v1/redmine/* Express handlers do
+  // not yet. Flip to 'live' only alongside wiring them in webServer.ts --
+  // docs/MCP_TOOLS.md renders planned entries as a dash, which is correct.
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/issues', summary: 'Search and filter Redmine issues', mcpToolName: 'listIssues', openapiOperationId: 'listRedmineIssues', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/issues/{issueId}', summary: 'Get a single Redmine issue', mcpToolName: 'getIssue', openapiOperationId: 'getRedmineIssue', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/issues/{issueId}/relations', summary: 'List the relations on a Redmine issue', mcpToolName: 'listIssueRelations', openapiOperationId: 'listRedmineIssueRelations', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/projects', summary: 'List Redmine projects', mcpToolName: 'listProjects', openapiOperationId: 'listRedmineProjects', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/projects/{projectId}', summary: 'Get a single Redmine project', mcpToolName: 'getProject', openapiOperationId: 'getRedmineProject', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/users', summary: 'List Redmine users (admin only)', mcpToolName: 'listUsers', openapiOperationId: 'listRedmineUsers', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/users/current', summary: 'Get the Redmine account this connection authenticates as', mcpToolName: 'getCurrentUser', openapiOperationId: 'getRedmineCurrentUser', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/users/{userId}', summary: 'Get a single Redmine user', mcpToolName: 'getUser', openapiOperationId: 'getRedmineUser', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/time-entries', summary: 'List Redmine time entries', mcpToolName: 'listTimeEntries', openapiOperationId: 'listRedmineTimeEntries', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/time-entries/{timeEntryId}', summary: 'Get a single Redmine time entry', mcpToolName: 'getTimeEntry', openapiOperationId: 'getRedmineTimeEntry', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/projects/{projectId}/wiki', summary: 'List the wiki page titles of a Redmine project', mcpToolName: 'listWikiPages', openapiOperationId: 'listRedmineWikiPages', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/projects/{projectId}/wiki/{title}', summary: 'Get one Redmine wiki page with its text', mcpToolName: 'getWikiPage', openapiOperationId: 'getRedmineWikiPage', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/projects/{projectId}/versions', summary: 'List the versions of a Redmine project', mcpToolName: 'listVersions', openapiOperationId: 'listRedmineVersions', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/versions/{versionId}', summary: 'Get a single Redmine version', mcpToolName: 'getVersion', openapiOperationId: 'getRedmineVersion', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/projects/{projectId}/issue-categories', summary: 'List the issue categories of a Redmine project', mcpToolName: 'listIssueCategories', openapiOperationId: 'listRedmineIssueCategories', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/projects/{projectId}/memberships', summary: 'List the members of a Redmine project with their roles', mcpToolName: 'listMemberships', openapiOperationId: 'listRedmineMemberships', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/trackers', summary: 'List Redmine trackers with their IDs', mcpToolName: 'listTrackers', openapiOperationId: 'listRedmineTrackers', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/issue-statuses', summary: 'List Redmine issue statuses with their IDs', mcpToolName: 'listIssueStatuses', openapiOperationId: 'listRedmineIssueStatuses', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/issue-priorities', summary: 'List Redmine issue priorities with their IDs', mcpToolName: 'listIssuePriorities', openapiOperationId: 'listRedmineIssuePriorities', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/time-entry-activities', summary: 'List Redmine time entry activities with their IDs', mcpToolName: 'listTimeEntryActivities', openapiOperationId: 'listRedmineTimeEntryActivities', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/custom-fields', summary: 'List Redmine custom fields and their cf_id filter keys', mcpToolName: 'listCustomFields', openapiOperationId: 'listRedmineCustomFields', status: 'planned' },
+  { service: 'redmine', method: 'GET', path: '/api/v1/redmine/search?q={query}', summary: 'Full text search across Redmine', mcpToolName: 'searchRedmine', openapiOperationId: 'searchRedmine', status: 'planned' },
 ];
 
 export function endpointsForTool(mcpToolName: string): RestEndpoint[] {

@@ -1534,7 +1534,8 @@
       const provider = instance.provider;
       const pasteCapable =
         provider === 'slack-bot' || provider === 'outline' ||
-        provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot';
+        provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot' ||
+        provider === 'redmine';
       return pasteCapable && !mcp.oauthAuthorizationUrl;
     }
 
@@ -1613,7 +1614,7 @@
       // back to the URL + API key paste form.
       const isTokenProvider =
         (provider === 'slack-bot' || provider === 'outline' || provider === 'peopleforce'
-          || provider === 'peopleforce-v4' || provider === 'hubspot')
+          || provider === 'peopleforce-v4' || provider === 'hubspot' || provider === 'redmine')
         && !selectedMcpType.oauthAuthorizationUrl;
 
       // For OAuth providers, skip naming step — name is auto-generated on the backend
@@ -1652,6 +1653,9 @@
           'Paste the generated token here. The key is scoped to your own user and can be revoked at any time.';
         urlSection.style.display = '';
         urlInput.value = '';
+        urlInput.placeholder = 'https://wiki.example.com';
+        document.getElementById('urlHint').innerHTML =
+          'The URL where your instance lives (no trailing slash). Example: <code translate="no">https://wiki.example.com</code>';
         // Auto-name from team/email upstream (same UX as OAuth providers).
         nameSection.style.display = 'none';
         nameInput.value = '';
@@ -1682,6 +1686,24 @@
         nameSection.style.display = 'none';
         nameInput.value = '';
         tokenInput.focus();
+      } else if (provider === 'redmine') {
+        tokenLabel.textContent = 'API Key';
+        tokenInput.placeholder = 'Your Redmine API access key';
+        tokenHint.innerHTML =
+          'In <span translate="no">Redmine</span>: open <strong>My account</strong> and copy the ' +
+          '<strong>API access key</strong> from the right-hand panel (click <em>Show</em> first). ' +
+          'If no such panel appears, an administrator has not enabled the REST API — they need to tick ' +
+          '<strong>Administration → Settings → API → Enable REST API</strong>. ' +
+          'The key acts as your own user, so it can only reach what you can already see.';
+        urlSection.style.display = '';
+        urlInput.value = '';
+        urlInput.placeholder = 'https://redmine.example.com';
+        document.getElementById('urlHint').innerHTML =
+          'The root URL of your Redmine (no trailing slash, no /projects path). Example: <code translate="no">https://redmine.example.com</code>';
+        // Auto-name from the instance host (same UX as the OAuth providers).
+        nameSection.style.display = 'none';
+        nameInput.value = '';
+        urlInput.focus();
       } else if (provider === 'hubspot') {
         tokenLabel.textContent = 'Access Token';
         tokenInput.placeholder = 'pat-…';
@@ -1745,7 +1767,8 @@
       // still asks the user because bot tokens don't carry workspace metadata
       // we can display.
       const isOutline = provider === 'outline';
-      const autoName = isOutline || provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot';
+      const isRedmine = provider === 'redmine';
+      const autoName = isOutline || isRedmine || provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot';
       const name = autoName ? '' : document.getElementById('instanceNameInput').value.trim();
       if (!autoName && !name) { alert('Please enter a name for this instance'); return; }
       const token = document.getElementById('tokenInput').value.trim();
@@ -1755,16 +1778,21 @@
                   : provider === 'peopleforce' ? 'Please enter your PeopleForce API key'
                   : provider === 'peopleforce-v4' ? 'Please enter your PeopleForce service account API key'
                   : provider === 'hubspot' ? 'Please enter your HubSpot access token'
+                  : provider === 'redmine' ? 'Please enter your Redmine API access key'
                   : 'Please enter a bot token';
         alert(msg);
         return;
       }
 
-      // Providers that need a per-connection base URL (currently: outline).
+      // Providers that need a per-connection base URL: outline and redmine.
+      // Both are self-hosted, so there is no default host to fall back to.
       let baseUrl;
-      if (isOutline) {
+      if (isOutline || isRedmine) {
         baseUrl = document.getElementById('urlInput').value.trim();
-        if (!baseUrl) { alert('Please enter the Outline instance URL'); return; }
+        if (!baseUrl) {
+          alert(isRedmine ? 'Please enter the Redmine instance URL' : 'Please enter the Outline instance URL');
+          return;
+        }
       }
 
       const btn = document.getElementById('connectTokenBtn');

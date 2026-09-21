@@ -15,6 +15,7 @@ const ROUTE_SCOPE_MAP: Record<string, string> = {
   peopleforce: 'mcp:peopleforce',
   'peopleforce-v4': 'mcp:peopleforce-v4',
   hubspot: 'mcp:hubspot',
+  redmine: 'mcp:redmine',
 };
 
 /** All supported MCP scopes (single source of truth). */
@@ -35,6 +36,7 @@ const SLUG_SCOPE_MAP: Record<string, string> = {
   'peopleforce': 'mcp:peopleforce',
   'peopleforce-v4': 'mcp:peopleforce-v4',
   'hubspot': 'mcp:hubspot',
+  'redmine': 'mcp:redmine',
 };
 
 /** Return the scope for a given MCP_SLUG, or all scopes if unknown. */
