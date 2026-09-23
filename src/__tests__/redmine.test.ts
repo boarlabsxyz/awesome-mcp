@@ -12,6 +12,7 @@ import {
   formatMembershipList,
   formatProject,
   formatProjectList,
+  formatUser,
   formatRefList,
   formatTimeEntryList,
   getRedmineClient,
@@ -185,10 +186,24 @@ describe('mapRedmineError', () => {
     }
   };
 
-  test('403 points at the admin setting, not the credential', () => {
+  // 403 is Redmine's answer to both "no permission" and "REST API switched
+  // off". The message has to say how to tell them apart, or it is not
+  // actionable — which is what the first version of it got wrong.
+  test('403 names the permission gap and how to rule out a disabled REST API', () => {
     const m = mapped(403);
-    assert.match(m, /Enable REST API/);
-    assert.match(m, /lacks the permission/);
+    assert.match(m, /lacks the required permission/);
+    assert.match(m, /Roles and permissions/);
+    assert.match(m, /would fail every Redmine call, not[\s\S]*just this one/);
+  });
+
+  test('403 names the governing permission when the caller knows it', () => {
+    try {
+      mapRedmineError('Failed to list issues', Object.assign(new Error('x'), { status: 403 }),
+        silentLog, { permission: 'view_issues' });
+      assert.fail('should have thrown');
+    } catch (err: any) {
+      assert.match(err.message, /`view_issues` permission/);
+    }
   });
 
   test('401 mentions the pre-4.1 ambiguity', () => {
@@ -293,9 +308,40 @@ describe('project association rendering', () => {
     assert.match(out, /Time entry activities: Development/);
   });
 
-  test('a project without associations renders no empty headings', () => {
+  test('a project without associations renders no empty headings when nothing was asked for', () => {
     const out = formatProjectList([{ id: 1, name: 'Bare' }], { total_count: 1, offset: 0 });
     assert.doesNotMatch(out, /Trackers:|Categories:|Modules:|Time entry activities:/);
+  });
+
+  // Redmine filters these by permission, so "asked for it and got nothing" is a
+  // real answer — and silently omitting the line makes it indistinguishable
+  // from a formatter that forgot to render it.
+  test('a requested association that comes back empty says so', () => {
+    const out = formatProject({ id: 1, name: 'Bare' }, ['trackers', 'issue_categories']);
+    assert.match(out, /Trackers: none visible to this account/);
+    assert.match(out, /Categories: none visible to this account/);
+    // Not requested, so still absent rather than reported as empty.
+    assert.doesNotMatch(out, /Modules:/);
+  });
+
+  test('the same holds for the list formatter', () => {
+    const out = formatProjectList([{ id: 1, name: 'Bare' }], { total_count: 1, offset: 0 }, ['trackers']);
+    assert.match(out, /Trackers: none visible to this account/);
+  });
+
+  test('a populated association still renders its values, not the empty note', () => {
+    const out = formatProject({ id: 1, name: 'P', trackers: [{ id: 1, name: 'Bug' }] }, ['trackers']);
+    assert.match(out, /Trackers: Bug \(#1\)/);
+    assert.doesNotMatch(out, /none visible/);
+  });
+
+  test('user memberships and groups report emptiness the same way', () => {
+    const out = formatUser({ id: 1, login: 'jsmith' }, ['memberships', 'groups']);
+    assert.match(out, /Groups: none visible to this account/);
+    assert.match(out, /Project memberships: none visible to this account/);
+
+    const bare = formatUser({ id: 1, login: 'jsmith' });
+    assert.doesNotMatch(bare, /none visible/);
   });
 });
 

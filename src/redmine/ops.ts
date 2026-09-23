@@ -216,7 +216,7 @@ export async function opDeleteIssueRelation(client: RedmineClient, args: z.infer
 export async function opListProjects(client: RedmineClient, args: z.infer<typeof listProjectsSchema>, log: RedmineToolLog): Promise<string> {
   log.info(`Listing Redmine projects (offset=${args.offset}, limit=${args.limit})`);
   const res = await client.listProjects({ include: args.include, offset: args.offset, limit: args.limit });
-  return formatProjectList(res.items, res.page);
+  return formatProjectList(res.items, res.page, args.include);
 }
 
 /** Body of the `getProject` tool. */
@@ -224,7 +224,7 @@ export async function opGetProject(client: RedmineClient, args: z.infer<typeof g
   log.info(`Fetching Redmine project ${args.projectId}`);
   const res = await client.getProject(args.projectId, args.include);
   if (!res?.project) throw new UserError('Project not found.');
-  return formatProject(res.project);
+  return formatProject(res.project, args.include);
 }
 
 /** Body of the `createProject` tool. */
@@ -302,7 +302,7 @@ export async function opGetUser(client: RedmineClient, args: z.infer<typeof getU
   log.info(`Fetching Redmine user ${args.userId}`);
   const res = await client.getUser(args.userId, args.include);
   if (!res?.user) throw new UserError('User not found.');
-  return formatUser(res.user);
+  return formatUser(res.user, args.include);
 }
 
 /** Body of the `getCurrentUser` tool. */
@@ -310,7 +310,7 @@ export async function opGetCurrentUser(client: RedmineClient, args: z.infer<type
   log.info('Fetching current Redmine user');
   const res = await client.getCurrentUser(args.include);
   if (!res?.user) throw new UserError('Could not resolve the current user.');
-  return formatUser(res.user);
+  return formatUser(res.user, args.include);
 }
 
 /** Body of the `listTimeEntries` tool. */

@@ -142,7 +142,7 @@ redmineServer.addTool({
   description: 'Search and filter Redmine issues. Returns one page and always reports the total, so check whether more pages remain before summarizing.',
   parameters: listIssuesSchema,
   execute: (args, { log, session }) =>
-    withRedmineClient('Failed to list issues', session, log, client => opListIssues(client, args, log)),
+    withRedmineClient('Failed to list issues', session, log, client => opListIssues(client, args, log), { permission: 'view_issues' }),
 });
 
 redmineServer.addTool({
@@ -151,7 +151,7 @@ redmineServer.addTool({
   description: 'Retrieve one Redmine issue in full. Use `include` to pull in the comment history, subtasks, watchers, or the statuses it may move to.',
   parameters: getIssueSchema,
   execute: (args, { log, session }) =>
-    withRedmineClient('Failed to fetch issue', session, log, client => opGetIssue(client, args, log)),
+    withRedmineClient('Failed to fetch issue', session, log, client => opGetIssue(client, args, log), { permission: 'view_issues' }),
 });
 
 redmineServer.addTool({
@@ -207,7 +207,7 @@ redmineServer.addTool({
   description: 'List the relations (blocks, precedes, duplicates, …) attached to a Redmine issue.',
   parameters: listIssueRelationsSchema,
   execute: (args, { log, session }) =>
-    withRedmineClient('Failed to list issue relations', session, log, client => opListIssueRelations(client, args, log)),
+    withRedmineClient('Failed to list issue relations', session, log, client => opListIssueRelations(client, args, log), { permission: 'view_issues' }),
 });
 
 redmineServer.addTool({
@@ -330,7 +330,7 @@ redmineServer.addTool({
   description: 'List Redmine time entries, filterable by project, issue, user and date range. The hours total shown covers the returned page only — check the reported total before treating it as a full sum.',
   parameters: listTimeEntriesSchema,
   execute: (args, { log, session }) =>
-    withRedmineClient('Failed to list time entries', session, log, client => opListTimeEntries(client, args, log)),
+    withRedmineClient('Failed to list time entries', session, log, client => opListTimeEntries(client, args, log), { permission: 'view_time_entries' }),
 });
 
 redmineServer.addTool({
@@ -339,7 +339,7 @@ redmineServer.addTool({
   description: 'Retrieve one Redmine time entry by ID.',
   parameters: getTimeEntrySchema,
   execute: (args, { log, session }) =>
-    withRedmineClient('Failed to fetch time entry', session, log, client => opGetTimeEntry(client, args, log)),
+    withRedmineClient('Failed to fetch time entry', session, log, client => opGetTimeEntry(client, args, log), { permission: 'view_time_entries' }),
 });
 
 redmineServer.addTool({
@@ -348,7 +348,7 @@ redmineServer.addTool({
   description: 'Log time against a Redmine issue or project. Pass exactly one of issueId or projectId. Most instances require activityId — call listTimeEntryActivities if you do not have it.',
   parameters: createTimeEntrySchema,
   execute: (args, { log, session }) =>
-    withRedmineClient('Failed to create time entry', session, log, client => opCreateTimeEntry(client, args, log)),
+    withRedmineClient('Failed to create time entry', session, log, client => opCreateTimeEntry(client, args, log), { permission: 'log_time' }),
 });
 
 redmineServer.addTool({
@@ -377,7 +377,7 @@ redmineServer.addTool({
   description: "List the titles in a Redmine project's wiki. Page bodies are not included — call getWikiPage for one.",
   parameters: listWikiPagesSchema,
   execute: (args, { log, session }) =>
-    withRedmineClient('Failed to list wiki pages', session, log, client => opListWikiPages(client, args, log)),
+    withRedmineClient('Failed to list wiki pages', session, log, client => opListWikiPages(client, args, log), { permission: 'view_wiki_pages' }),
 });
 
 redmineServer.addTool({
@@ -386,7 +386,7 @@ redmineServer.addTool({
   description: 'Retrieve one Redmine wiki page with its full text. Pass `version` to read a historical revision.',
   parameters: getWikiPageSchema,
   execute: (args, { log, session }) =>
-    withRedmineClient('Failed to fetch wiki page', session, log, client => opGetWikiPage(client, args, log)),
+    withRedmineClient('Failed to fetch wiki page', session, log, client => opGetWikiPage(client, args, log), { permission: 'view_wiki_pages' }),
 });
 
 redmineServer.addTool({
