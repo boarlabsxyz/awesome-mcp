@@ -218,7 +218,7 @@ describe('withRedmineClient', () => {
       }),
       (err: any) => {
         assert.ok(err instanceof UserError);
-        assert.match(err.message, /Enable REST API/);
+        assert.match(err.message, /lacks the required permission/);
         return true;
       },
     );

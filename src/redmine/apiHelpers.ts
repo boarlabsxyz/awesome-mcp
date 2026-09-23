@@ -724,7 +724,7 @@ export function formatIssue(issue: RedmineIssue): string {
   return parts.join('\n').trimEnd();
 }
 
-export function formatProjectList(items: RedmineProject[], page?: RedminePage): string {
+export function formatProjectList(items: RedmineProject[], page?: RedminePage, requested?: string[]): string {
   return renderList('Projects', 'projects', items, page, (project, i) => {
     const parts = [`## ${i + 1}. ${project.name ?? '(unnamed)'}`];
     pushKV(parts, 'ID', project.id);
@@ -733,12 +733,12 @@ export function formatProjectList(items: RedmineProject[], page?: RedminePage): 
     pushKV(parts, 'Visibility', visibilityLabel(project.is_public));
     pushKV(parts, 'Status', projectStatusName(project.status));
     pushKV(parts, 'Updated', project.updated_on);
-    parts.push(...projectAssociationLines(project));
+    parts.push(...projectAssociationLines(project, requested));
     return parts;
   });
 }
 
-export function formatProject(project: RedmineProject): string {
+export function formatProject(project: RedmineProject, requested?: string[]): string {
   const parts = [`# Project: ${project.name ?? '(unnamed)'}`, ''];
   pushKV(parts, 'ID', project.id);
   pushKV(parts, 'Identifier', project.identifier);
@@ -749,7 +749,7 @@ export function formatProject(project: RedmineProject): string {
   pushKV(parts, 'Created', project.created_on);
   pushKV(parts, 'Updated', project.updated_on);
   if (project.description) parts.push('', project.description);
-  const associations = projectAssociationLines(project);
+  const associations = projectAssociationLines(project, requested);
   if (associations.length) parts.push('', ...associations);
   const customLines = formatCustomFields(project.custom_fields);
   if (customLines.length) parts.push('', 'Custom fields:', ...customLines);
@@ -757,23 +757,39 @@ export function formatProject(project: RedmineProject): string {
 }
 
 /**
- * The association lists `include` can add to a project, rendered only when
- * present. Shared by the list and single-project formatters so `include` means
- * the same thing in both — offering the parameter on a tool that then drops the
- * data is worse than not offering it.
+ * Render one `include`-able association.
+ *
+ * The `requested` argument is what makes an empty result legible. Redmine
+ * filters these by permission, so an association can come back absent for a
+ * reason the caller cares about — and a formatter that simply omits the line is
+ * indistinguishable from one that forgot to render it. When the caller asked
+ * for an association and got nothing, say so explicitly.
  */
-function projectAssociationLines(project: RedmineProject): string[] {
-  const parts: string[] = [];
-  const join = (refs?: RedmineRef[]) => (refs ?? []).map(refName).filter(Boolean).join(', ');
-  if (project.trackers?.length) parts.push(`Trackers: ${join(project.trackers)}`);
-  if (project.issue_categories?.length) parts.push(`Categories: ${join(project.issue_categories)}`);
-  if (project.enabled_modules?.length) {
-    parts.push(`Modules: ${(project.enabled_modules).map(m => m.name ?? '').filter(Boolean).join(', ')}`);
-  }
-  if (project.time_entry_activities?.length) {
-    parts.push(`Time entry activities: ${join(project.time_entry_activities)}`);
-  }
-  return parts;
+function associationLine(
+  label: string,
+  values: string[],
+  key: string,
+  requested?: string[],
+): string | null {
+  if (values.length) return `${label}: ${values.join(', ')}`;
+  if (requested?.includes(key)) return `${label}: none visible to this account`;
+  return null;
+}
+
+/**
+ * The association lists `include` can add to a project. Shared by the list and
+ * single-project formatters so `include` means the same thing in both —
+ * offering the parameter on a tool that then drops the data is worse than not
+ * offering it at all.
+ */
+function projectAssociationLines(project: RedmineProject, requested?: string[]): string[] {
+  const names = (refs?: RedmineRef[]) => (refs ?? []).map(refName).filter(Boolean);
+  return [
+    associationLine('Trackers', names(project.trackers), 'trackers', requested),
+    associationLine('Categories', names(project.issue_categories), 'issue_categories', requested),
+    associationLine('Modules', (project.enabled_modules ?? []).map(m => m.name ?? '').filter(Boolean), 'enabled_modules', requested),
+    associationLine('Time entry activities', names(project.time_entry_activities), 'time_entry_activities', requested),
+  ].filter((line): line is string => line !== null);
 }
 
 /** Redmine reports visibility as a tri-state: true, false, or absent. */
@@ -818,7 +834,7 @@ export function formatUserList(items: RedmineUser[], page?: RedminePage): string
   });
 }
 
-export function formatUser(user: RedmineUser): string {
+export function formatUser(user: RedmineUser, requested?: string[]): string {
   const parts = [`# User: ${fullName(user)}`, ''];
   pushKV(parts, 'ID', user.id);
   pushKV(parts, 'Login', user.login);
@@ -829,7 +845,9 @@ export function formatUser(user: RedmineUser): string {
   pushKV(parts, 'Last login', user.last_login_on);
   const customLines = formatCustomFields(user.custom_fields);
   if (customLines.length) parts.push('', 'Custom fields:', ...customLines);
-  if (user.groups?.length) parts.push('', `Groups: ${user.groups.map(g => refName(g)).join(', ')}`);
+  const groupsLine = associationLine('Groups', (user.groups ?? []).map(refName).filter(Boolean), 'groups', requested);
+  if (groupsLine) parts.push('', groupsLine);
+
   if (user.memberships?.length) {
     parts.push('', '## Project memberships', '');
     for (const membership of user.memberships) {
@@ -837,6 +855,8 @@ export function formatUser(user: RedmineUser): string {
       const roleSuffix = roles ? ` — ${roles}` : '';
       parts.push(`- ${refName(membership.project)}${roleSuffix}`);
     }
+  } else if (requested?.includes('memberships')) {
+    parts.push('', 'Project memberships: none visible to this account');
   }
   return parts.join('\n').trimEnd();
 }
@@ -1066,6 +1086,13 @@ export interface RedmineErrorHints {
    * change.
    */
   adminOnly?: boolean;
+  /**
+   * The Redmine permission that governs this endpoint, when it is unambiguous.
+   * Naming it turns "you lack some permission" into something a project admin
+   * can actually grant. Left unset rather than guessed where Redmine's mapping
+   * is not clear-cut.
+   */
+  permission?: string;
 }
 
 /**
@@ -1121,9 +1148,13 @@ export function mapRedmineError(
       hints.adminOnly
         ? `${prefix}: this endpoint is administrator-only in Redmine, and the connected account is not an ` +
           'administrator. No project-level permission grants it — an admin has to run this, or grant the ' +
-          "account admin rights. (A disabled REST API also answers 403: Administration → Settings → API.)"
-        : `${prefix}: Redmine denied access. Either your Redmine account lacks the permission for this ` +
-          "action on this project, or the REST API is disabled (Administration → Settings → API → 'Enable REST API').",
+          'account admin rights.'
+        : `${prefix}: Redmine denied access. The connected account lacks the ` +
+          `${hints.permission ? `\`${hints.permission}\` permission` : 'required permission'} ` +
+          'on this project — a project or site admin grants it under Administration → Roles and permissions, ' +
+          'or by adding the account to the project with a role that has it. ' +
+          '(403 is also what a fully disabled REST API returns, but that would fail every Redmine call, not ' +
+          'just this one — so if other Redmine tools are answering, this is permissions.)',
     );
   }
   if (status === 404) {
