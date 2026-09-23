@@ -634,7 +634,18 @@ export async function seedDefaultCatalogs(): Promise<void> {
   // against /api/v4 and a Company key only against v1-v3, so a user who wants
   // both surfaces connects both. The v4 surface is also a different set, not a
   // superset — no recruitment, leave, knowledge base, skills or KPIs.
+  //
+  // Hidden by default while the connector is still being shaken out. Both
+  // catalog backends filter on is_active, so an inactive row disappears from
+  // /api/v1/catalogs and therefore from the dashboard's Add Tool list and the
+  // public integrations page. Set PEOPLEFORCE_V4_ENABLED=true to bring it
+  // back — the seed upserts on every boot, so it is a restart, not a deploy.
+  //
+  // The row is still seeded rather than skipped: dropping it entirely would
+  // orphan any existing connection, and keeping it lets the flag flip both
+  // ways without a migration.
   const peopleForceV4McpUrl = normalizeUrl(process.env.PEOPLEFORCE_V4_MCP_URL, '/peopleforce-v4');
+  const peopleForceV4Enabled = process.env.PEOPLEFORCE_V4_ENABLED === 'true';
 
   await createMcpCatalog({
     slug: 'peopleforce-v4',
@@ -650,7 +661,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
     oauthTokenUrl: '',
     oauthScopes: [],
     isLocal: !process.env.PEOPLEFORCE_V4_MCP_URL,
-    isActive: true,
+    isActive: peopleForceV4Enabled,
   });
 
   // HubSpot MCP — OAuth 2.0 ("Connect with HubSpot") by default. The catalog
