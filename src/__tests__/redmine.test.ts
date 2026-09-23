@@ -9,6 +9,9 @@ import {
   appendQueryParams,
   formatIssue,
   formatIssueList,
+  formatMembershipList,
+  formatProject,
+  formatProjectList,
   formatRefList,
   formatTimeEntryList,
   getRedmineClient,
@@ -209,6 +212,111 @@ describe('mapRedmineError', () => {
 
   test('429 reports rate limiting', () => {
     assert.match(mapped(429), /rate limited/);
+  });
+
+  // Redmine answers 403 both for "no permission on this project" and for
+  // "not an administrator". The generic wording sends people to check project
+  // rights they cannot change, so the admin-only tools say so instead.
+  test('an admin-only 403 says admin rights, not project permissions', () => {
+    try {
+      mapRedmineError('Failed to list custom fields', Object.assign(new Error('x'), { status: 403 }),
+        silentLog, { adminOnly: true });
+      assert.fail('should have thrown');
+    } catch (err: any) {
+      assert.match(err.message, /administrator-only/);
+      assert.match(err.message, /No project-level permission grants it/);
+    }
+  });
+
+  // undici reports every thrown fetch as the bare string "fetch failed", which
+  // is undiagnosable on its own — these two are the cases that actually happen.
+  test('a refused redirect explains itself and says the key was not sent', () => {
+    const err = Object.assign(new TypeError('fetch failed'), {
+      cause: new Error('unexpected redirect'),
+    });
+    try {
+      mapRedmineError('Failed to list time entries', err, silentLog, {}, 'https://redmine.example.com');
+      assert.fail('should have thrown');
+    } catch (thrown: any) {
+      assert.match(thrown.message, /redirected away from https:\/\/redmine\.example\.com/);
+      assert.match(thrown.message, /API key was not sent/);
+      assert.doesNotMatch(thrown.message, /^Failed to list time entries: fetch failed$/);
+    }
+  });
+
+  test('an unreachable host is reported as a host problem, not a credential one', () => {
+    const err = Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('getaddrinfo ENOTFOUND redmine.example.com'), { code: 'ENOTFOUND' }),
+    });
+    try {
+      mapRedmineError('Failed to list time entries', err, silentLog, {}, 'https://redmine.example.com');
+      assert.fail('should have thrown');
+    } catch (thrown: any) {
+      assert.match(thrown.message, /could not reach https:\/\/redmine\.example\.com/);
+      assert.match(thrown.message, /credential was never evaluated/);
+    }
+  });
+
+  test('a plain Error with a status is still mapped by status, not as transport', () => {
+    assert.match(mapped(404), /not found/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Project rendering. `include` is a promise the formatter has to keep.
+// ---------------------------------------------------------------------------
+
+describe('project association rendering', () => {
+  const withAssociations = {
+    id: 1, name: 'Platform', identifier: 'plat',
+    trackers: [{ id: 1, name: 'Bug' }, { id: 2, name: 'Feature' }],
+    issue_categories: [{ id: 7, name: 'UI' }],
+    enabled_modules: [{ id: 3, name: 'issue_tracking' }],
+    time_entry_activities: [{ id: 8, name: 'Development' }],
+  };
+
+  // listProjects advertises `include` in its schema; before this it rendered
+  // none of it, so the parameter was inert and the description was a lie.
+  test('formatProjectList renders every included association', () => {
+    const out = formatProjectList([withAssociations], { total_count: 1, offset: 0 });
+    assert.match(out, /Trackers: Bug \(#1\), Feature \(#2\)/);
+    assert.match(out, /Categories: UI \(#7\)/);
+    assert.match(out, /Modules: issue_tracking/);
+    assert.match(out, /Time entry activities: Development \(#8\)/);
+  });
+
+  test('formatProject renders the same set, including time_entry_activities', () => {
+    const out = formatProject(withAssociations);
+    assert.match(out, /Trackers: Bug/);
+    assert.match(out, /Categories: UI/);
+    assert.match(out, /Modules: issue_tracking/);
+    assert.match(out, /Time entry activities: Development/);
+  });
+
+  test('a project without associations renders no empty headings', () => {
+    const out = formatProjectList([{ id: 1, name: 'Bare' }], { total_count: 1, offset: 0 });
+    assert.doesNotMatch(out, /Trackers:|Categories:|Modules:|Time entry activities:/);
+  });
+});
+
+describe('membership role rendering', () => {
+  // Redmine lists a role twice when it is held directly AND inherited.
+  test('deduplicates repeated roles and trims padded names', () => {
+    const out = formatMembershipList([{
+      id: 1,
+      user: { id: 2, name: 'J Smith' },
+      roles: [{ id: 3, name: 'Developer' }, { id: 3, name: ' Developer ' }, { id: 4, name: 'Manager' }],
+    }], { total_count: 1, offset: 0 });
+    assert.match(out, /Roles: Developer, Manager/);
+    assert.equal((out.match(/Developer/g) || []).length, 1, 'Developer must appear once');
+  });
+
+  test('keeps an inherited role distinct from the same role held directly', () => {
+    const out = formatMembershipList([{
+      id: 1, user: { id: 2, name: 'J' },
+      roles: [{ id: 3, name: 'Dev' }, { id: 3, name: 'Dev', inherited: true }],
+    }], { total_count: 1, offset: 0 });
+    assert.match(out, /Roles: Dev, Dev \(inherited\)/);
   });
 });
 
