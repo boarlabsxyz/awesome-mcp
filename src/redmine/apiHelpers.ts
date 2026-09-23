@@ -116,6 +116,7 @@ export type RedmineProject = {
   trackers?: RedmineRef[];
   issue_categories?: RedmineRef[];
   enabled_modules?: RedmineRef[];
+  time_entry_activities?: RedmineRef[];
 };
 
 export type RedmineUser = {
@@ -732,6 +733,7 @@ export function formatProjectList(items: RedmineProject[], page?: RedminePage): 
     pushKV(parts, 'Visibility', visibilityLabel(project.is_public));
     pushKV(parts, 'Status', projectStatusName(project.status));
     pushKV(parts, 'Updated', project.updated_on);
+    parts.push(...projectAssociationLines(project));
     return parts;
   });
 }
@@ -747,12 +749,31 @@ export function formatProject(project: RedmineProject): string {
   pushKV(parts, 'Created', project.created_on);
   pushKV(parts, 'Updated', project.updated_on);
   if (project.description) parts.push('', project.description);
-  if (project.trackers?.length) parts.push('', `Trackers: ${project.trackers.map(t => refName(t)).join(', ')}`);
-  if (project.issue_categories?.length) parts.push(`Categories: ${project.issue_categories.map(c => refName(c)).join(', ')}`);
-  if (project.enabled_modules?.length) parts.push(`Modules: ${project.enabled_modules.map(m => m.name ?? '').filter(Boolean).join(', ')}`);
+  const associations = projectAssociationLines(project);
+  if (associations.length) parts.push('', ...associations);
   const customLines = formatCustomFields(project.custom_fields);
   if (customLines.length) parts.push('', 'Custom fields:', ...customLines);
   return parts.join('\n').trimEnd();
+}
+
+/**
+ * The association lists `include` can add to a project, rendered only when
+ * present. Shared by the list and single-project formatters so `include` means
+ * the same thing in both — offering the parameter on a tool that then drops the
+ * data is worse than not offering it.
+ */
+function projectAssociationLines(project: RedmineProject): string[] {
+  const parts: string[] = [];
+  const join = (refs?: RedmineRef[]) => (refs ?? []).map(refName).filter(Boolean).join(', ');
+  if (project.trackers?.length) parts.push(`Trackers: ${join(project.trackers)}`);
+  if (project.issue_categories?.length) parts.push(`Categories: ${join(project.issue_categories)}`);
+  if (project.enabled_modules?.length) {
+    parts.push(`Modules: ${(project.enabled_modules).map(m => m.name ?? '').filter(Boolean).join(', ')}`);
+  }
+  if (project.time_entry_activities?.length) {
+    parts.push(`Time entry activities: ${join(project.time_entry_activities)}`);
+  }
+  return parts;
 }
 
 /** Redmine reports visibility as a tri-state: true, false, or absent. */
@@ -921,13 +942,17 @@ export function formatMembershipList(items: RedmineMembership[], page?: RedmineP
     const kind = membership.group ? 'group' : 'user';
     const parts = [`## ${i + 1}. ${who} [${kind}]`];
     pushKV(parts, 'Membership ID', membership.id);
-    const roles = (membership.roles ?? [])
-      .map(r => {
-        const name = r.name ?? `#${r.id}`;
-        return r.inherited ? `${name} (inherited)` : name;
-      })
-      .filter(Boolean)
-      .join(', ');
+    // Redmine lists a role twice when it is held both directly and by
+    // inheritance, and pads some names; dedupe on the rendered label so the
+    // output does not repeat itself.
+    const roles = [...new Set(
+      (membership.roles ?? [])
+        .map(r => {
+          const name = (r.name ?? '').trim() || `#${r.id}`;
+          return r.inherited ? `${name} (inherited)` : name;
+        })
+        .filter(label => label && label !== '#undefined'),
+    )].join(', ');
     pushKV(parts, 'Roles', roles);
     return parts;
   });
@@ -1032,9 +1057,57 @@ function redmineValidationErrors(body: unknown): string[] {
  * key), so a bare "check your credentials" would send the user to regenerate a
  * key when an administrator setting is what actually blocks them.
  */
-export function mapRedmineError(prefix: string, error: any, log: RedmineToolLog): never {
-  log.error(`${prefix}: ${error?.message ?? error}`);
+/** Extra context a caller can attach to the generic denial message. */
+export interface RedmineErrorHints {
+  /**
+   * Named when a 403 is expected to mean "not an administrator" rather than
+   * "no permission on this project" — Redmine uses the same status for both,
+   * and the generic wording sends people to check project rights they cannot
+   * change.
+   */
+  adminOnly?: boolean;
+}
+
+/**
+ * A thrown fetch (as opposed to a rejected response) carries no status, and
+ * undici reports every one of them as the bare string "fetch failed". That is
+ * undiagnosable, so unwrap the cause and name the two cases that actually
+ * happen: a refused redirect (we set redirect:'error', so the credential is
+ * never followed off the instance) and an unreachable host.
+ */
+function describeTransportFailure(prefix: string, baseUrlHint: string, error: any): string | null {
+  if (error?.status !== undefined) return null;
+  const message = String(error?.message ?? '');
+  const cause = String(error?.cause?.message ?? error?.cause?.code ?? '');
+  if (!/fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|certificate|redirect|socket/i.test(`${message} ${cause}`)) {
+    return null;
+  }
+  if (/redirect/i.test(`${message} ${cause}`)) {
+    return (
+      `${prefix}: the request was redirected away from ${baseUrlHint} and was refused rather than followed, ` +
+      'so the API key was not sent to the redirect target. This usually means the instance URL is not the ' +
+      'final one (http to https, a trailing path, or a proxy rewrite) — connect again with the URL Redmine ' +
+      'actually serves, or the exact endpoint may be disabled and redirecting to a login page.'
+    );
+  }
+  return (
+    `${prefix}: could not reach ${baseUrlHint} (${cause || message}). The Redmine host, its TLS certificate, ` +
+    'or the network path is the problem here — the credential was never evaluated.'
+  );
+}
+
+export function mapRedmineError(
+  prefix: string,
+  error: any,
+  log: RedmineToolLog,
+  hints: RedmineErrorHints = {},
+  baseUrlHint = 'the Redmine instance',
+): never {
+  log.error(`${prefix}: ${error?.message ?? error}${error?.cause ? ` (cause: ${error.cause?.message ?? error.cause})` : ''}`);
   const status = error?.status;
+
+  const transport = describeTransportFailure(prefix, baseUrlHint, error);
+  if (transport) throw new UserError(transport);
 
   if (status === 401) {
     throw new UserError(
@@ -1045,8 +1118,12 @@ export function mapRedmineError(prefix: string, error: any, log: RedmineToolLog)
   }
   if (status === 403) {
     throw new UserError(
-      `${prefix}: Redmine denied access. Either your Redmine account lacks the permission for this ` +
-      "action on this project, or the REST API is disabled (Administration → Settings → API → 'Enable REST API').",
+      hints.adminOnly
+        ? `${prefix}: this endpoint is administrator-only in Redmine, and the connected account is not an ` +
+          'administrator. No project-level permission grants it — an admin has to run this, or grant the ' +
+          "account admin rights. (A disabled REST API also answers 403: Administration → Settings → API.)"
+        : `${prefix}: Redmine denied access. Either your Redmine account lacks the permission for this ` +
+          "action on this project, or the REST API is disabled (Administration → Settings → API → 'Enable REST API').",
     );
   }
   if (status === 404) {
@@ -1168,6 +1245,7 @@ export async function withRedmineClient<T>(
   session: UserSession | undefined,
   log: RedmineToolLog,
   fn: (client: RedmineClient) => Promise<T>,
+  hints: RedmineErrorHints = {},
 ): Promise<T> {
   await maybeRefreshRedmineToken(session, log);
   const client = getRedmineClient(session);
@@ -1175,6 +1253,6 @@ export async function withRedmineClient<T>(
     return await fn(client);
   } catch (error: any) {
     if (error instanceof UserError) throw error;
-    mapRedmineError(prefix, error, log);
+    mapRedmineError(prefix, error, log, hints, client.baseUrl);
   }
 }

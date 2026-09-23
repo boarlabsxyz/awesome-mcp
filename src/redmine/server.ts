@@ -301,7 +301,7 @@ redmineServer.addTool({
   description: 'List Redmine users. Requires administrator rights — a non-admin account gets a permission error, which is a Redmine restriction, not a connection problem.',
   parameters: listUsersSchema,
   execute: (args, { log, session }) =>
-    withRedmineClient('Failed to list users', session, log, client => opListUsers(client, args, log)),
+    withRedmineClient('Failed to list users', session, log, client => opListUsers(client, args, log), { adminOnly: true }),
 });
 
 redmineServer.addTool({
@@ -556,7 +556,7 @@ redmineServer.addTool({
   description: 'List the custom fields defined on this Redmine, with the `cf_<id>` filter key for each one that is filterable. Requires administrator rights. Call this before using the customFields filter on listIssues.',
   parameters: listCustomFieldsSchema,
   execute: (_args, { log, session }) =>
-    withRedmineClient('Failed to list custom fields', session, log, client => opListCustomFields(client, log)),
+    withRedmineClient('Failed to list custom fields', session, log, client => opListCustomFields(client, log), { adminOnly: true }),
 });
 
 // ==================== Search ====================
