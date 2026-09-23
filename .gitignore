@@ -24,3 +24,5 @@ data/
 # Claude Code local-only files (skills are checked in)
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+# Symlink created by npm run dev:docs (points at ../public)
+src/public
