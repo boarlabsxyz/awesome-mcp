@@ -55,6 +55,10 @@ export function formatTask(task: any, opts: { fullDescription?: boolean } = {}):
       );
     }
   }
+  // Rendered only when true: an "Archived: no" line on every row of a 100-task
+  // list is noise, while an archived task showing up in one is worth flagging.
+  // updateTask confirms the false direction itself -- see its archive note.
+  if (task.archived) parts.push('  Archived: yes');
   if (task.url) parts.push(`  URL: ${task.url}`);
   if (task.list) parts.push(`  List: ${task.list.name} (${task.list.id})`);
   // ClickUp returns `parent` / `top_level_parent` as bare task IDs and carries

@@ -446,10 +446,22 @@ clickUpServer.addTool({
       try {
         resolvedParent = await client.getTask(requestedParentId);
       } catch (err: any) {
+        const raw = String(err?.message || err);
+        // ClickUp answers a task ID it cannot resolve with 401 "Team not
+        // authorized" (OAUTH_027) -- the same shape a revoked token produces.
+        // Passing that through verbatim sends the caller off to re-issue a
+        // credential that was never the problem, so say plainly what it almost
+        // always means and keep the raw body for the rare case it does not.
+        const looksLikeNotFound = /OAUTH_027|Team not authorized|\b404\b/i.test(raw);
         throw new UserError(
-          `Cannot re-parent: parent task ${requestedParentId} could not be read, so nothing was changed on `
-          + `${args.taskId}. Check the ID is a ClickUp internal task ID this connection can see — custom task IDs `
-          + `are not supported here. ClickUp said: ${err?.message || err}`,
+          `Cannot re-parent: parent task ${requestedParentId} was not found or is not visible to this connection, `
+          + `so nothing was changed on ${args.taskId}. Check the ID is a ClickUp internal task ID in a workspace this `
+          + `connection can see — custom task IDs are not supported here.`
+          + (looksLikeNotFound
+            ? ` (ClickUp reports an unknown task ID as 401 "Team not authorized"/OAUTH_027, which looks like an auth `
+              + `failure but is not — the token is fine if other ClickUp tools are working.)`
+            : '')
+          + ` ClickUp said: ${raw}`,
         );
       }
       if (!resolvedParent?.id) {
@@ -500,9 +512,27 @@ clickUpServer.addTool({
       );
     }
 
+    // Archive confirmation. formatTask surfaces `archived` only when true, so a
+    // successful unarchive would otherwise be indistinguishable from a no-op --
+    // and before this the archive direction said nothing either. Read it off the
+    // PUT echo; when ClickUp omits the key, report it unconfirmed rather than
+    // asserting a state we never saw.
+    let archiveNote = '';
+    if (args.archived !== undefined) {
+      const want = args.archived;
+      if (echo && typeof echo.archived === 'boolean') {
+        archiveNote = echo.archived === want
+          ? `\n\n${want ? 'Archived' : 'Unarchived'} — confirmed by ClickUp.`
+          : `\n\n⚠ Requested archived=${want} but ClickUp reports archived=${echo.archived}. The change did not take effect.`;
+      } else {
+        archiveNote = `\n\nRequested archived=${want}. ClickUp's response did not include the flag, so this is `
+          + `unconfirmed — call getTask to check.`;
+      }
+    }
+
     // Everything below is the re-parent path. A plain update stays exactly one
     // API call and returns exactly the string it always did.
-    if (!resolvedParent) return `Task updated successfully:\n${formatTask(echo)}`;
+    if (!resolvedParent) return `Task updated successfully:\n${formatTask(echo)}${archiveNote}`;
 
     // Re-read rather than trusting the PUT echo: a stale echo would let a silent
     // no-op read as success, which is the failure this parameter exists to
@@ -548,7 +578,7 @@ clickUpServer.addTool({
 
     return `Task updated successfully:\n${formatTask(verified)}\n\nRe-parent confirmed: now a subtask of ${parentLabel}.`
       + `\n  Parent's list: ${resolvedParent.list?.name ?? 'unknown'} (${parentListId ?? 'unknown'})`
-      + `\n  This task's list: ${verified.list?.name ?? 'unknown'} (${taskListId ?? 'unknown'})${crossList}`;
+      + `\n  This task's list: ${verified.list?.name ?? 'unknown'} (${taskListId ?? 'unknown'})${crossList}${archiveNote}`;
   },
 });
 
