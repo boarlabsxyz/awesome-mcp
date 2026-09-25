@@ -16,6 +16,14 @@ import type { ClickUpTaskEvent, ClickUpWebhookSubscription, StoredTaskEvent } fr
 // The events we deliberately capture (see PR discussion — deliberately
 // excludes taskUpdated, which is a firehose fully redundant with pull's
 // date_updated_gt filter).
+// ClickUp offers NO parent-change event: taskMoved is a LIST move, not a
+// re-parent. A task re-parented via updateTask({parentTaskId}) is therefore
+// invisible to this store by construction, and that call's own response is the
+// only record. Do not synthesise a row for it -- it would capture only moves
+// made through this MCP, leaving a ClickUp-UI drag invisible, so the history
+// would be partial in a way that reads as complete. (It is also structurally
+// impossible: ClickUpTaskEvent requires a subscriptionId FK, and a user with no
+// subscription has none.)
 export const CAPTURED_EVENTS = [
   'taskCreated',
   'taskStatusUpdated',

@@ -90,6 +90,35 @@ describe('clickup formatHelpers', () => {
       assert.ok(!out.includes('skipped'));
     });
 
+    // Parent / top_level_parent are how a hierarchy gets rebuilt from a list
+    // rendering without one getTask per node. ClickUp ships them as bare IDs.
+    it('renders Parent when the task is a subtask', () => {
+      const out = formatTask({ id: 't1', name: 'Child', status: { status: 'open' }, parent: 'p1' });
+      assert.ok(out.includes('Parent: p1'));
+    });
+
+    it('omits Parent for a top-level task', () => {
+      const out = formatTask({ id: 't1', name: 'Root', status: { status: 'open' }, parent: null });
+      assert.ok(!out.includes('Parent'));
+    });
+
+    it('suppresses Top-level parent when it just repeats parent', () => {
+      const out = formatTask({ id: 't1', name: 'Child', status: { status: 'open' }, parent: 'p1', top_level_parent: 'p1' });
+      assert.ok(out.includes('Parent: p1'));
+      assert.ok(!out.includes('Top-level parent'));
+    });
+
+    it("suppresses Top-level parent when it is the task's own id", () => {
+      const out = formatTask({ id: 't1', name: 'Root', status: { status: 'open' }, top_level_parent: 't1' });
+      assert.ok(!out.includes('Top-level parent'));
+    });
+
+    it('renders Top-level parent only when nesting is deeper than one level', () => {
+      const out = formatTask({ id: 't1', name: 'Grandchild', status: { status: 'open' }, parent: 'mid', top_level_parent: 'root' });
+      assert.ok(out.includes('Parent: mid'));
+      assert.ok(out.includes('Top-level parent: root'));
+    });
+
     it('returns the full, untruncated description with { fullDescription: true }', () => {
       const desc = 'a'.repeat(250);
       const out = formatTask(
@@ -131,6 +160,18 @@ describe('clickup formatHelpers', () => {
       assert.ok(out.includes('Task: A'));
       assert.ok(out.includes('Task: B'));
       assert.ok(out.includes('\n\n'));
+    });
+
+    // The point of surfacing parent in the list rendering: the child's parent
+    // ID is matched against IDs already in the same response, so building a
+    // tree costs zero extra calls.
+    it('surfaces parent IDs so a hierarchy can be rebuilt from one call', () => {
+      const out = formatTaskList([
+        { id: 'root', name: 'CSF', status: { status: 'open' } },
+        { id: 'kid', name: 'Hypothesis', status: { status: 'open' }, parent: 'root' },
+      ]);
+      assert.ok(out.includes('ID: root'));
+      assert.ok(out.includes('Parent: root'));
     });
   });
 });

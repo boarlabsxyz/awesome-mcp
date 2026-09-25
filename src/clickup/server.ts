@@ -240,7 +240,11 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'getTask',
   annotations: { readOnlyHint: true },
-  description: 'Get detailed information about a specific ClickUp task by its ID. Returns the FULL, untruncated description — use this (not the list tools, which show a bounded preview) when you need to read a ticket in full to summarize it, reuse it as a template, or check acceptance criteria.',
+  description: 'Get detailed information about a specific ClickUp task by its ID. Returns the FULL, untruncated '
+    + 'description — use this (not the list tools, which show a bounded preview) when you need to read a ticket in '
+    + 'full to summarize it, reuse it as a template, or check acceptance criteria. Reports Parent (and Top-level '
+    + 'parent when nesting is deeper than one level) when the task is a subtask. ClickUp returns those as bare task '
+    + 'IDs with no name — that is the payload, not missing data; call getTask on the parent ID if you need its name.',
   parameters: z.object({
     taskId: z.string().describe('The task ID (e.g., "abc123" or custom task ID).'),
     includeSubtasks: z.boolean().optional().default(false).describe('Include subtasks in response.'),
@@ -263,7 +267,12 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'listTasks',
   annotations: { readOnlyHint: true },
-  description: 'List tasks in a ClickUp list with optional filters. To query tasks closed within a window, set closedAfter and/or closedBefore — the tool then forces include_closed, auto-paginates up to 2000 tasks, and filters locally on date_closed (ClickUp\'s REST API has no server-side close-date filter).',
+  description: 'List tasks in a ClickUp list with optional filters. To query tasks closed within a window, set '
+    + 'closedAfter and/or closedBefore — the tool then forces include_closed, auto-paginates up to 2000 tasks, and '
+    + 'filters locally on date_closed (ClickUp\'s REST API has no server-side close-date filter). Each task reports '
+    + 'its Parent ID when it is a subtask, so a hierarchy can be rebuilt from one call instead of a getTask per node; '
+    + 'match that ID against the IDs already in this response rather than looking each one up (ClickUp includes no '
+    + 'parent name). Set subtasks=true or children are omitted entirely.',
   parameters: z.object({
     listId: z.string().describe('The list ID to get tasks from.'),
     archived: z.boolean().optional().default(false).describe('Include archived tasks.'),
@@ -360,7 +369,15 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'updateTask',
   annotations: { readOnlyHint: false },
-  description: 'Update an existing ClickUp task. Only provided fields will be changed.',
+  description: 'Update an existing ClickUp task. Only provided fields will be changed. '
+    + 'Also RE-PARENTS a task: pass parentTaskId to move a subtask under a different parent while keeping its ID, '
+    + 'comments, history and custom fields, so restructuring a hierarchy never needs tasks to be recreated. '
+    + 'The re-parent is verified: the tool reads the target parent first (to resolve its name and list), applies the '
+    + 'change, then re-reads the task and reports the confirmed parent, so no follow-up getTask is needed — and if '
+    + 'ClickUp silently ignores the change it says so instead of claiming success. It also reports the parent\'s list '
+    + 'and the task\'s list, so the response tells you what ClickUp did about a cross-list parent. '
+    + 'Note ClickUp emits NO webhook event for a parent change, so getTaskEventHistory will never show one; this '
+    + 'response is the only record. moveTask changes a task\'s LIST, not its parent — the two are independent.',
   parameters: z.object({
     taskId: z.string().describe('The task ID to update.'),
     name: z.string().optional().describe('New task name.'),
@@ -374,9 +391,76 @@ clickUpServer.addTool({
     removeAssignees: z.array(z.number()).optional().describe('User IDs to remove from assignees.'),
     timeEstimate: z.number().int().optional().describe('Time estimate in milliseconds.'),
     archived: z.boolean().optional().describe('Archive or unarchive the task.'),
+    parentTaskId: z.string().nullable().optional().describe(
+      'Re-parent this task: move it under a different parent task in place, keeping its ID, comments, history and custom field values. '
+      + 'Its own subtasks come along. Must be a ClickUp internal task ID (custom task IDs are not supported here). '
+      + 'ClickUp cannot convert a subtask back into a top-level task, so null is rejected with an explanation rather than sent. '
+      + 'Issue a re-parent as its own updateTask call: ClickUp applies the PUT atomically, so if it rejects the parent, the other fields in the same call are lost too.'
+    ),
   }),
-  execute: async (args, { session }) => {
+  execute: async (args, { session, log }) => {
     const client = getClickUpClient(session);
+
+    // Re-parent input is validated before anything is sent. `parentTaskId` is
+    // deliberately `.nullable()` and NOT `.min(1)`: a Zod-level rejection
+    // surfaces as FastMCP's generic InvalidParams ("Expected string, received
+    // null"), which is the unexplained failure this parameter exists to
+    // replace. Letting null reach here is what buys the explanation.
+    let requestedParentId: string | undefined;
+    if (args.parentTaskId !== undefined) {
+      if (args.parentTaskId === null) {
+        throw new UserError(
+          'parentTaskId cannot be null. ClickUp does not support converting a subtask back into a top-level task by '
+          + 'clearing `parent` — the field only accepts a valid task ID, so a subtask can be moved under a different '
+          + 'parent but never detached. Detaching means recreating the task at top level (losing its comments and '
+          + 'history) or doing it in the ClickUp UI.',
+        );
+      }
+      requestedParentId = args.parentTaskId.trim();
+      if (requestedParentId === '') {
+        throw new UserError(
+          'parentTaskId must be a non-empty ClickUp task ID. Omit the field to leave the parent unchanged — an '
+          + 'empty string is not a way to clear it.',
+        );
+      }
+      if (requestedParentId === args.taskId.trim()) {
+        throw new UserError(`parentTaskId (${requestedParentId}) is the same as taskId — a task cannot be its own parent.`);
+      }
+    }
+
+    // Pre-flight, on the re-parent path only. ClickUp's task payload carries
+    // `parent` as a bare ID with no name anywhere, so this read is the only
+    // source for the name the response confirms with. It also yields the
+    // parent's list (the cross-list observation below) and turns an unknown or
+    // inaccessible ID into a message that names it, instead of the raw 400 body
+    // request() would otherwise surface (it has no 400/404 special-casing).
+    // Safe to throw from: nothing has been mutated yet.
+    let resolvedParent: any = null;
+    if (requestedParentId) {
+      try {
+        resolvedParent = await client.getTask(requestedParentId);
+      } catch (err: any) {
+        throw new UserError(
+          `Cannot re-parent: parent task ${requestedParentId} could not be read, so nothing was changed on `
+          + `${args.taskId}. Check the ID is a ClickUp internal task ID this connection can see — custom task IDs `
+          + `are not supported here. ClickUp said: ${err?.message || err}`,
+        );
+      }
+      if (!resolvedParent?.id) {
+        throw new UserError(`Cannot re-parent: ClickUp returned no task for parent ID ${requestedParentId}. Nothing was changed.`);
+      }
+      // Cheap cycle check. One getTask only sees the candidate's immediate
+      // parent and its root, so a cycle deeper than that still relies on
+      // ClickUp's own rejection (wrapped below); an exhaustive guard would be an
+      // O(depth) ancestor walk for a hierarchy ClickUp caps at 7 levels.
+      if (resolvedParent.parent === args.taskId || resolvedParent.top_level_parent === args.taskId) {
+        throw new UserError(
+          `Cannot re-parent: ${requestedParentId} ("${resolvedParent.name}") is already a descendant of `
+          + `${args.taskId}. Making it the parent would create a cycle. Nothing was changed.`,
+        );
+      }
+    }
+
     const data: any = {};
     if (args.name !== undefined) data.name = args.name;
     if (args.markdownContent !== undefined) {
@@ -393,9 +477,72 @@ clickUpServer.addTool({
     }
     if (args.timeEstimate !== undefined) data.time_estimate = args.timeEstimate;
     if (args.archived !== undefined) data.archived = args.archived;
+    // Send the ID ClickUp itself echoed, not the raw argument, so the
+    // verification compare below is against a canonical value.
+    if (resolvedParent) data.parent = resolvedParent.id;
 
-    const task = await client.updateTask(args.taskId, data);
-    return `Task updated successfully:\n${formatTask(task)}`;
+    let echo: any;
+    try {
+      echo = await client.updateTask(args.taskId, data);
+    } catch (err: any) {
+      if (!resolvedParent) throw err;
+      throw new UserError(
+        `Re-parenting ${args.taskId} under ${resolvedParent.id} ("${resolvedParent.name}") was rejected by ClickUp. `
+        + `The PUT is atomic, so any other fields in this call were most likely not applied either — re-read with `
+        + `getTask before retrying. The parent lives in list "${resolvedParent.list?.name}" (${resolvedParent.list?.id}). `
+        + `ClickUp said: ${err?.message || err}`,
+      );
+    }
+
+    // Everything below is the re-parent path. A plain update stays exactly one
+    // API call and returns exactly the string it always did.
+    if (!resolvedParent) return `Task updated successfully:\n${formatTask(echo)}`;
+
+    // Re-read rather than trusting the PUT echo: a stale echo would let a silent
+    // no-op read as success, which is the failure this parameter exists to
+    // remove. Best-effort: a failed verification must never turn a move that
+    // did happen into an error.
+    let verified: any = null;
+    try { verified = await client.getTask(args.taskId); } catch { /* reported below */ }
+
+    // Operator breadcrumb. ClickUp emits no webhook for a parent change, so this
+    // and the response are the only records the move happened. It also records
+    // echo-vs-re-read agreement, which is the evidence needed before anyone
+    // considers dropping the verification read.
+    log.info(
+      `[clickup-reparent] task=${args.taskId} parent=${resolvedParent.id} echoParent=${String(echo?.parent)} `
+      + `readParent=${String(verified?.parent)} parentList=${String(resolvedParent.list?.id)} `
+      + `taskList=${String(verified?.list?.id)}`,
+    );
+
+    const parentLabel = `"${resolvedParent.name}" (${resolvedParent.id})`;
+
+    if (!verified) {
+      return `Task updated successfully:\n${formatTask(echo)}\n\nParent set to ${parentLabel}. ClickUp returned 200 on `
+        + `the update, but the follow-up verification read failed — this is the requested state, not a confirmed one. `
+        + `Call getTask("${args.taskId}") to confirm.`;
+    }
+
+    if (verified.parent !== resolvedParent.id) {
+      return `⚠ Re-parent did NOT take effect. ClickUp accepted the update (HTTP 200) but ${args.taskId} still `
+        + `reports parent ${JSON.stringify(verified.parent ?? null)}, not the requested ${parentLabel}. ClickUp emits `
+        + `neither an error nor a webhook for a rejected parent change, so this silent no-op is the only signal — do `
+        + `not treat the move as done. Other fields in this call may have applied. Current state:\n${formatTask(verified)}`;
+    }
+
+    // Cross-list observation. ClickUp's docs do not say whether a parent in
+    // another list is allowed or what happens to the child's list, so the tool
+    // reports what actually happened rather than asserting a rule.
+    const parentListId = resolvedParent.list?.id;
+    const taskListId = verified.list?.id;
+    const crossList = parentListId && taskListId && parentListId !== taskListId
+      ? `\n  ⚠ The parent is in a different list — ClickUp accepted a cross-list parent and left this task where `
+        + `it was. Use moveTask if you want them co-located.`
+      : '';
+
+    return `Task updated successfully:\n${formatTask(verified)}\n\nRe-parent confirmed: now a subtask of ${parentLabel}.`
+      + `\n  Parent's list: ${resolvedParent.list?.name ?? 'unknown'} (${parentListId ?? 'unknown'})`
+      + `\n  This task's list: ${verified.list?.name ?? 'unknown'} (${taskListId ?? 'unknown'})${crossList}`;
   },
 });
 
@@ -416,7 +563,9 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'moveTask',
   annotations: { readOnlyHint: false },
-  description: 'Move a task to a different list.',
+  description: 'Move a task to a different LIST. This does NOT change the task\'s parent: a subtask moved to '
+    + 'another list stays a subtask of the same parent task. To re-parent a task (move a subtask under a different '
+    + 'parent task), use updateTask with parentTaskId instead.',
   parameters: z.object({
     taskId: z.string().describe('The task ID to move.'),
     listId: z.string().describe('The destination list ID.'),
@@ -482,7 +631,9 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'filterTeamTasks',
   annotations: { readOnlyHint: true },
-  description: 'Query tasks across a ClickUp workspace using ClickUp\'s server-side "Get Filtered Team Tasks" endpoint (GET /api/v2/team/{team_id}/task). One paginated call replaces per-list enumeration for workspace-wide digests. Returns tasks the caller can access (naturally scoped by the OAuth identity), 100 per page — iterate `page` from 0 to fetch all. Supports assignees, statuses, tags, scope narrowing (spaceIds/projectIds/listIds), and date ranges on date_created / date_updated / due_date. IMPORTANT: ClickUp does NOT support date_closed / date_done filters or a close-date sort here — for "closed since T", query with `dateUpdatedGt=T` (closing bumps date_updated, so this is a superset) and partition on each task\'s `date_closed` client-side.',
+  description: 'Query tasks across a ClickUp workspace using ClickUp\'s server-side "Get Filtered Team Tasks" endpoint (GET /api/v2/team/{team_id}/task). One paginated call replaces per-list enumeration for workspace-wide digests. Returns tasks the caller can access (naturally scoped by the OAuth identity), 100 per page — iterate `page` from 0 to fetch all. Supports assignees, statuses, tags, scope narrowing (spaceIds/projectIds/listIds), and date ranges on date_created / date_updated / due_date. IMPORTANT: ClickUp does NOT support date_closed / date_done filters or a close-date sort here — for "closed since T", query with `dateUpdatedGt=T` (closing bumps date_updated, so this is a superset) and partition on each task\'s `date_closed` client-side.'
+    + ' Each task reports its Parent ID when it is a subtask (a bare ID, no name — ClickUp does not include one), '
+    + 'so hierarchies can be rebuilt from one page. Set subtasks=true or children are omitted entirely.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
     assignees: z.array(z.string()).optional().describe('Filter to tasks assigned to any of these user IDs.'),
@@ -545,7 +696,9 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'searchTasks',
   annotations: { readOnlyHint: true },
-  description: 'Search for tasks across a ClickUp workspace. Supports filtering by name (client-side substring match) and/or custom fields. By default excludes closed/completed tasks — set includeClosed=true to include them. To query tasks closed within a window, set closedAfter and/or closedBefore — the tool then forces include_closed, auto-paginates up to 2000 tasks, and filters locally on date_closed (ClickUp\'s REST API has no server-side close-date filter).',
+  description: 'Search for tasks across a ClickUp workspace. Supports filtering by name (client-side substring match) and/or custom fields. By default excludes closed/completed tasks — set includeClosed=true to include them. To query tasks closed within a window, set closedAfter and/or closedBefore — the tool then forces include_closed, auto-paginates up to 2000 tasks, and filters locally on date_closed (ClickUp\'s REST API has no server-side close-date filter).'
+    + ' Each task reports its Parent ID when it is a subtask (a bare ID, no name — ClickUp does not include one), '
+    + 'so hierarchies can be rebuilt from one page.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID to search in.'),
     query: z.string().describe('Filter by task name (case-insensitive substring match). Use empty string to skip name filtering.'),
@@ -788,7 +941,10 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'getTaskEventHistory',
   annotations: { readOnlyHint: true },
-  description: 'Read from-status→to-status transitions (and other captured events) for a ClickUp workspace, sourced from the event store populated by subscribeToTaskEvents. Use this to answer "what moved to In Review since last report" exactly, instead of approximating from date_updated + current status. IMPORTANT: history accrues from the moment subscribeToTaskEvents was first called — events before that boundary are NOT in the store; the response includes `eventStoreStartedAt` so the caller can fall back to filterTeamTasks with dateUpdatedGt for any earlier window. If no subscription exists for the (user, workspace), the response is `kind: "no-subscription"` with a warning — not an error — so the digest can gracefully fall back to pull.',
+  description: 'Read from-status→to-status transitions (and other captured events) for a ClickUp workspace, sourced from the event store populated by subscribeToTaskEvents. Use this to answer "what moved to In Review since last report" exactly, instead of approximating from date_updated + current status. IMPORTANT: history accrues from the moment subscribeToTaskEvents was first called — events before that boundary are NOT in the store; the response includes `eventStoreStartedAt` so the caller can fall back to filterTeamTasks with dateUpdatedGt for any earlier window. If no subscription exists for the (user, workspace), the response is `kind: "no-subscription"` with a warning — not an error — so the digest can gracefully fall back to pull.'
+    + ' Parent changes are NOT captured: ClickUp emits no webhook event when a task\'s parent changes (taskMoved is a '
+    + 'LIST move, not a re-parent), so an empty result here never means "nothing was re-parented" — a re-parent done '
+    + 'through updateTask is recorded only in that call\'s own response.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
     since: z.string().optional().describe('Only return events at/after this time. ISO string or Unix ms.'),

@@ -383,6 +383,163 @@ describe('ClickUp server tools', () => {
       const body = JSON.parse(calls[0].body!);
       assert.deepEqual(body.assignees, { add: [5], rem: [] });
     });
+
+    // === re-parent (parentTaskId) ===
+    //
+    // callTool invokes execute() directly and BYPASSES Zod, so a guard test
+    // proves nothing about whether the schema would even let null through.
+    // That is what the first test here covers, and it is the one that fails if
+    // anyone "tidies" the schema to z.string().optional() -- silently
+    // re-breaking the explicit-null rejection no execute test can see.
+    it('accepts parentTaskId: null at the schema level so the body can explain it', () => {
+      const tool = toolMap.get('updateTask')!;
+      assert.equal(tool.parameters.safeParse({ taskId: 't1', parentTaskId: null }).success, true);
+      assert.equal(tool.parameters.safeParse({ taskId: 't1', parentTaskId: 'p1' }).success, true);
+    });
+
+    it('rejects parentTaskId: null with an explanation and sends nothing', async () => {
+      const { calls } = mockFetch([{ status: 200, body: {} }]);
+      await assert.rejects(
+        () => callTool('updateTask', { taskId: 't1', parentTaskId: null }),
+        /cannot be null/,
+      );
+      assert.equal(calls.length, 0);
+    });
+
+    it('rejects an empty parentTaskId without sending anything', async () => {
+      const { calls } = mockFetch([{ status: 200, body: {} }]);
+      await assert.rejects(
+        () => callTool('updateTask', { taskId: 't1', parentTaskId: '   ' }),
+        /non-empty/,
+      );
+      assert.equal(calls.length, 0);
+    });
+
+    it('rejects a task being made its own parent', async () => {
+      const { calls } = mockFetch([{ status: 200, body: {} }]);
+      await assert.rejects(
+        () => callTool('updateTask', { taskId: 't1', parentTaskId: 't1' }),
+        /cannot be its own parent/,
+      );
+      assert.equal(calls.length, 0);
+    });
+
+    it('re-parents: pre-flight, PUT, then a verification re-read', async () => {
+      const child = { id: 't1', name: 'Child', status: { status: 'open' }, parent: 'p1', list: { id: 'l1', name: 'Eng' } };
+      const { calls } = mockFetch([
+        { status: 200, body: { id: 'p1', name: 'Design spec', parent: null, list: { id: 'l1', name: 'Eng' } } },
+        { status: 200, body: child },
+        { status: 200, body: child },
+      ]);
+      const result = await callTool('updateTask', { taskId: 't1', parentTaskId: 'p1' });
+
+      assert.equal(calls.length, 3);
+      assert.equal(calls[0].method, 'GET');
+      assert.ok(calls[0].url.endsWith('/task/p1'));
+      assert.equal(calls[1].method, 'PUT');
+      assert.equal(JSON.parse(calls[1].body!).parent, 'p1');
+      assert.equal(calls[2].method, 'GET');
+      assert.ok(calls[2].url.endsWith('/task/t1'));
+
+      // Requirement: confirm the new parent by id AND name, so no second read.
+      assert.ok(result.includes('Re-parent confirmed'));
+      assert.ok(result.includes('Design spec'));
+      assert.ok(result.includes('(p1)'));
+      assert.ok(result.includes('Parent: p1'));
+    });
+
+    it('sends the parent ID ClickUp echoed, not the raw argument', async () => {
+      const child = { id: 't1', name: 'Child', status: { status: 'open' }, parent: 'CANON' };
+      const { calls } = mockFetch([
+        { status: 200, body: { id: 'CANON', name: 'Canonical', list: { id: 'l1', name: 'Eng' } } },
+        { status: 200, body: child },
+        { status: 200, body: child },
+      ]);
+      await callTool('updateTask', { taskId: 't1', parentTaskId: ' p1 ' });
+      assert.equal(JSON.parse(calls[1].body!).parent, 'CANON');
+    });
+
+    it('makes exactly one call when parentTaskId is omitted', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
+      const result = await callTool('updateTask', { taskId: 't1', name: 'X' });
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].method, 'PUT');
+      assert.ok(result.startsWith('Task updated successfully:'));
+    });
+
+    it('turns an unreadable parent into a clear error before any write', async () => {
+      const { calls } = mockFetch([{ status: 404, text: '{"err":"Task not found"}' }]);
+      await assert.rejects(
+        () => callTool('updateTask', { taskId: 't1', parentTaskId: 'nope' }),
+        /nothing was changed/,
+      );
+      assert.equal(calls.length, 1, 'the PUT must not be issued');
+    });
+
+    it('refuses a parent that is already a descendant', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: { id: 'p1', name: 'Kid', top_level_parent: 't1' } },
+      ]);
+      await assert.rejects(
+        () => callTool('updateTask', { taskId: 't1', parentTaskId: 'p1' }),
+        /cycle/,
+      );
+      assert.equal(calls.length, 1);
+    });
+
+    it('reports a silent no-op instead of claiming success', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: { id: 'p1', name: 'Design spec', list: { id: 'l1', name: 'Eng' } } },
+        { status: 200, body: { id: 't1', name: 'Child', status: { status: 'open' } } },
+        { status: 200, body: { id: 't1', name: 'Child', status: { status: 'open' }, parent: 'old' } },
+      ]);
+      const result = await callTool('updateTask', { taskId: 't1', parentTaskId: 'p1' });
+      assert.equal(calls.length, 3);
+      assert.ok(result.includes('did NOT take effect'));
+      assert.ok(!result.startsWith('Task updated successfully'));
+    });
+
+    it('does not fail a successful move when the verification read fails', async () => {
+      const result = await (async () => {
+        mockFetch([
+          { status: 200, body: { id: 'p1', name: 'Design spec', list: { id: 'l1', name: 'Eng' } } },
+          { status: 200, body: { id: 't1', name: 'Child', status: { status: 'open' }, parent: 'p1' } },
+          { status: 500, text: 'boom' },
+        ]);
+        return callTool('updateTask', { taskId: 't1', parentTaskId: 'p1' });
+      })();
+      assert.ok(result.includes('not a confirmed one'));
+      assert.ok(result.includes('Design spec'));
+    });
+
+    it('reports a cross-list parent rather than asserting a rule', async () => {
+      const child = { id: 't1', name: 'Child', status: { status: 'open' }, parent: 'p1', list: { id: 'l1', name: 'Eng' } };
+      mockFetch([
+        { status: 200, body: { id: 'p1', name: 'Design spec', list: { id: 'l2', name: 'Product' } } },
+        { status: 200, body: child },
+        { status: 200, body: child },
+      ]);
+      const result = await callTool('updateTask', { taskId: 't1', parentTaskId: 'p1' });
+      assert.ok(result.includes('Product'));
+      assert.ok(result.includes('Eng'));
+      assert.ok(result.includes('different list'));
+    });
+
+    it('wraps a rejected PUT with the parent context', async () => {
+      mockFetch([
+        { status: 200, body: { id: 'p1', name: 'Design spec', list: { id: 'l1', name: 'Eng' } } },
+        { status: 400, text: '{"err":"Parent task not valid"}' },
+      ]);
+      await assert.rejects(
+        () => callTool('updateTask', { taskId: 't1', parentTaskId: 'p1' }),
+        (err: any) => {
+          assert.ok(err.message.includes('Design spec'));
+          assert.ok(err.message.includes('atomic'));
+          assert.ok(err.message.includes('Parent task not valid'));
+          return true;
+        },
+      );
+    });
   });
 
   describe('deleteTask', () => {
@@ -401,6 +558,8 @@ describe('ClickUp server tools', () => {
       assert.ok(result.includes('t1'));
       assert.ok(result.includes('l2'));
       assert.equal(calls[0].method, 'POST');
+      // moveTask changes the LIST only. Re-parenting lives on updateTask.
+      assert.equal(JSON.parse(calls[0].body!).parent, undefined);
     });
   });
 

@@ -1637,6 +1637,10 @@
                   "priority": {
                     "type": "integer",
                     "description": "New priority (1=urgent, 2=high, 3=normal, 4=low)"
+                  },
+                  "parent": {
+                    "type": "string",
+                    "description": "Re-parent the task under this task ID. ClickUp does not accept null here (a subtask cannot be converted back into a top-level task). Note this REST route is an unvalidated passthrough - the guards and the post-change confirmation live in the updateTask MCP tool."
                   }
                 }
               }
@@ -10332,6 +10336,16 @@
               }
             },
             "description": "The list the task belongs to"
+          },
+          "parent": {
+            "type": "string",
+            "nullable": true,
+            "description": "ID of this task's immediate parent task, or null if it is top-level. A bare ID - ClickUp does not include the parent's name."
+          },
+          "top_level_parent": {
+            "type": "string",
+            "nullable": true,
+            "description": "ID of the root ancestor task, or null if top-level. Equals `parent` when nesting is one level deep."
           },
           "date_created": {
             "type": "string",

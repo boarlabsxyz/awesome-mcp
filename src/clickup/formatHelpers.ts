@@ -57,6 +57,19 @@ export function formatTask(task: any, opts: { fullDescription?: boolean } = {}):
   }
   if (task.url) parts.push(`  URL: ${task.url}`);
   if (task.list) parts.push(`  List: ${task.list.name} (${task.list.id})`);
+  // ClickUp returns `parent` / `top_level_parent` as bare task IDs and carries
+  // no parent NAME anywhere in the payload, so a list rendering can only print
+  // the ID -- call getTask on it when the name is needed. Surfacing it here
+  // rather than in each tool is what covers getTask/listTasks/filterTeamTasks/
+  // searchTasks *and* the REST `Accept: text/plain` rendering from one place:
+  // without it, rebuilding a hierarchy through MCP costs one getTask per node.
+  if (task.parent) parts.push(`  Parent: ${task.parent}`);
+  // Only interesting when it says something `parent` did not: for a first-level
+  // subtask top_level_parent equals parent, and for a top-level task ClickUp may
+  // echo the task's own id rather than null.
+  if (task.top_level_parent && task.top_level_parent !== task.parent && task.top_level_parent !== task.id) {
+    parts.push(`  Top-level parent: ${task.top_level_parent}`);
+  }
   if (task.tags?.length) parts.push(`  Tags: ${task.tags.map((t: any) => t.name).join(', ')}`);
   if (task.custom_fields?.length) {
     const cfParts = task.custom_fields
