@@ -4837,6 +4837,17 @@ function registerRestApiRoutes(app: express.Express): void {
   });
 
   // PATCH /api/v1/clickup/tasks/:taskId - Update task
+  //
+  // Passthrough by design: req.body goes to ClickUp verbatim, `parent` included,
+  // so a re-parent works over curl here. The guards in the updateTask MCP tool
+  // (null rejection, parent pre-flight, cycle check, post-change verification)
+  // are error-message quality for an LLM caller, NOT data-integrity checks --
+  // ClickUp itself rejects a null parent and rejects cycles. This route's caller
+  // is a dashboard API key holder, so they are deliberately not duplicated here;
+  // duplicating them would also make `parent` the only field this uncatalogued
+  // ChatGPT-Custom-Actions compat route validates. Revisit only if a parent
+  // guard ever becomes an integrity guard (something ClickUp accepts but we must
+  // prevent).
   app.patch('/api/v1/clickup/tasks/:taskId', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { ClickUpClient } = await import('../clickup/apiHelpers.js');
