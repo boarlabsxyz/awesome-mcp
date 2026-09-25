@@ -58,6 +58,13 @@ export function formatTask(task: any, opts: { fullDescription?: boolean } = {}):
   // Rendered only when true: an "Archived: no" line on every row of a 100-task
   // list is noise, while an archived task showing up in one is worth flagging.
   // updateTask confirms the false direction itself -- see its archive note.
+  // Task type. ClickUp ships a bare `custom_item_id` number and no name, so
+  // this is the ID; listTaskTypes resolves it. Rendered only when it is a real
+  // type -- 0 is the default "Task" and a line saying so on every row of a
+  // 100-task list carries no information.
+  if (typeof task.custom_item_id === 'number' && task.custom_item_id !== 0) {
+    parts.push(`  Task type: ${task.custom_item_id === 1 ? 'Milestone (1)' : task.custom_item_id}`);
+  }
   if (task.archived) parts.push('  Archived: yes');
   if (task.url) parts.push(`  URL: ${task.url}`);
   if (task.list) parts.push(`  List: ${task.list.name} (${task.list.id})`);

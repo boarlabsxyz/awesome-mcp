@@ -244,7 +244,8 @@ clickUpServer.addTool({
     + 'description — use this (not the list tools, which show a bounded preview) when you need to read a ticket in '
     + 'full to summarize it, reuse it as a template, or check acceptance criteria. Reports Parent (and Top-level '
     + 'parent when nesting is deeper than one level) when the task is a subtask. ClickUp returns those as bare task '
-    + 'IDs with no name — that is the payload, not missing data; call getTask on the parent ID if you need its name.',
+    + 'IDs with no name — that is the payload, not missing data; call getTask on the parent ID if you need its name. '
+    + 'Reports Task type when the task is not a plain Task; listTaskTypes resolves that number to a name.',
   parameters: z.object({
     taskId: z.string().describe('The task ID (e.g., "abc123" or custom task ID).'),
     includeSubtasks: z.boolean().optional().default(false).describe('Include subtasks in response.'),
@@ -346,6 +347,9 @@ clickUpServer.addTool({
     tags: z.array(z.string()).optional().describe('Array of tag names.'),
     timeEstimate: z.number().int().optional().describe('Time estimate in milliseconds.'),
     parentTaskId: z.string().optional().describe('Parent task ID to create as subtask.'),
+    taskTypeId: z.number().int().min(0).optional().describe(
+      'Task type (ClickUp custom item type) as a number: 0 = Task (the default), 1 = Milestone, and workspace-specific types above that. Call listTaskTypes to resolve a name like "Bug" to its number. Changing the type changes which custom fields apply to the task.',
+    ),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
@@ -361,6 +365,7 @@ clickUpServer.addTool({
       tags: args.tags,
       time_estimate: args.timeEstimate,
       parent: args.parentTaskId,
+      custom_item_id: args.taskTypeId,
     });
     return `Task created successfully:\n${formatTask(task)}`;
   },
@@ -391,6 +396,9 @@ clickUpServer.addTool({
     removeAssignees: z.array(z.number()).optional().describe('User IDs to remove from assignees.'),
     timeEstimate: z.number().int().optional().describe('Time estimate in milliseconds.'),
     archived: z.boolean().optional().describe('Archive or unarchive the task.'),
+    taskTypeId: z.number().int().min(0).optional().describe(
+      'Task type (ClickUp custom item type) as a number: 0 = Task (the default), 1 = Milestone, and workspace-specific types above that. Call listTaskTypes to resolve a name like "Bug" to its number. Changing the type changes which custom fields apply to the task.',
+    ),
     parentTaskId: z.string().nullable().optional().describe(
       'Re-parent this task: move it under a different parent task in place, keeping its ID, comments, history and custom field values. '
       + 'Its own subtasks come along. Must be a ClickUp internal task ID (custom task IDs are not supported here). '
@@ -495,6 +503,7 @@ clickUpServer.addTool({
     }
     if (args.timeEstimate !== undefined) data.time_estimate = args.timeEstimate;
     if (args.archived !== undefined) data.archived = args.archived;
+    if (args.taskTypeId !== undefined) data.custom_item_id = args.taskTypeId;
     // Send the ID ClickUp itself echoed, not the raw argument, so the
     // verification compare below is against a canonical value.
     if (resolvedParent) data.parent = resolvedParent.id;
@@ -776,6 +785,36 @@ clickUpServer.addTool({
     const tasks = result.tasks || [];
     if (tasks.length === 0) return `No tasks found${args.query ? ` matching "${args.query}"` : ''}.`;
     return `Found ${tasks.length} task(s):\n\n` + tasks.map((t: any) => formatTask(t)).join('\n\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'listTaskTypes',
+  annotations: { readOnlyHint: true },
+  description: 'List the task types (custom item types) in a ClickUp workspace. Use this to resolve a task type name like "Bug" to the numeric taskTypeId that createTask and updateTask take.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID.'),
+  }),
+  execute: async (args, { session, log }) => {
+    const client = getClickUpClient(session);
+    log.info(`listTaskTypes workspace=${args.workspaceId}`);
+    const result = await client.getCustomItems(args.workspaceId);
+    const custom = Array.isArray(result?.custom_items) ? result.custom_items : [];
+    // ClickUp's endpoint returns only the workspace's CUSTOM types. Listing
+    // just those would read as "this workspace has no Task type", so the two
+    // built-ins are prepended -- they are what createTask/updateTask fall back
+    // to and 0 is the value that resets a task to a plain Task.
+    const lines = [
+      'Task (0) — the default; pass 0 to reset a task to a plain Task',
+      'Milestone (1) — built in',
+      ...custom.map((c: any) => {
+        const desc = c?.description ? ` — ${c.description}` : '';
+        return `${c?.name ?? 'unnamed'} (${c?.id})${desc}`;
+      }),
+    ];
+    return `Found ${lines.length} task type(s) (2 built-in + ${custom.length} custom):\n\n`
+      + lines.map((l) => `  ${l}`).join('\n')
+      + `\n\nPass the number as taskTypeId on createTask or updateTask.`;
   },
 });
 

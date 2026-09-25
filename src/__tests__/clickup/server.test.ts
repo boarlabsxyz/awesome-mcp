@@ -83,14 +83,14 @@ describe('ClickUp server tools', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('should have registered all 47 tools', () => {
-    // 45 ClickUp-specific tools (incl. tag-management + filterTeamTasks +
+  it('should have registered all 48 tools', () => {
+    // 46 ClickUp-specific tools (incl. tag-management + filterTeamTasks +
     // subscribeToTaskEvents + getTaskEventHistory + listTaskEventSubscriptions
-    // + debugTaskEventSubscription + unsubscribeFromTaskEvents + doc-image
-    // tools insertImageIntoPage + uploadClickUpDocImage) + 2 shared
+    // + debugTaskEventSubscription + unsubscribeFromTaskEvents + listTaskTypes
+    // + doc-image tools insertImageIntoPage + uploadClickUpDocImage) + 2 shared
     // (mintRestBearerForCurl, listRestEndpoints) registered on every FastMCP
     // server.
-    assert.equal(toolMap.size, 47);
+    assert.equal(toolMap.size, 48);
   });
 
   // === getClickUpClient / auth guard ===
@@ -330,6 +330,18 @@ describe('ClickUp server tools', () => {
       const result = await callTool('createTask', { listId: 'l1', name: 'Simple' });
       assert.ok(result.includes('Simple'));
     });
+
+    it('maps taskTypeId to custom_item_id', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 'new3', name: 'Bug', status: { status: 'open' } } }]);
+      await callTool('createTask', { listId: 'l1', name: 'Bug', taskTypeId: 1300 });
+      assert.equal(JSON.parse(calls[0].body!).custom_item_id, 1300);
+    });
+
+    it('omits custom_item_id when no type is given', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 'new4', name: 'Plain', status: { status: 'open' } } }]);
+      await callTool('createTask', { listId: 'l1', name: 'Plain' });
+      assert.equal(JSON.parse(calls[0].body!).custom_item_id, undefined);
+    });
   });
 
   describe('updateTask', () => {
@@ -382,6 +394,18 @@ describe('ClickUp server tools', () => {
       await callTool('updateTask', { taskId: 't1', addAssignees: [5] });
       const body = JSON.parse(calls[0].body!);
       assert.deepEqual(body.assignees, { add: [5], rem: [] });
+    });
+
+    it('maps taskTypeId to custom_item_id', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
+      await callTool('updateTask', { taskId: 't1', taskTypeId: 1300 });
+      assert.equal(JSON.parse(calls[0].body!).custom_item_id, 1300);
+    });
+
+    it('sends taskTypeId 0 to reset a task to a plain Task', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
+      await callTool('updateTask', { taskId: 't1', taskTypeId: 0 });
+      assert.equal(JSON.parse(calls[0].body!).custom_item_id, 0);
     });
 
     // formatTask only renders `archived` when true, so without an explicit note
@@ -607,6 +631,31 @@ describe('ClickUp server tools', () => {
           return true;
         },
       );
+    });
+  });
+
+  describe('listTaskTypes', () => {
+    it('lists custom types and prepends the two built-ins', async () => {
+      const { calls } = mockFetch([{
+        status: 200,
+        body: { custom_items: [{ id: 1300, name: 'Bug', description: 'Defect' }, { id: 1301, name: 'Spike' }] },
+      }]);
+      const result = await callTool('listTaskTypes', { workspaceId: 'w1' });
+      assert.ok(calls[0].url.endsWith('/team/w1/custom_item'));
+      assert.ok(result.includes('Bug (1300)'));
+      assert.ok(result.includes('Spike (1301)'));
+      // ClickUp returns ONLY custom types; without these the output would read
+      // as "this workspace has no Task type".
+      assert.ok(result.includes('Task (0)'));
+      assert.ok(result.includes('Milestone (1)'));
+      assert.ok(result.includes('2 built-in + 2 custom'));
+    });
+
+    it('still reports the built-ins when the workspace has no custom types', async () => {
+      mockFetch([{ status: 200, body: { custom_items: [] } }]);
+      const result = await callTool('listTaskTypes', { workspaceId: 'w1' });
+      assert.ok(result.includes('Task (0)'));
+      assert.ok(result.includes('2 built-in + 0 custom'));
     });
   });
 

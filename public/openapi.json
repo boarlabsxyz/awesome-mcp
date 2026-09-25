@@ -1491,6 +1491,10 @@
                   "due_date": {
                     "type": "string",
                     "description": "The due date in Unix time (milliseconds)"
+                  },
+                  "custom_item_id": {
+                    "type": "integer",
+                    "description": "Task type (ClickUp custom item type). 0 = Task (default), 1 = Milestone, workspace-specific types above that. Resolve names with the listTaskTypes MCP tool or GET /api/v2/team/{team_id}/custom_item."
                   }
                 }
               }
@@ -1641,6 +1645,10 @@
                   "parent": {
                     "type": "string",
                     "description": "Re-parent the task under this task ID. ClickUp does not accept null here (a subtask cannot be converted back into a top-level task). Note this REST route is an unvalidated passthrough - the guards and the post-change confirmation live in the updateTask MCP tool."
+                  },
+                  "custom_item_id": {
+                    "type": "integer",
+                    "description": "Task type (ClickUp custom item type). 0 = Task (default), 1 = Milestone, workspace-specific types above that. Resolve names with the listTaskTypes MCP tool or GET /api/v2/team/{team_id}/custom_item."
                   }
                 }
               }
@@ -10346,6 +10354,11 @@
             "type": "string",
             "nullable": true,
             "description": "ID of the root ancestor task, or null if top-level. Equals `parent` when nesting is one level deep."
+          },
+          "custom_item_id": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Task type. 0 = Task (default), 1 = Milestone, workspace-specific types above that. Only Custom Fields applicable to this type appear in custom_fields."
           },
           "date_created": {
             "type": "string",

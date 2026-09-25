@@ -90,6 +90,18 @@ describe('clickup formatHelpers', () => {
       assert.ok(!out.includes('skipped'));
     });
 
+    it('names Milestone and shows other task types by ID', () => {
+      assert.ok(formatTask({ id: 't1', name: 'M', status: { status: 'open' }, custom_item_id: 1 })
+        .includes('Task type: Milestone (1)'));
+      assert.ok(formatTask({ id: 't2', name: 'B', status: { status: 'open' }, custom_item_id: 1300 })
+        .includes('Task type: 1300'));
+    });
+
+    it('stays quiet about task type for a plain Task (0) or when absent', () => {
+      assert.ok(!formatTask({ id: 't1', name: 'P', status: { status: 'open' }, custom_item_id: 0 }).includes('Task type'));
+      assert.ok(!formatTask({ id: 't2', name: 'P', status: { status: 'open' } }).includes('Task type'));
+    });
+
     it('flags an archived task', () => {
       const out = formatTask({ id: 't1', name: 'Old', status: { status: 'open' }, archived: true });
       assert.ok(out.includes('Archived: yes'));
