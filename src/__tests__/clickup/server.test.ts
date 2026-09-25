@@ -476,6 +476,25 @@ describe('ClickUp server tools', () => {
       assert.equal(calls.length, 1, 'the PUT must not be issued');
     });
 
+    // Both self-reference checks must agree on what "the same task" is. When
+    // they disagreed (one trimmed, one raw), a padded taskId downgraded the
+    // specific cycle message to ClickUp's generic rejection.
+    it('normalises taskId consistently across both self-reference checks', async () => {
+      const { calls } = mockFetch([{ status: 200, body: {} }]);
+      await assert.rejects(
+        () => callTool('updateTask', { taskId: ' t1 ', parentTaskId: 't1' }),
+        /cannot be its own parent/,
+      );
+      assert.equal(calls.length, 0);
+
+      const second = mockFetch([{ status: 200, body: { id: 'p1', name: 'Kid', top_level_parent: 't1' } }]);
+      await assert.rejects(
+        () => callTool('updateTask', { taskId: ' t1 ', parentTaskId: 'p1' }),
+        /cycle/,
+      );
+      assert.equal(second.calls.length, 1, 'the PUT must not be issued');
+    });
+
     it('refuses a parent that is already a descendant', async () => {
       const { calls } = mockFetch([
         { status: 200, body: { id: 'p1', name: 'Kid', top_level_parent: 't1' } },

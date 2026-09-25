@@ -406,6 +406,12 @@ clickUpServer.addTool({
     // surfaces as FastMCP's generic InvalidParams ("Expected string, received
     // null"), which is the unexplained failure this parameter exists to
     // replace. Letting null reach here is what buys the explanation.
+    // One normalised identity for this task, used by every comparison below.
+    // The self-reference and cycle checks exist purely to produce a specific
+    // message instead of ClickUp's generic rejection, so they must agree on
+    // what "the same task" means -- comparing a trimmed ID in one and a raw one
+    // in the other would silently downgrade a cycle to the generic error.
+    const selfTaskId = args.taskId.trim();
     let requestedParentId: string | undefined;
     if (args.parentTaskId !== undefined) {
       if (args.parentTaskId === null) {
@@ -423,7 +429,7 @@ clickUpServer.addTool({
           + 'empty string is not a way to clear it.',
         );
       }
-      if (requestedParentId === args.taskId.trim()) {
+      if (requestedParentId === selfTaskId) {
         throw new UserError(`parentTaskId (${requestedParentId}) is the same as taskId — a task cannot be its own parent.`);
       }
     }
@@ -453,10 +459,10 @@ clickUpServer.addTool({
       // parent and its root, so a cycle deeper than that still relies on
       // ClickUp's own rejection (wrapped below); an exhaustive guard would be an
       // O(depth) ancestor walk for a hierarchy ClickUp caps at 7 levels.
-      if (resolvedParent.parent === args.taskId || resolvedParent.top_level_parent === args.taskId) {
+      if (resolvedParent.parent === selfTaskId || resolvedParent.top_level_parent === selfTaskId) {
         throw new UserError(
           `Cannot re-parent: ${requestedParentId} ("${resolvedParent.name}") is already a descendant of `
-          + `${args.taskId}. Making it the parent would create a cycle. Nothing was changed.`,
+          + `${selfTaskId}. Making it the parent would create a cycle. Nothing was changed.`,
         );
       }
     }
