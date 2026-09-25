@@ -384,6 +384,38 @@ describe('ClickUp server tools', () => {
       assert.deepEqual(body.assignees, { add: [5], rem: [] });
     });
 
+    // formatTask only renders `archived` when true, so without an explicit note
+    // an unarchive is indistinguishable from a no-op and an archive said nothing.
+    it('confirms an archive from the response', async () => {
+      mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' }, archived: true } }]);
+      const result = await callTool('updateTask', { taskId: 't1', archived: true });
+      assert.ok(result.includes('Archived — confirmed by ClickUp'));
+    });
+
+    it('confirms an unarchive, which the rendering alone cannot show', async () => {
+      mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' }, archived: false } }]);
+      const result = await callTool('updateTask', { taskId: 't1', archived: false });
+      assert.ok(result.includes('Unarchived — confirmed by ClickUp'));
+    });
+
+    it('flags an archive that did not take effect', async () => {
+      mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' }, archived: false } }]);
+      const result = await callTool('updateTask', { taskId: 't1', archived: true });
+      assert.ok(result.includes('did not take effect'));
+    });
+
+    it('reports an archive as unconfirmed when ClickUp omits the flag', async () => {
+      mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
+      const result = await callTool('updateTask', { taskId: 't1', archived: true });
+      assert.ok(result.includes('unconfirmed'));
+    });
+
+    it('says nothing about archiving when it was not requested', async () => {
+      mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
+      const result = await callTool('updateTask', { taskId: 't1', name: 'X' });
+      assert.ok(!result.includes('archiv'), 'no archive note on an unrelated update');
+    });
+
     // === re-parent (parentTaskId) ===
     //
     // callTool invokes execute() directly and BYPASSES Zod, so a guard test
@@ -493,6 +525,23 @@ describe('ClickUp server tools', () => {
         /cycle/,
       );
       assert.equal(second.calls.length, 1, 'the PUT must not be issued');
+    });
+
+    // ClickUp answers an unknown task ID with 401 "Team not authorized"
+    // (OAUTH_027), which reads as a credential failure. Passing that through
+    // sends the caller to re-issue a token that was never the problem.
+    it("does not let ClickUp's 401 for an unknown ID read as a token problem", async () => {
+      mockFetch([{ status: 401, text: '{"err":"Team not authorized","ECODE":"OAUTH_027"}' }]);
+      await assert.rejects(
+        () => callTool('updateTask', { taskId: 't1', parentTaskId: 'bogus' }),
+        (err: any) => {
+          assert.ok(err.message.includes('was not found or is not visible'));
+          assert.ok(err.message.includes('looks like an auth failure but is not'));
+          // The raw body still travels, for the rare case it really is auth.
+          assert.ok(err.message.includes('OAUTH_027'));
+          return true;
+        },
+      );
     });
 
     it('refuses a parent that is already a descendant', async () => {

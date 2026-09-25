@@ -90,6 +90,16 @@ describe('clickup formatHelpers', () => {
       assert.ok(!out.includes('skipped'));
     });
 
+    it('flags an archived task', () => {
+      const out = formatTask({ id: 't1', name: 'Old', status: { status: 'open' }, archived: true });
+      assert.ok(out.includes('Archived: yes'));
+    });
+
+    it('stays quiet about archived for a live task', () => {
+      const out = formatTask({ id: 't1', name: 'Live', status: { status: 'open' }, archived: false });
+      assert.ok(!out.includes('Archived'));
+    });
+
     // Parent / top_level_parent are how a hierarchy gets rebuilt from a list
     // rendering without one getTask per node. ClickUp ships them as bare IDs.
     it('renders Parent when the task is a subtask', () => {
