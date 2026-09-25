@@ -371,6 +371,7 @@ export class ClickUpClient {
     tags?: string[];
     time_estimate?: number;
     parent?: string;
+    custom_item_id?: number;
   }): Promise<any> {
     return this.request('POST', `/list/${listId}/task`, data);
   }
@@ -387,6 +388,7 @@ export class ClickUpClient {
     time_estimate?: number;
     archived?: boolean;
     parent?: string;
+    custom_item_id?: number;
   }): Promise<any> {
     return this.request('PUT', `/task/${taskId}`, data);
   }
@@ -414,6 +416,13 @@ export class ClickUpClient {
   }
 
   // === Custom Fields ===
+
+  // Workspace's custom task types. NOTE this returns only the CUSTOM types --
+  // the built-in "Task" (custom_item_id 0) and "Milestone" (1) are not in the
+  // payload, so anything presenting the list has to add them back.
+  async getCustomItems(teamId: string): Promise<any> {
+    return this.request('GET', `/team/${teamId}/custom_item`);
+  }
 
   async getAccessibleCustomFields(listId: string): Promise<any> {
     return this.request('GET', `/list/${listId}/field`);

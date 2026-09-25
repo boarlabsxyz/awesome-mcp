@@ -13,7 +13,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Drive](#google-drive) (15)
 - [Gmail](#gmail) (14)
 - [Google Slides](#google-slides) (6)
-- [ClickUp](#clickup) (45)
+- [ClickUp](#clickup) (46)
 - [Slack (bot)](#slack-bot-) (8)
 - [Slack (user)](#slack-user-) (16)
 - [Outline](#outline) (27)
@@ -158,7 +158,7 @@ Source: `src/google-slides/server.ts` — 6 tools.
 
 ## ClickUp
 
-Source: `src/clickup/server.ts` — 45 tools.
+Source: `src/clickup/server.ts` — 46 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -167,7 +167,7 @@ Source: `src/clickup/server.ts` — 45 tools.
 | `listSpaces` | List all spaces in a ClickUp workspace. | `GET /api/v1/clickup/workspaces/{workspaceId}/spaces` |
 | `listFolders` | List all folders in a ClickUp space. | `GET /api/v1/clickup/spaces/{spaceId}/folders` |
 | `listLists` | List all lists in a ClickUp folder, or folderless lists in a space. Provide either folderId or spaceId. | — |
-| `getTask` | Get detailed information about a specific ClickUp task by its ID. Returns the FULL, untruncated description — use this (not the list tools, which show a bounded preview) when you need to read a ticket in full to summarize it, reuse it as a template, or check acceptance criteria. Reports Parent (and Top-level parent when nesting is deeper than one level) when the task is a subtask. ClickUp returns those as bare task IDs with no name — that is the payload, not missing data; call getTask on the parent ID if you need its name. | `GET /api/v1/clickup/tasks/{taskId}` |
+| `getTask` | Get detailed information about a specific ClickUp task by its ID. Returns the FULL, untruncated description — use this (not the list tools, which show a bounded preview) when you need to read a ticket in full to summarize it, reuse it as a template, or check acceptance criteria. Reports Parent (and Top-level parent when nesting is deeper than one level) when the task is a subtask. ClickUp returns those as bare task IDs with no name — that is the payload, not missing data; call getTask on the parent ID if you need its name. Reports Task type when the task is not a plain Task; listTaskTypes resolves that number to a name. | `GET /api/v1/clickup/tasks/{taskId}` |
 | `listTasks` | List tasks in a ClickUp list with optional filters. To query tasks closed within a window, set closedAfter and/or closedBefore — the tool then forces include_closed, auto-paginates up to 2000 tasks, and filters locally on date_closed (ClickUp's REST API has no server-side close-date filter). Each task reports its Parent ID when it is a subtask, so a hierarchy can be rebuilt from one call instead of a getTask per node; match that ID against the IDs already in this response rather than looking each one up (ClickUp includes no parent name). Set subtasks=true or children are omitted entirely. | `GET /api/v1/clickup/lists/{listId}/tasks` |
 | `createTask` | Create a new task in a ClickUp list. | — |
 | `updateTask` | Update an existing ClickUp task. Only provided fields will be changed. Also RE-PARENTS a task: pass parentTaskId to move a subtask under a different parent while keeping its ID, comments, history and custom fields, so restructuring a hierarchy never needs tasks to be recreated. The re-parent is verified: the tool reads the target parent first (to resolve its name and list), applies the change, then re-reads the task and reports the confirmed parent, so no follow-up getTask is needed — and if ClickUp silently ignores the change it says so instead of claiming success. It also reports the parent's list and the task's list, so the response tells you what ClickUp did about a cross-list parent. Note ClickUp emits NO webhook event for a parent change, so getTaskEventHistory will never show one; this response is the only record. moveTask changes a task's LIST, not its parent — the two are independent. | — |
@@ -177,6 +177,7 @@ Source: `src/clickup/server.ts` — 45 tools.
 | `getTaskComments` | Get comments on a ClickUp task. | `GET /api/v1/clickup/tasks/{taskId}/comments` |
 | `filterTeamTasks` | Query tasks across a ClickUp workspace using ClickUp's server-side "Get Filtered Team Tasks" endpoint (GET /api/v2/team/{team_id}/task). One paginated call replaces per-list enumeration for workspace-wide digests. Returns tasks the caller can access (naturally scoped by the OAuth identity), 100 per page — iterate `page` from 0 to fetch all. Supports assignees, statuses, tags, scope narrowing (spaceIds/projectIds/listIds), and date ranges on date_created / date_updated / due_date. IMPORTANT: ClickUp does NOT support date_closed / date_done filters or a close-date sort here — for "closed since T", query with `dateUpdatedGt=T` (closing bumps date_updated, so this is a superset) and partition on each task's `date_closed` client-side. Each task reports its Parent ID when it is a subtask (a bare ID, no name — ClickUp does not include one), so hierarchies can be rebuilt from one page. Set subtasks=true or children are omitted entirely. | `GET /api/v1/clickup/workspaces/{workspaceId}/tasks/filter` |
 | `searchTasks` | Search for tasks across a ClickUp workspace. Supports filtering by name (client-side substring match) and/or custom fields. By default excludes closed/completed tasks — set includeClosed=true to include them. To query tasks closed within a window, set closedAfter and/or closedBefore — the tool then forces include_closed, auto-paginates up to 2000 tasks, and filters locally on date_closed (ClickUp's REST API has no server-side close-date filter). Each task reports its Parent ID when it is a subtask (a bare ID, no name — ClickUp does not include one), so hierarchies can be rebuilt from one page. | `GET /api/v1/clickup/workspaces/{workspaceId}/tasks/search` |
+| `listTaskTypes` | List the task types (custom item types) in a ClickUp workspace. Use this to resolve a task type name like "Bug" to the numeric taskTypeId that createTask and updateTask take. | — |
 | `getAccessibleCustomFields` | List all custom fields available on a ClickUp list. Use this to discover field IDs for filtering or setting values. | `GET /api/v1/clickup/lists/{listId}/fields` |
 | `setCustomFieldValue` | Set a custom field value on a ClickUp task. Use getAccessibleCustomFields first to find the field ID and type. Value shape depends on field type: text/email/phone → string; number → number; drop_down → option orderindex (int); users → array of user IDs; labels → array of label UUIDs; date → unix ms. NOTE: drop_down uses orderindex here, but searchTasks custom_fields filter uses the option UUID — getAccessibleCustomFields returns both. | — |
 | `removeCustomFieldValue` | Remove/clear a custom field value from a ClickUp task. | — |
@@ -468,4 +469,4 @@ Source: `src/redmine/server.ts` — 46 tools.
 
 ---
 
-**Grand total: 339 tools across 15 sections.**
+**Grand total: 340 tools across 15 sections.**
