@@ -24,7 +24,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 
 ## Shared (opt-in per server)
 
-Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 10 of 14 servers; not on Outline, PeopleForce v4, HubSpot, Redmine).
+Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 12 of 14 servers; not on Outline, PeopleForce v4).
 
 | Tool | Description | REST |
 |---|---|---|
@@ -390,28 +390,28 @@ Source: `src/hubspot/server.ts` — 23 tools.
 
 | Tool | Description | REST |
 |---|---|---|
-| `createCompany` | Create a new company in HubSpot (skips creation if a company with the same name already exists). | — |
-| `getCompany` | Get a specific company by ID from HubSpot. | — |
+| `createCompany` | Create a new company in HubSpot (skips creation if a company with the same name already exists). | `POST /api/v1/hubspot/companies` |
+| `getCompany` | Get a specific company by ID from HubSpot. | `GET /api/v1/hubspot/companies/{companyId}` |
 | `updateCompany` | Update an existing company record in HubSpot. | — |
-| `getCompanyActivity` | Get activity/engagement history (notes, emails, calls, meetings, tasks) for a specific company. | — |
-| `createContact` | Create a new contact in HubSpot (skips creation if a matching contact already exists). | — |
-| `getContact` | Get a specific contact by ID from HubSpot. | — |
+| `getCompanyActivity` | Get activity/engagement history (notes, emails, calls, meetings, tasks) for a specific company. | `GET /api/v1/hubspot/companies/{companyId}/activity` |
+| `createContact` | Create a new contact in HubSpot (skips creation if a matching contact already exists). | `POST /api/v1/hubspot/contacts` |
+| `getContact` | Get a specific contact by ID from HubSpot. | `GET /api/v1/hubspot/contacts/{contactId}` |
 | `updateContact` | Update an existing contact record in HubSpot. | — |
-| `getCompanyDeals` | List the deals associated with a company, with amount, stage, pipeline, and close date. Use this to go from a company ID to its deal IDs — getDeal needs an ID no other tool returns. | — |
-| `getDeal` | Get a specific deal by ID from HubSpot. | — |
-| `createDeal` | Create a new deal in HubSpot. Set dealstage/pipeline via properties (use listPipelines to resolve stage IDs). | — |
+| `getCompanyDeals` | List the deals associated with a company, with amount, stage, pipeline, and close date. Use this to go from a company ID to its deal IDs — getDeal needs an ID no other tool returns. | `GET /api/v1/hubspot/companies/{companyId}/deals` |
+| `getDeal` | Get a specific deal by ID from HubSpot. | `GET /api/v1/hubspot/deals/{dealId}` |
+| `createDeal` | Create a new deal in HubSpot. Set dealstage/pipeline via properties (use listPipelines to resolve stage IDs). | `POST /api/v1/hubspot/deals` |
 | `updateDeal` | Update an existing deal record in HubSpot (e.g. move stage, change amount). | — |
-| `listPipelines` | List HubSpot deal pipelines and their stages (with stage IDs), so deal stage IDs can be resolved to human-readable names. | — |
-| `getRecentConversations` | Get recent conversation threads from HubSpot with their messages. | — |
-| `getTickets` | Get tickets from HubSpot based on configurable selection criteria. | — |
-| `getTicketConversationThreads` | Get conversation threads (and their messages) associated with a specific ticket. | — |
-| `getProperty` | Get details of a specific HubSpot property definition. | — |
+| `listPipelines` | List HubSpot deal pipelines and their stages (with stage IDs), so deal stage IDs can be resolved to human-readable names. | `GET /api/v1/hubspot/pipelines` |
+| `getRecentConversations` | Get recent conversation threads from HubSpot with their messages. | `GET /api/v1/hubspot/conversations` |
+| `getTickets` | Get tickets from HubSpot based on configurable selection criteria. | `GET /api/v1/hubspot/tickets` |
+| `getTicketConversationThreads` | Get conversation threads (and their messages) associated with a specific ticket. | `GET /api/v1/hubspot/tickets/{ticketId}/conversation-threads` |
+| `getProperty` | Get details of a specific HubSpot property definition. | `GET /api/v1/hubspot/properties/{objectType}/{propertyName}` |
 | `updateProperty` | Update a HubSpot property definition (e.g., add dropdown options). | — |
 | `createProperty` | Create a new custom property in HubSpot. | — |
-| `createNote` | Create a note and optionally attach it to a company, contact, or deal so it appears on that record's timeline. | — |
+| `createNote` | Create a note and optionally attach it to a company, contact, or deal so it appears on that record's timeline. | `POST /api/v1/hubspot/notes` |
 | `createTask` | Create a task and optionally attach it to a company, contact, or deal. | — |
-| `logCall` | Log a call activity and optionally attach it to a company, contact, or deal. | — |
-| `logMeeting` | Log a meeting activity and optionally attach it to a company, contact, or deal. | — |
+| `logCall` | Log a call activity and optionally attach it to a company, contact, or deal. | `POST /api/v1/hubspot/calls` |
+| `logMeeting` | Log a meeting activity and optionally attach it to a company, contact, or deal. | `POST /api/v1/hubspot/meetings` |
 | `deleteEngagement` | Delete a note, task, call, or meeting by ID — the cleanup counterpart to createNote/createTask/logCall/logMeeting. | — |
 
 ## Redmine
@@ -420,52 +420,52 @@ Source: `src/redmine/server.ts` — 46 tools.
 
 | Tool | Description | REST |
 |---|---|---|
-| `listIssues` | Search and filter Redmine issues. Returns one page and always reports the total, so check whether more pages remain before summarizing. | — |
-| `getIssue` | Retrieve one Redmine issue in full. Use `include` to pull in the comment history, subtasks, watchers, or the statuses it may move to. | — |
-| `createIssue` | Create a Redmine issue in a project. Only projectId and subject are required; every other field falls back to the project/tracker default. | — |
-| `updateIssue` | Update a Redmine issue and/or add a comment. Pass `notes` to append a comment; `description` REPLACES the body instead. Fields you omit are left untouched. | — |
+| `listIssues` | Search and filter Redmine issues. Returns one page and always reports the total, so check whether more pages remain before summarizing. | `GET /api/v1/redmine/issues` |
+| `getIssue` | Retrieve one Redmine issue in full. Use `include` to pull in the comment history, subtasks, watchers, or the statuses it may move to. | `GET /api/v1/redmine/issues/{issueId}` |
+| `createIssue` | Create a Redmine issue in a project. Only projectId and subject are required; every other field falls back to the project/tracker default. | `POST /api/v1/redmine/issues` |
+| `updateIssue` | Update a Redmine issue and/or add a comment. Pass `notes` to append a comment; `description` REPLACES the body instead. Fields you omit are left untouched. | `POST /api/v1/redmine/issues/{issueId}` |
 | `deleteIssue` | Permanently delete a Redmine issue, along with its comments, time entries and subtasks. Redmine has no recycle bin — this cannot be undone. | — |
 | `addIssueWatcher` | Add a user as a watcher on a Redmine issue so they receive its notifications. | — |
 | `removeIssueWatcher` | Remove a watcher from a Redmine issue. | — |
-| `listIssueRelations` | List the relations (blocks, precedes, duplicates, …) attached to a Redmine issue. | — |
+| `listIssueRelations` | List the relations (blocks, precedes, duplicates, …) attached to a Redmine issue. | `GET /api/v1/redmine/issues/{issueId}/relations` |
 | `createIssueRelation` | Link two Redmine issues with a relation such as blocks, precedes or duplicates. | — |
 | `deleteIssueRelation` | Delete a Redmine issue relation by its relation ID (from listIssueRelations — NOT an issue ID). | — |
-| `listProjects` | List the Redmine projects visible to the connected account, newest page first. Returns one page and reports the total. | — |
-| `getProject` | Retrieve one Redmine project, optionally with its trackers, categories and enabled modules. | — |
+| `listProjects` | List the Redmine projects visible to the connected account, newest page first. Returns one page and reports the total. | `GET /api/v1/redmine/projects` |
+| `getProject` | Retrieve one Redmine project, optionally with its trackers, categories and enabled modules. | `GET /api/v1/redmine/projects/{projectId}` |
 | `createProject` | Create a Redmine project. Requires administrator rights on most instances. | — |
 | `updateProject` | Update a Redmine project. Fields you omit are left untouched. | — |
 | `archiveProject` | Archive a Redmine project. It becomes read-only and hidden from project lists, but nothing is deleted — unarchiveProject reverses it. | — |
 | `unarchiveProject` | Restore a previously archived Redmine project to active status. | — |
 | `deleteProject` | Permanently delete a Redmine project AND every issue, wiki page, version and time entry inside it, including subprojects. There is no recycle bin. Prefer archiveProject unless the data is genuinely meant to be destroyed. | — |
-| `listUsers` | List Redmine users. Requires administrator rights — a non-admin account gets a permission error, which is a Redmine restriction, not a connection problem. | — |
-| `getUser` | Retrieve one Redmine user by ID, optionally with their group and project memberships. | — |
-| `getCurrentUser` | Retrieve the Redmine account this connection authenticates as. Use it to resolve "me" to a user ID, or to verify the connection works. | — |
-| `listTimeEntries` | List Redmine time entries, filterable by project, issue, user and date range. The hours total shown covers the returned page only — check the reported total before treating it as a full sum. | — |
-| `getTimeEntry` | Retrieve one Redmine time entry by ID. | — |
-| `createTimeEntry` | Log time against a Redmine issue or project. Pass exactly one of issueId or projectId. Most instances require activityId — call listTimeEntryActivities if you do not have it. | — |
+| `listUsers` | List Redmine users. Requires administrator rights — a non-admin account gets a permission error, which is a Redmine restriction, not a connection problem. | `GET /api/v1/redmine/users` |
+| `getUser` | Retrieve one Redmine user by ID, optionally with their group and project memberships. | `GET /api/v1/redmine/users/{userId}` |
+| `getCurrentUser` | Retrieve the Redmine account this connection authenticates as. Use it to resolve "me" to a user ID, or to verify the connection works. | `GET /api/v1/redmine/users/current` |
+| `listTimeEntries` | List Redmine time entries, filterable by project, issue, user and date range. The hours total shown covers the returned page only — check the reported total before treating it as a full sum. | `GET /api/v1/redmine/time-entries` |
+| `getTimeEntry` | Retrieve one Redmine time entry by ID. | `GET /api/v1/redmine/time-entries/{timeEntryId}` |
+| `createTimeEntry` | Log time against a Redmine issue or project. Pass exactly one of issueId or projectId. Most instances require activityId — call listTimeEntryActivities if you do not have it. | `POST /api/v1/redmine/time-entries` |
 | `updateTimeEntry` | Update an existing Redmine time entry. Fields you omit are left untouched. | — |
 | `deleteTimeEntry` | Permanently delete a Redmine time entry. This cannot be undone. | — |
-| `listWikiPages` | List the titles in a Redmine project's wiki. Page bodies are not included — call getWikiPage for one. | — |
-| `getWikiPage` | Retrieve one Redmine wiki page with its full text. Pass `version` to read a historical revision. | — |
-| `updateWikiPage` | Create or replace a Redmine wiki page. Redmine uses one endpoint for both — a title that does not exist yet is created. `text` REPLACES the whole page body, so read it first if you mean to edit rather than overwrite. | — |
+| `listWikiPages` | List the titles in a Redmine project's wiki. Page bodies are not included — call getWikiPage for one. | `GET /api/v1/redmine/projects/{projectId}/wiki` |
+| `getWikiPage` | Retrieve one Redmine wiki page with its full text. Pass `version` to read a historical revision. | `GET /api/v1/redmine/projects/{projectId}/wiki/{title}` |
+| `updateWikiPage` | Create or replace a Redmine wiki page. Redmine uses one endpoint for both — a title that does not exist yet is created. `text` REPLACES the whole page body, so read it first if you mean to edit rather than overwrite. | `POST /api/v1/redmine/projects/{projectId}/wiki/{title}` |
 | `deleteWikiPage` | Permanently delete a Redmine wiki page and every revision of it. Child pages are attached to its parent rather than deleted. | — |
-| `listVersions` | List the versions (milestones / target releases) of a Redmine project, including versions shared from other projects. | — |
-| `getVersion` | Retrieve one Redmine version by ID. | — |
+| `listVersions` | List the versions (milestones / target releases) of a Redmine project, including versions shared from other projects. | `GET /api/v1/redmine/projects/{projectId}/versions` |
+| `getVersion` | Retrieve one Redmine version by ID. | `GET /api/v1/redmine/versions/{versionId}` |
 | `createVersion` | Create a version (milestone / target release) in a Redmine project. | — |
 | `updateVersion` | Update a Redmine version. Fields you omit are left untouched. | — |
 | `deleteVersion` | Permanently delete a Redmine version. Issues targeting it are not deleted — their target version is cleared. | — |
-| `listIssueCategories` | List the issue categories defined on a Redmine project. Their IDs are what createIssue/updateIssue take as categoryId. | — |
+| `listIssueCategories` | List the issue categories defined on a Redmine project. Their IDs are what createIssue/updateIssue take as categoryId. | `GET /api/v1/redmine/projects/{projectId}/issue-categories` |
 | `createIssueCategory` | Create an issue category in a Redmine project. | — |
 | `deleteIssueCategory` | Delete a Redmine issue category. Issues in it are not deleted — pass reassignToId to move them to another category, otherwise their category is cleared. | — |
-| `listMemberships` | List the members of a Redmine project with their roles. This is the reliable way to find user IDs for assignment without administrator rights, since listUsers is admin-only. | — |
+| `listMemberships` | List the members of a Redmine project with their roles. This is the reliable way to find user IDs for assignment without administrator rights, since listUsers is admin-only. | `GET /api/v1/redmine/projects/{projectId}/memberships` |
 | `createMembership` | Add a user or group to a Redmine project with one or more roles. | — |
 | `deleteMembership` | Remove a member from a Redmine project by membership ID (from listMemberships — NOT a user ID). | — |
-| `listTrackers` | List the Redmine trackers (Bug, Feature, Support, …). Their IDs are what createIssue takes as trackerId. | — |
-| `listIssueStatuses` | List every Redmine issue status, flagging which ones count as closed. Their IDs are what updateIssue takes as statusId. | — |
-| `listIssuePriorities` | List the Redmine issue priorities (Low, Normal, High, …), flagging the default. Their IDs are what createIssue takes as priorityId. | — |
-| `listTimeEntryActivities` | List the Redmine time-tracking activities (Development, Design, …), flagging the default. Their IDs are what createTimeEntry takes as activityId. | — |
-| `listCustomFields` | List the custom fields defined on this Redmine, with the `cf_<id>` filter key for each one that is filterable. Requires administrator rights. Call this before using the customFields filter on listIssues. | — |
-| `searchRedmine` | Full-text search across Redmine issues, wiki pages, news, documents and messages. Scope it with projectId, or narrow the object types with the boolean flags. | — |
+| `listTrackers` | List the Redmine trackers (Bug, Feature, Support, …). Their IDs are what createIssue takes as trackerId. | `GET /api/v1/redmine/trackers` |
+| `listIssueStatuses` | List every Redmine issue status, flagging which ones count as closed. Their IDs are what updateIssue takes as statusId. | `GET /api/v1/redmine/issue-statuses` |
+| `listIssuePriorities` | List the Redmine issue priorities (Low, Normal, High, …), flagging the default. Their IDs are what createIssue takes as priorityId. | `GET /api/v1/redmine/issue-priorities` |
+| `listTimeEntryActivities` | List the Redmine time-tracking activities (Development, Design, …), flagging the default. Their IDs are what createTimeEntry takes as activityId. | `GET /api/v1/redmine/time-entry-activities` |
+| `listCustomFields` | List the custom fields defined on this Redmine, with the `cf_<id>` filter key for each one that is filterable. Requires administrator rights. Call this before using the customFields filter on listIssues. | `GET /api/v1/redmine/custom-fields` |
+| `searchRedmine` | Full-text search across Redmine issues, wiki pages, news, documents and messages. Scope it with projectId, or narrow the object types with the boolean flags. | `GET /api/v1/redmine/search?q={query}` |
 
 ---
 

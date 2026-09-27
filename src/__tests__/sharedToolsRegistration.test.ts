@@ -34,9 +34,16 @@ const REGISTRARS = ['registerMintRestBearerForCurl', 'registerListRestEndpoints'
 type Registrar = typeof REGISTRARS[number];
 
 function serverSource(service: RestService): string {
-  // Strip block comments so a commented-out registration cannot satisfy the
-  // guard. Line comments are handled by anchoring the call match below.
   return readFileSync(resolve(REPO_ROOT, SERVICE_SERVER_PATH[service]), 'utf8')
+    // Whole-line `//` comments go first, and the order is load-bearing rather
+    // than tidy. A line comment that mentions a wildcard endpoint path ends in
+    // the same two characters that OPEN a block comment, so stripping blocks
+    // first made the regex swallow everything from that line to the next `*/` —
+    // registration calls included — and the guard reported a service that does
+    // register both tools as registering neither. Anchoring at the line start
+    // also leaves `https://` inside code untouched, while still deleting a
+    // commented-out `// registerX(server)` so it cannot satisfy the check.
+    .replace(/^[ \t]*\/\/.*$/gm, '')
     .replace(/\/\*[\s\S]*?\*\//g, '');
 }
 
@@ -98,11 +105,11 @@ describe('shared REST tools are registered wherever the REST plane is live', () 
   });
 
   it('services with only planned endpoints are exempt, and stop being exempt automatically', () => {
-    // outline and hubspot have no live routes; registering the tools there
-    // would advertise a data plane that 404s (see restCatalog.ts:114-116).
-    // They are not hardcoded as exceptions — they are simply absent from
-    // servicesWithLiveEndpoints(), so flipping any entry to 'live' enrolls
-    // them with no edit to this file.
+    // Outline is the remaining planned-only service; registering the tools on
+    // its server would advertise a data plane that 404s. It is not hardcoded as
+    // an exception — it is simply absent from servicesWithLiveEndpoints(), which
+    // is how hubspot and redmine enrolled themselves the moment their entries
+    // flipped to 'live', with no edit to this file.
     const live = new Set(servicesWithLiveEndpoints());
     const planned = [...new Set(REST_CATALOG.map(e => e.service))].filter(s => !live.has(s));
     for (const service of planned) {

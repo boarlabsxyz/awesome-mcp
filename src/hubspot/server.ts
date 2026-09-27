@@ -18,6 +18,8 @@ import { z } from 'zod';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 import {
   HubSpotClient,
   COMPANY_SEARCH_PROPERTIES,
@@ -41,10 +43,13 @@ import {
   recentDealsSearch,
   textSearch,
   withHubSpotClient,
+  type HubSpotEngagementDetail,
   type HubSpotEngagementType,
+  type HubSpotObject,
   type HubSpotMessage,
   type HubSpotObjectType,
   type HubSpotSearchFilter,
+  type HubSpotSearchResponse,
   type RenderedThread,
 } from './apiHelpers.js';
 
@@ -53,6 +58,13 @@ export const hubspotServer = new FastMCP<UserSession>({
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'hubspot'),
 });
+
+// REST data-plane companions. Registered because src/restCatalog.ts marks the
+// /api/v1/hubspot endpoints live: without mintRestBearerForCurl the only
+// credential for them is the PERMANENT dashboard API key, and without
+// listRestEndpoints a client cannot discover them in-session.
+registerMintRestBearerForCurl(hubspotServer);
+registerListRestEndpoints(hubspotServer);
 
 const objectTypeParam = z
   .enum(['companies', 'contacts', 'deals'])
@@ -166,6 +178,58 @@ const TARGET_MSG = 'Provide both associateToObjectType and associateToObjectId, 
 const bothOrNeitherTarget = (a: { associateToObjectType?: string; associateToObjectId?: string }) =>
   Boolean(a.associateToObjectType) === Boolean(a.associateToObjectId);
 
+// ---------------------------------------------------------------------------
+// Parameter schemas for the write tools that have a live POST /api/v1/hubspot/*
+// sibling. Named and exported rather than inlined in addTool so the REST route
+// validates req.body with EXACTLY what the MCP tool validates — hand-rolling
+// `if (!field)` checks in webServer.ts is the drift this prevents. The reads
+// keep their schemas inline: a GET route validates query params, not a body.
+// ---------------------------------------------------------------------------
+
+export const createCompanySchema = z.object({
+  name: z.string().describe('Company name.'),
+  properties: z.record(z.string(), z.any()).optional().describe('Additional company properties (e.g. domain, industry).'),
+});
+
+export const createContactSchema = z.object({
+  firstname: z.string().describe("Contact's first name."),
+  lastname: z.string().describe("Contact's last name."),
+  email: z.string().optional().describe("Contact's email address."),
+  properties: z.record(z.string(), z.any()).optional().describe('Additional contact properties (e.g. company, phone).'),
+});
+
+export const createDealSchema = z.object({
+  dealname: z.string().describe('Deal name.'),
+  properties: z.record(z.string(), z.any()).optional().describe('Additional deal properties (e.g. amount, dealstage, pipeline, closedate).'),
+});
+
+export const createNoteSchema = z
+  .object({
+    body: z.string().describe('Note text (hs_note_body).'),
+    ...engagementAssociationShape,
+  })
+  .refine(bothOrNeitherTarget, { message: TARGET_MSG });
+
+export const logCallSchema = z
+  .object({
+    title: z.string().optional().describe('Call title (hs_call_title).'),
+    body: z.string().optional().describe('Call notes/summary (hs_call_body).'),
+    durationMs: z.number().int().optional().describe('Call duration in milliseconds (hs_call_duration).'),
+    direction: z.enum(['INBOUND', 'OUTBOUND']).optional().describe('Call direction (hs_call_direction).'),
+    ...engagementAssociationShape,
+  })
+  .refine(bothOrNeitherTarget, { message: TARGET_MSG });
+
+export const logMeetingSchema = z
+  .object({
+    title: z.string().optional().describe('Meeting title (hs_meeting_title).'),
+    body: z.string().optional().describe('Meeting notes/agenda (hs_meeting_body).'),
+    startTime: z.union([z.string(), z.number()]).optional().describe('Meeting start (ISO-8601 or epoch ms; hs_meeting_start_time).'),
+    endTime: z.union([z.string(), z.number()]).optional().describe('Meeting end (ISO-8601 or epoch ms; hs_meeting_end_time).'),
+    ...engagementAssociationShape,
+  })
+  .refine(bothOrNeitherTarget, { message: TARGET_MSG });
+
 // Cap on how many engagement detail records getCompanyActivity fetches.
 const MAX_ACTIVITY_FETCH = 100;
 
@@ -180,7 +244,7 @@ const TICKET_PROPERTIES = [
  * entries (drop system events), classify the sender, and sort oldest-first.
  * Shared by getRecentConversations and getTicketConversationThreads.
  */
-async function renderThread(
+export async function renderThread(
   fetchMessages: () => Promise<{ results?: HubSpotMessage[] }>,
   thread: { id?: string | number; status?: string },
 ): Promise<RenderedThread> {
@@ -198,18 +262,29 @@ async function renderThread(
 // ===========================================================================
 
 // company_handler.py:105 — dedupe by name, then create.
+//
+// `created` is the load-bearing half of the return: this call is a no-op when a
+// company of that name already exists, and a caller (REST especially, where it
+// decides 201 vs 200) has no other way to tell a write from a match.
+export async function performCreateCompany(
+  client: HubSpotClient,
+  args: { name: string; properties?: Record<string, unknown> },
+): Promise<{ created: boolean; company: HubSpotObject | undefined }> {
+  const search = await client.searchCompanies(eqFilterGroup([{ propertyName: 'name', value: args.name }]));
+  if ((search.total ?? 0) > 0) {
+    return { created: false, company: search.results?.[0] };
+  }
+  // Spread caller properties first so the canonical `name` (the value we just
+  // deduped on) always wins over a stray properties.name.
+  return { created: true, company: await client.createCompany({ ...(args.properties ?? {}), name: args.name }) };
+}
+
 export async function opCreateCompany(
   client: HubSpotClient,
   args: { name: string; properties?: Record<string, unknown> },
 ): Promise<string> {
-  const search = await client.searchCompanies(eqFilterGroup([{ propertyName: 'name', value: args.name }]));
-  if ((search.total ?? 0) > 0) {
-    return `Company already exists:\n\n${formatCompany(search.results?.[0])}`;
-  }
-  // Spread caller properties first so the canonical `name` (the value we just
-  // deduped on) always wins over a stray properties.name.
-  const created = await client.createCompany({ ...(args.properties ?? {}), name: args.name });
-  return `Created company.\n\n${formatCompany(created)}`;
+  const { created, company } = await performCreateCompany(client, args);
+  return `${created ? 'Created company.' : 'Company already exists:'}\n\n${formatCompany(company)}`;
 }
 
 // company_handler.py:193
@@ -271,21 +346,34 @@ export async function opUpdateCompany(
 }
 
 // company_handler.py:171 — associations-v4 fan-out + per-id engagement detail.
-export async function opGetCompanyActivity(client: HubSpotClient, args: { companyId: string }): Promise<string> {
-  const ids = await client.getCompanyEngagementIds(args.companyId);
+//
+// `omitted` is returned rather than dropped: the fan-out is capped, so a caller
+// that only saw the details would read a truncated activity list as the whole
+// timeline. Both the MCP formatter and the REST route report it.
+export async function fetchCompanyActivity(
+  client: HubSpotClient,
+  companyId: string,
+): Promise<{ details: HubSpotEngagementDetail[]; omitted: number }> {
+  const ids = await client.getCompanyEngagementIds(companyId);
   const capped = ids.slice(0, MAX_ACTIVITY_FETCH);
   const details = await Promise.all(capped.map(id => client.getEngagementDetail(id).catch(() => null)));
-  return formatCompanyActivity(
-    details.filter((d): d is NonNullable<typeof d> => d !== null),
-    ids.length - capped.length,
-  );
+  return {
+    details: details.filter((d): d is NonNullable<typeof d> => d !== null),
+    omitted: ids.length - capped.length,
+  };
+}
+
+export async function opGetCompanyActivity(client: HubSpotClient, args: { companyId: string }): Promise<string> {
+  const { details, omitted } = await fetchCompanyActivity(client, args.companyId);
+  return formatCompanyActivity(details, omitted);
 }
 
 // contact_handler.py:92 — dedupe by name (+ company), then create.
-export async function opCreateContact(
+// Returns `created` for the same reason performCreateCompany does.
+export async function performCreateContact(
   client: HubSpotClient,
   args: { firstname: string; lastname: string; email?: string; properties?: Record<string, unknown> },
-): Promise<string> {
+): Promise<{ created: boolean; contact: HubSpotObject | undefined }> {
   const filters = [
     { propertyName: 'firstname', value: args.firstname },
     { propertyName: 'lastname', value: args.lastname },
@@ -296,7 +384,7 @@ export async function opCreateContact(
   }
   const search = await client.searchContacts(eqFilterGroup(filters));
   if ((search.total ?? 0) > 0) {
-    return `Contact already exists:\n\n${formatContact(search.results?.[0])}`;
+    return { created: false, contact: search.results?.[0] };
   }
   // Spread caller properties first so the canonical firstname/lastname/email
   // (the values we just deduped on) always win over stray property values.
@@ -306,7 +394,15 @@ export async function opCreateContact(
     lastname: args.lastname,
     ...(args.email ? { email: args.email } : {}),
   };
-  return `Created contact.\n\n${formatContact(await client.createContact(properties))}`;
+  return { created: true, contact: await client.createContact(properties) };
+}
+
+export async function opCreateContact(
+  client: HubSpotClient,
+  args: { firstname: string; lastname: string; email?: string; properties?: Record<string, unknown> },
+): Promise<string> {
+  const { created, contact } = await performCreateContact(client, args);
+  return `${created ? 'Created contact.' : 'Contact already exists:'}\n\n${formatContact(contact)}`;
 }
 
 // contact_handler.py:179
@@ -361,22 +457,57 @@ export function opSearchDeals(client: HubSpotClient, args: SearchArgs): Promise<
  * silently: a truncated list that says "Found 10 deals" would read as the
  * company's complete pipeline.
  */
+export async function fetchCompanyDeals(
+  client: HubSpotClient,
+  args: { companyId: string; limit: number; properties?: string[] },
+): Promise<{
+  deals: HubSpotObject[];
+  properties: string[];
+  /** IDs the association scan found, before `limit` was applied. */
+  associatedCount: number;
+  /** IDs this call asked HubSpot to read — `min(associatedCount, limit)`. */
+  requestedCount: number;
+  /** The association scan hit its page bound, so associatedCount is a floor. */
+  truncated: boolean;
+}> {
+  const { ids, truncated } = await client.getCompanyDealIds(args.companyId);
+  const properties = args.properties ?? DEAL_SEARCH_PROPERTIES;
+  if (ids.length === 0) return { deals: [], properties, associatedCount: 0, requestedCount: 0, truncated };
+  const requested = ids.slice(0, args.limit);
+  return {
+    deals: await client.readDealsByIds(requested, properties),
+    properties,
+    associatedCount: ids.length,
+    requestedCount: requested.length,
+    truncated,
+  };
+}
+
+export type CompanyDealsResult = Awaited<ReturnType<typeof fetchCompanyDeals>>;
+
+/**
+ * Render a company's deals, including the two truncation facts.
+ *
+ * Split from the fetch so the REST sibling can serve the same numbers as JSON
+ * without a second round-trip, and so the "N+" rule lives in one place: a
+ * truncated association scan makes the total a FLOOR, and a total rendered as
+ * an exact count would read as the company's whole pipeline.
+ */
+export function renderCompanyDeals(result: CompanyDealsResult): string {
+  const { deals, properties, associatedCount, requestedCount, truncated } = result;
+  if (associatedCount === 0) return 'No deals are associated with this company.';
+  const total = truncated ? `${associatedCount}+` : `${associatedCount}`;
+  const note = truncated || associatedCount > requestedCount
+    ? `\n\nShowing ${requestedCount} of ${total} associated deals — raise \`limit\` to see the rest.`
+    : '';
+  return formatObjectList(deals, 'deals', properties) + note;
+}
+
 export async function opGetCompanyDeals(
   client: HubSpotClient,
   args: { companyId: string; limit: number; properties?: string[] },
 ): Promise<string> {
-  const { ids, truncated } = await client.getCompanyDealIds(args.companyId);
-  if (ids.length === 0) return 'No deals are associated with this company.';
-  const properties = args.properties ?? DEAL_SEARCH_PROPERTIES;
-  const shown = ids.slice(0, args.limit);
-  const deals = await client.readDealsByIds(shown, properties);
-  // `truncated` means the association scan stopped at its page bound, so the
-  // total is a floor, not a count — render "N+" rather than assert a wrong one.
-  const total = truncated ? `${ids.length}+` : `${ids.length}`;
-  const note = truncated || ids.length > shown.length
-    ? `\n\nShowing ${shown.length} of ${total} associated deals — raise \`limit\` to see the rest.`
-    : '';
-  return formatObjectList(deals, 'deals', properties) + note;
+  return renderCompanyDeals(await fetchCompanyDeals(client, args));
 }
 
 export async function opGetDeal(client: HubSpotClient, args: { dealId: string; properties?: string[] }): Promise<string> {
@@ -427,6 +558,59 @@ type EngagementArgs = {
  * Reports honestly: success only claims a timeline attachment once the
  * association call returns 2xx; otherwise it flags the note as orphaned.
  */
+/**
+ * The outcome of the optional timeline attachment.
+ *
+ * Reported as data rather than only folded into a message, because the REST
+ * sibling has to answer the same question in JSON: `attempted` without
+ * `attached` is an ORPHANED engagement — it exists but appears on no record's
+ * timeline — and a response omitting that would read as a plain success.
+ */
+export type EngagementAssociation =
+  | { attempted: false }
+  | { attempted: true; attached: true; objectType: string; objectId: string }
+  | { attempted: true; attached: false; objectType: string; objectId: string; error: string };
+
+export async function performCreateEngagement(
+  client: HubSpotClient,
+  engagementType: HubSpotEngagementType,
+  label: string,
+  properties: Record<string, unknown>,
+  args: EngagementArgs,
+  nowMs: number = Date.now(),
+): Promise<{ engagement: HubSpotObject; association: EngagementAssociation }> {
+  const created = await client.createEngagement(engagementType, {
+    ...properties,
+    hs_timestamp: args.hs_timestamp ?? nowMs,
+  });
+  if (!args.associateToObjectType || !args.associateToObjectId) {
+    return { engagement: created, association: { attempted: false } };
+  }
+  const objectType = args.associateToObjectType;
+  const objectId = args.associateToObjectId;
+  if (!created.id) {
+    return {
+      engagement: created,
+      association: {
+        attempted: true,
+        attached: false,
+        objectType,
+        objectId,
+        error: 'HubSpot returned no ID for the created engagement, so it could not be attached.',
+      },
+    };
+  }
+  try {
+    await client.associateDefault(engagementType, created.id, objectType, objectId);
+    return { engagement: created, association: { attempted: true, attached: true, objectType, objectId } };
+  } catch (err: any) {
+    return {
+      engagement: created,
+      association: { attempted: true, attached: false, objectType, objectId, error: String(err?.message ?? err) },
+    };
+  }
+}
+
 async function opCreateEngagement(
   client: HubSpotClient,
   engagementType: HubSpotEngagementType,
@@ -435,24 +619,19 @@ async function opCreateEngagement(
   args: EngagementArgs,
   nowMs: number = Date.now(),
 ): Promise<string> {
-  const created = await client.createEngagement(engagementType, {
-    ...properties,
-    hs_timestamp: args.hs_timestamp ?? nowMs,
-  });
+  const { engagement, association } = await performCreateEngagement(client, engagementType, label, properties, args, nowMs);
   let note = '';
-  if (args.associateToObjectType && args.associateToObjectId) {
-    if (!created.id) {
-      note = `\n\n⚠ ${label} created but no ID was returned, so it could not be attached to ${args.associateToObjectType} ${args.associateToObjectId}.`;
+  if (association.attempted) {
+    const { objectType, objectId } = association;
+    if (association.attached) {
+      note = `\n\nAttached to ${objectType} ${objectId} (visible on its timeline).`;
+    } else if (!engagement.id) {
+      note = `\n\n⚠ ${label} created but no ID was returned, so it could not be attached to ${objectType} ${objectId}.`;
     } else {
-      try {
-        await client.associateDefault(engagementType, created.id, args.associateToObjectType, args.associateToObjectId);
-        note = `\n\nAttached to ${args.associateToObjectType} ${args.associateToObjectId} (visible on its timeline).`;
-      } catch (err: any) {
-        note = `\n\n⚠ ${label} created (id ${created.id}) but attaching it to ${args.associateToObjectType} ${args.associateToObjectId} failed: ${err?.message ?? err}. It will not appear on that record's timeline until associated.`;
-      }
+      note = `\n\n⚠ ${label} created (id ${engagement.id}) but attaching it to ${objectType} ${objectId} failed: ${association.error}. It will not appear on that record's timeline until associated.`;
     }
   }
-  return `Created ${label}.\n\n${formatEngagement(created, label)}${note}`;
+  return `Created ${label}.\n\n${formatEngagement(engagement, label)}${note}`;
 }
 
 export async function opCreateNote(
@@ -518,23 +697,32 @@ export async function opDeleteEngagement(
 }
 
 // conversation_handler.py:39 — list threads then fetch each thread's messages.
-export async function opGetRecentConversations(
+// One upstream call per thread, so `limit` is the cost knob on both surfaces.
+export async function fetchRecentConversations(
   client: HubSpotClient,
   args: { limit: number; after?: string },
-): Promise<string> {
+): Promise<{ threads: RenderedThread[]; nextAfter?: string }> {
   const page = await client.listConversationThreads({ limit: args.limit, after: args.after });
   const threads = await Promise.all(
     (page.results ?? []).map(t => renderThread(() => client.getThreadMessages(String(t.id)), t)),
   );
-  return formatThreads(threads, page.paging?.next?.after);
+  return { threads, nextAfter: page.paging?.next?.after };
+}
+
+export async function opGetRecentConversations(
+  client: HubSpotClient,
+  args: { limit: number; after?: string },
+): Promise<string> {
+  const { threads, nextAfter } = await fetchRecentConversations(client, args);
+  return formatThreads(threads, nextAfter);
 }
 
 // ticket_handler.py:58 — criteria-based filter groups + retry (in searchTickets).
-export async function opGetTickets(
+export async function fetchTickets(
   client: HubSpotClient,
   args: { criteria: 'default' | 'Closed'; limit: number; maxRetries: number; retryDelay: number },
   nowMs: number = Date.now(),
-): Promise<string> {
+): Promise<HubSpotSearchResponse> {
   // HubSpot's search API compares datetime properties (closedate,
   // hs_lastmodifieddate) against epoch MILLISECONDS, not ISO-8601. Passing an
   // ISO string 400s the request — which is why the `default` branch failed
@@ -555,14 +743,29 @@ export async function opGetTickets(
     limit: args.limit,
     properties: TICKET_PROPERTIES,
   };
-  const res = await client.searchTickets(body, { maxRetries: args.maxRetries, retryDelay: args.retryDelay });
+  return client.searchTickets(body, { maxRetries: args.maxRetries, retryDelay: args.retryDelay });
+}
+
+export async function opGetTickets(
+  client: HubSpotClient,
+  args: { criteria: 'default' | 'Closed'; limit: number; maxRetries: number; retryDelay: number },
+  nowMs: number = Date.now(),
+): Promise<string> {
+  const res = await fetchTickets(client, args, nowMs);
   return formatTickets(res.results ?? [], res.total, res.paging?.next?.after);
 }
 
 // ticket_handler.py:133 — tickets→conversation associations + per-thread messages.
+export async function fetchTicketConversationThreads(
+  client: HubSpotClient,
+  ticketId: string,
+): Promise<{ threads: RenderedThread[] }> {
+  const threadIds = await client.getTicketConversationIds(ticketId);
+  return { threads: await Promise.all(threadIds.map(id => renderThread(() => client.getThreadMessages(id), { id }))) };
+}
+
 export async function opGetTicketConversationThreads(client: HubSpotClient, args: { ticketId: string }): Promise<string> {
-  const threadIds = await client.getTicketConversationIds(args.ticketId);
-  const threads = await Promise.all(threadIds.map(id => renderThread(() => client.getThreadMessages(id), { id })));
+  const { threads } = await fetchTicketConversationThreads(client, args.ticketId);
   return formatThreads(threads);
 }
 
@@ -616,10 +819,7 @@ hubspotServer.addTool({
   name: 'createCompany',
   annotations: { readOnlyHint: false },
   description: 'Create a new company in HubSpot (skips creation if a company with the same name already exists).',
-  parameters: z.object({
-    name: z.string().describe('Company name.'),
-    properties: z.record(z.string(), z.any()).optional().describe('Additional company properties (e.g. domain, industry).'),
-  }),
+  parameters: createCompanySchema,
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to create company', session, log, (client) => {
       log.info(`createCompany name=${args.name}`);
@@ -690,12 +890,7 @@ hubspotServer.addTool({
   name: 'createContact',
   annotations: { readOnlyHint: false },
   description: 'Create a new contact in HubSpot (skips creation if a matching contact already exists).',
-  parameters: z.object({
-    firstname: z.string().describe("Contact's first name."),
-    lastname: z.string().describe("Contact's last name."),
-    email: z.string().optional().describe("Contact's email address."),
-    properties: z.record(z.string(), z.any()).optional().describe('Additional contact properties (e.g. company, phone).'),
-  }),
+  parameters: createContactSchema,
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to create contact', session, log, (client) => {
       log.info('createContact');
@@ -805,10 +1000,7 @@ hubspotServer.addTool({
   name: 'createDeal',
   annotations: { readOnlyHint: false },
   description: 'Create a new deal in HubSpot. Set dealstage/pipeline via properties (use listPipelines to resolve stage IDs).',
-  parameters: z.object({
-    dealname: z.string().describe('Deal name.'),
-    properties: z.record(z.string(), z.any()).optional().describe('Additional deal properties (e.g. amount, dealstage, pipeline, closedate).'),
-  }),
+  parameters: createDealSchema,
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to create deal', session, log, (client) => {
       log.info(`createDeal name=${args.dealname}`);
@@ -964,12 +1156,7 @@ hubspotServer.addTool({
   name: 'createNote',
   annotations: { readOnlyHint: false },
   description: 'Create a note and optionally attach it to a company, contact, or deal so it appears on that record\'s timeline.',
-  parameters: z
-    .object({
-      body: z.string().describe('Note text (hs_note_body).'),
-      ...engagementAssociationShape,
-    })
-    .refine(bothOrNeitherTarget, { message: TARGET_MSG }),
+  parameters: createNoteSchema,
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to create note', session, log, (client) => {
       log.info(`createNote associate=${args.associateToObjectType ?? 'none'}`);
@@ -1001,15 +1188,7 @@ hubspotServer.addTool({
   name: 'logCall',
   annotations: { readOnlyHint: false },
   description: 'Log a call activity and optionally attach it to a company, contact, or deal.',
-  parameters: z
-    .object({
-      title: z.string().optional().describe('Call title (hs_call_title).'),
-      body: z.string().optional().describe('Call notes/summary (hs_call_body).'),
-      durationMs: z.number().int().optional().describe('Call duration in milliseconds (hs_call_duration).'),
-      direction: z.enum(['INBOUND', 'OUTBOUND']).optional().describe('Call direction (hs_call_direction).'),
-      ...engagementAssociationShape,
-    })
-    .refine(bothOrNeitherTarget, { message: TARGET_MSG }),
+  parameters: logCallSchema,
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to log call', session, log, (client) => {
       log.info(`logCall associate=${args.associateToObjectType ?? 'none'}`);
@@ -1021,15 +1200,7 @@ hubspotServer.addTool({
   name: 'logMeeting',
   annotations: { readOnlyHint: false },
   description: 'Log a meeting activity and optionally attach it to a company, contact, or deal.',
-  parameters: z
-    .object({
-      title: z.string().optional().describe('Meeting title (hs_meeting_title).'),
-      body: z.string().optional().describe('Meeting notes/agenda (hs_meeting_body).'),
-      startTime: z.union([z.string(), z.number()]).optional().describe('Meeting start (ISO-8601 or epoch ms; hs_meeting_start_time).'),
-      endTime: z.union([z.string(), z.number()]).optional().describe('Meeting end (ISO-8601 or epoch ms; hs_meeting_end_time).'),
-      ...engagementAssociationShape,
-    })
-    .refine(bothOrNeitherTarget, { message: TARGET_MSG }),
+  parameters: logMeetingSchema,
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to log meeting', session, log, (client) => {
       log.info(`logMeeting associate=${args.associateToObjectType ?? 'none'}`);

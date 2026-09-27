@@ -316,13 +316,17 @@ import { selectTabContent, extractDocBodyText, truncateJsonByLength } from './do
 import { clearSessionCache, createUserSession, createUserSessionFromConnection, UserSession } from '../userSession.js';
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
 import { exchangeOutlineOauthCode, buildOutlineInstanceName } from '../outline/oauthCallback.js';
-import { exchangeHubSpotOauthCode, buildHubSpotOauthInstanceName, HUBSPOT_TOKEN_URL } from '../hubspot/oauthCallback.js';
+import { exchangeHubSpotOauthCode, buildHubSpotOauthInstanceName, fetchHubSpotGrantedScopes, HUBSPOT_TOKEN_URL } from '../hubspot/oauthCallback.js';
 import { exchangeRedmineOauthCode, redmineOauthUrls, redmineBaseFromTokenUrl } from '../redmine/oauthCallback.js';
 import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceNameFromToken } from '../outline/connectToken.js';
 import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
 import { validatePeopleForceV4Token } from '../peopleforce-v4/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
 import { validateRedmineToken, buildRedmineInstanceName } from '../redmine/connectToken.js';
+// Type-only: erased at compile time, so the REST handlers can still import the
+// clients dynamically and keep them out of the web server's startup graph.
+import type { HubSpotClient } from '../hubspot/apiHelpers.js';
+import type { RedmineClient } from '../redmine/apiHelpers.js';
 import { checkConnectionHealth, type ConnectionHealth } from './connectionHealth.js';
 import { discoverConnectedOrgs, type OrgDiscoveryResult } from '../slack-user/orgDiscovery.js';
 import { buildSimpleInstanceName, type ValidateResult } from '../util/pasteTokenValidation.js';
@@ -349,6 +353,38 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/**
+ * Body limit for the REST write endpoints whose payload is a document rather
+ * than a record — a Redmine issue description or wiki page, a HubSpot note or
+ * call transcript. Express defaults to 100 kb, which would 413 exactly the
+ * large-body case those endpoints exist to serve. Applied per path prefix
+ * (REST_LARGE_BODY_PREFIXES) rather than by raising the global limit, so an
+ * oversize body cannot be posted at anything else on the app.
+ */
+const REST_LARGE_BODY_LIMIT = '5mb';
+
+/**
+ * Log sink for the provider helpers the REST plane reuses from the MCP servers
+ * (token refresh, error mapping). They expect a FastMCP-shaped `{info, error}`;
+ * a REST handler has no per-call log channel, so both ends go to stderr beside
+ * the console.error these routes already use for failures. Deliberately not
+ * console.log: in the MCP_MODE=mcp pods this module shares a process with MCP
+ * servers, and a stray line on stdout is not worth risking for a breadcrumb.
+ */
+const REST_PROVIDER_LOG = {
+  info: (msg: string) => console.error(msg),
+  error: (msg: string) => console.error(msg),
+};
+
+/** Drop undefined values so an optional field is omitted from an upstream body rather than sent as null. */
+function compactRecord(obj: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
 
 /** Capitalize each word in a string. */
 function titleCase(str: string): string {
@@ -1596,9 +1632,50 @@ function registerSharedRoutes(app: express.Express): void {
   // by its own express.raw() rather than a JSON parser.
   registerImageBlobRoutes(app);
 
+  // Large-body REST write endpoints get their own JSON parser, and it MUST be
+  // mounted before the global one below rather than beside each handler.
+  // body-parser sets req._body on the first successful parse and every later
+  // json() middleware then skips the request — but the reverse does not hold: a
+  // per-route parser registered next to the handler (thousands of lines below,
+  // in registerRestApiRoutes) would never see a request the 100 kb global had
+  // already rejected with 413. These paths are prefixes, so they cover both the
+  // collection POST and the by-id POST underneath it.
+  //
+  // Keep in step with the POST handlers in registerRestApiRoutes; each entry is
+  // there because its body is a document, not a record:
+  const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
+    '/api/v1/redmine/issues',   // createIssue / updateIssue — description and notes are full issue bodies
+    '/api/v1/redmine/projects', // updateWikiPage — `text` replaces an entire wiki page
+    '/api/v1/hubspot/notes',    // createNote — free text
+    '/api/v1/hubspot/calls',    // logCall — can be a whole transcript
+    '/api/v1/hubspot/meetings', // logMeeting — can be full minutes
+  ];
+  for (const prefix of REST_LARGE_BODY_PREFIXES) {
+    app.use(prefix, express.json({ limit: REST_LARGE_BODY_LIMIT }));
+  }
+
   // JSON body parser for API routes
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
+
+  // Body-parser failures on the REST plane answer JSON, not Express's default
+  // HTML error page: a curl client told this API speaks JSON cannot tell an
+  // oversize body from a proxy fault when it gets HTML back. Registered here —
+  // after the parsers, before the routes — because Express walks FORWARD from
+  // the throw site looking for an error handler, so a handler mounted after the
+  // routes would never see a parser error while one mounted before the parsers
+  // would not either.
+  app.use('/api/v1', (err: any, _req: Request, res: Response, next: NextFunction) => {
+    if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+      res.status(413).json({ error: `Request body too large (max ${REST_LARGE_BODY_LIMIT} on the endpoints that accept a document body, 100kb elsewhere).` });
+      return;
+    }
+    if (err && (err.type === 'entity.parse.failed' || err.status === 400)) {
+      res.status(400).json({ error: 'Request body is not valid JSON.' });
+      return;
+    }
+    next(err);
+  });
 
   // === Per-MCP OAuth Connection ===
 
@@ -3555,6 +3632,21 @@ function registerRestApiRoutes(app: express.Express): void {
             // auth would pass and the handler would throw at call time.
             const { createPeopleForceSession } = await import('../userSession.js');
             req.userSession = createPeopleForceSession(user, connection);
+          } else if (connection.provider === 'hubspot') {
+            // HubSpot carries hubspotAccessToken plus the OAuth refresh
+            // plumbing (refresh token, expiry, client id/secret) that
+            // maybeRefreshHubSpotToken needs — access tokens expire in ~30 min,
+            // so a session built without them serves a dead credential.
+            const { createHubSpotSession } = await import('../userSession.js');
+            req.userSession = createHubSpotSession(user, connection);
+          } else if (connection.provider === 'redmine') {
+            // Redmine is self-hosted, so the instance URL and the auth mode
+            // (X-Redmine-API-Key vs Bearer) are per-connection data with no
+            // equivalent on the Google session. Getting the mode wrong re-probes
+            // a healthy OAuth connection as an API key and reads as a bad
+            // credential, so this branch is not optional.
+            const { createRedmineSession } = await import('../userSession.js');
+            req.userSession = createRedmineSession(user, connection);
           } else {
             const mcp = await getMcpCatalog(connection.mcpSlug);
             const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
@@ -3585,6 +3677,8 @@ function registerRestApiRoutes(app: express.Express): void {
   const requireClickUpApiKey = createServiceAuth('clickup', 'clickup');
   const requireSlackApiKey = createServiceAuth('slack-bot', 'slack');
   const requirePeopleForceApiKey = createServiceAuth('peopleforce', 'peopleforce');
+  const requireHubSpotApiKey = createServiceAuth('hubspot', 'hubspot');
+  const requireRedmineApiKey = createServiceAuth('redmine', 'redmine');
 
   // JSON body parser already added above for auth routes
 
@@ -6599,6 +6693,1134 @@ function registerRestApiRoutes(app: express.Express): void {
       res.json({ workspaceId: team.id, members: team.members || [] });
     } catch (err) {
       sendUpstreamError(res, err, { notFound: 'Workspace not found', fallback: 'Failed to list workspace members' });
+    }
+  });
+
+
+  // =========================================================================
+  // === HubSpot ===
+  // =========================================================================
+  //
+  // Every HubSpot route resolves its client through hubspotRestClient rather
+  // than `new HubSpotClient(token)`. Two silent failures otherwise:
+  // createServiceAuth falls back to a plain Google session when the account has
+  // no HubSpot connection, so auth passes and the bearer would go out
+  // undefined; and OAuth access tokens expire in ~30 minutes, so a connection
+  // the dashboard reports as healthy 401s on every call unless
+  // maybeRefreshHubSpotToken has run. That helper mutates the session in place,
+  // which is why getHubSpotClient is called after it rather than before.
+  async function hubspotRestClient(
+    req: ApiAuthenticatedRequest,
+    res: Response,
+  ): Promise<HubSpotClient | null> {
+    if (!req.userSession?.hubspotAccessToken) {
+      res.status(403).json({ error: 'HubSpot connection required for REST. Connect via the dashboard.' });
+      return null;
+    }
+    const { maybeRefreshHubSpotToken, getHubSpotClient } = await import('../hubspot/apiHelpers.js');
+    await maybeRefreshHubSpotToken(req.userSession, REST_PROVIDER_LOG);
+    return getHubSpotClient(req.userSession);
+  }
+
+  /**
+   * Error mapper for the HubSpot routes.
+   *
+   * Defers to sendUpstreamError for everything except the missing-scope 403,
+   * which is the one failure where the token itself holds the answer the user
+   * needs: every deal endpoint 403s on a connection the dashboard reports as
+   * perfectly healthy until the user reconnects and re-consents, and a bare
+   * "Permission denied" sends them to inspect HubSpot user permissions instead.
+   * Mirrors withHubSpotClient's branch, including the best-effort granted-scope
+   * lookup — `granted` is the only thing that separates "the reconnect never
+   * happened" from "it happened and still did not grant the scope", and in the
+   * latter case the message stops telling them to reconnect.
+   */
+  async function sendHubSpotError(
+    req: ApiAuthenticatedRequest,
+    res: Response,
+    err: unknown,
+    opts: { notFound: string; fallback: string },
+  ): Promise<void> {
+    const { parseHubSpotMissingScopes, formatHubSpotScopeError } = await import('../hubspot/apiHelpers.js');
+    const required = parseHubSpotMissingScopes(err);
+    const token = req.userSession?.hubspotAccessToken;
+    if (required && token) {
+      // Never throws — returns null when the token lookup fails, which degrades
+      // to the needed-only message rather than to a second error.
+      const granted = await fetchHubSpotGrantedScopes(token);
+      res.status(403).json({
+        error: formatHubSpotScopeError(opts.fallback, required, granted),
+        requiredScopes: required,
+        ...(granted ? { grantedScopes: granted } : {}),
+      });
+      return;
+    }
+    sendUpstreamError(res, err, opts);
+  }
+
+  // --- HubSpot reads ---
+  // A recent-companies sweep or a company activity timeline is exactly the
+  // payload this plane exists to keep out of the LLM context window. Every read
+  // also answers ?format=text (or Accept: text/plain) using the MCP tool's own
+  // formatter, so the two surfaces cannot word the same record differently.
+  // Defaults match the MCP tools' Zod defaults on purpose — these are
+  // documented as passthroughs, and a different default here would be a silent
+  // divergence. `limit` is clamped at 100, HubSpot's own search page cap.
+
+  // GET /api/v1/hubspot/companies - Most recently active companies
+  app.get('/api/v1/hubspot/companies', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { recentCompaniesSearch, formatObjectList } = await import('../hubspot/apiHelpers.js');
+      const result = await client.searchCompanies(recentCompaniesSearch(qint(req.query.limit, 10, { min: 1, max: 100 })));
+      respondNegotiated(req, res, result, () => formatObjectList(result.results ?? [], 'companies'));
+    } catch (err: any) {
+      console.error('Error listing HubSpot companies:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Companies not found', fallback: 'Failed to get active companies' });
+    }
+  });
+
+  // GET /api/v1/hubspot/companies/:companyId - One company
+  // ?properties=a,b narrows what HubSpot returns. HubSpot silently DROPS keys it
+  // does not recognise, so the text rendering appends a note naming any that
+  // never came back — otherwise "no value on this record" and "that property
+  // does not exist" look identical.
+  app.get('/api/v1/hubspot/companies/:companyId', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { formatCompany, missingPropertiesNote } = await import('../hubspot/apiHelpers.js');
+      const properties = qarr(req.query.properties);
+      const result = await client.getCompany(req.params.companyId as string, properties);
+      respondNegotiated(req, res, result, () => formatCompany(result) + missingPropertiesNote(properties, result));
+    } catch (err: any) {
+      console.error('Error fetching HubSpot company:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Company not found', fallback: 'Failed to get company' });
+    }
+  });
+
+  // GET /api/v1/hubspot/companies/:companyId/activity - Notes, calls, meetings, tasks
+  // Never deals — those live on the sibling route below. `omitted` is part of
+  // the payload because the engagement fan-out is capped: a caller that only saw
+  // the details would read a truncated timeline as the whole history.
+  app.get('/api/v1/hubspot/companies/:companyId/activity', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { formatCompanyActivity } = await import('../hubspot/apiHelpers.js');
+      const { fetchCompanyActivity } = await import('../hubspot/server.js');
+      const result = await fetchCompanyActivity(client, req.params.companyId as string);
+      respondNegotiated(req, res, result, () => formatCompanyActivity(result.details, result.omitted));
+    } catch (err: any) {
+      console.error('Error fetching HubSpot company activity:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Company not found', fallback: 'Failed to get company activity' });
+    }
+  });
+
+  // GET /api/v1/hubspot/companies/:companyId/deals - Deals associated with a company
+  // The only route from a company to its deal IDs: a company record carries
+  // num_associated_deals as a plain company property, so without this the by-ID
+  // deal endpoints are unreachable from a company and the dead end reads as a
+  // permissions problem. `truncated` means the association scan hit its page
+  // bound, so associatedCount is a floor rather than a count.
+  app.get('/api/v1/hubspot/companies/:companyId/deals', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { fetchCompanyDeals, renderCompanyDeals } = await import('../hubspot/server.js');
+      const result = await fetchCompanyDeals(client, {
+        companyId: req.params.companyId as string,
+        limit: qint(req.query.limit, 25, { min: 1, max: 500 }),
+        properties: qarr(req.query.properties),
+      });
+      respondNegotiated(req, res, result, () => renderCompanyDeals(result));
+    } catch (err: any) {
+      console.error('Error fetching HubSpot company deals:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Company not found', fallback: 'Failed to get company deals' });
+    }
+  });
+
+  // GET /api/v1/hubspot/contacts - Most recently active contacts
+  app.get('/api/v1/hubspot/contacts', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { recentContactsSearch, formatObjectList } = await import('../hubspot/apiHelpers.js');
+      const result = await client.searchContacts(recentContactsSearch(qint(req.query.limit, 10, { min: 1, max: 100 })));
+      respondNegotiated(req, res, result, () => formatObjectList(result.results ?? [], 'contacts'));
+    } catch (err: any) {
+      console.error('Error listing HubSpot contacts:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Contacts not found', fallback: 'Failed to get active contacts' });
+    }
+  });
+
+  // GET /api/v1/hubspot/contacts/:contactId - One contact
+  app.get('/api/v1/hubspot/contacts/:contactId', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { formatContact, missingPropertiesNote } = await import('../hubspot/apiHelpers.js');
+      const properties = qarr(req.query.properties);
+      const result = await client.getContact(req.params.contactId as string, properties);
+      respondNegotiated(req, res, result, () => formatContact(result) + missingPropertiesNote(properties, result));
+    } catch (err: any) {
+      console.error('Error fetching HubSpot contact:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Contact not found', fallback: 'Failed to get contact' });
+    }
+  });
+
+  // GET /api/v1/hubspot/deals - Most recently active deals
+  // All four deal routes gate on crm.objects.deals.read. A connection made
+  // before that scope entered the catalog seed looks healthy and 403s here;
+  // sendHubSpotError is what turns that into "reconnect", naming needed vs
+  // granted scopes rather than reporting a bare permission denial.
+  app.get('/api/v1/hubspot/deals', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { recentDealsSearch, formatObjectList, DEAL_SEARCH_PROPERTIES } = await import('../hubspot/apiHelpers.js');
+      const result = await client.searchDeals(recentDealsSearch(qint(req.query.limit, 10, { min: 1, max: 100 })));
+      respondNegotiated(req, res, result, () => formatObjectList(result.results ?? [], 'deals', DEAL_SEARCH_PROPERTIES));
+    } catch (err: any) {
+      console.error('Error listing HubSpot deals:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Deals not found', fallback: 'Failed to get active deals' });
+    }
+  });
+
+  // GET /api/v1/hubspot/deals/:dealId - One deal
+  app.get('/api/v1/hubspot/deals/:dealId', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { formatDeal, missingPropertiesNote } = await import('../hubspot/apiHelpers.js');
+      const properties = qarr(req.query.properties);
+      const result = await client.getDeal(req.params.dealId as string, properties);
+      respondNegotiated(req, res, result, () => formatDeal(result) + missingPropertiesNote(properties, result));
+    } catch (err: any) {
+      console.error('Error fetching HubSpot deal:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Deal not found', fallback: 'Failed to get deal' });
+    }
+  });
+
+  // GET /api/v1/hubspot/pipelines - Deal pipelines with their ordered stages
+  // How a dealstage ID on a deal record becomes a stage name.
+  app.get('/api/v1/hubspot/pipelines', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { formatPipelines } = await import('../hubspot/apiHelpers.js');
+      const result = await client.listDealPipelines();
+      respondNegotiated(req, res, result, () => formatPipelines(result.results ?? []));
+    } catch (err: any) {
+      console.error('Error listing HubSpot pipelines:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Pipelines not found', fallback: 'Failed to list pipelines' });
+    }
+  });
+
+  // GET /api/v1/hubspot/conversations - Recent threads with their messages
+  // One upstream call per thread on top of the list, so ?limit is the cost knob.
+  app.get('/api/v1/hubspot/conversations', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { formatThreads } = await import('../hubspot/apiHelpers.js');
+      const { fetchRecentConversations } = await import('../hubspot/server.js');
+      const result = await fetchRecentConversations(client, {
+        limit: qint(req.query.limit, 10, { min: 1, max: 100 }),
+        after: qstr(req.query.after) || undefined,
+      });
+      respondNegotiated(req, res, result, () => formatThreads(result.threads, result.nextAfter));
+    } catch (err: any) {
+      console.error('Error listing HubSpot conversations:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Conversations not found', fallback: 'Failed to get recent conversations' });
+    }
+  });
+
+  // GET /api/v1/hubspot/tickets - Tickets by criteria
+  // criteria=default is "closed or last-modified within the last day";
+  // criteria=Closed filters on the pipeline stage. The date filters go upstream
+  // as epoch MILLISECONDS — HubSpot's search API 400s on ISO-8601, which is why
+  // this is never built from a date string here.
+  app.get('/api/v1/hubspot/tickets', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const criteria = qstr(req.query.criteria, 'default');
+      if (criteria !== 'default' && criteria !== 'Closed') {
+        res.status(400).json({ error: "criteria must be 'default' or 'Closed'" });
+        return;
+      }
+      const { formatTickets } = await import('../hubspot/apiHelpers.js');
+      const { fetchTickets } = await import('../hubspot/server.js');
+      const result = await fetchTickets(client, {
+        criteria,
+        limit: qint(req.query.limit, 50, { min: 1, max: 100 }),
+        maxRetries: qint(req.query.maxRetries, 3, { min: 0, max: 10 }),
+        retryDelay: qint(req.query.retryDelay, 1, { min: 0, max: 30 }),
+      });
+      respondNegotiated(req, res, result, () => formatTickets(result.results ?? [], result.total, result.paging?.next?.after));
+    } catch (err: any) {
+      console.error('Error listing HubSpot tickets:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Tickets not found', fallback: 'Failed to get tickets' });
+    }
+  });
+
+  // GET /api/v1/hubspot/tickets/:ticketId/conversation-threads
+  app.get('/api/v1/hubspot/tickets/:ticketId/conversation-threads', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { formatThreads } = await import('../hubspot/apiHelpers.js');
+      const { fetchTicketConversationThreads } = await import('../hubspot/server.js');
+      const result = await fetchTicketConversationThreads(client, req.params.ticketId as string);
+      respondNegotiated(req, res, result, () => formatThreads(result.threads));
+    } catch (err: any) {
+      console.error('Error fetching HubSpot ticket threads:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Ticket not found', fallback: 'Failed to get ticket conversation threads' });
+    }
+  });
+
+  // GET /api/v1/hubspot/properties/:objectType/:propertyName - One property definition
+  app.get('/api/v1/hubspot/properties/:objectType/:propertyName', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const objectType = req.params.objectType as string;
+      if (objectType !== 'companies' && objectType !== 'contacts' && objectType !== 'deals') {
+        res.status(400).json({ error: 'objectType must be companies, contacts or deals' });
+        return;
+      }
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { formatProperty } = await import('../hubspot/apiHelpers.js');
+      const result = await client.getProperty(objectType, req.params.propertyName as string);
+      respondNegotiated(req, res, result, () => formatProperty(result));
+    } catch (err: any) {
+      console.error('Error fetching HubSpot property:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Property not found', fallback: 'Failed to get property' });
+    }
+  });
+
+  // --- HubSpot writes ---
+  // Bodies are validated with the MCP tools' own exported Zod schemas, not
+  // hand-rolled `if (!field)` checks: REST bypasses FastMCP's Zod layer, and
+  // reusing the schema is the only thing keeping the two surfaces in step.
+  //
+  // These widen what the PERMANENT dashboard API key can do — it reaches the
+  // same createServiceAuth gate as the reads, so a key that could only read
+  // HubSpot yesterday can now write CRM records and timeline activities.
+  //
+  // Responses are JSON only. The `created` flag and the association outcome are
+  // the parts a curl pipeline needs, and both are better as fields than as
+  // prose, so there is deliberately no ?format=text on the writes.
+
+  // POST /api/v1/hubspot/companies - Create a company (deduped by name)
+  app.post('/api/v1/hubspot/companies', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { createCompanySchema, performCreateCompany } = await import('../hubspot/server.js');
+      const parsed = createCompanySchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      // created:false means a company of that name already existed and NOTHING
+      // was written — the same no-op the MCP tool performs. 200 vs 201 says so
+      // too, but the flag is what survives a `jq` that only reads the body.
+      const { created, company } = await performCreateCompany(client, parsed.data);
+      res.status(created ? 201 : 200).json({ created, company });
+    } catch (err: any) {
+      console.error('Error creating HubSpot company:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Company not found', fallback: 'Failed to create company' });
+    }
+  });
+
+  // POST /api/v1/hubspot/contacts - Create a contact (deduped by name + company)
+  app.post('/api/v1/hubspot/contacts', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { createContactSchema, performCreateContact } = await import('../hubspot/server.js');
+      const parsed = createContactSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const { created, contact } = await performCreateContact(client, parsed.data);
+      res.status(created ? 201 : 200).json({ created, contact });
+    } catch (err: any) {
+      console.error('Error creating HubSpot contact:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Contact not found', fallback: 'Failed to create contact' });
+    }
+  });
+
+  // POST /api/v1/hubspot/deals - Create a deal
+  // No dedupe step: deals are not uniquely named, so every call creates one.
+  // Not idempotent — a retried curl makes a second deal.
+  app.post('/api/v1/hubspot/deals', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { createDealSchema } = await import('../hubspot/server.js');
+      const parsed = createDealSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      // Caller properties first so the canonical dealname always wins over a
+      // stray properties.dealname — the same ordering opCreateDeal uses.
+      const deal = await client.createDeal({ ...(parsed.data.properties ?? {}), dealname: parsed.data.dealname });
+      res.status(201).json({ created: true, deal });
+    } catch (err: any) {
+      console.error('Error creating HubSpot deal:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Pipeline or stage not found', fallback: 'Failed to create deal' });
+    }
+  });
+
+  // Notes, calls and meetings share one handler: the only differences are the
+  // engagement type, the schema, and which properties the body maps onto. Each
+  // is registered from the table below so the two-step create-then-associate
+  // contract — and the honesty about a failed association — lives in one place.
+  const HUBSPOT_ENGAGEMENT_ROUTES: ReadonlyArray<{
+    path: string;
+    type: 'notes' | 'calls' | 'meetings';
+    label: string;
+    schemaName: 'createNoteSchema' | 'logCallSchema' | 'logMeetingSchema';
+    properties: (args: any) => Record<string, unknown>;
+    fallback: string;
+  }> = [
+    {
+      path: '/api/v1/hubspot/notes',
+      type: 'notes',
+      label: 'note',
+      schemaName: 'createNoteSchema',
+      properties: a => ({ hs_note_body: a.body }),
+      fallback: 'Failed to create note',
+    },
+    {
+      path: '/api/v1/hubspot/calls',
+      type: 'calls',
+      label: 'call',
+      schemaName: 'logCallSchema',
+      properties: a => compactRecord({
+        hs_call_title: a.title,
+        hs_call_body: a.body,
+        hs_call_duration: a.durationMs,
+        hs_call_direction: a.direction,
+      }),
+      fallback: 'Failed to log call',
+    },
+    {
+      path: '/api/v1/hubspot/meetings',
+      type: 'meetings',
+      label: 'meeting',
+      schemaName: 'logMeetingSchema',
+      properties: a => compactRecord({
+        hs_meeting_title: a.title,
+        hs_meeting_body: a.body,
+        hs_meeting_start_time: a.startTime,
+        hs_meeting_end_time: a.endTime,
+      }),
+      fallback: 'Failed to log meeting',
+    },
+  ];
+
+  for (const route of HUBSPOT_ENGAGEMENT_ROUTES) {
+    app.post(route.path, requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const client = await hubspotRestClient(req, res);
+        if (!client) return;
+        const hubspot = await import('../hubspot/server.js');
+        const parsed = hubspot[route.schemaName].safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const args = parsed.data as any;
+        const result = await hubspot.performCreateEngagement(
+          client,
+          route.type,
+          route.label,
+          route.properties(args),
+          args,
+        );
+        // 201 even when the association failed: the engagement WAS created, and
+        // reporting otherwise would leave the caller believing they can retry
+        // cleanly. `association.attached === false` is the orphan signal — the
+        // record exists but sits on no timeline until it is associated.
+        res.status(201).json(result);
+      } catch (err: any) {
+        console.error(`Error on HubSpot ${route.path}:`, err);
+        await sendHubSpotError(req, res, err, { notFound: 'Record to associate not found', fallback: route.fallback });
+      }
+    });
+  }
+
+
+  // =========================================================================
+  // === Redmine ===
+  // =========================================================================
+  //
+  // Redmine is self-hosted, so a connection carries three things a Google
+  // session has no slot for — the instance URL, the credential, and which of
+  // the two auth headers it goes in — and all three are checked before a client
+  // is built. The base-URL check has no fallback on purpose: there is no
+  // api.redmine.com, so guessing a host would send the credential somewhere the
+  // user never named.
+  async function redmineRestClient(
+    req: ApiAuthenticatedRequest,
+    res: Response,
+  ): Promise<RedmineClient | null> {
+    const session = req.userSession;
+    if (!session?.redmineAccessToken) {
+      res.status(403).json({ error: 'Redmine connection required for REST. Connect via the dashboard.' });
+      return null;
+    }
+    if (!session.redmineBaseUrl) {
+      res.status(403).json({ error: 'Redmine connection is missing its instance URL. Reconnect from the dashboard and enter your Redmine URL.' });
+      return null;
+    }
+    const { maybeRefreshRedmineToken, getRedmineClient } = await import('../redmine/apiHelpers.js');
+    // Doorkeeper expires access tokens in ~2h AND rotates the refresh token on
+    // use. The helper is single-flight per connection precisely so two
+    // concurrent REST calls cannot race to spend the same rotating refresh
+    // token, which would kill the connection on the call after next.
+    await maybeRefreshRedmineToken(session, REST_PROVIDER_LOG);
+    return getRedmineClient(session);
+  }
+
+  /**
+   * Error mapper for the Redmine routes.
+   *
+   * Not sendUpstreamError, because for Redmine the bare status is misleading in
+   * three ways the MCP surface already handles and a curl caller needs just as
+   * much: 403 means an administrator switched the REST API off about as often as
+   * it means a missing permission, 422 carries Redmine's own `{"errors":[...]}`
+   * validation list that a generic 500 would bury, and an unreachable
+   * self-hosted instance throws with no status at all — undici reports every one
+   * of those as the bare string "fetch failed". The message text comes from
+   * mapRedmineError so the two surfaces cannot word the same failure
+   * differently; it signals by throwing a UserError rather than returning, which
+   * is what the try/catch here is reading.
+   */
+  async function sendRedmineError(
+    res: Response,
+    err: unknown,
+    opts: { fallback: string; adminOnly?: boolean; permission?: string; baseUrl?: string },
+  ): Promise<void> {
+    const { mapRedmineError } = await import('../redmine/apiHelpers.js');
+    let message = opts.fallback;
+    try {
+      mapRedmineError(
+        opts.fallback,
+        err,
+        REST_PROVIDER_LOG,
+        { adminOnly: opts.adminOnly, permission: opts.permission },
+        opts.baseUrl || 'the Redmine instance',
+      );
+    } catch (mapped: any) {
+      if (typeof mapped?.message === 'string' && mapped.message) message = mapped.message;
+    }
+    const upstream = typeof (err as any)?.status === 'number' ? (err as any).status : undefined;
+    // An upstream 401 is deliberately NOT echoed as a 401. On this plane a 401
+    // means "your REST bearer is bad", so a client that saw one would go re-mint
+    // a bearer when the real problem is the stored Redmine credential. 502 plus
+    // the mapped message ("Redmine rejected the credential. Reconnect from the
+    // dashboard.") says what actually happened. A missing status is the same
+    // class of thing — the instance was never reached.
+    res.status(upstream && upstream !== 401 ? upstream : 502).json({ error: message });
+  }
+
+  /**
+   * Pull `?cf_3=Urgent` style keys out of a query string.
+   *
+   * Only `cf_<digits>` keys are collected, which is also what
+   * mergeCustomFieldFilters enforces downstream: Redmine silently DROPS an
+   * unknown filter rather than erroring, so forwarding a mistyped key would
+   * widen the result set and read as "the filter matched everything".
+   */
+  function redmineCustomFieldFilters(query: Record<string, unknown>): Record<string, string> | undefined {
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(query)) {
+      if (/^cf_\d+$/.test(key) && typeof value === 'string') out[key] = value;
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  }
+
+  /**
+   * Optional numeric query param.
+   *
+   * `undefined` when the key is absent, so an omitted filter stays omitted —
+   * but a present-and-unparseable value comes back as NaN, which the Zod schema
+   * then rejects with a 400 rather than quietly dropping a filter the caller
+   * believes is applied. Same reasoning as redmineCustomFieldFilters: Redmine
+   * ignores what it does not understand, so failing open turns a typo into a
+   * plausible-looking wrong answer.
+   */
+  function qnum(v: unknown): number | undefined {
+    if (typeof v !== 'string' || v === '') return undefined;
+    return Number.parseInt(v, 10);
+  }
+
+  /**
+   * Optional boolean query param. Redmine reads its search toggles as PRESENCE
+   * flags, so `false` and absent behave identically upstream — the tri-state
+   * exists only so an omitted flag is not sent at all.
+   */
+  function qflag(v: unknown): boolean | undefined {
+    if (typeof v !== 'string' || v === '') return undefined;
+    return v === 'true' || v === '1';
+  }
+
+  /** 400 for a query string the tool's own schema rejects. */
+  function sendInvalidQuery(res: Response, issues: unknown): void {
+    res.status(400).json({ error: 'Invalid query parameters', issues });
+  }
+
+  // --- Redmine reads ---
+  // Query params are validated with the MCP tools' own Zod schemas rather than
+  // passed through. That is not ceremony here: Redmine DROPS a filter it does
+  // not recognise and caps `limit` at 100 server-side without saying so, so an
+  // unvalidated query fails open — a bad tracker ID or an out-of-range limit
+  // returns a plausible-looking wrong page instead of an error. The schemas also
+  // give the query builders their exact types, so the camelCase-to-filter
+  // mapping is never re-derived here.
+  //
+  // Lists answer { items, page } where page carries total_count / offset /
+  // limit. Follow `page` before treating a list as complete.
+
+  // GET /api/v1/redmine/issues - Search and filter issues
+  app.get('/api/v1/redmine/issues', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { listIssuesSchema } = await import('../redmine/schemas.js');
+      const { issueListQuery } = await import('../redmine/ops.js');
+      const { formatIssueList, REDMINE_MAX_LIMIT } = await import('../redmine/apiHelpers.js');
+      const parsed = listIssuesSchema.safeParse({
+        projectId: qstr(req.query.projectId) || undefined,
+        subprojectId: qstr(req.query.subprojectId) || undefined,
+        trackerId: qnum(req.query.trackerId),
+        statusId: qstr(req.query.statusId) || undefined,
+        assignedToId: qstr(req.query.assignedToId) || undefined,
+        authorId: qstr(req.query.authorId) || undefined,
+        parentId: qnum(req.query.parentId),
+        issueIds: qarr(req.query.issueIds)?.map(Number),
+        subject: qstr(req.query.subject) || undefined,
+        createdOn: qstr(req.query.createdOn) || undefined,
+        updatedOn: qstr(req.query.updatedOn) || undefined,
+        customFields: redmineCustomFieldFilters(req.query as Record<string, unknown>),
+        sort: qstr(req.query.sort) || undefined,
+        include: qarr(req.query.include),
+        offset: qint(req.query.offset, 0, { min: 0 }),
+        limit: qint(req.query.limit, 25, { min: 1, max: REDMINE_MAX_LIMIT }),
+      });
+      if (!parsed.success) { sendInvalidQuery(res, parsed.error.flatten()); return; }
+      const result = await client.listIssues(issueListQuery(parsed.data));
+      respondNegotiated(req, res, result, () => formatIssueList(result.items, result.page));
+    } catch (err: any) {
+      console.error('Error listing Redmine issues:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to list issues', permission: 'view_issues', baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // GET /api/v1/redmine/issues/:issueId - One issue
+  // ?include=journals is the comment history; allowed_statuses is the set of
+  // statuses this issue can legally move to.
+  app.get('/api/v1/redmine/issues/:issueId', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { getIssueSchema } = await import('../redmine/schemas.js');
+      const { formatIssue } = await import('../redmine/apiHelpers.js');
+      const parsed = getIssueSchema.safeParse({
+        issueId: req.params.issueId as string,
+        include: qarr(req.query.include),
+      });
+      if (!parsed.success) { sendInvalidQuery(res, parsed.error.flatten()); return; }
+      const result = await client.getIssue(parsed.data.issueId, parsed.data.include);
+      if (!result?.issue) { res.status(404).json({ error: 'Issue not found' }); return; }
+      respondNegotiated(req, res, result, () => formatIssue(result.issue!));
+    } catch (err: any) {
+      console.error('Error fetching Redmine issue:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to fetch issue', permission: 'view_issues', baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // GET /api/v1/redmine/issues/:issueId/relations - blocks, precedes, duplicates, ...
+  app.get('/api/v1/redmine/issues/:issueId/relations', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { formatRelationList } = await import('../redmine/apiHelpers.js');
+      const result = await client.listIssueRelations(req.params.issueId as string);
+      respondNegotiated(req, res, result, () => formatRelationList(result.items, result.page));
+    } catch (err: any) {
+      console.error('Error listing Redmine issue relations:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to list issue relations', permission: 'view_issues', baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // GET /api/v1/redmine/projects - Projects visible to the connected account
+  app.get('/api/v1/redmine/projects', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { listProjectsSchema } = await import('../redmine/schemas.js');
+      const { projectListQuery } = await import('../redmine/ops.js');
+      const { formatProjectList, REDMINE_MAX_LIMIT } = await import('../redmine/apiHelpers.js');
+      const parsed = listProjectsSchema.safeParse({
+        include: qarr(req.query.include),
+        offset: qint(req.query.offset, 0, { min: 0 }),
+        limit: qint(req.query.limit, 25, { min: 1, max: REDMINE_MAX_LIMIT }),
+      });
+      if (!parsed.success) { sendInvalidQuery(res, parsed.error.flatten()); return; }
+      const result = await client.listProjects(projectListQuery(parsed.data));
+      respondNegotiated(req, res, result, () => formatProjectList(result.items, result.page, parsed.data.include));
+    } catch (err: any) {
+      console.error('Error listing Redmine projects:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to list projects', baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // GET /api/v1/redmine/users/current - The account this connection authenticates as
+  // Registered BEFORE /users/:userId, or Express reads "current" as a user ID.
+  app.get('/api/v1/redmine/users/current', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { getCurrentUserSchema } = await import('../redmine/schemas.js');
+      const { formatUser } = await import('../redmine/apiHelpers.js');
+      const parsed = getCurrentUserSchema.safeParse({ include: qarr(req.query.include) });
+      if (!parsed.success) { sendInvalidQuery(res, parsed.error.flatten()); return; }
+      const result = await client.getCurrentUser(parsed.data.include);
+      if (!result?.user) { res.status(404).json({ error: 'Current user not found' }); return; }
+      respondNegotiated(req, res, result, () => formatUser(result.user!, parsed.data.include));
+    } catch (err: any) {
+      console.error('Error fetching current Redmine user:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to fetch the current user', baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // GET /api/v1/redmine/users - All users (administrator-only upstream)
+  app.get('/api/v1/redmine/users', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { listUsersSchema } = await import('../redmine/schemas.js');
+      const { userListQuery } = await import('../redmine/ops.js');
+      const { formatUserList, REDMINE_MAX_LIMIT } = await import('../redmine/apiHelpers.js');
+      const parsed = listUsersSchema.safeParse({
+        status: qstr(req.query.status) || undefined,
+        name: qstr(req.query.name) || undefined,
+        groupId: qnum(req.query.groupId),
+        offset: qint(req.query.offset, 0, { min: 0 }),
+        limit: qint(req.query.limit, 25, { min: 1, max: REDMINE_MAX_LIMIT }),
+      });
+      if (!parsed.success) { sendInvalidQuery(res, parsed.error.flatten()); return; }
+      const result = await client.listUsers(userListQuery(parsed.data));
+      respondNegotiated(req, res, result, () => formatUserList(result.items, result.page));
+    } catch (err: any) {
+      console.error('Error listing Redmine users:', err);
+      // adminOnly: Redmine answers 403 for both "not an administrator" and "no
+      // permission on this project", and the generic wording sends people to
+      // check project rights they cannot change.
+      await sendRedmineError(res, err, { fallback: 'Failed to list users', adminOnly: true, baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // GET /api/v1/redmine/users/:userId - One user
+  app.get('/api/v1/redmine/users/:userId', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { getUserSchema } = await import('../redmine/schemas.js');
+      const { formatUser } = await import('../redmine/apiHelpers.js');
+      const parsed = getUserSchema.safeParse({
+        userId: req.params.userId as string,
+        include: qarr(req.query.include),
+      });
+      if (!parsed.success) { sendInvalidQuery(res, parsed.error.flatten()); return; }
+      const result = await client.getUser(parsed.data.userId, parsed.data.include);
+      if (!result?.user) { res.status(404).json({ error: 'User not found' }); return; }
+      respondNegotiated(req, res, result, () => formatUser(result.user!, parsed.data.include));
+    } catch (err: any) {
+      console.error('Error fetching Redmine user:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to fetch user', baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // GET /api/v1/redmine/time-entries - Logged time
+  // Any hours total computed from one response is per page, not per project.
+  app.get('/api/v1/redmine/time-entries', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { listTimeEntriesSchema } = await import('../redmine/schemas.js');
+      const { timeEntryListQuery } = await import('../redmine/ops.js');
+      const { formatTimeEntryList, REDMINE_MAX_LIMIT } = await import('../redmine/apiHelpers.js');
+      const parsed = listTimeEntriesSchema.safeParse({
+        projectId: qstr(req.query.projectId) || undefined,
+        issueId: qstr(req.query.issueId) || undefined,
+        userId: qstr(req.query.userId) || undefined,
+        spentOn: qstr(req.query.spentOn) || undefined,
+        from: qstr(req.query.from) || undefined,
+        to: qstr(req.query.to) || undefined,
+        offset: qint(req.query.offset, 0, { min: 0 }),
+        limit: qint(req.query.limit, 25, { min: 1, max: REDMINE_MAX_LIMIT }),
+      });
+      if (!parsed.success) { sendInvalidQuery(res, parsed.error.flatten()); return; }
+      const result = await client.listTimeEntries(timeEntryListQuery(parsed.data));
+      respondNegotiated(req, res, result, () => formatTimeEntryList(result.items, result.page));
+    } catch (err: any) {
+      console.error('Error listing Redmine time entries:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to list time entries', permission: 'view_time_entries', baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // GET /api/v1/redmine/time-entries/:timeEntryId - One time entry
+  app.get('/api/v1/redmine/time-entries/:timeEntryId', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { formatTimeEntry } = await import('../redmine/apiHelpers.js');
+      const result = await client.getTimeEntry(req.params.timeEntryId as string);
+      if (!result?.time_entry) { res.status(404).json({ error: 'Time entry not found' }); return; }
+      respondNegotiated(req, res, result, () => formatTimeEntry(result.time_entry!));
+    } catch (err: any) {
+      console.error('Error fetching Redmine time entry:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to fetch time entry', permission: 'view_time_entries', baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // GET /api/v1/redmine/projects/:projectId/wiki/:title - One wiki page with its text
+  // `title` is the page title exactly as listWikiPages reports it, not a slug —
+  // Redmine matches on the title. ?version fetches a specific revision.
+  app.get('/api/v1/redmine/projects/:projectId/wiki/:title', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { getWikiPageSchema } = await import('../redmine/schemas.js');
+      const { formatWikiPage } = await import('../redmine/apiHelpers.js');
+      const parsed = getWikiPageSchema.safeParse({
+        projectId: req.params.projectId as string,
+        title: req.params.title as string,
+        version: qnum(req.query.version),
+      });
+      if (!parsed.success) { sendInvalidQuery(res, parsed.error.flatten()); return; }
+      const result = await client.getWikiPage(parsed.data.projectId, parsed.data.title, parsed.data.version);
+      if (!result?.wiki_page) { res.status(404).json({ error: 'Wiki page not found' }); return; }
+      respondNegotiated(req, res, result, () => formatWikiPage(result.wiki_page!));
+    } catch (err: any) {
+      console.error('Error fetching Redmine wiki page:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to fetch wiki page', permission: 'view_wiki_pages', baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // --- Redmine project-nested lists ---
+  // Four routes with one shape: a project reference in the path, no query
+  // params, one client call, one formatter. Registered from a table so a change
+  // to the error or negotiation contract lands once, the same reason
+  // PF_LOOKUP_ROUTES exists. Kept after the wiki/:title route above.
+  const REDMINE_PROJECT_ROUTES: ReadonlyArray<{
+    path: string;
+    fetch: (client: RedmineClient, projectId: string, offset: number, limit: number) => Promise<any>;
+    format: (helpers: any, result: any) => string;
+    fallback: string;
+    permission?: string;
+  }> = [
+    {
+      path: '/api/v1/redmine/projects/:projectId/wiki',
+      fetch: (c, id) => c.listWikiPages(id),
+      format: (h, r) => h.formatWikiPageList(r.items, r.page),
+      fallback: 'Failed to list wiki pages',
+      permission: 'view_wiki_pages',
+    },
+    {
+      path: '/api/v1/redmine/projects/:projectId/versions',
+      fetch: (c, id) => c.listVersions(id),
+      format: (h, r) => h.formatVersionList(r.items, r.page),
+      fallback: 'Failed to list versions',
+    },
+    {
+      path: '/api/v1/redmine/projects/:projectId/issue-categories',
+      fetch: (c, id) => c.listIssueCategories(id),
+      format: (h, r) => h.formatCategoryList(r.items, r.page),
+      fallback: 'Failed to list issue categories',
+    },
+    {
+      path: '/api/v1/redmine/projects/:projectId/memberships',
+      fetch: (c, id, offset, limit) => c.listMemberships(id, { offset, limit }),
+      format: (h, r) => h.formatMembershipList(r.items, r.page),
+      fallback: 'Failed to list memberships',
+      permission: 'manage_members',
+    },
+  ];
+
+  for (const route of REDMINE_PROJECT_ROUTES) {
+    app.get(route.path, requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const client = await redmineRestClient(req, res);
+        if (!client) return;
+        const helpers = await import('../redmine/apiHelpers.js');
+        const result = await route.fetch(
+          client,
+          req.params.projectId as string,
+          qint(req.query.offset, 0, { min: 0 }),
+          qint(req.query.limit, 25, { min: 1, max: helpers.REDMINE_MAX_LIMIT }),
+        );
+        respondNegotiated(req, res, result, () => route.format(helpers, result));
+      } catch (err: any) {
+        console.error(`Error on Redmine ${route.path}:`, err);
+        await sendRedmineError(res, err, { fallback: route.fallback, permission: route.permission, baseUrl: req.userSession?.redmineBaseUrl });
+      }
+    });
+  }
+
+  // GET /api/v1/redmine/projects/:projectId - One project
+  // projectId takes the numeric ID or the URL identifier, as everywhere else.
+  app.get('/api/v1/redmine/projects/:projectId', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { getProjectSchema } = await import('../redmine/schemas.js');
+      const { formatProject } = await import('../redmine/apiHelpers.js');
+      const parsed = getProjectSchema.safeParse({
+        projectId: req.params.projectId as string,
+        include: qarr(req.query.include),
+      });
+      if (!parsed.success) { sendInvalidQuery(res, parsed.error.flatten()); return; }
+      const result = await client.getProject(parsed.data.projectId, parsed.data.include);
+      if (!result?.project) { res.status(404).json({ error: 'Project not found' }); return; }
+      respondNegotiated(req, res, result, () => formatProject(result.project!, parsed.data.include));
+    } catch (err: any) {
+      console.error('Error fetching Redmine project:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to fetch project', baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // GET /api/v1/redmine/versions/:versionId - One version
+  app.get('/api/v1/redmine/versions/:versionId', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { formatVersion } = await import('../redmine/apiHelpers.js');
+      const result = await client.getVersion(req.params.versionId as string);
+      if (!result?.version) { res.status(404).json({ error: 'Version not found' }); return; }
+      respondNegotiated(req, res, result, () => formatVersion(result.version!));
+    } catch (err: any) {
+      console.error('Error fetching Redmine version:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to fetch version', baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // GET /api/v1/redmine/search?q=... - Full-text search
+  // The flags (?issues, ?wikiPages, ?news, ?documents, ?titlesOnly,
+  // ?openIssues) are presence flags upstream, so passing one as false is the
+  // same as leaving it out.
+  app.get('/api/v1/redmine/search', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { searchRedmineSchema } = await import('../redmine/schemas.js');
+      const { searchQuery } = await import('../redmine/ops.js');
+      const { formatSearchResults, REDMINE_MAX_LIMIT } = await import('../redmine/apiHelpers.js');
+      const parsed = searchRedmineSchema.safeParse({
+        // ?q is what the catalog documents; ?query is accepted as an alias
+        // because that is the MCP parameter's name.
+        query: qstr(req.query.q) || qstr(req.query.query),
+        projectId: qstr(req.query.projectId) || undefined,
+        scope: qstr(req.query.scope) || undefined,
+        titlesOnly: qflag(req.query.titlesOnly),
+        issues: qflag(req.query.issues),
+        news: qflag(req.query.news),
+        documents: qflag(req.query.documents),
+        wikiPages: qflag(req.query.wikiPages),
+        openIssues: qflag(req.query.openIssues),
+        offset: qint(req.query.offset, 0, { min: 0 }),
+        limit: qint(req.query.limit, 25, { min: 1, max: REDMINE_MAX_LIMIT }),
+      });
+      if (!parsed.success) { sendInvalidQuery(res, parsed.error.flatten()); return; }
+      const result = await client.search(searchQuery(parsed.data));
+      respondNegotiated(req, res, result, () => formatSearchResults(result.items, result.page));
+    } catch (err: any) {
+      console.error('Error searching Redmine:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to search Redmine', baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // --- Redmine lookup lists ---
+  // Unpaginated upstream: Redmine returns the whole list. Same table treatment
+  // as the project-nested routes above.
+  const REDMINE_LOOKUP_ROUTES: ReadonlyArray<{
+    path: string;
+    fetch: (client: RedmineClient) => Promise<any>;
+    format: (helpers: any, result: any) => string;
+    fallback: string;
+    adminOnly?: boolean;
+  }> = [
+    {
+      path: '/api/v1/redmine/trackers',
+      fetch: c => c.listTrackers(),
+      format: (h, r) => h.formatRefList('Trackers', 'trackers', r.items, r.page),
+      fallback: 'Failed to list trackers',
+    },
+    {
+      path: '/api/v1/redmine/issue-statuses',
+      fetch: c => c.listIssueStatuses(),
+      format: (h, r) => h.formatRefList('Issue statuses', 'issue statuses', r.items, r.page),
+      fallback: 'Failed to list issue statuses',
+    },
+    {
+      path: '/api/v1/redmine/issue-priorities',
+      fetch: c => c.listIssuePriorities(),
+      format: (h, r) => h.formatRefList('Issue priorities', 'issue priorities', r.items, r.page),
+      fallback: 'Failed to list issue priorities',
+    },
+    {
+      path: '/api/v1/redmine/time-entry-activities',
+      fetch: c => c.listTimeEntryActivities(),
+      format: (h, r) => h.formatRefList('Time entry activities', 'time entry activities', r.items, r.page),
+      fallback: 'Failed to list time entry activities',
+    },
+    {
+      path: '/api/v1/redmine/custom-fields',
+      fetch: c => c.listCustomFields(),
+      format: (h, r) => h.formatCustomFieldDefList(r.items, r.page),
+      fallback: 'Failed to list custom fields',
+      adminOnly: true,
+    },
+  ];
+
+  for (const route of REDMINE_LOOKUP_ROUTES) {
+    app.get(route.path, requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const client = await redmineRestClient(req, res);
+        if (!client) return;
+        const helpers = await import('../redmine/apiHelpers.js');
+        const result = await route.fetch(client);
+        respondNegotiated(req, res, result, () => route.format(helpers, result));
+      } catch (err: any) {
+        console.error(`Error on Redmine ${route.path}:`, err);
+        await sendRedmineError(res, err, { fallback: route.fallback, adminOnly: route.adminOnly, baseUrl: req.userSession?.redmineBaseUrl });
+      }
+    });
+  }
+
+  // --- Redmine writes ---
+  // Same schema-reuse rule as the HubSpot writes, and the same consequence: the
+  // PERMANENT dashboard API key now reaches them. Deliberately absent are all
+  // seven delete tools, archiveProject, and the project/version/category/
+  // membership admin creates — Redmine has no recycle bin, deleteProject
+  // cascades into subprojects, and a curl has no confirmation affordance.
+  //
+  // Path params are merged OVER the body so a URL and a mismatched body key
+  // cannot disagree about which record is being written.
+
+  // POST /api/v1/redmine/issues - Create an issue
+  app.post('/api/v1/redmine/issues', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { createIssueSchema } = await import('../redmine/server.js');
+      const { issueBody } = await import('../redmine/ops.js');
+      const parsed = createIssueSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const result = await client.createIssue({ project_id: parsed.data.projectId, ...issueBody(parsed.data) });
+      if (!result?.issue?.id) {
+        res.status(502).json({ error: 'Redmine accepted the request but returned no issue' });
+        return;
+      }
+      res.status(201).json(result);
+    } catch (err: any) {
+      console.error('Error creating Redmine issue:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to create issue', permission: 'add_issues', baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // POST /api/v1/redmine/issues/:issueId - Update an issue, or append a comment
+  // POST rather than PUT because the REST catalog's method union is GET|POST;
+  // Redmine itself takes a PUT here. `notes` appends a comment, `description`
+  // REPLACES the body.
+  app.post('/api/v1/redmine/issues/:issueId', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { updateIssueSchema } = await import('../redmine/server.js');
+      const { issueBody } = await import('../redmine/ops.js');
+      const parsed = updateIssueSchema.safeParse({ ...req.body, issueId: req.params.issueId });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const body = issueBody(parsed.data);
+      if (Object.keys(body).length === 0) {
+        res.status(400).json({ error: 'Nothing to update — pass at least one field to change, or `notes` to add a comment.' });
+        return;
+      }
+      await client.updateIssue(parsed.data.issueId, body);
+      // Redmine answers the write with 204 and no body, so re-read: a caller
+      // chaining curls would otherwise have to issue the follow-up GET itself.
+      const result = await client.getIssue(parsed.data.issueId);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error updating Redmine issue:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to update issue', permission: 'edit_issues', baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // POST /api/v1/redmine/time-entries - Log time
+  // Not idempotent: a retried curl logs the hours twice.
+  app.post('/api/v1/redmine/time-entries', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { createTimeEntrySchema } = await import('../redmine/server.js');
+      const { timeEntryBody } = await import('../redmine/ops.js');
+      const parsed = createTimeEntrySchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const result = await client.createTimeEntry(timeEntryBody(parsed.data));
+      res.status(201).json(result);
+    } catch (err: any) {
+      console.error('Error creating Redmine time entry:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to log time', permission: 'log_time', baseUrl: req.userSession?.redmineBaseUrl });
+    }
+  });
+
+  // POST /api/v1/redmine/projects/:projectId/wiki/:title - Create or replace a wiki page
+  // The clearest large-body case on this plane: `text` replaces the entire page.
+  // A title that does not exist yet is created. Pass `version` for optimistic
+  // locking so a concurrent edit is rejected rather than clobbered.
+  app.post('/api/v1/redmine/projects/:projectId/wiki/:title', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await redmineRestClient(req, res);
+      if (!client) return;
+      const { updateWikiPageSchema } = await import('../redmine/server.js');
+      const { wikiPageBody } = await import('../redmine/ops.js');
+      const parsed = updateWikiPageSchema.safeParse({
+        ...req.body,
+        projectId: req.params.projectId,
+        title: req.params.title,
+      });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      await client.updateWikiPage(parsed.data.projectId, parsed.data.title, wikiPageBody(parsed.data));
+      // Re-read rather than echo the request: Redmine answers a page update with
+      // 204, and the re-read is also what confirms the new version number the
+      // next optimistic-locking write will need.
+      const result = await client.getWikiPage(parsed.data.projectId, parsed.data.title);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error saving Redmine wiki page:', err);
+      await sendRedmineError(res, err, { fallback: 'Failed to save wiki page', permission: 'edit_wiki_pages', baseUrl: req.userSession?.redmineBaseUrl });
     }
   });
 }

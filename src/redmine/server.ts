@@ -26,6 +26,8 @@ import { FastMCP } from 'fastmcp';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 import { withRedmineClient } from './apiHelpers.js';
 import {
   listIssuesSchema,
@@ -125,14 +127,23 @@ import {
 } from './ops.js';
 
 // Re-exported so the schemas stay importable from the server module, which is
-// where a REST sibling and the existing tests look for them.
-export { createIssueSchema, updateIssueSchema, createTimeEntrySchema };
+// where a REST sibling and the existing tests look for them. These four are
+// exactly the tools with a live POST /api/v1/redmine/* sibling, which validates
+// its body with the schema below rather than a hand-rolled copy.
+export { createIssueSchema, updateIssueSchema, createTimeEntrySchema, updateWikiPageSchema };
 
 export const redmineServer = new FastMCP<UserSession>({
   name: 'Redmine MCP',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'redmine'),
 });
+
+// REST data-plane companions. Registered because src/restCatalog.ts marks the
+// /api/v1/redmine endpoints live: without mintRestBearerForCurl the only
+// credential for them is the PERMANENT dashboard API key, and without
+// listRestEndpoints a client cannot discover them in-session.
+registerMintRestBearerForCurl(redmineServer);
+registerListRestEndpoints(redmineServer);
 
 // ==================== Issues ====================
 
