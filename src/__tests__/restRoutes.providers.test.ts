@@ -194,8 +194,16 @@ describe('REST data plane: HubSpot and Redmine handler bodies', () => {
       reset();
       when('/objects/contacts/p1', { json: { id: 'p1', properties: { firstname: 'Ada' } } });
       when('/objects/deals/d1', { json: { id: 'd1', properties: { dealname: 'Renewal' } } });
-      await request(app).get('/api/v1/hubspot/contacts/p1').set(auth()).expect(200);
-      await request(app).get('/api/v1/hubspot/deals/d1').set(auth()).expect(200);
+
+      const contact = await request(app).get('/api/v1/hubspot/contacts/p1').set(auth());
+      assert.equal(contact.status, 200);
+      assert.equal(contact.body.id, 'p1');
+      assert.ok(calls.some(c => c.url.includes('/objects/contacts/p1')), 'read the contact endpoint');
+
+      const deal = await request(app).get('/api/v1/hubspot/deals/d1').set(auth());
+      assert.equal(deal.status, 200);
+      assert.equal(deal.body.properties.dealname, 'Renewal');
+      assert.ok(calls.some(c => c.url.includes('/objects/deals/d1')), 'read the deals endpoint');
     });
 
     it('reports the engagement cap on company activity instead of hiding it', async () => {

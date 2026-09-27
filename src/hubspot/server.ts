@@ -279,7 +279,7 @@ export async function performCreateCompany(
   }
   // Spread caller properties first so the canonical `name` (the value we just
   // deduped on) always wins over a stray properties.name.
-  return { created: true, company: await client.createCompany({ ...(args.properties ?? {}), name: args.name }) };
+  return { created: true, company: await client.createCompany({ ...args.properties, name: args.name }) };
 }
 
 /** Body of the `createCompany` tool: the dedupe-or-create above, rendered. */
@@ -401,7 +401,7 @@ export async function performCreateContact(
   // Spread caller properties first so the canonical firstname/lastname/email
   // (the values we just deduped on) always win over stray property values.
   const properties: Record<string, unknown> = {
-    ...(args.properties ?? {}),
+    ...args.properties,
     firstname: args.firstname,
     lastname: args.lastname,
     ...(args.email ? { email: args.email } : {}),
@@ -544,7 +544,7 @@ export async function opCreateDeal(
   args: { dealname: string; properties?: Record<string, unknown> },
 ): Promise<string> {
   // Spread caller properties first so the canonical dealname always wins.
-  const created = await client.createDeal({ ...(args.properties ?? {}), dealname: args.dealname });
+  const created = await client.createDeal({ ...args.properties, dealname: args.dealname });
   return `Created deal.\n\n${formatDeal(created)}`;
 }
 

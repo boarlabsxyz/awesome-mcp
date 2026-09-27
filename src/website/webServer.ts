@@ -309,6 +309,13 @@ import { createPendingRegistration, consumePendingRegistration, deletePendingReg
 import { lookupRestToken } from './restTokenStore.js';
 import { mapSlackErrorToHttpStatus } from './slackErrorMapper.js';
 import { negotiateFormat, respondNegotiated } from './restContent.js';
+import {
+  hubspotRestClient,
+  sendHubSpotError,
+  redmineRestClient,
+  sendRedmineError,
+  sendInvalidQuery,
+} from './restProviderAuth.js';
 import { sendUpstreamError } from './restUpstreamError.js';
 import { qstr, qint, qarr, qoptint, qflag, redmineCustomFieldFilters } from '../util/queryParams.js';
 import { stripTrailingSlashes } from '../util/url.js';
@@ -316,7 +323,7 @@ import { selectTabContent, extractDocBodyText, truncateJsonByLength } from './do
 import { clearSessionCache, createUserSession, createUserSessionFromConnection, UserSession } from '../userSession.js';
 import { listMcpCatalogs, getMcpCatalog } from '../mcpCatalogStore.js';
 import { exchangeOutlineOauthCode, buildOutlineInstanceName } from '../outline/oauthCallback.js';
-import { exchangeHubSpotOauthCode, buildHubSpotOauthInstanceName, fetchHubSpotGrantedScopes, HUBSPOT_TOKEN_URL } from '../hubspot/oauthCallback.js';
+import { exchangeHubSpotOauthCode, buildHubSpotOauthInstanceName, HUBSPOT_TOKEN_URL } from '../hubspot/oauthCallback.js';
 import { exchangeRedmineOauthCode, redmineOauthUrls, redmineBaseFromTokenUrl } from '../redmine/oauthCallback.js';
 import { validateOutlineToken, buildOutlineInstanceName as buildOutlineInstanceNameFromToken } from '../outline/connectToken.js';
 import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
@@ -364,18 +371,6 @@ const __dirname = path.dirname(__filename);
  */
 const REST_LARGE_BODY_LIMIT = '5mb';
 
-/**
- * Log sink for the provider helpers the REST plane reuses from the MCP servers
- * (token refresh, error mapping). They expect a FastMCP-shaped `{info, error}`;
- * a REST handler has no per-call log channel, so both ends go to stderr beside
- * the console.error these routes already use for failures. Deliberately not
- * console.log: in the MCP_MODE=mcp pods this module shares a process with MCP
- * servers, and a stray line on stdout is not worth risking for a breadcrumb.
- */
-const REST_PROVIDER_LOG = {
-  info: (msg: string) => console.error(msg),
-  error: (msg: string) => console.error(msg),
-};
 
 /** Drop undefined values so an optional field is omitted from an upstream body rather than sent as null. */
 function compactRecord(obj: Record<string, unknown>): Record<string, unknown> {
@@ -6701,66 +6696,7 @@ function registerRestApiRoutes(app: express.Express): void {
   // === HubSpot ===
   // =========================================================================
   //
-  /**
-   * Resolve a refreshed HubSpot client, or answer 403 and return null.
-   *
-   * Every HubSpot route goes through this rather than `new HubSpotClient(token)`,
-   * because there are two silent failures otherwise. createServiceAuth falls
-   * back to a plain Google session when the account has no HubSpot connection,
-   * so auth passes and the bearer would go out undefined. And OAuth access
-   * tokens expire in ~30 minutes, so a connection the dashboard reports as
-   * healthy 401s on every call unless maybeRefreshHubSpotToken has run — that
-   * helper mutates the session in place, which is why getHubSpotClient is
-   * called after it rather than before.
-   */
-  async function hubspotRestClient(
-    req: ApiAuthenticatedRequest,
-    res: Response,
-  ): Promise<HubSpotClient | null> {
-    if (!req.userSession?.hubspotAccessToken) {
-      res.status(403).json({ error: 'HubSpot connection required for REST. Connect via the dashboard.' });
-      return null;
-    }
-    const { maybeRefreshHubSpotToken, getHubSpotClient } = await import('../hubspot/apiHelpers.js');
-    await maybeRefreshHubSpotToken(req.userSession, REST_PROVIDER_LOG);
-    return getHubSpotClient(req.userSession);
-  }
 
-  /**
-   * Error mapper for the HubSpot routes.
-   *
-   * Defers to sendUpstreamError for everything except the missing-scope 403,
-   * which is the one failure where the token itself holds the answer the user
-   * needs: every deal endpoint 403s on a connection the dashboard reports as
-   * perfectly healthy until the user reconnects and re-consents, and a bare
-   * "Permission denied" sends them to inspect HubSpot user permissions instead.
-   * Mirrors withHubSpotClient's branch, including the best-effort granted-scope
-   * lookup — `granted` is the only thing that separates "the reconnect never
-   * happened" from "it happened and still did not grant the scope", and in the
-   * latter case the message stops telling them to reconnect.
-   */
-  async function sendHubSpotError(
-    req: ApiAuthenticatedRequest,
-    res: Response,
-    err: unknown,
-    opts: { notFound: string; fallback: string },
-  ): Promise<void> {
-    const { parseHubSpotMissingScopes, formatHubSpotScopeError } = await import('../hubspot/apiHelpers.js');
-    const required = parseHubSpotMissingScopes(err);
-    const token = req.userSession?.hubspotAccessToken;
-    if (required && token) {
-      // Never throws — returns null when the token lookup fails, which degrades
-      // to the needed-only message rather than to a second error.
-      const granted = await fetchHubSpotGrantedScopes(token);
-      res.status(403).json({
-        error: formatHubSpotScopeError(opts.fallback, required, granted),
-        requiredScopes: required,
-        ...(granted ? { grantedScopes: granted } : {}),
-      });
-      return;
-    }
-    sendUpstreamError(res, err, opts);
-  }
 
   // --- HubSpot CRM object reads ---
   // Companies, contacts and deals are the same two reads three times over: a
@@ -7110,7 +7046,7 @@ function registerRestApiRoutes(app: express.Express): void {
       }
       // Caller properties first so the canonical dealname always wins over a
       // stray properties.dealname — the same ordering opCreateDeal uses.
-      const deal = await client.createDeal({ ...(parsed.data.properties ?? {}), dealname: parsed.data.dealname });
+      const deal = await client.createDeal({ ...parsed.data.properties, dealname: parsed.data.dealname });
       res.status(201).json({ created: true, deal });
     } catch (err: any) {
       console.error('Error creating HubSpot deal:', err);
@@ -7202,84 +7138,8 @@ function registerRestApiRoutes(app: express.Express): void {
   // === Redmine ===
   // =========================================================================
   //
-  /**
-   * Resolve a refreshed Redmine client, or answer 403 and return null.
-   *
-   * Redmine is self-hosted, so a connection carries three things a Google
-   * session has no slot for — the instance URL, the credential, and which of the
-   * two auth headers it goes in — and all three are settled before a client is
-   * built. The base-URL check has no fallback on purpose: there is no
-   * api.redmine.com, so guessing a host would send the credential somewhere the
-   * user never named.
-   */
-  async function redmineRestClient(
-    req: ApiAuthenticatedRequest,
-    res: Response,
-  ): Promise<RedmineClient | null> {
-    const session = req.userSession;
-    if (!session?.redmineAccessToken) {
-      res.status(403).json({ error: 'Redmine connection required for REST. Connect via the dashboard.' });
-      return null;
-    }
-    if (!session.redmineBaseUrl) {
-      res.status(403).json({ error: 'Redmine connection is missing its instance URL. Reconnect from the dashboard and enter your Redmine URL.' });
-      return null;
-    }
-    const { maybeRefreshRedmineToken, getRedmineClient } = await import('../redmine/apiHelpers.js');
-    // Doorkeeper expires access tokens in ~2h AND rotates the refresh token on
-    // use. The helper is single-flight per connection precisely so two
-    // concurrent REST calls cannot race to spend the same rotating refresh
-    // token, which would kill the connection on the call after next.
-    await maybeRefreshRedmineToken(session, REST_PROVIDER_LOG);
-    return getRedmineClient(session);
-  }
 
-  /**
-   * Error mapper for the Redmine routes.
-   *
-   * Not sendUpstreamError, because for Redmine the bare status is misleading in
-   * three ways the MCP surface already handles and a curl caller needs just as
-   * much: 403 means an administrator switched the REST API off about as often as
-   * it means a missing permission, 422 carries Redmine's own `{"errors":[...]}`
-   * validation list that a generic 500 would bury, and an unreachable
-   * self-hosted instance throws with no status at all — undici reports every one
-   * of those as the bare string "fetch failed". The message text comes from
-   * mapRedmineError so the two surfaces cannot word the same failure
-   * differently; it signals by throwing a UserError rather than returning, which
-   * is what the try/catch here is reading.
-   */
-  async function sendRedmineError(
-    res: Response,
-    err: unknown,
-    opts: { fallback: string; adminOnly?: boolean; permission?: string; baseUrl?: string },
-  ): Promise<void> {
-    const { mapRedmineError } = await import('../redmine/apiHelpers.js');
-    let message = opts.fallback;
-    try {
-      mapRedmineError(
-        opts.fallback,
-        err,
-        REST_PROVIDER_LOG,
-        { adminOnly: opts.adminOnly, permission: opts.permission },
-        opts.baseUrl || 'the Redmine instance',
-      );
-    } catch (mapped: any) {
-      if (typeof mapped?.message === 'string' && mapped.message) message = mapped.message;
-    }
-    const upstream = typeof (err as any)?.status === 'number' ? (err as any).status : undefined;
-    // An upstream 401 is deliberately NOT echoed as a 401. On this plane a 401
-    // means "your REST bearer is bad", so a client that saw one would go re-mint
-    // a bearer when the real problem is the stored Redmine credential. 502 plus
-    // the mapped message ("Redmine rejected the credential. Reconnect from the
-    // dashboard.") says what actually happened. A missing status is the same
-    // class of thing — the instance was never reached.
-    res.status(upstream && upstream !== 401 ? upstream : 502).json({ error: message });
-  }
 
-  /** 400 for a query string the tool's own schema rejects. */
-  function sendInvalidQuery(res: Response, issues: unknown): void {
-    res.status(400).json({ error: 'Invalid query parameters', issues });
-  }
 
   // --- Redmine reads ---
   // Query params are validated with the MCP tools' own Zod schemas rather than
