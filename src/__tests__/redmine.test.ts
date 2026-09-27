@@ -3,7 +3,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { UserError } from 'fastmcp';
 
-import { redmineServer, createIssueSchema, updateIssueSchema, createTimeEntrySchema } from '../redmine/server.js';
+import { redmineServer, createIssueSchema, updateIssueSchema, createTimeEntrySchema, updateWikiPageSchema } from '../redmine/server.js';
 import {
   RedmineClient,
   appendQueryParams,
@@ -428,5 +428,27 @@ describe('exported Zod schemas', () => {
   test('createTimeEntrySchema rejects non-positive hours', () => {
     assert.equal(createTimeEntrySchema.safeParse({ hours: 0, issueId: 5 }).success, false);
     assert.equal(createTimeEntrySchema.safeParse({ hours: -1, issueId: 5 }).success, false);
+  });
+
+  // The whole-page replacement is the reason POST
+  // /api/v1/redmine/projects/:projectId/wiki/:title exists, so `text` being
+  // required is load-bearing: an omitted body would blank the page rather than
+  // leave it alone.
+  test('updateWikiPageSchema requires a project, a title and the replacement text', () => {
+    assert.equal(updateWikiPageSchema.safeParse({ projectId: 'p', title: 'Home' }).success, false);
+    assert.equal(updateWikiPageSchema.safeParse({ projectId: 'p', text: 'body' }).success, false);
+    assert.equal(updateWikiPageSchema.safeParse({ title: 'Home', text: 'body' }).success, false);
+    assert.equal(updateWikiPageSchema.safeParse({ projectId: 'p', title: 'Home', text: 'body' }).success, true);
+  });
+
+  test('updateWikiPageSchema accepts an empty replacement body but not an empty title', () => {
+    // An intentional blanking is legitimate; a blank title is not a page.
+    assert.equal(updateWikiPageSchema.safeParse({ projectId: 'p', title: 'Home', text: '' }).success, true);
+    assert.equal(updateWikiPageSchema.safeParse({ projectId: 'p', title: '', text: 'body' }).success, false);
+  });
+
+  test('updateWikiPageSchema takes the optimistic-locking version as an integer', () => {
+    assert.equal(updateWikiPageSchema.safeParse({ projectId: 'p', title: 'H', text: 'b', version: 3 }).success, true);
+    assert.equal(updateWikiPageSchema.safeParse({ projectId: 'p', title: 'H', text: 'b', version: 1.5 }).success, false);
   });
 });

@@ -28,6 +28,8 @@ const SAMPLE_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/gmail/labels',
   '/api/v1/slack/channels',
   '/api/v1/clickup/workspaces',
+  '/api/v1/hubspot/companies',
+  '/api/v1/redmine/projects',
 ];
 
 describe('REST routes are reachable from createWebOnlyApp (MCP_MODE=web factory)', () => {

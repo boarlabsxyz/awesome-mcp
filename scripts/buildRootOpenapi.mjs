@@ -34,6 +34,8 @@ const SERVICE_PREFIX = {
   'openapi-slides.json': 'Slides',
   'openapi-clickup.json': 'ClickUp',
   'openapi-peopleforce.json': 'PeopleForce',
+  'openapi-hubspot.json': 'HubSpot',
+  'openapi-redmine.json': 'Redmine',
 };
 
 const SHARED_SCHEMAS = new Set(['Error']);

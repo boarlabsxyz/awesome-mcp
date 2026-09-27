@@ -1,0 +1,2060 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "HubSpot MCP REST API",
+    "description": "REST data plane for the HubSpot CRM: companies, contacts, deals, pipelines, tickets, conversations and property definitions, plus the gated writes. Reads exist so a shell-capable client can curl | jq bulk payloads without them crossing the LLM context window, and every read also accepts format=text to get the same markdown the MCP tool renders. Writes are validated with the MCP tools own exported Zod schemas, so the two surfaces cannot drift. Every deal endpoint needs the crm.objects.deals.read scope: an already-connected user must reconnect from the dashboard, and until they do the 403 body names both the needed and the granted scopes.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://awesome-mcp.xyz",
+      "description": "awesome-mcp REST data plane"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/hubspot/companies": {
+      "get": {
+        "operationId": "getHubSpotActiveCompanies",
+        "summary": "Get most recently active HubSpot companies",
+        "description": "Companies sorted by last-modified date. Mirrors the MCP tool `getActiveCompanies`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10
+            },
+            "description": "Maximum records to return (default 10, max 100)."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A HubSpot CRM search response (total, results, paging), or the rendered list when text was requested."
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createHubSpotCompany",
+        "summary": "Create a HubSpot company",
+        "description": "Deduped by name exactly as the MCP tool is: when a company of that name already exists NOTHING is written and the existing record comes back with created:false and a 200. 201 means it was created. Mirrors the MCP tool `createCompany`.",
+        "tags": [
+          "hubspot"
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with createCompanySchema from src/hubspot/server.ts \u2014 the same object the MCP tool declares as its parameters.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCompanyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A company of that name already existed; nothing was written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyWriteResult"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Company created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyWriteResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/companies/{companyId}": {
+      "get": {
+        "operationId": "getHubSpotCompany",
+        "summary": "Get a single HubSpot company",
+        "description": "One company by ID. Mirrors the MCP tool `getCompany`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "companyId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot company ID.",
+            "required": true
+          },
+          {
+            "name": "properties",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated HubSpot property names to return. HubSpot silently omits keys it does not recognise; the text rendering names any that never came back, so an unset value is never confused with a non-existent property."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The raw HubSpot company object, or its rendering when text was requested."
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/companies/{companyId}/activity": {
+      "get": {
+        "operationId": "getHubSpotCompanyActivity",
+        "summary": "Get activity history for a HubSpot company",
+        "description": "Notes, calls, meetings and tasks associated with the company \u2014 never deals, which have their own endpoint. The engagement fan-out is capped at 100 details and `omitted` reports how many were left out, so a truncated timeline is never mistaken for the whole history. Mirrors the MCP tool `getCompanyActivity`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "companyId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot company ID.",
+            "required": true
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Engagement details plus the overflow count.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyActivityResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/companies/{companyId}/deals": {
+      "get": {
+        "operationId": "getHubSpotCompanyDeals",
+        "summary": "List the deals associated with a HubSpot company",
+        "description": "The only route from a company to its deal IDs: a company record carries num_associated_deals as a plain company property, so without this the by-ID deal endpoints cannot be reached from a company. The association scan is bounded at 5,000 IDs \u2014 truncated:true means associatedCount is a floor rather than a count. Needs the crm.objects.deals.read scope. Mirrors the MCP tool `getCompanyDeals`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "companyId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot company ID.",
+            "required": true
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 25
+            },
+            "description": "Maximum deals to read (default 25, max 500)."
+          },
+          {
+            "name": "properties",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated HubSpot property names to return. HubSpot silently omits keys it does not recognise; the text rendering names any that never came back, so an unset value is never confused with a non-existent property."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deals, the properties requested, and both truncation facts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyDealsResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/contacts": {
+      "get": {
+        "operationId": "getHubSpotActiveContacts",
+        "summary": "Get most recently active HubSpot contacts",
+        "description": "Contacts sorted by last-modified date. Mirrors the MCP tool `getActiveContacts`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10
+            },
+            "description": "Maximum records to return (default 10, max 100)."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A HubSpot CRM search response, or the rendered list."
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createHubSpotContact",
+        "summary": "Create a HubSpot contact",
+        "description": "Deduped by first name, last name and (when given) company: an existing match returns created:false with a 200 and nothing is written. Mirrors the MCP tool `createContact`.",
+        "tags": [
+          "hubspot"
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with createContactSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateContactRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A matching contact already existed; nothing was written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactWriteResult"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Contact created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactWriteResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/contacts/{contactId}": {
+      "get": {
+        "operationId": "getHubSpotContact",
+        "summary": "Get a single HubSpot contact",
+        "description": "One contact by ID. Mirrors the MCP tool `getContact`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "contactId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot contact ID.",
+            "required": true
+          },
+          {
+            "name": "properties",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated HubSpot property names to return. HubSpot silently omits keys it does not recognise; the text rendering names any that never came back, so an unset value is never confused with a non-existent property."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The raw HubSpot contact object, or its rendering."
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/deals": {
+      "get": {
+        "operationId": "getHubSpotActiveDeals",
+        "summary": "Get most recently active HubSpot deals",
+        "description": "Deals sorted by last-modified date, with amount, stage, pipeline and close date. Needs the crm.objects.deals.read scope: a connection made before that scope entered the catalog looks healthy and 403s here until the user reconnects, and the 403 body names the needed and granted scopes rather than reporting a bare permission denial. Mirrors the MCP tool `getActiveDeals`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10
+            },
+            "description": "Maximum records to return (default 10, max 100)."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A HubSpot CRM search response, or the rendered list."
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createHubSpotDeal",
+        "summary": "Create a HubSpot deal",
+        "description": "No dedupe step: deals are not uniquely named, so every call creates one. Not idempotent \u2014 a retried request makes a second deal. Set dealstage and pipeline through `properties`; the pipelines endpoint resolves stage IDs. Mirrors the MCP tool `createDeal`.",
+        "tags": [
+          "hubspot"
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with createDealSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDealRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Deal created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DealWriteResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/deals/{dealId}": {
+      "get": {
+        "operationId": "getHubSpotDeal",
+        "summary": "Get a single HubSpot deal",
+        "description": "One deal by ID. Deal IDs come from the deals list, the company-deals endpoint, or the searchDeals MCP tool. Mirrors the MCP tool `getDeal`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "dealId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot deal ID.",
+            "required": true
+          },
+          {
+            "name": "properties",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated HubSpot property names to return. HubSpot silently omits keys it does not recognise; the text rendering names any that never came back, so an unset value is never confused with a non-existent property."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The raw HubSpot deal object, or its rendering."
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/pipelines": {
+      "get": {
+        "operationId": "listHubSpotPipelines",
+        "summary": "List HubSpot deal pipelines with their ordered stages",
+        "description": "One call returns every pipeline with its stages, which is how a dealstage ID on a deal record becomes a stage name. Mirrors the MCP tool `listPipelines`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The raw pipelines page, or its rendering."
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/conversations": {
+      "get": {
+        "operationId": "getHubSpotRecentConversations",
+        "summary": "Get recent HubSpot conversation threads",
+        "description": "Threads newest first, each with its messages. That is one upstream call per thread on top of the list, so limit is the cost knob. Mirrors the MCP tool `getRecentConversations`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10
+            },
+            "description": "Maximum records to return (default 10, max 100)."
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pagination cursor from a previous response (nextAfter)."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rendered threads plus the next cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadsResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/tickets": {
+      "get": {
+        "operationId": "getHubSpotTickets",
+        "summary": "Get HubSpot tickets by criteria",
+        "description": "criteria=default matches tickets closed or last-modified within the last day; criteria=Closed filters on the pipeline stage. The datetime filters go upstream as epoch milliseconds \u2014 HubSpot 400s on ISO-8601 \u2014 so they are never built from a date string here. Mirrors the MCP tool `getTickets`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "criteria",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "default",
+                "Closed"
+              ],
+              "default": "default"
+            },
+            "description": "Which ticket set to return."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            },
+            "description": "Maximum records to return (default 50, max 100)."
+          },
+          {
+            "name": "maxRetries",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3,
+              "default": 3
+            },
+            "description": "Retry attempts on 429/5xx (exponential backoff). Capped at 3: the total sleep is retryDelay * (2^maxRetries - 1) seconds, and an unbounded budget would hold the socket open for hours during exactly the rate limiting that triggered the retries."
+          },
+          {
+            "name": "retryDelay",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2,
+              "default": 1
+            },
+            "description": "Initial retry delay in seconds; doubles each attempt. Capped at 2, which keeps the worst-case sleep at 14 seconds."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A HubSpot CRM search response, or the rendered list."
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/tickets/{ticketId}/conversation-threads": {
+      "get": {
+        "operationId": "getHubSpotTicketConversationThreads",
+        "summary": "Get conversation threads for a HubSpot ticket",
+        "description": "The threads associated with the ticket, each with its messages. Mirrors the MCP tool `getTicketConversationThreads`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "ticketId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot ticket ID.",
+            "required": true
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rendered threads.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadsResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/properties/{objectType}/{propertyName}": {
+      "get": {
+        "operationId": "getHubSpotProperty",
+        "summary": "Get a HubSpot property definition",
+        "description": "One property definition, including its dropdown options when it has any. Mirrors the MCP tool `getProperty`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "companies",
+                "contacts",
+                "deals"
+              ]
+            },
+            "description": "CRM object the property belongs to.",
+            "required": true
+          },
+          {
+            "name": "propertyName",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Internal property name.",
+            "required": true
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The raw HubSpot property definition, or its rendering."
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/notes": {
+      "post": {
+        "operationId": "createHubSpotNote",
+        "summary": "Create a HubSpot note and optionally attach it to a record",
+        "description": "Accepts a body up to 5 MB, which is the point: a long note travels straight to HubSpot instead of through a tool call. The engagement is created standalone and then attached with a v4 default association, so the response reports the attachment outcome separately: association.attempted without association.attached means the record exists but sits on no timeline. Mirrors the MCP tool `createNote`.",
+        "tags": [
+          "hubspot"
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with createNoteSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateNoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The engagement was created. This is 201 even when the association failed, because the record does exist \u2014 check association.attached before reporting it as on the timeline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngagementResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/calls": {
+      "post": {
+        "operationId": "logHubSpotCall",
+        "summary": "Log a HubSpot call activity",
+        "description": "Accepts a body up to 5 MB so a full transcript can be posted without crossing the LLM context window. The engagement is created standalone and then attached with a v4 default association, so the response reports the attachment outcome separately: association.attempted without association.attached means the record exists but sits on no timeline. Mirrors the MCP tool `logCall`.",
+        "tags": [
+          "hubspot"
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with logCallSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogCallRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The engagement was created. This is 201 even when the association failed, because the record does exist \u2014 check association.attached before reporting it as on the timeline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngagementResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/meetings": {
+      "post": {
+        "operationId": "logHubSpotMeeting",
+        "summary": "Log a HubSpot meeting activity",
+        "description": "Accepts a body up to 5 MB so full minutes can be posted directly. The engagement is created standalone and then attached with a v4 default association, so the response reports the attachment outcome separately: association.attempted without association.attached means the record exists but sits on no timeline. Mirrors the MCP tool `logMeeting`.",
+        "tags": [
+          "hubspot"
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with logMeetingSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogMeetingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The engagement was created. This is 201 even when the association failed, because the record does exist \u2014 check association.attached before reporting it as on the timeline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngagementResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Bearer token from the mintRestBearerForCurl MCP tool (5-minute TTL) or a permanent dashboard API key."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Human-readable failure description."
+          },
+          "issues": {
+            "type": "object",
+            "description": "Present on 400 only: the flattened Zod error ({formErrors, fieldErrors})."
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "CreateCompanyRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Company name. Also the key the dedupe search runs on."
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Additional HubSpot properties by internal name."
+          }
+        }
+      },
+      "CreateContactRequest": {
+        "type": "object",
+        "required": [
+          "firstname",
+          "lastname"
+        ],
+        "properties": {
+          "firstname": {
+            "type": "string"
+          },
+          "lastname": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Additional HubSpot properties by internal name."
+          }
+        }
+      },
+      "CreateDealRequest": {
+        "type": "object",
+        "required": [
+          "dealname"
+        ],
+        "properties": {
+          "dealname": {
+            "type": "string",
+            "description": "Deal name."
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Additional deal properties, e.g. amount, dealstage, pipeline, closedate."
+          }
+        }
+      },
+      "CreateNoteRequest": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Note text (hs_note_body)."
+          },
+          "hs_timestamp": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "description": "Activity time as ISO-8601 or epoch milliseconds. Defaults to now \u2014 omitting it is the most common HubSpot engagement-create failure, so this endpoint fills it in."
+          },
+          "associateToObjectType": {
+            "type": "string",
+            "enum": [
+              "companies",
+              "contacts",
+              "deals"
+            ],
+            "description": "Record type to attach the activity to. Must be given together with associateToObjectId."
+          },
+          "associateToObjectId": {
+            "type": "string",
+            "description": "ID of the record to attach the activity to. Must be given together with associateToObjectType."
+          }
+        }
+      },
+      "LogCallRequest": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Call title (hs_call_title)."
+          },
+          "body": {
+            "type": "string",
+            "description": "Call notes, summary or transcript (hs_call_body)."
+          },
+          "durationMs": {
+            "type": "integer",
+            "description": "Call duration in milliseconds (hs_call_duration)."
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "INBOUND",
+              "OUTBOUND"
+            ],
+            "description": "Call direction (hs_call_direction)."
+          },
+          "hs_timestamp": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "description": "Activity time as ISO-8601 or epoch milliseconds. Defaults to now \u2014 omitting it is the most common HubSpot engagement-create failure, so this endpoint fills it in."
+          },
+          "associateToObjectType": {
+            "type": "string",
+            "enum": [
+              "companies",
+              "contacts",
+              "deals"
+            ],
+            "description": "Record type to attach the activity to. Must be given together with associateToObjectId."
+          },
+          "associateToObjectId": {
+            "type": "string",
+            "description": "ID of the record to attach the activity to. Must be given together with associateToObjectType."
+          }
+        }
+      },
+      "LogMeetingRequest": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Meeting title (hs_meeting_title)."
+          },
+          "body": {
+            "type": "string",
+            "description": "Meeting notes, agenda or minutes (hs_meeting_body)."
+          },
+          "startTime": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "description": "Meeting start as ISO-8601 or epoch ms."
+          },
+          "endTime": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "description": "Meeting end as ISO-8601 or epoch ms."
+          },
+          "hs_timestamp": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "description": "Activity time as ISO-8601 or epoch milliseconds. Defaults to now \u2014 omitting it is the most common HubSpot engagement-create failure, so this endpoint fills it in."
+          },
+          "associateToObjectType": {
+            "type": "string",
+            "enum": [
+              "companies",
+              "contacts",
+              "deals"
+            ],
+            "description": "Record type to attach the activity to. Must be given together with associateToObjectId."
+          },
+          "associateToObjectId": {
+            "type": "string",
+            "description": "ID of the record to attach the activity to. Must be given together with associateToObjectType."
+          }
+        }
+      },
+      "CrmObject": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A raw HubSpot CRM object: id, properties, createdAt, updatedAt.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "CompanyWriteResult": {
+        "type": "object",
+        "required": [
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "false means a company of that name already existed and nothing was written."
+          },
+          "company": {
+            "$ref": "#/components/schemas/CrmObject"
+          }
+        }
+      },
+      "ContactWriteResult": {
+        "type": "object",
+        "required": [
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "false means a matching contact already existed and nothing was written."
+          },
+          "contact": {
+            "$ref": "#/components/schemas/CrmObject"
+          }
+        }
+      },
+      "DealWriteResult": {
+        "type": "object",
+        "required": [
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "Always true \u2014 deals are never deduped."
+          },
+          "deal": {
+            "$ref": "#/components/schemas/CrmObject"
+          }
+        }
+      },
+      "EngagementResult": {
+        "type": "object",
+        "required": [
+          "engagement",
+          "association"
+        ],
+        "properties": {
+          "engagement": {
+            "$ref": "#/components/schemas/CrmObject"
+          },
+          "association": {
+            "type": "object",
+            "required": [
+              "attempted"
+            ],
+            "description": "Outcome of the optional timeline attachment. attempted:true with attached:false is an ORPHANED engagement \u2014 it exists but appears on no record timeline until it is associated.",
+            "properties": {
+              "attempted": {
+                "type": "boolean"
+              },
+              "attached": {
+                "type": "boolean"
+              },
+              "objectType": {
+                "type": "string"
+              },
+              "objectId": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "description": "Why the attachment failed, when it did."
+              }
+            }
+          }
+        }
+      },
+      "CompanyActivityResult": {
+        "type": "object",
+        "properties": {
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "description": "Legacy engagement detail records."
+          },
+          "omitted": {
+            "type": "integer",
+            "description": "Associated engagements beyond the 100-detail cap. Non-zero means this is not the whole timeline."
+          }
+        }
+      },
+      "CompanyDealsResult": {
+        "type": "object",
+        "properties": {
+          "deals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CrmObject"
+            }
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Properties requested per deal."
+          },
+          "associatedCount": {
+            "type": "integer",
+            "description": "IDs the association scan found before limit was applied. A FLOOR when truncated is true."
+          },
+          "requestedCount": {
+            "type": "integer",
+            "description": "IDs this call asked HubSpot to read: min(associatedCount, limit)."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "The association scan hit its page bound, so associatedCount is not a total."
+          }
+        }
+      },
+      "ThreadsResult": {
+        "type": "object",
+        "properties": {
+          "threads": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "status": {
+                  "type": "string"
+                },
+                "messages": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "created_at": {
+                        "type": "string"
+                      },
+                      "sender_type": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "nextAfter": {
+            "type": "string",
+            "description": "Cursor for the next page, when there is one."
+          }
+        }
+      }
+    }
+  }
+}

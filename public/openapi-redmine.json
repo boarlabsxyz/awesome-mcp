@@ -1,0 +1,3446 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Redmine MCP REST API",
+    "description": "REST data plane for a self-hosted Redmine: issues, projects, users, time entries, wiki, versions, categories, memberships, relations, enumerations and search, plus the gated writes. Reads exist so a shell-capable client can curl | jq bulk payloads without them crossing the LLM context window, and every read also accepts format=text to get the same markdown the MCP tool renders. Writes are validated with the MCP tools own exported Zod schemas, so the two surfaces cannot drift. Two things to know before relying on this: Redmine marks only Issues, Projects, Users, Time Entries and News as Stable, and the wiki, version, membership, relation, category, enumeration, custom-field and search endpoints as Alpha, so they may change between releases; and every collection caps at limit=100 server side, which is why each list answers { items, page } with the window it returned. The deletes, project archiving and the project/version/category/membership admin creates are deliberately NOT exposed here \u2014 Redmine has no recycle bin, a project delete cascades into its subprojects, and a curl has no confirmation affordance.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://awesome-mcp.xyz",
+      "description": "awesome-mcp REST data plane"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/redmine/issues": {
+      "get": {
+        "operationId": "listRedmineIssues",
+        "summary": "Search and filter Redmine issues",
+        "description": "One page of issues with the total reported. Multi-valued filters go upstream as ONE comma-joined parameter (issueIds=1,2,3) because repeated keys are silently ignored. Custom-field filters are passed as `cf_<id>` query keys, e.g. ?cf_3=Urgent, with IDs from the custom-fields endpoint. Anything that is not `cf_<digits>` is dropped rather than forwarded, because Redmine silently ignores an unknown filter \u2014 which widens the result set and reads as \"the filter matched everything\". Mirrors the MCP tool `listIssues`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Restrict to one project (ID or identifier). Omit to search every visible project."
+          },
+          {
+            "name": "subprojectId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Subproject filter. Pass !* to EXCLUDE subprojects."
+          },
+          {
+            "name": "trackerId",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Tracker ID from the trackers endpoint."
+          },
+          {
+            "name": "statusId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "open (Redmine default), closed, * for any, or a numeric status ID."
+          },
+          {
+            "name": "assignedToId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Assignee user ID, or the literal \"me\"."
+          },
+          {
+            "name": "authorId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Author user ID, or \"me\"."
+          },
+          {
+            "name": "parentId",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Return only subtasks of this issue."
+          },
+          {
+            "name": "issueIds",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated issue IDs."
+          },
+          {
+            "name": "subject",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Subject filter. Prefix with ~ for \"contains\"; a bare string matches exactly."
+          },
+          {
+            "name": "createdOn",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Creation-date filter in Redmine operator syntax, e.g. >=2026-01-01 or ><2026-01-01|2026-03-31."
+          },
+          {
+            "name": "updatedOn",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Last-updated filter, same syntax as createdOn."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Sort column; append :desc to reverse, e.g. updated_on:desc."
+          },
+          {
+            "name": "include",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "attachments",
+                "relations",
+                "attachments,relations"
+              ]
+            },
+            "description": "Associations to embed in each issue."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            },
+            "description": "Records to skip. The response `page` reports the window that came back."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "description": "Records per page. Redmine caps this at 100 server-side and silently returns 100 for anything larger, so values above it are rejected here instead."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          },
+          {
+            "name": "cf_<id>",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Custom-field filter, e.g. ?cf_3=Urgent, with IDs from the custom-fields endpoint. Keys that are not cf_<digits> are ignored. A cf_<digits> key given more than once is REJECTED with 400 rather than dropped: Redmine answers a missing filter with more rows, so a silent drop would return a wider result set than was asked for. Pass multiple values comma-joined (?cf_3=a,b)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Issues for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query parameters failed the MCP tool schema, or a cf_<digits> filter was given more than once. `issues` carries the flattened Zod field errors; `invalidKeys` names the unusable custom-field keys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRedmineIssue",
+        "summary": "Create a Redmine issue",
+        "description": "Only projectId and subject are required; every other field falls back to the project or tracker default. Accepts a body up to 5 MB, since `description` is a full issue body. Mirrors the MCP tool `createIssue`.",
+        "tags": [
+          "redmine"
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with createIssueSchema from src/redmine/schemas.ts \u2014 the same object the MCP tool declares as its parameters.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIssueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Issue created, as Redmine own { issue } payload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/issues/{issueId}": {
+      "get": {
+        "operationId": "getRedmineIssue",
+        "summary": "Get a single Redmine issue",
+        "description": "One issue in full. include=journals is the comment and change history; include=allowed_statuses is the set of statuses this issue can legally move to, which is what an update needs. Mirrors the MCP tool `getIssue`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "issueId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Issue ID (the number after # in Redmine).",
+            "required": true
+          },
+          {
+            "name": "include",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated associations: children, attachments, relations, changesets, journals, watchers, allowed_statuses."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Redmine { issue } payload, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "updateRedmineIssue",
+        "summary": "Update a Redmine issue or append a comment",
+        "description": "POST rather than PUT because this catalog method union is GET and POST; Redmine itself takes a PUT here. `notes` APPENDS a comment while `description` REPLACES the body \u2014 fields left out are untouched. A body that changes nothing is rejected with 400 rather than sent. Accepts up to 5 MB. Redmine answers the write with 204 and no body, so the issue is re-read and returned. Mirrors the MCP tool `updateIssue`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "issueId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Issue ID. Wins over any issueId in the body.",
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with updateIssueSchema from src/redmine/schemas.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateIssueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The issue as it now stands, re-read after the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/issues/{issueId}/relations": {
+      "get": {
+        "operationId": "listRedmineIssueRelations",
+        "summary": "List the relations on a Redmine issue",
+        "description": "blocks, precedes, duplicates and friends. The relation IDs here are what a relation delete takes \u2014 they are not issue IDs. Mirrors the MCP tool `listIssueRelations`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "issueId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Issue ID.",
+            "required": true
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Relations for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/projects": {
+      "get": {
+        "operationId": "listRedmineProjects",
+        "summary": "List Redmine projects",
+        "description": "The projects visible to the connected account, one page at a time. Mirrors the MCP tool `listProjects`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "include",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated associations: trackers, issue_categories, enabled_modules, time_entry_activities."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            },
+            "description": "Records to skip. The response `page` reports the window that came back."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "description": "Records per page. Redmine caps this at 100 server-side and silently returns 100 for anything larger, so values above it are rejected here instead."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Projects for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/projects/{projectId}": {
+      "get": {
+        "operationId": "getRedmineProject",
+        "summary": "Get a single Redmine project",
+        "description": "One project, optionally with its trackers, categories and enabled modules. Mirrors the MCP tool `getProject`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project numeric ID or URL identifier (the slug in the project URL). Redmine accepts either everywhere.",
+            "required": true
+          },
+          {
+            "name": "include",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated associations: trackers, issue_categories, enabled_modules, time_entry_activities."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Redmine { project } payload, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/projects/{projectId}/wiki": {
+      "get": {
+        "operationId": "listRedmineWikiPages",
+        "summary": "List the wiki page titles of a Redmine project",
+        "description": "Titles only \u2014 fetch a page for its text. Alpha upstream. Mirrors the MCP tool `listWikiPages`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project numeric ID or URL identifier (the slug in the project URL). Redmine accepts either everywhere.",
+            "required": true
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Wiki pages for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/projects/{projectId}/wiki/{title}": {
+      "get": {
+        "operationId": "getRedmineWikiPage",
+        "summary": "Get one Redmine wiki page with its text",
+        "description": "The title is the page title exactly as the wiki index reports it, not a slug \u2014 Redmine matches on the title. Alpha upstream. Mirrors the MCP tool `getWikiPage`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project numeric ID or URL identifier (the slug in the project URL). Redmine accepts either everywhere.",
+            "required": true
+          },
+          {
+            "name": "title",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Page title as listed.",
+            "required": true
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "Specific revision number. Omit for the current version."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Redmine { wiki_page } payload, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "updateRedmineWikiPage",
+        "summary": "Create or replace a Redmine wiki page",
+        "description": "The clearest large-body case on this plane: `text` REPLACES the entire page, so read the page first if you mean to edit rather than overwrite. Accepts up to 5 MB. A title that does not exist yet is created \u2014 Redmine uses one endpoint for both. Pass `version` for optimistic locking so a concurrent edit is rejected instead of clobbered. The page is re-read afterwards, which is also how you get the new version number the next locked write needs. Mirrors the MCP tool `updateWikiPage`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project numeric ID or URL identifier (the slug in the project URL). Redmine accepts either everywhere.",
+            "required": true
+          },
+          {
+            "name": "title",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Page title. Wins over any title in the body.",
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with updateWikiPageSchema from src/redmine/schemas.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWikiPageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The page as it now stands, re-read after the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/projects/{projectId}/versions": {
+      "get": {
+        "operationId": "listRedmineVersions",
+        "summary": "List the versions of a Redmine project",
+        "description": "Milestones and target releases, including versions shared from other projects. Alpha upstream. Mirrors the MCP tool `listVersions`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project numeric ID or URL identifier (the slug in the project URL). Redmine accepts either everywhere.",
+            "required": true
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Versions for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/projects/{projectId}/issue-categories": {
+      "get": {
+        "operationId": "listRedmineIssueCategories",
+        "summary": "List the issue categories of a Redmine project",
+        "description": "Their IDs are what an issue create or update takes as categoryId. Alpha upstream. Mirrors the MCP tool `listIssueCategories`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project numeric ID or URL identifier (the slug in the project URL). Redmine accepts either everywhere.",
+            "required": true
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Issue categories for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/projects/{projectId}/memberships": {
+      "get": {
+        "operationId": "listRedmineMemberships",
+        "summary": "List the members of a Redmine project with their roles",
+        "description": "The non-admin route to user IDs for assignment and watchers, since the users list is administrator-only. Alpha upstream. Mirrors the MCP tool `listMemberships`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project numeric ID or URL identifier (the slug in the project URL). Redmine accepts either everywhere.",
+            "required": true
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            },
+            "description": "Records to skip. The response `page` reports the window that came back."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "description": "Records per page. Redmine caps this at 100 server-side and silently returns 100 for anything larger, so values above it are rejected here instead."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Memberships for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/users": {
+      "get": {
+        "operationId": "listRedmineUsers",
+        "summary": "List Redmine users",
+        "description": "Administrator-only upstream: a non-admin account gets a 403 naming that, because no project-level permission grants this. Use the project memberships endpoint instead. Mirrors the MCP tool `listUsers`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1",
+                "2",
+                "3"
+              ]
+            },
+            "description": "Account status: 1 active, 2 registered (awaiting activation), 3 locked. Omit for active only."
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Substring match on login, first name, last name or email."
+          },
+          {
+            "name": "groupId",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Only users in this group."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            },
+            "description": "Records to skip. The response `page` reports the window that came back."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "description": "Records per page. Redmine caps this at 100 server-side and silently returns 100 for anything larger, so values above it are rejected here instead."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Users for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/users/current": {
+      "get": {
+        "operationId": "getRedmineCurrentUser",
+        "summary": "Get the Redmine account this connection authenticates as",
+        "description": "Resolves \"me\" to a user ID and verifies the connection works. Registered ahead of the by-ID route so \"current\" is not read as a user ID. Mirrors the MCP tool `getCurrentUser`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "include",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated associations: memberships, groups."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Redmine { user } payload, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/users/{userId}": {
+      "get": {
+        "operationId": "getRedmineUser",
+        "summary": "Get a single Redmine user",
+        "description": "One user, optionally with their group and project memberships. Mirrors the MCP tool `getUser`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "User ID.",
+            "required": true
+          },
+          {
+            "name": "include",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated associations: memberships, groups."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Redmine { user } payload, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/time-entries": {
+      "get": {
+        "operationId": "listRedmineTimeEntries",
+        "summary": "List Redmine time entries",
+        "description": "Filterable by project, issue, user and date range. Any hours total computed from one response covers that PAGE only \u2014 follow `page` to the end before treating it as a sum. Mirrors the MCP tool `listTimeEntries`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Restrict to one project (ID or identifier)."
+          },
+          {
+            "name": "issueId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Restrict to one issue."
+          },
+          {
+            "name": "userId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Restrict to one user ID, or \"me\"."
+          },
+          {
+            "name": "spentOn",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact date (YYYY-MM-DD) or a Redmine operator expression like >=2026-01-01."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Start of the date range, inclusive."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "End of the date range, inclusive."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            },
+            "description": "Records to skip. The response `page` reports the window that came back."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "description": "Records per page. Redmine caps this at 100 server-side and silently returns 100 for anything larger, so values above it are rejected here instead."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Time entries for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRedmineTimeEntry",
+        "summary": "Log time against a Redmine issue or project",
+        "description": "Provide issueId OR projectId. Most instances require activityId \u2014 the time-entry-activities endpoint lists them. NOT idempotent: a retried request logs the hours twice. Mirrors the MCP tool `createTimeEntry`.",
+        "tags": [
+          "redmine"
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with createTimeEntrySchema from src/redmine/schemas.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTimeEntryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Redmine { time_entry } payload for the created entry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/time-entries/{timeEntryId}": {
+      "get": {
+        "operationId": "getRedmineTimeEntry",
+        "summary": "Get a single Redmine time entry",
+        "description": "One time entry by ID. Mirrors the MCP tool `getTimeEntry`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "timeEntryId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Time-entry ID.",
+            "required": true
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Redmine { time_entry } payload, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/versions/{versionId}": {
+      "get": {
+        "operationId": "getRedmineVersion",
+        "summary": "Get a single Redmine version",
+        "description": "One version by ID. Alpha upstream. Mirrors the MCP tool `getVersion`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "versionId",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Version ID.",
+            "required": true
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Redmine { version } payload, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/search": {
+      "get": {
+        "operationId": "searchRedmine",
+        "summary": "Full text search across Redmine",
+        "description": "q is required. The record-type toggles are PRESENCE flags upstream, so passing one as false is the same as leaving it out. Alpha upstream. Mirrors the MCP tool `searchRedmine`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Search terms. Required. ?query= is accepted as an alias, since that is the MCP parameter name.",
+            "required": true
+          },
+          {
+            "name": "projectId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Restrict the search to one project. Omit to search everything visible."
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "my_projects",
+                "subprojects"
+              ]
+            },
+            "description": "Breadth of the search. subprojects only means anything alongside projectId."
+          },
+          {
+            "name": "titlesOnly",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Match titles only instead of full text."
+          },
+          {
+            "name": "issues",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Include issues."
+          },
+          {
+            "name": "news",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Include news entries."
+          },
+          {
+            "name": "documents",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Include documents."
+          },
+          {
+            "name": "wikiPages",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Include wiki pages."
+          },
+          {
+            "name": "openIssues",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Restrict issue hits to open issues."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            },
+            "description": "Records to skip. The response `page` reports the window that came back."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "description": "Records per page. Redmine caps this at 100 server-side and silently returns 100 for anything larger, so values above it are rejected here instead."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/trackers": {
+      "get": {
+        "operationId": "listRedmineTrackers",
+        "summary": "List Redmine trackers with their IDs",
+        "description": "Bug, Feature, Support and whatever else the instance defines. Their IDs are what an issue create takes as trackerId. Unpaginated upstream. Mirrors the MCP tool `listTrackers`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Records for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/issue-statuses": {
+      "get": {
+        "operationId": "listRedmineIssueStatuses",
+        "summary": "List Redmine issue statuses with their IDs",
+        "description": "Flags which statuses count as closed. Their IDs are what an issue update takes as statusId. Unpaginated upstream. Alpha. Mirrors the MCP tool `listIssueStatuses`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Records for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/issue-priorities": {
+      "get": {
+        "operationId": "listRedmineIssuePriorities",
+        "summary": "List Redmine issue priorities with their IDs",
+        "description": "Low, Normal, High and friends, flagging the default. Unpaginated upstream. Alpha. Mirrors the MCP tool `listIssuePriorities`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Records for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/time-entry-activities": {
+      "get": {
+        "operationId": "listRedmineTimeEntryActivities",
+        "summary": "List Redmine time entry activities with their IDs",
+        "description": "What a time-entry write takes as activityId. Unpaginated upstream. Alpha. Mirrors the MCP tool `listTimeEntryActivities`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Records for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/custom-fields": {
+      "get": {
+        "operationId": "listRedmineCustomFields",
+        "summary": "List Redmine custom fields and their cf_id filter keys",
+        "description": "The cf_<id> keys here are what the issues endpoint accepts as custom-field filters. Administrator-only upstream. Alpha. Mirrors the MCP tool `listCustomFields`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Records for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 \u2014 see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Bearer token from the mintRestBearerForCurl MCP tool (5-minute TTL) or a permanent dashboard API key."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "issues": {
+            "type": "object",
+            "description": "Present on 400 only: the flattened Zod error ({formErrors, fieldErrors})."
+          },
+          "invalidKeys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Custom-field query keys that could not be used, when that is why the request was rejected."
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "Pagination": {
+        "type": "object",
+        "description": "The window Redmine actually returned. total_count is the full match count; offset is where to resume.",
+        "properties": {
+          "total_count": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        }
+      },
+      "ListResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/Pagination"
+          }
+        }
+      },
+      "ObjectResponse": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Redmine own single-record envelope, keyed by the resource name (issue, project, user, wiki_page, version, time_entry)."
+      },
+      "IssueResponse": {
+        "type": "object",
+        "properties": {
+          "issue": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "CustomFieldValue": {
+        "type": "object",
+        "required": [
+          "id",
+          "value"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Custom field ID from the custom-fields endpoint."
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "CreateIssueRequest": {
+        "type": "object",
+        "required": [
+          "projectId",
+          "subject"
+        ],
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "Project numeric ID or URL identifier."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Issue title."
+          },
+          "description": {
+            "type": "string",
+            "description": "Issue body, in the markup the instance is configured for. This is the field the 5 MB body limit exists for."
+          },
+          "trackerId": {
+            "type": "integer"
+          },
+          "statusId": {
+            "type": "integer",
+            "description": "Omit to use the tracker default."
+          },
+          "priorityId": {
+            "type": "integer"
+          },
+          "categoryId": {
+            "type": "integer"
+          },
+          "fixedVersionId": {
+            "type": "integer",
+            "description": "Target version ID."
+          },
+          "assignedToId": {
+            "type": "integer"
+          },
+          "parentIssueId": {
+            "type": "integer",
+            "description": "Create this as a subtask of that issue."
+          },
+          "watcherUserIds": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "dueDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "estimatedHours": {
+            "type": "number"
+          },
+          "doneRatio": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "isPrivate": {
+            "type": "boolean"
+          },
+          "customFields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomFieldValue"
+            }
+          }
+        }
+      },
+      "UpdateIssueRequest": {
+        "type": "object",
+        "description": "Every field is optional, but a body that changes nothing is rejected with 400 rather than sent. The issueId in the path wins over one here.",
+        "properties": {
+          "subject": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "description": "REPLACES the issue body. Use `notes` to add a comment without touching it."
+          },
+          "notes": {
+            "type": "string",
+            "description": "APPENDS a comment to the issue history."
+          },
+          "privateNotes": {
+            "type": "boolean",
+            "description": "Mark the appended note private."
+          },
+          "trackerId": {
+            "type": "integer"
+          },
+          "statusId": {
+            "type": "integer",
+            "description": "Read the issue with include=allowed_statuses to see which transitions are legal."
+          },
+          "priorityId": {
+            "type": "integer"
+          },
+          "categoryId": {
+            "type": "integer"
+          },
+          "fixedVersionId": {
+            "type": "integer"
+          },
+          "assignedToId": {
+            "type": "integer"
+          },
+          "parentIssueId": {
+            "type": "integer"
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "dueDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "estimatedHours": {
+            "type": "number"
+          },
+          "doneRatio": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "isPrivate": {
+            "type": "boolean"
+          },
+          "customFields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomFieldValue"
+            }
+          }
+        }
+      },
+      "CreateTimeEntryRequest": {
+        "type": "object",
+        "required": [
+          "hours"
+        ],
+        "description": "Provide issueId OR projectId; a body with neither is rejected with 400 rather than spending a 422 round-trip.",
+        "properties": {
+          "issueId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "projectId": {
+            "type": "string",
+            "description": "Project ID or identifier."
+          },
+          "hours": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Hours spent, decimal (1.5)."
+          },
+          "spentOn": {
+            "type": "string",
+            "format": "date",
+            "description": "Defaults to today on the Redmine side."
+          },
+          "activityId": {
+            "type": "integer",
+            "description": "Required unless the instance has a default."
+          },
+          "comments": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "userId": {
+            "type": "integer",
+            "description": "Log on behalf of another user. Needs the log-time-for-other-users permission."
+          }
+        }
+      },
+      "UpdateWikiPageRequest": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "description": "projectId and title come from the path and win over the same keys here.",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Full page body. REPLACES the existing content entirely \u2014 this is the field the 5 MB body limit exists for."
+          },
+          "comments": {
+            "type": "string",
+            "description": "Revision comment describing the change."
+          },
+          "parentTitle": {
+            "type": "string",
+            "description": "Title of the parent wiki page, to nest this one under it."
+          },
+          "version": {
+            "type": "integer",
+            "description": "Version being edited, for optimistic locking. A mismatch is rejected by Redmine instead of clobbering a concurrent edit."
+          }
+        }
+      }
+    }
+  }
+}

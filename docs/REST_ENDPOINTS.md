@@ -199,46 +199,60 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 
 | MCP tool | REST endpoint | Status | Summary |
 |---|---|---|---|
-| `getActiveCompanies` | `GET /api/v1/hubspot/companies` | planned | Get most recently active HubSpot companies |
-| `getCompany` | `GET /api/v1/hubspot/companies/{companyId}` | planned | Get a single HubSpot company |
-| `getCompanyActivity` | `GET /api/v1/hubspot/companies/{companyId}/activity` | planned | Get activity history for a HubSpot company |
-| `getActiveContacts` | `GET /api/v1/hubspot/contacts` | planned | Get most recently active HubSpot contacts |
-| `getContact` | `GET /api/v1/hubspot/contacts/{contactId}` | planned | Get a single HubSpot contact |
-| `getRecentConversations` | `GET /api/v1/hubspot/conversations` | planned | Get recent HubSpot conversation threads |
-| `getTickets` | `GET /api/v1/hubspot/tickets` | planned | Get HubSpot tickets by criteria |
-| `getTicketConversationThreads` | `GET /api/v1/hubspot/tickets/{ticketId}/conversation-threads` | planned | Get conversation threads for a HubSpot ticket |
-| `getProperty` | `GET /api/v1/hubspot/properties/{objectType}/{propertyName}` | planned | Get a HubSpot property definition |
+| `getActiveCompanies` | `GET /api/v1/hubspot/companies` | live | Get most recently active HubSpot companies — _Sorted by last-modified. ?limit caps at 100. Accept: text/plain renders the same list the MCP tool returns._ |
+| `getCompany` | `GET /api/v1/hubspot/companies/{companyId}` | live | Get a single HubSpot company — _Pass ?properties=a,b for specific properties. HubSpot silently drops unknown keys, so the text rendering flags any it never returned._ |
+| `getCompanyActivity` | `GET /api/v1/hubspot/companies/{companyId}/activity` | live | Get activity history for a HubSpot company — _Notes, calls, meetings and tasks - never deals. Capped at 100 engagement details; the overflow count is reported._ |
+| `getCompanyDeals` | `GET /api/v1/hubspot/companies/{companyId}/deals` | live | List the deals associated with a HubSpot company — _Association scan is bounded at 5000 IDs; truncated:true means the total is a floor, not a count. Needs the crm.objects.deals.read scope._ |
+| `getActiveContacts` | `GET /api/v1/hubspot/contacts` | live | Get most recently active HubSpot contacts |
+| `getContact` | `GET /api/v1/hubspot/contacts/{contactId}` | live | Get a single HubSpot contact — _Pass ?properties=a,b for specific properties._ |
+| `getActiveDeals` | `GET /api/v1/hubspot/deals` | live | Get most recently active HubSpot deals — _Needs the crm.objects.deals.read scope - already-connected users must reconnect before any deal endpoint answers._ |
+| `getDeal` | `GET /api/v1/hubspot/deals/{dealId}` | live | Get a single HubSpot deal — _Deal IDs come from the deals list, the company-deals endpoint, or the searchDeals MCP tool._ |
+| `listPipelines` | `GET /api/v1/hubspot/pipelines` | live | List HubSpot deal pipelines with their ordered stages — _Use it to resolve a dealstage ID to a stage name._ |
+| `getRecentConversations` | `GET /api/v1/hubspot/conversations` | live | Get recent HubSpot conversation threads — _Each thread is fetched with its messages, so this is N+1 upstream calls - keep ?limit modest. ?after pages._ |
+| `getTickets` | `GET /api/v1/hubspot/tickets` | live | Get HubSpot tickets by criteria — _criteria=default (closed or modified in the last day) or criteria=Closed. Datetime filters go out as epoch millis; ISO-8601 400s upstream._ |
+| `getTicketConversationThreads` | `GET /api/v1/hubspot/tickets/{ticketId}/conversation-threads` | live | Get conversation threads for a HubSpot ticket |
+| `getProperty` | `GET /api/v1/hubspot/properties/{objectType}/{propertyName}` | live | Get a HubSpot property definition — _objectType is companies, contacts or deals._ |
+| `createCompany` | `POST /api/v1/hubspot/companies` | live | Create a HubSpot company — _Deduped by name like the MCP tool: 201 with created:true when it was written, 200 with created:false and the existing record when a company of that name already existed._ |
+| `createContact` | `POST /api/v1/hubspot/contacts` | live | Create a HubSpot contact — _Deduped by first and last name plus company: 201 created:true, or 200 created:false with the existing record._ |
+| `createDeal` | `POST /api/v1/hubspot/deals` | live | Create a HubSpot deal — _Deals are not uniquely named, so there is no dedupe step - every call creates a new deal. Always 201._ |
+| `createNote` | `POST /api/v1/hubspot/notes` | live | Create a HubSpot note and optionally attach it to a record — _Body limit 5mb. hs_timestamp defaults to now. The response reports whether the timeline association succeeded - a failed association is an orphaned note, not a silent success._ |
+| `logCall` | `POST /api/v1/hubspot/calls` | live | Log a HubSpot call activity — _Body limit 5mb - the point is posting a transcript without it crossing the LLM context. Same association reporting as notes._ |
+| `logMeeting` | `POST /api/v1/hubspot/meetings` | live | Log a HubSpot meeting activity — _Body limit 5mb for full minutes. Same association reporting as notes._ |
 
 ### Redmine (`redmine`)
 
 | MCP tool | REST endpoint | Status | Summary |
 |---|---|---|---|
-| `listIssues` | `GET /api/v1/redmine/issues` | planned | Search and filter Redmine issues |
-| `getIssue` | `GET /api/v1/redmine/issues/{issueId}` | planned | Get a single Redmine issue |
-| `listIssueRelations` | `GET /api/v1/redmine/issues/{issueId}/relations` | planned | List the relations on a Redmine issue |
-| `listProjects` | `GET /api/v1/redmine/projects` | planned | List Redmine projects |
-| `getProject` | `GET /api/v1/redmine/projects/{projectId}` | planned | Get a single Redmine project |
-| `listUsers` | `GET /api/v1/redmine/users` | planned | List Redmine users (admin only) |
-| `getCurrentUser` | `GET /api/v1/redmine/users/current` | planned | Get the Redmine account this connection authenticates as |
-| `getUser` | `GET /api/v1/redmine/users/{userId}` | planned | Get a single Redmine user |
-| `listTimeEntries` | `GET /api/v1/redmine/time-entries` | planned | List Redmine time entries |
-| `getTimeEntry` | `GET /api/v1/redmine/time-entries/{timeEntryId}` | planned | Get a single Redmine time entry |
-| `listWikiPages` | `GET /api/v1/redmine/projects/{projectId}/wiki` | planned | List the wiki page titles of a Redmine project |
-| `getWikiPage` | `GET /api/v1/redmine/projects/{projectId}/wiki/{title}` | planned | Get one Redmine wiki page with its text |
-| `listVersions` | `GET /api/v1/redmine/projects/{projectId}/versions` | planned | List the versions of a Redmine project |
-| `getVersion` | `GET /api/v1/redmine/versions/{versionId}` | planned | Get a single Redmine version |
-| `listIssueCategories` | `GET /api/v1/redmine/projects/{projectId}/issue-categories` | planned | List the issue categories of a Redmine project |
-| `listMemberships` | `GET /api/v1/redmine/projects/{projectId}/memberships` | planned | List the members of a Redmine project with their roles |
-| `listTrackers` | `GET /api/v1/redmine/trackers` | planned | List Redmine trackers with their IDs |
-| `listIssueStatuses` | `GET /api/v1/redmine/issue-statuses` | planned | List Redmine issue statuses with their IDs |
-| `listIssuePriorities` | `GET /api/v1/redmine/issue-priorities` | planned | List Redmine issue priorities with their IDs |
-| `listTimeEntryActivities` | `GET /api/v1/redmine/time-entry-activities` | planned | List Redmine time entry activities with their IDs |
-| `listCustomFields` | `GET /api/v1/redmine/custom-fields` | planned | List Redmine custom fields and their cf_id filter keys |
-| `searchRedmine` | `GET /api/v1/redmine/search?q={query}` | planned | Full text search across Redmine |
+| `listIssues` | `GET /api/v1/redmine/issues` | live | Search and filter Redmine issues — _Multi-valued filters are one comma-joined parameter (issueIds=1,2,3); repeated keys are silently ignored upstream. Custom-field filters must be cf_<digits> or they are dropped rather than sent._ |
+| `getIssue` | `GET /api/v1/redmine/issues/{issueId}` | live | Get a single Redmine issue — _Pass ?include=journals,relations,watchers,allowed_statuses to embed associations. journals is the comment history._ |
+| `listIssueRelations` | `GET /api/v1/redmine/issues/{issueId}/relations` | live | List the relations on a Redmine issue |
+| `listProjects` | `GET /api/v1/redmine/projects` | live | List Redmine projects |
+| `getProject` | `GET /api/v1/redmine/projects/{projectId}` | live | Get a single Redmine project — _projectId accepts the numeric ID or the URL identifier._ |
+| `listUsers` | `GET /api/v1/redmine/users` | live | List Redmine users (admin only) — _Administrator-only upstream - 403 for an ordinary account. Use the project memberships endpoint to resolve user IDs without admin rights._ |
+| `getCurrentUser` | `GET /api/v1/redmine/users/current` | live | Get the Redmine account this connection authenticates as — _Registered before /users/{userId} so current is not read as a user ID._ |
+| `getUser` | `GET /api/v1/redmine/users/{userId}` | live | Get a single Redmine user |
+| `listTimeEntries` | `GET /api/v1/redmine/time-entries` | live | List Redmine time entries — _Any hours total you compute from this is per page, not per project - follow the reported offset to the end before summing._ |
+| `getTimeEntry` | `GET /api/v1/redmine/time-entries/{timeEntryId}` | live | Get a single Redmine time entry |
+| `listWikiPages` | `GET /api/v1/redmine/projects/{projectId}/wiki` | live | List the wiki page titles of a Redmine project — _Titles only - fetch each page for its text._ |
+| `getWikiPage` | `GET /api/v1/redmine/projects/{projectId}/wiki/{title}` | live | Get one Redmine wiki page with its text — _title is the page title exactly as listed, not a slug. ?version fetches a specific revision._ |
+| `listVersions` | `GET /api/v1/redmine/projects/{projectId}/versions` | live | List the versions of a Redmine project |
+| `getVersion` | `GET /api/v1/redmine/versions/{versionId}` | live | Get a single Redmine version |
+| `listIssueCategories` | `GET /api/v1/redmine/projects/{projectId}/issue-categories` | live | List the issue categories of a Redmine project |
+| `listMemberships` | `GET /api/v1/redmine/projects/{projectId}/memberships` | live | List the members of a Redmine project with their roles — _The non-admin way to resolve user IDs for assignment and watchers._ |
+| `listTrackers` | `GET /api/v1/redmine/trackers` | live | List Redmine trackers with their IDs |
+| `listIssueStatuses` | `GET /api/v1/redmine/issue-statuses` | live | List Redmine issue statuses with their IDs |
+| `listIssuePriorities` | `GET /api/v1/redmine/issue-priorities` | live | List Redmine issue priorities with their IDs |
+| `listTimeEntryActivities` | `GET /api/v1/redmine/time-entry-activities` | live | List Redmine time entry activities with their IDs |
+| `listCustomFields` | `GET /api/v1/redmine/custom-fields` | live | List Redmine custom fields and their cf_id filter keys — _Administrator-only upstream, same as the users list._ |
+| `searchRedmine` | `GET /api/v1/redmine/search?q={query}` | live | Full text search across Redmine — _q is required. Pass ?issues=true&wikiPages=true etc. to restrict which record types are searched._ |
+| `createIssue` | `POST /api/v1/redmine/issues` | live | Create a Redmine issue — _Body limit 5mb. 201 with the created issue. Only projectId and subject are required; everything else falls back to the project or tracker default._ |
+| `updateIssue` | `POST /api/v1/redmine/issues/{issueId}` | live | Update a Redmine issue or append a comment — _POST rather than PUT because the catalog scope is GET and POST; Redmine itself takes a PUT here. Body limit 5mb. notes appends a comment, description REPLACES the body. Returns 200 with the issue re-read, since Redmine answers the write with 204 and no body._ |
+| `createTimeEntry` | `POST /api/v1/redmine/time-entries` | live | Log time against a Redmine issue or project — _201 with the created entry. Provide issueId or projectId, not neither. Not idempotent - repeating the call logs the hours twice._ |
+| `updateWikiPage` | `POST /api/v1/redmine/projects/{projectId}/wiki/{title}` | live | Create or replace a Redmine wiki page — _Body limit 5mb - the clearest large-body case here, since text replaces the whole page. A title that does not exist yet is created. Pass version for optimistic locking so a concurrent edit is rejected rather than clobbered. Returns 200 with the page re-read._ |
 
 ## Status legend
 
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 146 endpoints.
+Catalog size: 160 endpoints.

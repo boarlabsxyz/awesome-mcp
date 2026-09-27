@@ -12,6 +12,7 @@ import { z } from 'zod';
 
 import {
   RedmineClient,
+  RedmineQueryParams,
   RedmineToolLog,
   formatCategoryList,
   formatCustomFieldDefList,
@@ -78,7 +79,7 @@ import {
 } from './schemas.js';
 
 /** Strip undefined values so a PUT body never clears a field the caller left out. */
-function compact(obj: Record<string, unknown>): Record<string, unknown> {
+export function compact(obj: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj)) {
     if (value !== undefined) out[key] = value;
@@ -86,8 +87,15 @@ function compact(obj: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
-/** Map the shared issue-write args onto Redmine's snake_case body keys. */
-function issueBody(args: Record<string, any>): Record<string, unknown> {
+/**
+ * Map the shared issue-write args onto Redmine's snake_case body keys.
+ *
+ * Exported for the same reason the query builders are: POST
+ * /api/v1/redmine/issues needs exactly this mapping, and a second copy in
+ * webServer.ts would silently stop carrying a field the moment either side
+ * grows one.
+ */
+export function issueBody(args: Record<string, any>): Record<string, unknown> {
   return compact({
     subject: args.subject,
     description: args.description,
@@ -110,10 +118,20 @@ function issueBody(args: Record<string, any>): Record<string, unknown> {
   });
 }
 
-/** Body of the `listIssues` tool. */
-export async function opListIssues(client: RedmineClient, args: z.infer<typeof listIssuesSchema>, log: RedmineToolLog): Promise<string> {
-  log.info(`Listing Redmine issues (project=${args.projectId ?? 'all'}, status=${args.statusId ?? 'open'}, offset=${args.offset})`);
-  const query = mergeCustomFieldFilters(
+// ---------------------------------------------------------------------------
+// Query builders.
+//
+// Exported because the /api/v1/redmine/* GET siblings need the SAME camelCase →
+// Redmine-filter mapping, and two of these carry a gotcha that must not be
+// re-derived per caller: mergeCustomFieldFilters refuses any key that is not
+// `cf_<digits>` (Redmine silently drops an unknown filter, which widens the
+// result set and reads as "the filter matched everything"), and Redmine's search
+// flags are PRESENCE flags, so a falsy one has to be omitted rather than sent.
+// ---------------------------------------------------------------------------
+
+/** Redmine issue filters for `listIssues`. */
+export function issueListQuery(args: z.infer<typeof listIssuesSchema>): RedmineQueryParams {
+  return mergeCustomFieldFilters(
     {
       project_id: args.projectId,
       subproject_id: args.subprojectId,
@@ -133,7 +151,12 @@ export async function opListIssues(client: RedmineClient, args: z.infer<typeof l
     },
     args.customFields,
   );
-  const res = await client.listIssues(query);
+}
+
+/** Body of the `listIssues` tool. */
+export async function opListIssues(client: RedmineClient, args: z.infer<typeof listIssuesSchema>, log: RedmineToolLog): Promise<string> {
+  log.info(`Listing Redmine issues (project=${args.projectId ?? 'all'}, status=${args.statusId ?? 'open'}, offset=${args.offset})`);
+  const res = await client.listIssues(issueListQuery(args));
   return formatIssueList(res.items, res.page);
 }
 
@@ -212,10 +235,15 @@ export async function opDeleteIssueRelation(client: RedmineClient, args: z.infer
   return `Deleted relation #${args.relationId}.`;
 }
 
+/** Redmine query for `listProjects`. */
+export function projectListQuery(args: z.infer<typeof listProjectsSchema>): RedmineQueryParams {
+  return { include: args.include, offset: args.offset, limit: args.limit };
+}
+
 /** Body of the `listProjects` tool. */
 export async function opListProjects(client: RedmineClient, args: z.infer<typeof listProjectsSchema>, log: RedmineToolLog): Promise<string> {
   log.info(`Listing Redmine projects (offset=${args.offset}, limit=${args.limit})`);
-  const res = await client.listProjects({ include: args.include, offset: args.offset, limit: args.limit });
+  const res = await client.listProjects(projectListQuery(args));
   return formatProjectList(res.items, res.page, args.include);
 }
 
@@ -284,16 +312,21 @@ export async function opDeleteProject(client: RedmineClient, args: z.infer<typeo
   return `Deleted project ${args.projectId} and all of its contents permanently.`;
 }
 
-/** Body of the `listUsers` tool. */
-export async function opListUsers(client: RedmineClient, args: z.infer<typeof listUsersSchema>, log: RedmineToolLog): Promise<string> {
-  log.info(`Listing Redmine users (name=${args.name ?? 'any'}, offset=${args.offset})`);
-  const res = await client.listUsers({
+/** Redmine query for `listUsers`. */
+export function userListQuery(args: z.infer<typeof listUsersSchema>): RedmineQueryParams {
+  return {
     status: args.status,
     name: args.name,
     group_id: args.groupId,
     offset: args.offset,
     limit: args.limit,
-  });
+  };
+}
+
+/** Body of the `listUsers` tool. */
+export async function opListUsers(client: RedmineClient, args: z.infer<typeof listUsersSchema>, log: RedmineToolLog): Promise<string> {
+  log.info(`Listing Redmine users (name=${args.name ?? 'any'}, offset=${args.offset})`);
+  const res = await client.listUsers(userListQuery(args));
   return formatUserList(res.items, res.page);
 }
 
@@ -313,10 +346,9 @@ export async function opGetCurrentUser(client: RedmineClient, args: z.infer<type
   return formatUser(res.user, args.include);
 }
 
-/** Body of the `listTimeEntries` tool. */
-export async function opListTimeEntries(client: RedmineClient, args: z.infer<typeof listTimeEntriesSchema>, log: RedmineToolLog): Promise<string> {
-  log.info(`Listing Redmine time entries (project=${args.projectId ?? 'all'}, user=${args.userId ?? 'all'}, offset=${args.offset})`);
-  const res = await client.listTimeEntries({
+/** Redmine query for `listTimeEntries`. */
+export function timeEntryListQuery(args: z.infer<typeof listTimeEntriesSchema>): RedmineQueryParams {
+  return {
     project_id: args.projectId,
     issue_id: args.issueId,
     user_id: args.userId,
@@ -325,7 +357,13 @@ export async function opListTimeEntries(client: RedmineClient, args: z.infer<typ
     to: args.to,
     offset: args.offset,
     limit: args.limit,
-  });
+  };
+}
+
+/** Body of the `listTimeEntries` tool. */
+export async function opListTimeEntries(client: RedmineClient, args: z.infer<typeof listTimeEntriesSchema>, log: RedmineToolLog): Promise<string> {
+  log.info(`Listing Redmine time entries (project=${args.projectId ?? 'all'}, user=${args.userId ?? 'all'}, offset=${args.offset})`);
+  const res = await client.listTimeEntries(timeEntryListQuery(args));
   return formatTimeEntryList(res.items, res.page);
 }
 
@@ -337,11 +375,9 @@ export async function opGetTimeEntry(client: RedmineClient, args: z.infer<typeof
   return formatTimeEntry(res.time_entry);
 }
 
-/** Body of the `createTimeEntry` tool. */
-export async function opCreateTimeEntry(client: RedmineClient, args: z.infer<typeof createTimeEntrySchema>, log: RedmineToolLog): Promise<string> {
-  const target = args.issueId ? `issue ${args.issueId}` : `project ${args.projectId}`;
-  log.info(`Logging ${args.hours}h against Redmine ${target}`);
-  const res = await client.createTimeEntry(compact({
+/** Redmine body for `createTimeEntry`. */
+export function timeEntryBody(args: z.infer<typeof createTimeEntrySchema>): Record<string, unknown> {
+  return compact({
     issue_id: args.issueId,
     project_id: args.projectId,
     hours: args.hours,
@@ -349,7 +385,14 @@ export async function opCreateTimeEntry(client: RedmineClient, args: z.infer<typ
     activity_id: args.activityId,
     comments: args.comments,
     user_id: args.userId,
-  }));
+  });
+}
+
+/** Body of the `createTimeEntry` tool. */
+export async function opCreateTimeEntry(client: RedmineClient, args: z.infer<typeof createTimeEntrySchema>, log: RedmineToolLog): Promise<string> {
+  const target = args.issueId ? `issue ${args.issueId}` : `project ${args.projectId}`;
+  log.info(`Logging ${args.hours}h against Redmine ${target}`);
+  const res = await client.createTimeEntry(timeEntryBody(args));
   return res?.time_entry
     ? `Logged ${res.time_entry.hours ?? args.hours}h (time entry #${res.time_entry.id ?? '?'}).`
     : `Logged ${args.hours}h.`;
@@ -394,15 +437,20 @@ export async function opGetWikiPage(client: RedmineClient, args: z.infer<typeof 
   return formatWikiPage(res.wiki_page);
 }
 
-/** Body of the `updateWikiPage` tool. */
-export async function opUpdateWikiPage(client: RedmineClient, args: z.infer<typeof updateWikiPageSchema>, log: RedmineToolLog): Promise<string> {
-  log.info(`Updating Redmine wiki page "${args.title}" in project ${args.projectId}`);
-  await client.updateWikiPage(args.projectId, args.title, compact({
+/** Redmine body for `updateWikiPage`. */
+export function wikiPageBody(args: z.infer<typeof updateWikiPageSchema>): Record<string, unknown> {
+  return compact({
     text: args.text,
     comments: args.comments,
     parent_title: args.parentTitle,
     version: args.version,
-  }));
+  });
+}
+
+/** Body of the `updateWikiPage` tool. */
+export async function opUpdateWikiPage(client: RedmineClient, args: z.infer<typeof updateWikiPageSchema>, log: RedmineToolLog): Promise<string> {
+  log.info(`Updating Redmine wiki page "${args.title}" in project ${args.projectId}`);
+  await client.updateWikiPage(args.projectId, args.title, wikiPageBody(args));
   return `Saved wiki page "${args.title}" in project ${args.projectId}.`;
 }
 
@@ -550,10 +598,9 @@ export async function opListCustomFields(client: RedmineClient, log: RedmineTool
   return formatCustomFieldDefList(res.items, res.page);
 }
 
-/** Body of the `searchRedmine` tool. */
-export async function opSearchRedmine(client: RedmineClient, args: z.infer<typeof searchRedmineSchema>, log: RedmineToolLog): Promise<string> {
-  log.info(`Searching Redmine for "${args.query}" (project=${args.projectId ?? 'all'})`);
-  const res = await client.search({
+/** Redmine query for `searchRedmine`. */
+export function searchQuery(args: z.infer<typeof searchRedmineSchema>): RedmineQueryParams {
+  return {
     q: args.query,
     project_id: args.projectId,
     scope: args.scope,
@@ -567,6 +614,12 @@ export async function opSearchRedmine(client: RedmineClient, args: z.infer<typeo
     open_issues: args.openIssues ? 1 : undefined,
     offset: args.offset,
     limit: args.limit,
-  });
+  };
+}
+
+/** Body of the `searchRedmine` tool. */
+export async function opSearchRedmine(client: RedmineClient, args: z.infer<typeof searchRedmineSchema>, log: RedmineToolLog): Promise<string> {
+  log.info(`Searching Redmine for "${args.query}" (project=${args.projectId ?? 'all'})`);
+  const res = await client.search(searchQuery(args));
   return formatSearchResults(res.items, res.page);
 }

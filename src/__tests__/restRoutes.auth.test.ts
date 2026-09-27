@@ -89,6 +89,45 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/peopleforce/recruitment/candidate-movements',
   '/api/v1/peopleforce/recruitment/disqualify-reasons',
   '/api/v1/peopleforce/recruitment/sources',
+  // HubSpot
+  '/api/v1/hubspot/companies',
+  '/api/v1/hubspot/companies/comp-123',
+  '/api/v1/hubspot/companies/comp-123/activity',
+  '/api/v1/hubspot/companies/comp-123/deals',
+  '/api/v1/hubspot/contacts',
+  '/api/v1/hubspot/contacts/cont-123',
+  '/api/v1/hubspot/deals',
+  '/api/v1/hubspot/deals/deal-123',
+  '/api/v1/hubspot/pipelines',
+  '/api/v1/hubspot/conversations',
+  '/api/v1/hubspot/tickets',
+  '/api/v1/hubspot/tickets/tick-123/conversation-threads',
+  '/api/v1/hubspot/properties/companies/domain',
+  // Redmine. /users/current is listed alongside /users/:userId on purpose: both
+  // are one segment under /users, so the only thing keeping "current" from being
+  // read as a user ID is the registration order in webServer.ts.
+  '/api/v1/redmine/issues',
+  '/api/v1/redmine/issues/123',
+  '/api/v1/redmine/issues/123/relations',
+  '/api/v1/redmine/projects',
+  '/api/v1/redmine/projects/my-project',
+  '/api/v1/redmine/projects/my-project/wiki',
+  '/api/v1/redmine/projects/my-project/wiki/Home',
+  '/api/v1/redmine/projects/my-project/versions',
+  '/api/v1/redmine/projects/my-project/issue-categories',
+  '/api/v1/redmine/projects/my-project/memberships',
+  '/api/v1/redmine/users',
+  '/api/v1/redmine/users/current',
+  '/api/v1/redmine/users/7',
+  '/api/v1/redmine/time-entries',
+  '/api/v1/redmine/time-entries/55',
+  '/api/v1/redmine/versions/9',
+  '/api/v1/redmine/trackers',
+  '/api/v1/redmine/issue-statuses',
+  '/api/v1/redmine/issue-priorities',
+  '/api/v1/redmine/time-entry-activities',
+  '/api/v1/redmine/custom-fields',
+  '/api/v1/redmine/search?q=login',
 ];
 
 // POST endpoints — same auth gate, exercised with the right verb. Bodies are
@@ -100,6 +139,19 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/peopleforce/recruitment/candidates/cand-123/notes',
   '/api/v1/peopleforce/recruitment/vacancies/vac-123/applications/app-123/move',
   '/api/v1/peopleforce/recruitment/vacancies/vac-123/applications/app-123/disqualify',
+  // HubSpot. Note /companies, /contacts and /deals are in BOTH arrays — the GET
+  // is the list, the POST is the create, and only the verb tells them apart.
+  '/api/v1/hubspot/companies',
+  '/api/v1/hubspot/contacts',
+  '/api/v1/hubspot/deals',
+  '/api/v1/hubspot/notes',
+  '/api/v1/hubspot/calls',
+  '/api/v1/hubspot/meetings',
+  // Redmine
+  '/api/v1/redmine/issues',
+  '/api/v1/redmine/issues/123',
+  '/api/v1/redmine/time-entries',
+  '/api/v1/redmine/projects/my-project/wiki/Home',
 ];
 
 describe('REST data-plane: auth gate', () => {

@@ -24,6 +24,7 @@ import {
   opUpdateDeal,
   opListPipelines,
   opCreateNote,
+  performCreateEngagement,
   opCreateTask,
   opLogCall,
   opLogMeeting,
@@ -369,6 +370,29 @@ test('opCreateNote reports an orphaned note (not success) when association fails
   assert.match(out, /created \(id n1\) but attaching/i, 'association failure is surfaced, not swallowed');
   assert.doesNotMatch(out, /visible on its timeline/);
   assert.equal(calls.filter(c => c.method === 'PUT').length, 1);
+});
+
+// The one orphan case with no recovery handle: HubSpot 201s the engagement but
+// returns no id, so there is nothing to associate it with afterwards and nothing
+// for the caller to retry against either. Both surfaces have to say so rather
+// than report a clean create.
+test('an engagement created with no id is reported as unattachable, not as success', async () => {
+  const calls = router(() => ({ body: { properties: {} } }));
+  const out = await opCreateNote(client(), { body: 'x', associateToObjectType: 'companies', associateToObjectId: 'c1' });
+  assert.match(out, /no ID was returned/i);
+  assert.doesNotMatch(out, /visible on its timeline/);
+  assert.equal(calls.filter(c => c.method === 'PUT').length, 0, 'nothing to associate, so no attempt');
+});
+
+test('performCreateEngagement reports the same no-id case as structured data for REST', async () => {
+  router(() => ({ body: { properties: {} } }));
+  const { association } = await performCreateEngagement(
+    client(), 'notes', 'note', { hs_note_body: 'x' },
+    { associateToObjectType: 'companies', associateToObjectId: 'c1' },
+  );
+  assert.equal(association.attempted, true);
+  assert.equal(association.attached as boolean, false);
+  assert.match((association as any).error, /no ID/i);
 });
 
 test('opDeleteEngagement deletes the typed engagement and confirms with its singular label', async () => {
