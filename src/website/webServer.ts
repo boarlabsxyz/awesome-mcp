@@ -7358,8 +7358,20 @@ function registerRestApiRoutes(app: express.Express): void {
     path: string;
     /** Build the tool's args from the request, so the schema validates exactly what the MCP tool would. */
     args: (req: ApiAuthenticatedRequest) => Record<string, unknown>;
-    /** Name of the schema to validate against, in src/redmine/schemas.js. */
-    schemaName: string;
+    /**
+     * Schema to validate against, named rather than imported so the table stays
+     * a literal. A union, not `string`: it makes a typo a typecheck failure
+     * instead of an `undefined.safeParse` TypeError that would surface as a 502
+     * the first time someone hit the route.
+     */
+    schemaName:
+      | 'getIssueSchema'
+      | 'getCurrentUserSchema'
+      | 'getUserSchema'
+      | 'getProjectSchema'
+      | 'getWikiPageSchema'
+      | 'getVersionSchema'
+      | 'getTimeEntrySchema';
     fetch: (client: RedmineClient, args: any) => Promise<any>;
     /** Key Redmine wraps the record in. Absent means "not found", which is a 404. */
     envelopeKey: string;
