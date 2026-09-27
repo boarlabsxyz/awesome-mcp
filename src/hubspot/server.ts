@@ -261,11 +261,14 @@ export async function renderThread(
 // Attribution comments reference the ported source handler.
 // ===========================================================================
 
-// company_handler.py:105 — dedupe by name, then create.
-//
-// `created` is the load-bearing half of the return: this call is a no-op when a
-// company of that name already exists, and a caller (REST especially, where it
-// decides 201 vs 200) has no other way to tell a write from a match.
+/**
+ * Create a company unless one of that name already exists.
+ *
+ * company_handler.py:105 — dedupe by name, then create. `created` is the
+ * load-bearing half of the return: this call is a NO-OP when a match exists,
+ * and a caller (REST especially, where it decides 201 vs 200) has no other way
+ * to tell a write from a match.
+ */
 export async function performCreateCompany(
   client: HubSpotClient,
   args: { name: string; properties?: Record<string, unknown> },
@@ -279,6 +282,7 @@ export async function performCreateCompany(
   return { created: true, company: await client.createCompany({ ...(args.properties ?? {}), name: args.name }) };
 }
 
+/** Body of the `createCompany` tool: the dedupe-or-create above, rendered. */
 export async function opCreateCompany(
   client: HubSpotClient,
   args: { name: string; properties?: Record<string, unknown> },
@@ -345,11 +349,14 @@ export async function opUpdateCompany(
   return `Updated company.\n\n${formatCompany(fresh)}`;
 }
 
-// company_handler.py:171 — associations-v4 fan-out + per-id engagement detail.
-//
-// `omitted` is returned rather than dropped: the fan-out is capped, so a caller
-// that only saw the details would read a truncated activity list as the whole
-// timeline. Both the MCP formatter and the REST route report it.
+/**
+ * Engagements associated with a company, resolved to detail records.
+ *
+ * company_handler.py:171 — associations-v4 fan-out, then one detail read per id.
+ * `omitted` is returned rather than dropped: the fan-out is capped, so a caller
+ * that only saw the details would read a truncated activity list as the whole
+ * timeline. Both the MCP formatter and the REST route report it.
+ */
 export async function fetchCompanyActivity(
   client: HubSpotClient,
   companyId: string,
@@ -363,13 +370,18 @@ export async function fetchCompanyActivity(
   };
 }
 
+/** Body of the `getCompanyActivity` tool: the fetch above, rendered. */
 export async function opGetCompanyActivity(client: HubSpotClient, args: { companyId: string }): Promise<string> {
   const { details, omitted } = await fetchCompanyActivity(client, args.companyId);
   return formatCompanyActivity(details, omitted);
 }
 
-// contact_handler.py:92 — dedupe by name (+ company), then create.
-// Returns `created` for the same reason performCreateCompany does.
+/**
+ * Create a contact unless a matching one already exists.
+ *
+ * contact_handler.py:92 — dedupe on first and last name, plus company when one
+ * is given. Returns `created` for the same reason performCreateCompany does.
+ */
 export async function performCreateContact(
   client: HubSpotClient,
   args: { firstname: string; lastname: string; email?: string; properties?: Record<string, unknown> },
@@ -397,6 +409,7 @@ export async function performCreateContact(
   return { created: true, contact: await client.createContact(properties) };
 }
 
+/** Body of the `createContact` tool: the dedupe-or-create above, rendered. */
 export async function opCreateContact(
   client: HubSpotClient,
   args: { firstname: string; lastname: string; email?: string; properties?: Record<string, unknown> },
@@ -457,6 +470,14 @@ export function opSearchDeals(client: HubSpotClient, args: SearchArgs): Promise<
  * silently: a truncated list that says "Found 10 deals" would read as the
  * company's complete pipeline.
  */
+/**
+ * Deals associated with a company, resolved to full records.
+ *
+ * Two phases on purpose: associations v4 returns IDs only — and pages them, so
+ * the ID scan is itself a loop — while the batch read turns those IDs into
+ * amounts, stages and close dates. Every cap is reported rather than applied
+ * silently, which is what the four counters in the return are for.
+ */
 export async function fetchCompanyDeals(
   client: HubSpotClient,
   args: { companyId: string; limit: number; properties?: string[] },
@@ -503,6 +524,7 @@ export function renderCompanyDeals(result: CompanyDealsResult): string {
   return formatObjectList(deals, 'deals', properties) + note;
 }
 
+/** Body of the `getCompanyDeals` tool: the fetch above, rendered. */
 export async function opGetCompanyDeals(
   client: HubSpotClient,
   args: { companyId: string; limit: number; properties?: string[] },
@@ -571,6 +593,16 @@ export type EngagementAssociation =
   | { attempted: true; attached: true; objectType: string; objectId: string }
   | { attempted: true; attached: false; objectType: string; objectId: string; error: string };
 
+/**
+ * Create an engagement, then (if a target was given) attach it to that record.
+ *
+ * Two calls, because HubSpot has no create-and-associate endpoint: the
+ * engagement is created standalone and a v4 DEFAULT association attaches it,
+ * which avoids the direction-sensitive association-type-ID table. hs_timestamp
+ * defaults to now — omitting it is the most common documented create failure.
+ * The association outcome comes back as data rather than folded into a message
+ * so the REST sibling can answer the same question in JSON.
+ */
 export async function performCreateEngagement(
   client: HubSpotClient,
   engagementType: HubSpotEngagementType,
@@ -696,8 +728,13 @@ export async function opDeleteEngagement(
   return `Deleted ${label} ${args.engagementId}. It no longer appears on any record's timeline (recoverable from HubSpot's recycling bin).`;
 }
 
-// conversation_handler.py:39 — list threads then fetch each thread's messages.
-// One upstream call per thread, so `limit` is the cost knob on both surfaces.
+/**
+ * Recent conversation threads, each with its messages.
+ *
+ * conversation_handler.py:39 — list threads, then fetch each thread's messages.
+ * That is one upstream call per thread on top of the list, so `limit` is the
+ * cost knob on both surfaces.
+ */
 export async function fetchRecentConversations(
   client: HubSpotClient,
   args: { limit: number; after?: string },
@@ -709,6 +746,7 @@ export async function fetchRecentConversations(
   return { threads, nextAfter: page.paging?.next?.after };
 }
 
+/** Body of the `getRecentConversations` tool: the fetch above, rendered. */
 export async function opGetRecentConversations(
   client: HubSpotClient,
   args: { limit: number; after?: string },
@@ -718,6 +756,13 @@ export async function opGetRecentConversations(
 }
 
 // ticket_handler.py:58 — criteria-based filter groups + retry (in searchTickets).
+/**
+ * Search tickets by criteria, with backoff on 429 and 5xx.
+ *
+ * ticket_handler.py:58. The date filters go out as epoch MILLISECONDS, not
+ * ISO-8601: HubSpot's search API 400s on an ISO datetime, which is why the
+ * `default` branch used to fail while `Closed` (a string stage filter) worked.
+ */
 export async function fetchTickets(
   client: HubSpotClient,
   args: { criteria: 'default' | 'Closed'; limit: number; maxRetries: number; retryDelay: number },
@@ -746,6 +791,7 @@ export async function fetchTickets(
   return client.searchTickets(body, { maxRetries: args.maxRetries, retryDelay: args.retryDelay });
 }
 
+/** Body of the `getTickets` tool: the search above, rendered. */
 export async function opGetTickets(
   client: HubSpotClient,
   args: { criteria: 'default' | 'Closed'; limit: number; maxRetries: number; retryDelay: number },
@@ -755,7 +801,12 @@ export async function opGetTickets(
   return formatTickets(res.results ?? [], res.total, res.paging?.next?.after);
 }
 
-// ticket_handler.py:133 — tickets→conversation associations + per-thread messages.
+/**
+ * Conversation threads associated with a ticket, each with its messages.
+ *
+ * ticket_handler.py:133 — the tickets-to-conversation association read, then one
+ * message read per thread.
+ */
 export async function fetchTicketConversationThreads(
   client: HubSpotClient,
   ticketId: string,
@@ -764,6 +815,7 @@ export async function fetchTicketConversationThreads(
   return { threads: await Promise.all(threadIds.map(id => renderThread(() => client.getThreadMessages(id), { id }))) };
 }
 
+/** Body of the `getTicketConversationThreads` tool: the fetch above, rendered. */
 export async function opGetTicketConversationThreads(client: HubSpotClient, args: { ticketId: string }): Promise<string> {
   const { threads } = await fetchTicketConversationThreads(client, args.ticketId);
   return formatThreads(threads);

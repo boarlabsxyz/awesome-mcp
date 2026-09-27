@@ -1160,10 +1160,10 @@
             "schema": {
               "type": "integer",
               "minimum": 0,
-              "maximum": 10,
+              "maximum": 3,
               "default": 3
             },
-            "description": "Retry attempts on 429/5xx (exponential backoff)."
+            "description": "Retry attempts on 429/5xx (exponential backoff). Capped at 3: the total sleep is retryDelay * (2^maxRetries - 1) seconds, and an unbounded budget would hold the socket open for hours during exactly the rate limiting that triggered the retries."
           },
           {
             "name": "retryDelay",
@@ -1171,10 +1171,10 @@
             "schema": {
               "type": "integer",
               "minimum": 0,
-              "maximum": 30,
+              "maximum": 2,
               "default": 1
             },
-            "description": "Initial retry delay in seconds; doubles each attempt."
+            "description": "Initial retry delay in seconds; doubles each attempt. Capped at 2, which keeps the worst-case sleep at 14 seconds."
           },
           {
             "name": "format",

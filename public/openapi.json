@@ -5626,10 +5626,10 @@
             "schema": {
               "type": "integer",
               "minimum": 0,
-              "maximum": 10,
+              "maximum": 3,
               "default": 3
             },
-            "description": "Retry attempts on 429/5xx (exponential backoff)."
+            "description": "Retry attempts on 429/5xx (exponential backoff). Capped at 3: the total sleep is retryDelay * (2^maxRetries - 1) seconds, and an unbounded budget would hold the socket open for hours during exactly the rate limiting that triggered the retries."
           },
           {
             "name": "retryDelay",
@@ -5637,10 +5637,10 @@
             "schema": {
               "type": "integer",
               "minimum": 0,
-              "maximum": 30,
+              "maximum": 2,
               "default": 1
             },
-            "description": "Initial retry delay in seconds; doubles each attempt."
+            "description": "Initial retry delay in seconds; doubles each attempt. Capped at 2, which keeps the worst-case sleep at 14 seconds."
           },
           {
             "name": "format",
@@ -10402,6 +10402,14 @@
               ]
             },
             "description": "Response shape. Defaults to the { items, page } JSON envelope (or the raw record for a by-ID read); text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          },
+          {
+            "name": "cf_<id>",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Custom-field filter, e.g. ?cf_3=Urgent, with IDs from the custom-fields endpoint. Keys that are not cf_<digits> are ignored. A cf_<digits> key given more than once is REJECTED with 400 rather than dropped: Redmine answers a missing filter with more rows, so a silent drop would return a wider result set than was asked for. Pass multiple values comma-joined (?cf_3=a,b)."
           }
         ],
         "responses": {
@@ -10416,7 +10424,7 @@
             }
           },
           "400": {
-            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "description": "Query parameters failed the MCP tool schema, or a cf_<digits> filter was given more than once. `issues` carries the flattened Zod field errors; `invalidKeys` names the unusable custom-field keys.",
             "content": {
               "application/json": {
                 "schema": {

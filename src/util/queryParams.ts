@@ -46,3 +46,67 @@ export function qarr(v: unknown): string[] | undefined {
     .filter((s) => s.length > 0);
   return out.length > 0 ? out : undefined;
 }
+
+/**
+ * Optional integer query param, tri-state.
+ *
+ * `undefined` when the key is absent so an omitted filter stays omitted, but a
+ * present-and-unparseable value comes back as `NaN` rather than `undefined`.
+ * That distinction is the point: a Zod `z.number()` rejects NaN, so the caller
+ * gets a 400 instead of having a filter they believe is applied quietly
+ * dropped. Redmine in particular ignores filters it does not understand, so
+ * failing open turns a typo into a plausible-looking wrong answer.
+ *
+ * Use `qint` instead when the param sizes a response and a default is correct.
+ */
+export function qoptint(v: unknown): number | undefined {
+  if (typeof v !== 'string' || v === '') return undefined;
+  return Number.parseInt(v, 10);
+}
+
+/**
+ * Optional boolean query param, tri-state.
+ *
+ * Absent stays absent so an omitted flag is never sent downstream as an
+ * explicit `false` — which matters where the upstream treats its toggles as
+ * PRESENCE flags (Redmine's search does), because there "false" and "omitted"
+ * are the same thing and only a missing key leaves the default alone.
+ */
+export function qflag(v: unknown): boolean | undefined {
+  if (typeof v !== 'string' || v === '') return undefined;
+  return v === 'true' || v === '1';
+}
+
+/**
+ * Split `?cf_3=Urgent` style keys out of a query string into Redmine's
+ * custom-field filter shape, reporting the ones that cannot be used.
+ *
+ * Two kinds of key are deliberately treated differently. A key that is not
+ * `cf_<digits>` is simply not ours — it belongs to another parameter — so it is
+ * ignored. A key that IS `cf_<digits>` but whose value is not a plain string
+ * has to be an error, and this is the case worth spelling out: Express parses a
+ * repeated `?cf_3=a&cf_3=b` into an ARRAY, and a nested `?cf_3[x]=y` into an
+ * object. Skipping those would send the query to Redmine with the filter
+ * missing, and Redmine answers an absent filter with MORE rows, not fewer — the
+ * exact "the filter matched everything" failure this whole path exists to
+ * prevent. Redmine wants one comma-joined value (`?cf_3=a,b`), so the caller is
+ * told that rather than silently served a wider result set.
+ */
+export function redmineCustomFieldFilters(
+  query: Record<string, unknown>,
+): { filters?: Record<string, string>; invalidKeys: string[] } {
+  const filters: Record<string, string> = {};
+  const invalidKeys: string[] = [];
+  for (const [key, value] of Object.entries(query)) {
+    if (!/^cf_\d+$/.test(key)) continue;
+    if (typeof value !== 'string') {
+      invalidKeys.push(key);
+      continue;
+    }
+    filters[key] = value;
+  }
+  return {
+    filters: Object.keys(filters).length > 0 ? filters : undefined,
+    invalidKeys,
+  };
+}
