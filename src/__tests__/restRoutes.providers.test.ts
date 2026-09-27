@@ -921,5 +921,32 @@ describe('REST data plane: HubSpot and Redmine handler bodies', () => {
       assert.equal(rm.status, 403);
       assert.match(rm.body.error, /Redmine connection required/);
     });
+
+    // Redmine is self-hosted, so a connection without an instance URL is broken
+    // rather than defaultable — there is no api.redmine.com to fall back to, and
+    // guessing a host would send the credential somewhere the user never named.
+    // It has to say that, not throw on the way to building a client.
+    it('403s a Redmine connection that has a credential but no instance URL', async () => {
+      const urlless = await createOrUpdateUser(
+        { email: 'redmine-no-url@example.com', googleId: 'google-redmine-no-url', name: 'No Instance URL' },
+        dummyUserTokens,
+      );
+      const urllessId = USER_ID + 1;
+      const u = await getUserByGoogleId('google-redmine-no-url');
+      if (u) (u as any).id = urllessId;
+      await createMcpInstance(
+        urllessId, 'redmine', 'Broken Redmine', dummyGoogleTokens, null,
+        'redmine', { access_token: 'rm-key-no-url' }, null,
+      );
+
+      reset();
+      const res = await request(app)
+        .get('/api/v1/redmine/issues')
+        .set({ Authorization: `Bearer ${urlless.apiKey}` });
+      assert.equal(res.status, 403);
+      assert.match(res.body.error, /missing its instance URL/);
+      assert.match(res.body.error, /Reconnect/i);
+      assert.equal(calls.length, 0, 'no request should be attempted without a host');
+    });
   });
 });
