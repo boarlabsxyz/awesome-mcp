@@ -299,6 +299,14 @@ export class ClickUpClient {
 
   // === Lists ===
 
+  // A single list by ID. ClickUp offers no other way to turn a bare list ID
+  // into a name, which is what the Tasks-in-Multiple-Lists tools confirm with
+  // (those endpoints answer with an empty body) and what lets them tell an
+  // unreadable list apart from a disabled ClickApp.
+  async getList(listId: string): Promise<any> {
+    return this.request('GET', `/list/${listId}`);
+  }
+
   async getListsInFolder(folderId: string, archived?: boolean): Promise<any> {
     const params = archived ? '?archived=true' : '';
     return this.request('GET', `/folder/${folderId}/list${params}`);
@@ -399,6 +407,26 @@ export class ClickUpClient {
 
   async moveTask(taskId: string, listId: string): Promise<any> {
     return this.request('POST', `/task/${taskId}`, { list_id: listId });
+  }
+
+  // === Tasks in Multiple Lists ===
+  //
+  // Share a task into an extra list / withdraw it again. Both endpoints require
+  // the "Tasks in Multiple Lists" ClickApp to be enabled on the workspace, and
+  // BOTH answer a disabled ClickApp with 401 -- the same status ClickUp uses for
+  // a revoked token and for an ID it cannot resolve, with nothing in the body to
+  // tell them apart. Neither takes a request body, and both answer 200 with an
+  // empty one, so the calling tool has nothing to render and no confirmation
+  // beyond the status: see addTaskToList/removeTaskFromList in server.ts for the
+  // pre-flight reads and the post-write re-read that make that honest.
+  async addTaskToList(listId: string, taskId: string): Promise<any> {
+    return this.request('POST', `/list/${listId}/task/${taskId}`);
+  }
+
+  // ClickUp refuses to remove a task from its HOME list; only additional lists
+  // can be withdrawn.
+  async removeTaskFromList(listId: string, taskId: string): Promise<any> {
+    return this.request('DELETE', `/list/${listId}/task/${taskId}`);
   }
 
   // === Tags ===
