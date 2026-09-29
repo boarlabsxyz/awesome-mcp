@@ -739,17 +739,61 @@ describe('ClickUp server tools', () => {
       );
     });
 
-    it('does not blame the ClickApp for a non-401 rejection', async () => {
+    it('does not blame the ClickApp for a non-401 refusal', async () => {
       mockFetch([
         { status: 200, body: homeTask },
         { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
-        { status: 500, text: 'boom' },
+        { status: 403, text: 'nope' },
       ]);
       await assert.rejects(
         () => callTool('addTaskToList', { taskId: 't1', listId: 'l2' }),
         (err: any) => {
           assert.ok(!err.message.includes('Tasks in Multiple Lists'));
-          assert.ok(err.message.includes('boom'));
+          // A 4xx IS a refusal, so claiming nothing changed is a fact here.
+          assert.ok(err.message.includes('refused'));
+          assert.ok(err.message.includes('the task was not changed'));
+          assert.ok(err.message.includes('nope'));
+          return true;
+        },
+      );
+    });
+
+    it('treats an answered 5xx as an unknown outcome, not as a refusal', async () => {
+      // ClickUp answering 500/502/504 does not mean it declined: a 500 can be
+      // raised after the write committed and a 502 is usually a proxy that never
+      // learned either, so "the task was not changed" would be an overclaim.
+      for (const status of [500, 502, 504]) {
+        mockFetch([
+          { status: 200, body: homeTask },
+          { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+          { status, text: 'boom' },
+        ]);
+        await assert.rejects(
+          () => callTool('addTaskToList', { taskId: 't1', listId: 'l2' }),
+          (err: any) => {
+            assert.ok(err.message.includes('outcome is UNKNOWN'), `${status}: ${err.message}`);
+            assert.ok(err.message.includes(`answered with ${status}`), `${status}: ${err.message}`);
+            assert.ok(!err.message.includes('was not changed'), `${status}: ${err.message}`);
+            assert.ok(!err.message.includes('Tasks in Multiple Lists'), `${status}: ${err.message}`);
+            assert.ok(err.message.includes('boom'));
+            return true;
+          },
+        );
+      }
+    });
+
+    it('still reports a 401 as a refusal, with the ClickApp explanation', async () => {
+      mockFetch([
+        { status: 200, body: homeTask },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 401, text: '{"ECODE":"OAUTH_027"}' },
+      ]);
+      await assert.rejects(
+        () => callTool('removeTaskFromList', { taskId: 't1', listId: 'l2' }),
+        (err: any) => {
+          assert.ok(err.message.includes('refused'));
+          assert.ok(err.message.includes('the task was not changed'));
+          assert.ok(err.message.includes('Tasks in Multiple Lists'));
           return true;
         },
       );

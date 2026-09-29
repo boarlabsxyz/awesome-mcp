@@ -728,14 +728,20 @@ async function resolveMultiListTargets(
 /**
  * Turn a failed multi-list write into one message, without overclaiming.
  *
- * Two distinctions are the whole point. ClickUp answering with a status means
- * it rejected the request and nothing was committed, so "the task was not
- * changed" is a fact; a timeout or a dropped connection means the outcome is
- * genuinely UNKNOWN, because the failure can land after ClickUp has already
- * applied the write — reporting that as "not changed" would be the same class
- * of lie as reporting a silent no-op as success. And the ClickApp note is
- * attached only to an answered 401, never to a transport failure that merely
- * mentions one.
+ * The line that matters is not whether ClickUp answered but whether it answered
+ * that it REFUSED. Only a 4xx is a refusal, and only then is "the task was not
+ * changed" a fact. Everything else leaves the outcome genuinely UNKNOWN, and
+ * that covers two cases that feel different and are not:
+ *
+ *   - no answer at all (timeout, dropped connection) — the failure can land
+ *     after ClickUp has already applied the write;
+ *   - an answered 5xx — a 500 can be raised after the write committed, and a
+ *     502/504 is usually a proxy that never learned the outcome either.
+ *
+ * Reporting either as "not changed" is the same class of lie as reporting a
+ * silent no-op as success, which is the failure this whole module exists to
+ * remove. The ClickApp note stays pinned to an answered 401 specifically, never
+ * to a transport failure or a 5xx body that merely mentions one.
  */
 function multiListWriteError(
   action: MultiListAction,
@@ -746,18 +752,24 @@ function multiListWriteError(
 ): UserError {
   const verbs = MULTI_LIST_VERBS[action];
   const raw = String((err as any)?.message || err);
-  if (!clickUpErrorWasAnswered(err)) {
+  const attempt = `${verbs.gerund} task ${taskLabel} ${verbs.preposition} list ${listLabel}`;
+  const status = clickUpErrorStatus(err);
+  const refused = clickUpErrorWasAnswered(err) && status !== undefined && status < 500;
+
+  if (!refused) {
+    const cause = status === undefined
+      ? 'failed before ClickUp answered'
+      : `was answered with ${status}, a server-side error that does not say whether the write was applied`;
     return new UserError(
-      `The request ${verbs.gerund} task ${taskLabel} ${verbs.preposition} list ${listLabel} failed before ClickUp `
-      + `answered, so the outcome is UNKNOWN — ClickUp may or may not have applied it. Do not retry blindly: call `
-      + `getTask("${taskId}") and check whether the list is listed, then retry only if it is not. `
-      + `ClickUp said: ${raw}`,
+      `The request ${attempt} ${cause}, so the outcome is UNKNOWN — ClickUp may or may not have applied it. Do not `
+      + `retry blindly: call getTask("${taskId}") and check whether the list is listed, then retry only if it is `
+      + `not. ClickUp said: ${raw}`,
     );
   }
-  const isClickApp = clickUpErrorStatus(err) === 401;
+
   return new UserError(
-    `ClickUp rejected ${verbs.gerund} task ${taskLabel} ${verbs.preposition} list ${listLabel}; the task was not `
-    + `changed. ` + (isClickApp ? `${MULTI_LIST_CLICKAPP_NOTE} ` : '') + `ClickUp said: ${raw}`,
+    `ClickUp refused ${attempt} (HTTP ${status}); the task was not changed. `
+    + (status === 401 ? `${MULTI_LIST_CLICKAPP_NOTE} ` : '') + `ClickUp said: ${raw}`,
   );
 }
 
