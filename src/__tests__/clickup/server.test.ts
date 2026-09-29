@@ -276,6 +276,56 @@ describe('ClickUp server tools', () => {
   });
 
   describe('listTasks', () => {
+    // === Tasks in Multiple Lists (include_timl) ===
+    //
+    // ClickUp EXCLUDES a task shared into the list unless include_timl is set,
+    // so the default behaviour made a task that plainly sits in the list read
+    // back as absent. These assert the default is on and that the rendering
+    // explains the rows whose home list is elsewhere.
+    it('sends include_timl by default so shared tasks are not omitted', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { tasks: [] } }]);
+      await callTool('listTasks', { listId: 'l1' });
+      assert.ok(calls[0].url.includes('include_timl=true'), calls[0].url);
+    });
+
+    it('omits include_timl when explicitly opted out', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { tasks: [] } }]);
+      await callTool('listTasks', { listId: 'l1', includeMultiListTasks: false });
+      assert.ok(!calls[0].url.includes('include_timl'), calls[0].url);
+    });
+
+    it('sends include_timl on the close-window path too', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { tasks: [] } }]);
+      await callTool('listTasks', { listId: 'l1', closedAfter: '2026-01-01' });
+      assert.ok(calls[0].url.includes('include_timl=true'), calls[0].url);
+    });
+
+    it('explains the rows whose List: line names a different list', async () => {
+      // Without this note a shared task reads as a bug: the caller asked for l1
+      // and got a row whose List: says Eng.
+      mockFetch([{
+        status: 200,
+        body: {
+          tasks: [
+            { id: 't1', name: 'Lives here', status: { status: 'open' }, list: { id: 'l1', name: 'Sprint 4' } },
+            { id: 't2', name: 'Shared in', status: { status: 'open' }, list: { id: 'l9', name: 'Eng' } },
+          ],
+        },
+      }]);
+      const result = await callTool('listTasks', { listId: 'l1' });
+      assert.ok(result.includes('1 of these live in another list'), result);
+      assert.ok(result.includes('t2 (home: Eng)'), result);
+    });
+
+    it('stays silent about shared tasks when there are none', async () => {
+      mockFetch([{
+        status: 200,
+        body: { tasks: [{ id: 't1', name: 'Lives here', status: { status: 'open' }, list: { id: 'l1', name: 'Sprint 4' } }] },
+      }]);
+      const result = await callTool('listTasks', { listId: 'l1' });
+      assert.ok(!result.includes('live in another list'));
+    });
+
     it('returns formatted task list', async () => {
       mockFetch([{
         status: 200,

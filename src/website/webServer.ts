@@ -4869,6 +4869,11 @@ function registerRestApiRoutes(app: express.Express): void {
       if (req.query.page) params.page = parseInt(req.query.page as string);
       if (req.query.orderBy) params.order_by = req.query.orderBy;
       if (req.query.statuses) params.statuses = Array.isArray(req.query.statuses) ? req.query.statuses : [req.query.statuses];
+      // Tasks in Multiple Lists, defaulted ON to match the listTasks MCP tool.
+      // ClickUp omits a task shared into this list unless include_timl is set,
+      // so the default answers "what is in this list" instead of "what has its
+      // home here" -- pass ?includeMultiListTasks=false to opt out.
+      params.include_timl = req.query.includeMultiListTasks !== 'false';
 
       const win = parseCloseWindow(req.query.closedAfter as string | undefined, req.query.closedBefore as string | undefined);
       if (win.error) { res.status(400).json({ error: win.error }); return; }
