@@ -828,6 +828,67 @@ describe('ClickUp server tools', () => {
       assert.ok(!result.includes('did NOT take effect'));
     });
 
+    // --- review follow-ups -------------------------------------------------
+
+    it('encodes IDs into the path so a "#" cannot silently retarget the write', async () => {
+      // Unencoded, `t1#x` truncates at the fragment and BOTH the pre-flight and
+      // the write would operate on `t1` while the tool reported `t1#x`.
+      const { calls } = mockFetch([
+        { status: 200, body: { id: 't1#x', name: 'Ship it', status: { status: 'open' }, list: { id: 'l1', name: 'Eng' } } },
+        { status: 200, body: { id: 'l2?a', name: 'Sprint 4' } },
+        { status: 200, text: '' },
+        { status: 200, body: { id: 't1#x', name: 'Ship it', status: { status: 'open' }, list: { id: 'l1', name: 'Eng' }, locations: [{ id: 'l2?a', name: 'Sprint 4' }] } },
+      ]);
+      await callTool('addTaskToList', { taskId: 't1#x', listId: 'l2?a' });
+      assert.ok(calls[0].url.endsWith('/task/t1%23x'), calls[0].url);
+      assert.ok(calls[1].url.endsWith('/list/l2%3Fa'), calls[1].url);
+      assert.ok(calls[2].url.endsWith('/list/l2%3Fa/task/t1%23x'), calls[2].url);
+    });
+
+    it('reports an unanswered write as UNKNOWN, never as "not changed"', async () => {
+      // A timeout or dropped connection can land AFTER ClickUp applied the
+      // write, so claiming the task was unchanged would be the same class of
+      // lie as reporting a silent no-op as success.
+      let call = 0;
+      globalThis.fetch = (async () => {
+        call++;
+        if (call === 1) {
+          return { ok: true, status: 200, text: async () => JSON.stringify(homeTask) } as any;
+        }
+        if (call === 2) {
+          return { ok: true, status: 200, text: async () => JSON.stringify({ id: 'l2', name: 'Sprint 4' }) } as any;
+        }
+        const err: any = new Error('The operation was aborted');
+        err.name = 'AbortError';
+        throw err;
+      }) as any;
+      await assert.rejects(
+        () => callTool('addTaskToList', { taskId: 't1', listId: 'l2' }),
+        (err: any) => {
+          assert.ok(err instanceof UserError);
+          assert.ok(err.message.includes('outcome is UNKNOWN'));
+          assert.ok(err.message.includes('Do not retry blindly'));
+          assert.ok(!err.message.includes('was not changed'));
+          // A transport failure must not be dressed up as the ClickApp being off.
+          assert.ok(!err.message.includes('Tasks in Multiple Lists'));
+          return true;
+        },
+      );
+    });
+
+    it('does not count a concurrent move into the home list as a successful share', async () => {
+      mockFetch([
+        { status: 200, body: homeTask },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 200, text: '' },
+        // Something else moved the task: l2 is now home, not an extra list.
+        { status: 200, body: { id: 't1', name: 'Ship it', status: { status: 'open' }, list: { id: 'l2', name: 'Sprint 4' }, locations: [] } },
+      ]);
+      const result = await callTool('addTaskToList', { taskId: 't1', listId: 'l2' });
+      assert.ok(result.includes('HOME list'));
+      assert.ok(result.includes('changed the task concurrently'));
+      assert.ok(!result.includes('It remains in its home list'));
+    });
     it('does not turn a failed verification read into a failed write', async () => {
       mockFetch([
         { status: 200, body: homeTask },
@@ -862,6 +923,25 @@ describe('ClickUp server tools', () => {
       assert.ok(calls[2].url.endsWith('/list/l2/task/t1'));
       assert.ok(result.includes('removed from list "Sprint 4" (l2)'));
       assert.ok(result.includes('not deleted'));
+    });
+
+    it('reads back a grammatical pre-flight failure for both directions', async () => {
+      mockFetch([{ status: 404, text: 'nope' }]);
+      await assert.rejects(
+        () => callTool('removeTaskFromList', { taskId: 't1', listId: 'l2' }),
+        (err: any) => {
+          assert.ok(err.message.startsWith('Cannot remove task t1 from list l2:'), err.message);
+          return true;
+        },
+      );
+      mockFetch([{ status: 404, text: 'nope' }]);
+      await assert.rejects(
+        () => callTool('addTaskToList', { taskId: 't1', listId: 'l2' }),
+        (err: any) => {
+          assert.ok(err.message.startsWith('Cannot add task t1 to list l2:'), err.message);
+          return true;
+        },
+      );
     });
 
     it('refuses the home list without spending a call on it', async () => {
@@ -913,6 +993,18 @@ describe('ClickUp server tools', () => {
       ]);
       const result = await callTool('removeTaskFromList', { taskId: 't1', listId: 'l2' });
       assert.ok(result.includes('did NOT take effect'));
+    });
+
+    it('names the home list when a concurrent move left the task there', async () => {
+      mockFetch([
+        { status: 200, body: shared },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 200, text: '' },
+        { status: 200, body: { ...shared, list: { id: 'l2', name: 'Sprint 4' }, locations: [] } },
+      ]);
+      const result = await callTool('removeTaskFromList', { taskId: 't1', listId: 'l2' });
+      assert.ok(result.includes('did NOT take effect'));
+      assert.ok(result.includes('as its home list'));
     });
   });
 
