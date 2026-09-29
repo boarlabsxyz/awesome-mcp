@@ -849,6 +849,26 @@ async function reportMultiListOutcome(
 }
 
 /**
+ * The parameters both multi-list tools take.
+ *
+ * Shared rather than written twice because the two are token-identical, and
+ * because the home-list rule belongs in ONE place: it constrains both
+ * directions, just for opposite reasons — ClickUp cannot remove a task from its
+ * home list, and adding a task to its own home list is a no-op it answers 200
+ * to. The per-direction wording lives in each tool's description instead.
+ */
+const MULTI_LIST_PARAMS = z.object({
+  taskId: z.string().min(1).describe(
+    'The task whose additional-list membership changes. Must be a ClickUp internal task ID — custom task IDs are '
+    + 'not supported here.',
+  ),
+  listId: z.string().min(1).describe(
+    'The ADDITIONAL list (from listLists), never the task\'s own home list. The home list is not a valid target in '
+    + 'either direction: ClickUp cannot remove a task from it, and adding a task to it changes nothing.',
+  ),
+});
+
+/**
  * Everything both multi-list tools do before they diverge: acquire the client
  * (which is also the auth guard), normalise the two IDs, leave the breadcrumb,
  * and run the hard-gate pre-flight.
@@ -887,14 +907,7 @@ clickUpServer.addTool({
   annotations: { readOnlyHint: false },
   description: 'Add an existing task to an ADDITIONAL ClickUp list while it stays in its current list (the Tasks in '
     + 'Multiple Lists ClickApp). Use moveTask instead to relocate a task rather than share it into a second place.',
-  parameters: z.object({
-    taskId: z.string().min(1).describe(
-      'The task to share into another list. Must be a ClickUp internal task ID — custom task IDs are not supported here.',
-    ),
-    listId: z.string().min(1).describe(
-      'The ADDITIONAL list to add the task to (from listLists). The task keeps its existing home list; this does not move it.',
-    ),
-  }),
+  parameters: MULTI_LIST_PARAMS,
   execute: async (args, { session, log }) => {
     const { client, taskId, listId, task, taskLabel, listLabel } = await beginMultiListWrite(session, log, args, 'add');
 
@@ -924,14 +937,7 @@ clickUpServer.addTool({
   annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Remove a task from one of its ADDITIONAL ClickUp lists (Tasks in Multiple Lists). The task itself is '
     + 'not deleted and stays in its home list, which ClickUp will not let you remove it from.',
-  parameters: z.object({
-    taskId: z.string().min(1).describe(
-      'The task to withdraw from an additional list. Must be a ClickUp internal task ID — custom task IDs are not supported here.',
-    ),
-    listId: z.string().min(1).describe(
-      'The additional list to remove the task from. Cannot be the task\'s home list — ClickUp has no way to remove a task from that.',
-    ),
-  }),
+  parameters: MULTI_LIST_PARAMS,
   execute: async (args, { session, log }) => {
     const { client, taskId, listId, task, taskLabel, listLabel } = await beginMultiListWrite(session, log, args, 'remove');
 
