@@ -68,6 +68,20 @@ export function formatTask(task: any, opts: { fullDescription?: boolean } = {}):
   if (task.archived) parts.push('  Archived: yes');
   if (task.url) parts.push(`  URL: ${task.url}`);
   if (task.list) parts.push(`  List: ${task.list.name} (${task.list.id})`);
+  // Tasks in Multiple Lists. Without this, addTaskToList is write-only: a task
+  // could be shared into three more lists with no tool in this server able to
+  // show it. Rendering the *extra* lists only, rather than `locations` verbatim,
+  // is what keeps it silent for the overwhelmingly common single-list task --
+  // ClickUp's schema calls `locations` "Lists where the task has been added"
+  // without saying whether the home list is among them, and subtracting
+  // `task.list` is correct either way (same suppression rule as
+  // `Top-level parent`, which may or may not echo the task's own id).
+  if (Array.isArray(task.locations)) {
+    const extra = task.locations.filter((l: any) => l && String(l.id) !== String(task.list?.id));
+    if (extra.length) {
+      parts.push(`  Also in lists: ${extra.map((l: any) => `${l.name ?? 'unnamed'} (${l.id})`).join(', ')}`);
+    }
+  }
   // ClickUp returns `parent` / `top_level_parent` as bare task IDs and carries
   // no parent NAME anywhere in the payload, so a list rendering can only print
   // the ID -- call getTask on it when the name is needed. Surfacing it here

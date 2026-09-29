@@ -83,14 +83,15 @@ describe('ClickUp server tools', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('should have registered all 48 tools', () => {
-    // 46 ClickUp-specific tools (incl. tag-management + filterTeamTasks +
+  it('should have registered all 50 tools', () => {
+    // 48 ClickUp-specific tools (incl. tag-management + filterTeamTasks +
     // subscribeToTaskEvents + getTaskEventHistory + listTaskEventSubscriptions
     // + debugTaskEventSubscription + unsubscribeFromTaskEvents + listTaskTypes
-    // + doc-image tools insertImageIntoPage + uploadClickUpDocImage) + 2 shared
+    // + doc-image tools insertImageIntoPage + uploadClickUpDocImage
+    // + Tasks-in-Multiple-Lists addTaskToList + removeTaskFromList) + 2 shared
     // (mintRestBearerForCurl, listRestEndpoints) registered on every FastMCP
     // server.
-    assert.equal(toolMap.size, 48);
+    assert.equal(toolMap.size, 50);
   });
 
   // === getClickUpClient / auth guard ===
@@ -677,6 +678,377 @@ describe('ClickUp server tools', () => {
       assert.equal(calls[0].method, 'POST');
       // moveTask changes the LIST only. Re-parenting lives on updateTask.
       assert.equal(JSON.parse(calls[0].body!).parent, undefined);
+    });
+  });
+
+  // === Tasks in Multiple Lists ===
+  //
+  // The whole point of these two tools is that ClickUp's 401 is ambiguous
+  // between a disabled ClickApp, a revoked token and an unresolvable ID, so most
+  // of what is asserted here is which explanation the caller gets.
+  describe('addTaskToList', () => {
+    const homeTask = { id: 't1', name: 'Ship it', status: { status: 'open' }, list: { id: 'l1', name: 'Eng' } };
+
+    it('pre-flights task + list, writes, then verifies membership', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: homeTask },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 200, text: '' },
+        { status: 200, body: { ...homeTask, locations: [{ id: 'l1', name: 'Eng' }, { id: 'l2', name: 'Sprint 4' }] } },
+      ]);
+      const result = await callTool('addTaskToList', { taskId: 't1', listId: 'l2' });
+      assert.equal(calls.length, 4);
+      assert.ok(calls[0].url.endsWith('/task/t1'));
+      assert.ok(calls[1].url.endsWith('/list/l2'));
+      assert.equal(calls[2].method, 'POST');
+      assert.ok(calls[2].url.endsWith('/list/l2/task/t1'));
+      assert.ok(result.includes('added to list "Sprint 4" (l2)'));
+      // The rendered task proves the read half works too: without `Also in
+      // lists` the write would be unobservable through this server.
+      assert.ok(result.includes('Also in lists: Sprint 4 (l2)'));
+      assert.ok(!result.includes('Also in lists: Eng'));
+    });
+
+    it('trims its arguments before using them as identifiers', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: homeTask },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 200, text: '' },
+        { status: 200, body: { ...homeTask, locations: [{ id: 'l2', name: 'Sprint 4' }] } },
+      ]);
+      await callTool('addTaskToList', { taskId: ' t1 ', listId: ' l2 ' });
+      assert.ok(calls[2].url.endsWith('/list/l2/task/t1'));
+    });
+
+    it('blames the ClickApp for a 401 only after both reads succeeded', async () => {
+      mockFetch([
+        { status: 200, body: homeTask },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 401, text: '{"err":"Team not authorized","ECODE":"OAUTH_027"}' },
+      ]);
+      await assert.rejects(
+        () => callTool('addTaskToList', { taskId: 't1', listId: 'l2' }),
+        (err: any) => {
+          assert.ok(err instanceof UserError);
+          assert.ok(err.message.includes('Tasks in Multiple Lists'));
+          assert.ok(err.message.includes('neither the connection nor either ID'));
+          // The raw body is kept for the rare case it is something else.
+          assert.ok(err.message.includes('OAUTH_027'));
+          return true;
+        },
+      );
+    });
+
+    it('does not blame the ClickApp for a non-401 refusal', async () => {
+      mockFetch([
+        { status: 200, body: homeTask },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 403, text: 'nope' },
+      ]);
+      await assert.rejects(
+        () => callTool('addTaskToList', { taskId: 't1', listId: 'l2' }),
+        (err: any) => {
+          assert.ok(!err.message.includes('Tasks in Multiple Lists'));
+          // A 4xx IS a refusal, so claiming nothing changed is a fact here.
+          assert.ok(err.message.includes('refused'));
+          assert.ok(err.message.includes('the task was not changed'));
+          assert.ok(err.message.includes('nope'));
+          return true;
+        },
+      );
+    });
+
+    it('treats an answered 5xx as an unknown outcome, not as a refusal', async () => {
+      // ClickUp answering 500/502/504 does not mean it declined: a 500 can be
+      // raised after the write committed and a 502 is usually a proxy that never
+      // learned either, so "the task was not changed" would be an overclaim.
+      for (const status of [500, 502, 504]) {
+        mockFetch([
+          { status: 200, body: homeTask },
+          { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+          { status, text: 'boom' },
+        ]);
+        await assert.rejects(
+          () => callTool('addTaskToList', { taskId: 't1', listId: 'l2' }),
+          (err: any) => {
+            assert.ok(err.message.includes('outcome is UNKNOWN'), `${status}: ${err.message}`);
+            assert.ok(err.message.includes(`answered with ${status}`), `${status}: ${err.message}`);
+            assert.ok(!err.message.includes('was not changed'), `${status}: ${err.message}`);
+            assert.ok(!err.message.includes('Tasks in Multiple Lists'), `${status}: ${err.message}`);
+            assert.ok(err.message.includes('boom'));
+            return true;
+          },
+        );
+      }
+    });
+
+    it('still reports a 401 as a refusal, with the ClickApp explanation', async () => {
+      mockFetch([
+        { status: 200, body: homeTask },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 401, text: '{"ECODE":"OAUTH_027"}' },
+      ]);
+      await assert.rejects(
+        () => callTool('removeTaskFromList', { taskId: 't1', listId: 'l2' }),
+        (err: any) => {
+          assert.ok(err.message.includes('refused'));
+          assert.ok(err.message.includes('the task was not changed'));
+          assert.ok(err.message.includes('Tasks in Multiple Lists'));
+          return true;
+        },
+      );
+    });
+
+    it('names the task when the task read fails, and sends nothing', async () => {
+      const { calls } = mockFetch([{ status: 401, text: '{"ECODE":"OAUTH_027"}' }]);
+      await assert.rejects(
+        () => callTool('addTaskToList', { taskId: 'nope', listId: 'l2' }),
+        (err: any) => {
+          assert.ok(err.message.includes('task nope was not found'));
+          assert.ok(!err.message.includes('Tasks in Multiple Lists'));
+          return true;
+        },
+      );
+      assert.equal(calls.length, 1);
+    });
+
+    it('names the list when the list read fails, and sends nothing', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: homeTask },
+        { status: 401, text: '{"ECODE":"OAUTH_027"}' },
+      ]);
+      await assert.rejects(
+        () => callTool('addTaskToList', { taskId: 't1', listId: 'bogus' }),
+        (err: any) => {
+          assert.ok(err.message.includes('list bogus was not found'));
+          assert.ok(!err.message.includes('Tasks in Multiple Lists'));
+          return true;
+        },
+      );
+      assert.equal(calls.length, 2);
+    });
+
+    it('refuses the home list as a no-op instead of reporting a share', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: homeTask },
+        { status: 200, body: { id: 'l1', name: 'Eng' } },
+      ]);
+      const result = await callTool('addTaskToList', { taskId: 't1', listId: 'l1' });
+      assert.equal(calls.length, 2);
+      assert.ok(result.includes('already the home list'));
+      assert.ok(result.includes('moveTask'));
+    });
+
+    it('skips the write when the task is already in the list', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: { ...homeTask, locations: [{ id: 'l2', name: 'Sprint 4' }] } },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+      ]);
+      const result = await callTool('addTaskToList', { taskId: 't1', listId: 'l2' });
+      assert.equal(calls.length, 2);
+      assert.ok(result.includes('already in list'));
+    });
+
+    it('reports a silent no-op as not having taken effect', async () => {
+      mockFetch([
+        { status: 200, body: homeTask },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 200, text: '' },
+        { status: 200, body: { ...homeTask, locations: [{ id: 'l1', name: 'Eng' }] } },
+      ]);
+      const result = await callTool('addTaskToList', { taskId: 't1', listId: 'l2' });
+      assert.ok(result.includes('did NOT take effect'));
+    });
+
+    it('separates "no membership data" from "did not take effect"', async () => {
+      mockFetch([
+        { status: 200, body: homeTask },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 200, text: '' },
+        { status: 200, body: homeTask },   // no `locations` key at all
+      ]);
+      const result = await callTool('addTaskToList', { taskId: 't1', listId: 'l2' });
+      assert.ok(result.includes('requested state rather than a confirmed one'));
+      assert.ok(!result.includes('did NOT take effect'));
+    });
+
+    // --- review follow-ups -------------------------------------------------
+
+    it('encodes IDs into the path so a "#" cannot silently retarget the write', async () => {
+      // Unencoded, `t1#x` truncates at the fragment and BOTH the pre-flight and
+      // the write would operate on `t1` while the tool reported `t1#x`.
+      const { calls } = mockFetch([
+        { status: 200, body: { id: 't1#x', name: 'Ship it', status: { status: 'open' }, list: { id: 'l1', name: 'Eng' } } },
+        { status: 200, body: { id: 'l2?a', name: 'Sprint 4' } },
+        { status: 200, text: '' },
+        { status: 200, body: { id: 't1#x', name: 'Ship it', status: { status: 'open' }, list: { id: 'l1', name: 'Eng' }, locations: [{ id: 'l2?a', name: 'Sprint 4' }] } },
+      ]);
+      await callTool('addTaskToList', { taskId: 't1#x', listId: 'l2?a' });
+      assert.ok(calls[0].url.endsWith('/task/t1%23x'), calls[0].url);
+      assert.ok(calls[1].url.endsWith('/list/l2%3Fa'), calls[1].url);
+      assert.ok(calls[2].url.endsWith('/list/l2%3Fa/task/t1%23x'), calls[2].url);
+    });
+
+    it('reports an unanswered write as UNKNOWN, never as "not changed"', async () => {
+      // A timeout or dropped connection can land AFTER ClickUp applied the
+      // write, so claiming the task was unchanged would be the same class of
+      // lie as reporting a silent no-op as success.
+      let call = 0;
+      globalThis.fetch = (async () => {
+        call++;
+        if (call === 1) {
+          return { ok: true, status: 200, text: async () => JSON.stringify(homeTask) } as any;
+        }
+        if (call === 2) {
+          return { ok: true, status: 200, text: async () => JSON.stringify({ id: 'l2', name: 'Sprint 4' }) } as any;
+        }
+        const err: any = new Error('The operation was aborted');
+        err.name = 'AbortError';
+        throw err;
+      }) as any;
+      await assert.rejects(
+        () => callTool('addTaskToList', { taskId: 't1', listId: 'l2' }),
+        (err: any) => {
+          assert.ok(err instanceof UserError);
+          assert.ok(err.message.includes('outcome is UNKNOWN'));
+          assert.ok(err.message.includes('Do not retry blindly'));
+          assert.ok(!err.message.includes('was not changed'));
+          // A transport failure must not be dressed up as the ClickApp being off.
+          assert.ok(!err.message.includes('Tasks in Multiple Lists'));
+          return true;
+        },
+      );
+    });
+
+    it('does not count a concurrent move into the home list as a successful share', async () => {
+      mockFetch([
+        { status: 200, body: homeTask },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 200, text: '' },
+        // Something else moved the task: l2 is now home, not an extra list.
+        { status: 200, body: { id: 't1', name: 'Ship it', status: { status: 'open' }, list: { id: 'l2', name: 'Sprint 4' }, locations: [] } },
+      ]);
+      const result = await callTool('addTaskToList', { taskId: 't1', listId: 'l2' });
+      assert.ok(result.includes('HOME list'));
+      assert.ok(result.includes('changed the task concurrently'));
+      assert.ok(!result.includes('It remains in its home list'));
+    });
+    it('does not turn a failed verification read into a failed write', async () => {
+      mockFetch([
+        { status: 200, body: homeTask },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 200, text: '' },
+        { status: 500, text: 'boom' },
+      ]);
+      const result = await callTool('addTaskToList', { taskId: 't1', listId: 'l2' });
+      assert.ok(result.includes('verification read failed'));
+      assert.ok(result.includes('not a confirmed one'));
+    });
+  });
+
+  describe('removeTaskFromList', () => {
+    const shared = {
+      id: 't1',
+      name: 'Ship it',
+      status: { status: 'open' },
+      list: { id: 'l1', name: 'Eng' },
+      locations: [{ id: 'l1', name: 'Eng' }, { id: 'l2', name: 'Sprint 4' }],
+    };
+
+    it('removes from an additional list and verifies the absence', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: shared },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 200, text: '' },
+        { status: 200, body: { ...shared, locations: [{ id: 'l1', name: 'Eng' }] } },
+      ]);
+      const result = await callTool('removeTaskFromList', { taskId: 't1', listId: 'l2' });
+      assert.equal(calls[2].method, 'DELETE');
+      assert.ok(calls[2].url.endsWith('/list/l2/task/t1'));
+      assert.ok(result.includes('removed from list "Sprint 4" (l2)'));
+      assert.ok(result.includes('not deleted'));
+    });
+
+    it('reads back a grammatical pre-flight failure for both directions', async () => {
+      mockFetch([{ status: 404, text: 'nope' }]);
+      await assert.rejects(
+        () => callTool('removeTaskFromList', { taskId: 't1', listId: 'l2' }),
+        (err: any) => {
+          assert.ok(err.message.startsWith('Cannot remove task t1 from list l2:'), err.message);
+          return true;
+        },
+      );
+      mockFetch([{ status: 404, text: 'nope' }]);
+      await assert.rejects(
+        () => callTool('addTaskToList', { taskId: 't1', listId: 'l2' }),
+        (err: any) => {
+          assert.ok(err.message.startsWith('Cannot add task t1 to list l2:'), err.message);
+          return true;
+        },
+      );
+    });
+
+    it('refuses the home list without spending a call on it', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: shared },
+        { status: 200, body: { id: 'l1', name: 'Eng' } },
+      ]);
+      const result = await callTool('removeTaskFromList', { taskId: 't1', listId: 'l1' });
+      assert.equal(calls.length, 2);
+      assert.ok(result.includes('home list'));
+      assert.ok(result.includes('Nothing was changed'));
+    });
+
+    it('skips the write when the task is not in that list', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: shared },
+        { status: 200, body: { id: 'l9', name: 'Other' } },
+      ]);
+      const result = await callTool('removeTaskFromList', { taskId: 't1', listId: 'l9' });
+      assert.equal(calls.length, 2);
+      assert.ok(result.includes('is not in list'));
+    });
+
+    it('still calls through when ClickUp reported no memberships at all', async () => {
+      // An absent `locations` array is not evidence the task is in no extra
+      // list -- it is what a disabled ClickApp looks like, and that diagnosis
+      // belongs to the 401 path, not to a fabricated "nothing to do".
+      const { calls } = mockFetch([
+        { status: 200, body: { id: 't1', name: 'Ship it', status: { status: 'open' }, list: { id: 'l1', name: 'Eng' } } },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 401, text: '{"err":"Team not authorized","ECODE":"OAUTH_027"}' },
+      ]);
+      await assert.rejects(
+        () => callTool('removeTaskFromList', { taskId: 't1', listId: 'l2' }),
+        (err: any) => {
+          assert.ok(err.message.includes('Tasks in Multiple Lists'));
+          return true;
+        },
+      );
+      assert.equal(calls.length, 3);
+    });
+
+    it('reports a silent no-op as not having taken effect', async () => {
+      mockFetch([
+        { status: 200, body: shared },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 200, text: '' },
+        { status: 200, body: shared },
+      ]);
+      const result = await callTool('removeTaskFromList', { taskId: 't1', listId: 'l2' });
+      assert.ok(result.includes('did NOT take effect'));
+    });
+
+    it('names the home list when a concurrent move left the task there', async () => {
+      mockFetch([
+        { status: 200, body: shared },
+        { status: 200, body: { id: 'l2', name: 'Sprint 4' } },
+        { status: 200, text: '' },
+        { status: 200, body: { ...shared, list: { id: 'l2', name: 'Sprint 4' }, locations: [] } },
+      ]);
+      const result = await callTool('removeTaskFromList', { taskId: 't1', listId: 'l2' });
+      assert.ok(result.includes('did NOT take effect'));
+      assert.ok(result.includes('as its home list'));
     });
   });
 

@@ -5,6 +5,8 @@ import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import {
   ClickUpClient,
+  clickUpErrorStatus,
+  clickUpErrorWasAnswered,
   collectTasksInCloseWindow,
   cursorFromEnvelope,
   DOCS_MAX_PAGES,
@@ -619,6 +621,345 @@ clickUpServer.addTool({
     const client = getClickUpClient(session);
     await client.moveTask(args.taskId, args.listId);
     return `Task ${args.taskId} moved to list ${args.listId}.`;
+  },
+});
+
+// === Tasks in Multiple Lists ===
+//
+// ClickUp's two multi-list endpoints share one diagnostic problem, and these
+// helpers are the whole of the fix. `POST`/`DELETE /list/{listId}/task/{taskId}`
+// answer 401 when the "Tasks in Multiple Lists" ClickApp is switched off -- the
+// SAME status ClickUp returns for a revoked token and for an ID it cannot
+// resolve (OAUTH_027 "Team not authorized"; see the re-parent pre-flight in
+// updateTask), with nothing in the body separating the four cases. A bare
+// "ClickUp API error (401)" therefore sends the user to re-issue a credential
+// that works perfectly, which is the failure being reported. Since the response
+// cannot be read to tell which cause it is, the only honest route is to rule the
+// others out first: read the task, read the list, and only then attribute a 401
+// to the ClickApp -- and say so only when the status actually looks like one.
+//
+// Add and remove are deliberately driven through ONE set of helpers below,
+// parameterised by direction. The two tools differ only in a verb and in which
+// membership they expect afterwards; duplicating the pre-flight, the error
+// attribution and the four-way verdict would mean the honesty rules could drift
+// apart between them, which is the one thing this code exists to guarantee.
+
+const UNRESOLVED_ID_401_NOTE =
+  'ClickUp reports an ID it cannot resolve as 401 "Team not authorized"/OAUTH_027, which reads like an auth failure '
+  + 'but is not — the connection is fine if other ClickUp tools are working.';
+
+const MULTI_LIST_CLICKAPP_NOTE =
+  'This is almost certainly the "Tasks in Multiple Lists" ClickApp being switched off: ClickUp answers a disabled '
+  + 'ClickApp with 401, which reads as an authentication failure, but this call had already read both the task and '
+  + 'the list successfully — so neither the connection nor either ID is the problem. A Workspace owner or admin '
+  + 'enables it in ClickUp under Settings → ClickApps → "Tasks in Multiple Lists"; it can also be toggled per Space, '
+  + 'so check the Space containing this list. Sharing a SUBTASK into another list needs the separate "Subtasks in '
+  + 'Multiple Lists" ClickApp as well.';
+
+/** Which way a multi-list write is going. The two tools differ only in this. */
+type MultiListAction = 'add' | 'remove';
+
+const MULTI_LIST_VERBS: Record<MultiListAction, {
+  tool: string; bare: string; gerund: string; preposition: string;
+}> = {
+  add: { tool: 'addTaskToList', bare: 'add', gerund: 'adding', preposition: 'to' },
+  remove: { tool: 'removeTaskFromList', bare: 'remove', gerund: 'removing', preposition: 'from' },
+};
+
+/**
+ * The lists a task has been shared into, per ClickUp's `locations`.
+ *
+ * Returns undefined -- not [] -- when the payload carries no array, because
+ * "shared into nothing" and "ClickUp did not tell us" must not lead to the same
+ * decision: the first is safe to act on (refuse a duplicate add, refuse a
+ * pointless remove), the second is absence of evidence and has to fall through
+ * to the API and let the 401 path explain itself.
+ */
+function taskLocationIds(task: any): string[] | undefined {
+  if (!Array.isArray(task?.locations)) return undefined;
+  return task.locations.filter((l: any) => l?.id !== undefined).map((l: any) => String(l.id));
+}
+
+/**
+ * Hard gate for both multi-list tools: resolve the task and the list before
+ * anything is mutated.
+ *
+ * Three jobs, all load-bearing. It attributes a bad ID to the ID that is bad
+ * instead of leaving the caller to guess which of the two arguments ClickUp
+ * objected to; it is the only source of the two NAMES the confirmation quotes,
+ * since these endpoints answer with an empty body; and by proving the connection
+ * can read both, it is what earns the right to blame a later 401 on the
+ * ClickApp. Safe to throw from -- nothing has been sent yet.
+ */
+async function resolveMultiListTargets(
+  client: ClickUpClient,
+  taskId: string,
+  listId: string,
+  action: string,
+): Promise<{ task: any; list: any }> {
+  let task: any;
+  try {
+    task = await client.getTask(taskId);
+  } catch (err: any) {
+    throw new UserError(
+      `Cannot ${action}: task ${taskId} was not found or is not visible to this connection, so nothing was changed. `
+      + `Check it is a ClickUp internal task ID — custom task IDs are not supported here. ${UNRESOLVED_ID_401_NOTE} `
+      + `ClickUp said: ${String(err?.message || err)}`,
+    );
+  }
+  if (!task?.id) {
+    throw new UserError(`Cannot ${action}: ClickUp returned no task for ID ${taskId}. Nothing was changed.`);
+  }
+  let list: any;
+  try {
+    list = await client.getList(listId);
+  } catch (err: any) {
+    throw new UserError(
+      `Cannot ${action}: list ${listId} was not found or is not visible to this connection, so nothing was changed. `
+      + `Use listLists to find the list ID. ${UNRESOLVED_ID_401_NOTE} ClickUp said: ${String(err?.message || err)}`,
+    );
+  }
+  if (!list?.id) {
+    throw new UserError(`Cannot ${action}: ClickUp returned no list for ID ${listId}. Nothing was changed.`);
+  }
+  return { task, list };
+}
+
+/**
+ * Turn a failed multi-list write into one message, without overclaiming.
+ *
+ * The line that matters is not whether ClickUp answered but whether it answered
+ * that it REFUSED. Only a 4xx is a refusal, and only then is "the task was not
+ * changed" a fact. Everything else leaves the outcome genuinely UNKNOWN, and
+ * that covers two cases that feel different and are not:
+ *
+ *   - no answer at all (timeout, dropped connection) — the failure can land
+ *     after ClickUp has already applied the write;
+ *   - an answered 5xx — a 500 can be raised after the write committed, and a
+ *     502/504 is usually a proxy that never learned the outcome either.
+ *
+ * Reporting either as "not changed" is the same class of lie as reporting a
+ * silent no-op as success, which is the failure this whole module exists to
+ * remove. The ClickApp note stays pinned to an answered 401 specifically, never
+ * to a transport failure or a 5xx body that merely mentions one.
+ */
+function multiListWriteError(
+  action: MultiListAction,
+  err: unknown,
+  taskId: string,
+  taskLabel: string,
+  listLabel: string,
+): UserError {
+  const verbs = MULTI_LIST_VERBS[action];
+  const raw = String((err as any)?.message || err);
+  const attempt = `${verbs.gerund} task ${taskLabel} ${verbs.preposition} list ${listLabel}`;
+  const status = clickUpErrorStatus(err);
+  const refused = clickUpErrorWasAnswered(err) && status !== undefined && status < 500;
+
+  if (!refused) {
+    const cause = status === undefined
+      ? 'failed before ClickUp answered'
+      : `was answered with ${status}, a server-side error that does not say whether the write was applied`;
+    return new UserError(
+      `The request ${attempt} ${cause}, so the outcome is UNKNOWN — ClickUp may or may not have applied it. Do not `
+      + `retry blindly: call getTask("${taskId}") and check whether the list is listed, then retry only if it is `
+      + `not. ClickUp said: ${raw}`,
+    );
+  }
+
+  return new UserError(
+    `ClickUp refused ${attempt} (HTTP ${status}); the task was not changed. `
+    + (status === 401 ? `${MULTI_LIST_CLICKAPP_NOTE} ` : '') + `ClickUp said: ${raw}`,
+  );
+}
+
+/**
+ * Re-read the task after a successful write and report what is actually true.
+ *
+ * Both endpoints answer 200 with an empty body, so without this a silent no-op
+ * is indistinguishable from success — the same reasoning as the re-parent
+ * verification in updateTask. The verdict is four-way rather than two because
+ * collapsing them would turn a write that DID happen into an error: a failed
+ * re-read reports the requested state, a payload with no `locations` array
+ * reports unconfirmed, and only a payload that actually disagrees is reported as
+ * not having taken effect.
+ *
+ * The home-list case is called out separately on the add path. `locations` not
+ * containing the list while the task's home list IS that list means the task was
+ * moved rather than shared — which these tools explicitly do not promise — so
+ * counting it as presence would misreport a concurrent moveTask as a successful
+ * share.
+ */
+async function reportMultiListOutcome(
+  client: ClickUpClient,
+  action: MultiListAction,
+  taskId: string,
+  listId: string,
+  taskLabel: string,
+  listLabel: string,
+  homeList: { name?: string; id?: string },
+): Promise<string> {
+  const verbs = MULTI_LIST_VERBS[action];
+  const accepted = `ClickUp accepted ${verbs.gerund} task ${taskLabel} ${verbs.preposition} list ${listLabel} (HTTP 200)`;
+
+  let verified: any;
+  try {
+    verified = await client.getTask(taskId);
+  } catch {
+    return `${accepted}, but the follow-up verification read failed — this is the requested state, not a confirmed `
+      + `one. Call getTask("${taskId}") to confirm.`;
+  }
+
+  const ids = taskLocationIds(verified);
+  if (!ids) {
+    // Deliberately does NOT blame the ClickApp: the write returned 200, which a
+    // disabled ClickApp would not have. The cause is unknown, so the message
+    // reports what is and is not known rather than inventing one.
+    return `${accepted}, but the follow-up read returned no list-membership data at all, so this is the requested `
+      + `state rather than a confirmed one. Call getTask("${taskId}") or open the list in ClickUp to check.`
+      + `\n\n${formatTask(verified)}`;
+  }
+
+  const inAdditional = ids.includes(listId);
+  const isHome = String(verified.list?.id) === listId;
+
+  if (action === 'add') {
+    if (inAdditional) {
+      return `Task ${taskLabel} added to list ${listLabel}. It remains in its home list `
+        + `"${homeList.name ?? 'unknown'}" (${homeList.id ?? 'unknown'}).\n\n${formatTask(verified)}`;
+    }
+    if (isHome) {
+      return `⚠ Task ${taskLabel} now reports ${listLabel} as its HOME list, not as an additional one. That is a `
+        + `move, not the share this tool performs, so something else changed the task concurrently — do not treat `
+        + `this as a confirmed multi-list membership. Current state:\n${formatTask(verified)}`;
+    }
+    return `⚠ The add did NOT take effect. ${accepted} but task ${taskLabel} still does not list ${listLabel} among `
+      + `its lists. ClickUp reports no error for this, so a silent no-op is the only signal — do not treat the task `
+      + `as shared. Current state:\n${formatTask(verified)}`;
+  }
+
+  if (!inAdditional && !isHome) {
+    return `Task ${taskLabel} removed from list ${listLabel}. The task itself was not deleted and still lives in `
+      + `"${verified.list?.name ?? homeList.name ?? 'unknown'}" (${verified.list?.id ?? homeList.id ?? 'unknown'}).`
+      + `\n\n${formatTask(verified)}`;
+  }
+  return `⚠ The removal did NOT take effect. ${accepted} but task ${taskLabel} still lists ${listLabel}`
+    + (isHome ? ' (as its home list)' : '') + `. ClickUp reports no error for this, so a silent no-op is the only `
+    + `signal — do not treat the task as removed. Current state:\n${formatTask(verified)}`;
+}
+
+/**
+ * Everything both multi-list tools do before they diverge: acquire the client
+ * (which is also the auth guard), normalise the two IDs, leave the breadcrumb,
+ * and run the hard-gate pre-flight.
+ *
+ * Shared rather than written twice so the pre-flight can never be skipped on one
+ * path -- it is what earns the right to blame a later 401 on the ClickApp, so a
+ * tool that quietly lost it would start reporting a credential problem again.
+ */
+async function beginMultiListWrite(
+  session: UserSession | undefined,
+  log: { info: (msg: string) => void },
+  args: { taskId: string; listId: string },
+  action: MultiListAction,
+): Promise<{
+  client: ClickUpClient; taskId: string; listId: string;
+  task: any; list: any; taskLabel: string; listLabel: string;
+}> {
+  const client = getClickUpClient(session);
+  const taskId = args.taskId.trim();
+  const listId = args.listId.trim();
+  const verbs = MULTI_LIST_VERBS[action];
+  log.info(`${verbs.tool} task=${taskId} list=${listId}`);
+  const { task, list } = await resolveMultiListTargets(
+    client, taskId, listId,
+    `${verbs.bare} task ${taskId} ${verbs.preposition} list ${listId}`,
+  );
+  return {
+    client, taskId, listId, task, list,
+    taskLabel: `${taskId} ("${task.name ?? 'unnamed'}")`,
+    listLabel: `"${list.name ?? 'unnamed'}" (${listId})`,
+  };
+}
+
+clickUpServer.addTool({
+  name: 'addTaskToList',
+  annotations: { readOnlyHint: false },
+  description: 'Add an existing task to an ADDITIONAL ClickUp list while it stays in its current list (the Tasks in '
+    + 'Multiple Lists ClickApp). Use moveTask instead to relocate a task rather than share it into a second place.',
+  parameters: z.object({
+    taskId: z.string().min(1).describe(
+      'The task to share into another list. Must be a ClickUp internal task ID — custom task IDs are not supported here.',
+    ),
+    listId: z.string().min(1).describe(
+      'The ADDITIONAL list to add the task to (from listLists). The task keeps its existing home list; this does not move it.',
+    ),
+  }),
+  execute: async (args, { session, log }) => {
+    const { client, taskId, listId, task, taskLabel, listLabel } = await beginMultiListWrite(session, log, args, 'add');
+
+    // Both no-op cases are reported rather than sent. ClickUp accepts them and
+    // answers 200 with an empty body, so calling through would report a share
+    // that never happened -- and for the home list there is no share to make.
+    if (String(task.list?.id) === listId) {
+      return `Nothing to do: ${listLabel} is already the home list of task ${taskLabel}, not an additional one. `
+        + `Pass a different list to share the task into, or use moveTask to relocate it.`;
+    }
+    if (taskLocationIds(task)?.includes(listId)) {
+      return `Nothing to do: task ${taskLabel} is already in list ${listLabel}.\n\n${formatTask(task)}`;
+    }
+
+    try {
+      await client.addTaskToList(listId, taskId);
+    } catch (err: any) {
+      throw multiListWriteError('add', err, taskId, taskLabel, listLabel);
+    }
+    log.info(`[clickup-multilist] add task=${taskId} list=${listId}`);
+    return reportMultiListOutcome(client, 'add', taskId, listId, taskLabel, listLabel, task.list ?? {});
+  },
+});
+
+clickUpServer.addTool({
+  name: 'removeTaskFromList',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Remove a task from one of its ADDITIONAL ClickUp lists (Tasks in Multiple Lists). The task itself is '
+    + 'not deleted and stays in its home list, which ClickUp will not let you remove it from.',
+  parameters: z.object({
+    taskId: z.string().min(1).describe(
+      'The task to withdraw from an additional list. Must be a ClickUp internal task ID — custom task IDs are not supported here.',
+    ),
+    listId: z.string().min(1).describe(
+      'The additional list to remove the task from. Cannot be the task\'s home list — ClickUp has no way to remove a task from that.',
+    ),
+  }),
+  execute: async (args, { session, log }) => {
+    const { client, taskId, listId, task, taskLabel, listLabel } = await beginMultiListWrite(session, log, args, 'remove');
+
+    // ClickUp documents that a task cannot be removed from its home list, so
+    // this is refused with the reason instead of spending a call on a rejection
+    // whose 401/400 body would land back in the ClickApp ambiguity above.
+    if (String(task.list?.id) === listId) {
+      return `Refused: ${listLabel} is the home list of task ${taskLabel}, and ClickUp cannot remove a task from `
+        + `its home list — only from additional ones. Use moveTask to send it to a different list, or deleteTask to `
+        + `delete it. Nothing was changed.`;
+    }
+    // Only acted on when ClickUp actually told us the memberships; see
+    // taskLocationIds on why an absent array is not evidence of absence.
+    const existing = taskLocationIds(task);
+    if (existing && !existing.includes(listId)) {
+      return `Nothing to do: task ${taskLabel} is not in list ${listLabel}. Its lists: `
+        + `home "${task.list?.name ?? 'unknown'}" (${task.list?.id ?? 'unknown'})`
+        + (existing.length ? `, additional ${existing.join(', ')}` : ', no additional lists')
+        + `. Nothing was changed.`;
+    }
+
+    try {
+      await client.removeTaskFromList(listId, taskId);
+    } catch (err: any) {
+      throw multiListWriteError('remove', err, taskId, taskLabel, listLabel);
+    }
+    log.info(`[clickup-multilist] remove task=${taskId} list=${listId}`);
+    return reportMultiListOutcome(client, 'remove', taskId, listId, taskLabel, listLabel, task.list ?? {});
   },
 });
 

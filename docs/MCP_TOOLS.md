@@ -13,7 +13,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Drive](#google-drive) (15)
 - [Gmail](#gmail) (14)
 - [Google Slides](#google-slides) (6)
-- [ClickUp](#clickup) (46)
+- [ClickUp](#clickup) (48)
 - [Slack (bot)](#slack-bot-) (8)
 - [Slack (user)](#slack-user-) (16)
 - [Outline](#outline) (27)
@@ -158,7 +158,7 @@ Source: `src/google-slides/server.ts` — 6 tools.
 
 ## ClickUp
 
-Source: `src/clickup/server.ts` — 46 tools.
+Source: `src/clickup/server.ts` — 48 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -173,6 +173,8 @@ Source: `src/clickup/server.ts` — 46 tools.
 | `updateTask` | Update an existing ClickUp task. Only provided fields will be changed. Also RE-PARENTS a task: pass parentTaskId to move a subtask under a different parent while keeping its ID, comments, history and custom fields, so restructuring a hierarchy never needs tasks to be recreated. The re-parent is verified: the tool reads the target parent first (to resolve its name and list), applies the change, then re-reads the task and reports the confirmed parent, so no follow-up getTask is needed — and if ClickUp silently ignores the change it says so instead of claiming success. It also reports the parent's list and the task's list, so the response tells you what ClickUp did about a cross-list parent. Note ClickUp emits NO webhook event for a parent change, so getTaskEventHistory will never show one; this response is the only record. moveTask changes a task's LIST, not its parent — the two are independent. | — |
 | `deleteTask` | Delete a ClickUp task permanently. | — |
 | `moveTask` | Move a task to a different LIST. This does NOT change the task's parent: a subtask moved to another list stays a subtask of the same parent task. To re-parent a task (move a subtask under a different parent task), use updateTask with parentTaskId instead. | — |
+| `addTaskToList` | Add an existing task to an ADDITIONAL ClickUp list while it stays in its current list (the Tasks in Multiple Lists ClickApp). Use moveTask instead to relocate a task rather than share it into a second place. | — |
+| `removeTaskFromList` | Remove a task from one of its ADDITIONAL ClickUp lists (Tasks in Multiple Lists). The task itself is not deleted and stays in its home list, which ClickUp will not let you remove it from. | — |
 | `addTaskComment` | Add a comment to a ClickUp task. Supports markdown formatting: **bold**, *italic*, `inline code`. | — |
 | `getTaskComments` | Get comments on a ClickUp task. | `GET /api/v1/clickup/tasks/{taskId}/comments` |
 | `filterTeamTasks` | Query tasks across a ClickUp workspace using ClickUp's server-side "Get Filtered Team Tasks" endpoint (GET /api/v2/team/{team_id}/task). One paginated call replaces per-list enumeration for workspace-wide digests. Returns tasks the caller can access (naturally scoped by the OAuth identity), 100 per page — iterate `page` from 0 to fetch all. Supports assignees, statuses, tags, scope narrowing (spaceIds/projectIds/listIds), and date ranges on date_created / date_updated / due_date. IMPORTANT: ClickUp does NOT support date_closed / date_done filters or a close-date sort here — for "closed since T", query with `dateUpdatedGt=T` (closing bumps date_updated, so this is a superset) and partition on each task's `date_closed` client-side. Each task reports its Parent ID when it is a subtask (a bare ID, no name — ClickUp does not include one), so hierarchies can be rebuilt from one page. Set subtasks=true or children are omitted entirely. | `GET /api/v1/clickup/workspaces/{workspaceId}/tasks/filter` |
@@ -469,4 +471,4 @@ Source: `src/redmine/server.ts` — 46 tools.
 
 ---
 
-**Grand total: 340 tools across 15 sections.**
+**Grand total: 342 tools across 15 sections.**

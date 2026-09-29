@@ -220,6 +220,51 @@ export async function collectTasksInCloseWindow(
   return { tasks: collected, pagesScanned, hitCap };
 }
 
+/**
+ * Whether ClickUp answered the request that failed, and with what status.
+ *
+ * This is the difference between "ClickUp rejected it, so nothing was
+ * committed" and "we never learned the outcome": a timeout or a dropped
+ * connection can land AFTER ClickUp has already applied a write. Anything that
+ * reports "nothing was changed" may only do so for the first case, so
+ * `request()` tags both rather than leaving callers to pattern-match a message
+ * string -- which would silently start lying the day the wording changes.
+ *
+ * The status is carried alongside for the same reason: the multi-list tools key
+ * their ClickApp diagnosis off a 401 specifically, and scraping it back out of
+ * the message is exactly the coupling these tags remove.
+ */
+const CLICKUP_ANSWERED = Symbol('clickUpAnswered');
+const CLICKUP_STATUS = Symbol('clickUpStatus');
+
+function answered<E extends Error>(err: E, status: number): E {
+  (err as any)[CLICKUP_ANSWERED] = true;
+  (err as any)[CLICKUP_STATUS] = status;
+  return err;
+}
+
+function undelivered<E extends Error>(err: E): E {
+  (err as any)[CLICKUP_ANSWERED] = false;
+  return err;
+}
+
+/**
+ * True only when ClickUp is known to have answered with an HTTP status.
+ *
+ * Defaults to false for anything this module did not tag, so an unrecognised
+ * error is treated as "outcome unknown" rather than as a clean rejection --
+ * the safe direction when the alternative is claiming a write did not happen.
+ */
+export function clickUpErrorWasAnswered(err: unknown): boolean {
+  return (err as any)?.[CLICKUP_ANSWERED] === true;
+}
+
+/** The HTTP status ClickUp answered with, or undefined if it never answered. */
+export function clickUpErrorStatus(err: unknown): number | undefined {
+  const status = (err as any)?.[CLICKUP_STATUS];
+  return typeof status === 'number' ? status : undefined;
+}
+
 export class ClickUpClient {
   constructor(private accessToken: string) {}
 
@@ -242,19 +287,19 @@ export class ClickUpClient {
     } catch (err: any) {
       clearTimeout(timeout);
       if (err.name === 'AbortError') {
-        throw new UserError(`ClickUp API request timed out: ${method} ${path}`);
+        throw undelivered(new UserError(`ClickUp API request timed out: ${method} ${path}`));
       }
-      throw new UserError(`ClickUp API request failed (${method} ${path}): ${err.message || err}`);
+      throw undelivered(new UserError(`ClickUp API request failed (${method} ${path}): ${err.message || err}`));
     } finally {
       clearTimeout(timeout);
     }
 
     if (res.status === 429) {
-      throw new UserError('ClickUp rate limit exceeded. Please try again in a moment.');
+      throw answered(new UserError('ClickUp rate limit exceeded. Please try again in a moment.'), 429);
     }
     if (!res.ok) {
       const errText = await res.text();
-      throw new UserError(`ClickUp API error (${res.status}): ${errText}`);
+      throw answered(new UserError(`ClickUp API error (${res.status}): ${errText}`), res.status);
     }
 
     // Some endpoints return empty bodies (e.g., DELETE)
@@ -298,6 +343,14 @@ export class ClickUpClient {
   }
 
   // === Lists ===
+
+  // A single list by ID. ClickUp offers no other way to turn a bare list ID
+  // into a name, which is what the Tasks-in-Multiple-Lists tools confirm with
+  // (those endpoints answer with an empty body) and what lets them tell an
+  // unreadable list apart from a disabled ClickApp.
+  async getList(listId: string): Promise<any> {
+    return this.request('GET', `/list/${encodeURIComponent(listId)}`);
+  }
 
   async getListsInFolder(folderId: string, archived?: boolean): Promise<any> {
     const params = archived ? '?archived=true' : '';
@@ -354,9 +407,14 @@ export class ClickUpClient {
     return this.request('GET', `/list/${listId}/task${qs ? '?' + qs : ''}`);
   }
 
+  // The ID is encoded, not interpolated raw. A `?` or `#` in it would
+  // otherwise truncate the path and read a DIFFERENT task while the tool
+  // reported the ID it was given -- and for the multi-list tools that also
+  // means the pre-flight could validate one task while the write targets
+  // another. Encoding is identity for every real ClickUp ID.
   async getTask(taskId: string, includeSubtasks?: boolean): Promise<any> {
     const params = includeSubtasks ? '?include_subtasks=true' : '';
-    return this.request('GET', `/task/${taskId}${params}`);
+    return this.request('GET', `/task/${encodeURIComponent(taskId)}${params}`);
   }
 
   async createTask(listId: string, data: {
@@ -399,6 +457,26 @@ export class ClickUpClient {
 
   async moveTask(taskId: string, listId: string): Promise<any> {
     return this.request('POST', `/task/${taskId}`, { list_id: listId });
+  }
+
+  // === Tasks in Multiple Lists ===
+  //
+  // Share a task into an extra list / withdraw it again. Both endpoints require
+  // the "Tasks in Multiple Lists" ClickApp to be enabled on the workspace, and
+  // BOTH answer a disabled ClickApp with 401 -- the same status ClickUp uses for
+  // a revoked token and for an ID it cannot resolve, with nothing in the body to
+  // tell them apart. Neither takes a request body, and both answer 200 with an
+  // empty one, so the calling tool has nothing to render and no confirmation
+  // beyond the status: see addTaskToList/removeTaskFromList in server.ts for the
+  // pre-flight reads and the post-write re-read that make that honest.
+  async addTaskToList(listId: string, taskId: string): Promise<any> {
+    return this.request('POST', `/list/${encodeURIComponent(listId)}/task/${encodeURIComponent(taskId)}`);
+  }
+
+  // ClickUp refuses to remove a task from its HOME list; only additional lists
+  // can be withdrawn.
+  async removeTaskFromList(listId: string, taskId: string): Promise<any> {
+    return this.request('DELETE', `/list/${encodeURIComponent(listId)}/task/${encodeURIComponent(taskId)}`);
   }
 
   // === Tags ===
