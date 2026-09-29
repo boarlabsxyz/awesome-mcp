@@ -1102,6 +1102,44 @@ describe('ClickUp server tools', () => {
     });
   });
 
+  describe('getAccessibleCustomFields task-type scoping', () => {
+    // Verified live on task 1245xawcvnn: of eight fields on the list, only
+    // "Mode" listed task type 0 in applied_objects, and only Mode appeared in
+    // the task payload -- the other five had values stored (the searchTasks
+    // filter matched them) and were omitted entirely. These lock in the one
+    // place that omission can be diagnosed from.
+    const liveShapedFields = {
+      fields: [
+        { id: 'f1', name: 'Mode', type: 'drop_down', applied_objects: [{ object_type: 19, object_id: 1007 }, { object_type: 19, object_id: 0 }] },
+        { id: 'f2', name: 'Function', type: 'drop_down', applied_objects: [{ object_type: 19, object_id: 1007 }] },
+        { id: 'f3', name: 'Reactions', type: 'number', applied_objects: [{ object_type: 19, object_id: 1011 }] },
+      ],
+    };
+
+    it('renders each field\'s applicable task types', async () => {
+      mockFetch([{ status: 200, body: liveShapedFields }]);
+      const result = await callTool('getAccessibleCustomFields', { listId: 'l1' });
+      assert.ok(result.includes('Applies to task types: 1007, Task (0, the default)'), result);
+      assert.ok(result.includes('Applies to task types: 1007\n'), result);
+      assert.ok(result.includes('Applies to task types: 1011'), result);
+    });
+
+    it('explains that an inapplicable field is omitted from a task even when set', async () => {
+      mockFetch([{ status: 200, body: liveShapedFields }]);
+      const result = await callTool('getAccessibleCustomFields', { listId: 'l1' });
+      assert.ok(result.includes('EVEN IF a value is stored'), result);
+      assert.ok(result.includes('listTaskTypes'), result);
+    });
+
+    it('reports a field with no applied_objects as applying to all types', async () => {
+      mockFetch([{ status: 200, body: { fields: [{ id: 'f1', name: 'Anywhere', type: 'text' }] } }]);
+      const result = await callTool('getAccessibleCustomFields', { listId: 'l1' });
+      assert.ok(result.includes('Applies to task types: all'), result);
+      // Nothing is type-scoped, so the caveat would be noise.
+      assert.ok(!result.includes('EVEN IF a value is stored'), result);
+    });
+  });
+
   describe('addTaskComment', () => {
     it('adds comment and returns comment ID', async () => {
       mockFetch([{ status: 200, body: { id: 'c99' } }]);

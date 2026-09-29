@@ -247,7 +247,10 @@ clickUpServer.addTool({
     + 'full to summarize it, reuse it as a template, or check acceptance criteria. Reports Parent (and Top-level '
     + 'parent when nesting is deeper than one level) when the task is a subtask. ClickUp returns those as bare task '
     + 'IDs with no name — that is the payload, not missing data; call getTask on the parent ID if you need its name. '
-    + 'Reports Task type when the task is not a plain Task; listTaskTypes resolves that number to a name.',
+    + 'Reports Task type when the task is not a plain Task; listTaskTypes resolves that number to a name. Custom '
+    + 'Fields listed are only those applying to this task\'s type — ClickUp omits the others even when a value is '
+    + 'stored, so a field missing here is NOT evidence it is empty; getAccessibleCustomFields shows which task types '
+    + 'each field applies to.',
   parameters: z.object({
     taskId: z.string().describe('The task ID (e.g., "abc123" or custom task ID).'),
     includeSubtasks: z.boolean().optional().default(false).describe('Include subtasks in response.'),
@@ -1195,6 +1198,20 @@ clickUpServer.addTool({
   },
 });
 
+/**
+ * Render one task-type ID from a custom field's `applied_objects`.
+ *
+ * Only the two built-ins get names: ClickUp's field payload carries type IDs and
+ * no names anywhere, exactly like `custom_item_id` on a task, so resolving the
+ * rest would cost a workspace lookup this tool has no team ID for. Same call
+ * formatTask makes — print the number and point at listTaskTypes.
+ */
+function describeTaskTypeId(id: number): string {
+  if (id === 0) return 'Task (0, the default)';
+  if (id === 1) return 'Milestone (1)';
+  return String(id);
+}
+
 clickUpServer.addTool({
   name: 'getAccessibleCustomFields',
   annotations: { readOnlyHint: true },
@@ -1211,8 +1228,22 @@ clickUpServer.addTool({
     const result = await client.getAccessibleCustomFields(args.listId);
     const fields = result.fields || [];
     if (fields.length === 0) return 'No custom fields found on this list.';
-    return `Found ${fields.length} custom field(s):\n\n` + fields.map((f: any) => {
+    let anyTypeScoped = false;
+    const rendered = fields.map((f: any) => {
       const parts = [`Field: ${f.name}`, `  ID: ${f.id}`, `  Type: ${f.type}`];
+      // Which custom task types this field applies to. This is the ONLY place
+      // the omission described in the trailing note can be diagnosed from: the
+      // task payload simply lacks the field, with nothing in it to say whether
+      // the value is unset or the field inapplicable. An absent or empty array
+      // means it applies to every type -- the scoping is opt-in.
+      const applied = Array.isArray(f.applied_objects) ? f.applied_objects : [];
+      const typeIds = applied.map((o: any) => o?.object_id).filter((v: any) => typeof v === 'number');
+      if (typeIds.length) {
+        anyTypeScoped = true;
+        parts.push(`  Applies to task types: ${typeIds.map(describeTaskTypeId).join(', ')}`);
+      } else {
+        parts.push('  Applies to task types: all');
+      }
       if (f.type_config?.options) {
         parts.push('  Options:');
         f.type_config.options.forEach((o: any) => {
@@ -1222,6 +1253,21 @@ clickUpServer.addTool({
       }
       return parts.join('\n');
     }).join('\n\n');
+
+    // Verified live 2026-09-29: a field whose applied task types exclude a
+    // task's custom_item_id is absent from that task's payload ENTIRELY, even
+    // when a value is stored -- and it stays matchable by the searchTasks
+    // custom_fields filter, which runs server-side against the stored value. So
+    // "getTask did not show it" is not evidence the value is unset, and without
+    // this note the omission reads as exactly that.
+    const scopingNote = anyTypeScoped
+      ? `\n\nNote on the task types above: ClickUp omits a custom field from a task's payload when the field does not `
+        + `apply to that task's type, EVEN IF a value is stored. So getTask/listTasks/searchTasks can show none of these `
+        + `fields on a task that really has values set, and the value is still matched by the searchTasks custom_fields `
+        + `filter. Check the task's own type (formatTask prints "Task type" for anything but the default 0) against the `
+        + `types listed here before concluding a field is empty. Call listTaskTypes to resolve these numbers to names.`
+      : '';
+    return `Found ${fields.length} custom field(s):\n\n` + rendered + scopingNote;
   },
 });
 
