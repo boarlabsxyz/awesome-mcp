@@ -388,6 +388,7 @@ export class ClickUpClient {
     subtasks?: boolean;
     statuses?: string[];
     include_closed?: boolean;
+    include_timl?: boolean;
     assignees?: string[];
     due_date_gt?: number;
     due_date_lt?: number;
@@ -399,6 +400,12 @@ export class ClickUpClient {
     if (params?.reverse) searchParams.set('reverse', 'true');
     if (params?.subtasks) searchParams.set('subtasks', 'true');
     if (params?.include_closed) searchParams.set('include_closed', 'true');
+    // Tasks in Multiple Lists. ClickUp EXCLUDES a task shared into this list
+    // from this endpoint unless include_timl is set, so a task that plainly
+    // sits in the list reads back as absent -- see listTasks, which turns this
+    // on by default. Note the sibling endpoint GET /team/{id}/task has no such
+    // parameter at all, so its list_ids filter can never see shared tasks.
+    if (params?.include_timl) searchParams.set('include_timl', 'true');
     appendArrayFilter(searchParams, 'statuses', params?.statuses);
     appendArrayFilter(searchParams, 'assignees', params?.assignees);
     if (params?.due_date_gt) searchParams.set('due_date_gt', String(params.due_date_gt));
@@ -522,6 +529,10 @@ export class ClickUpClient {
   // "closed since T" should pass date_updated_gt=T (closing bumps
   // date_updated) and partition on date_closed themselves; ClickUp does not
   // support date_closed_gt/lt or date_done_gt/lt on this endpoint.
+  // NOTE there is deliberately no include_timl here: ClickUp's Get Filtered
+  // Team Tasks does not accept it, so this endpoint's list_ids filter only ever
+  // matches a task's HOME list. Declaring the field would advertise support
+  // ClickUp does not have.
   async filterTeamTasks(teamId: string, params?: {
     page?: number;
     order_by?: string;

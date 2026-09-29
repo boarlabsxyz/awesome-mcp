@@ -247,7 +247,10 @@ clickUpServer.addTool({
     + 'full to summarize it, reuse it as a template, or check acceptance criteria. Reports Parent (and Top-level '
     + 'parent when nesting is deeper than one level) when the task is a subtask. ClickUp returns those as bare task '
     + 'IDs with no name — that is the payload, not missing data; call getTask on the parent ID if you need its name. '
-    + 'Reports Task type when the task is not a plain Task; listTaskTypes resolves that number to a name.',
+    + 'Reports Task type when the task is not a plain Task; listTaskTypes resolves that number to a name. Custom '
+    + 'Fields listed are only those applying to this task\'s type — ClickUp omits the others even when a value is '
+    + 'stored, so a field missing here is NOT evidence it is empty; getAccessibleCustomFields shows which task types '
+    + 'each field applies to.',
   parameters: z.object({
     taskId: z.string().describe('The task ID (e.g., "abc123" or custom task ID).'),
     includeSubtasks: z.boolean().optional().default(false).describe('Include subtasks in response.'),
@@ -267,6 +270,26 @@ clickUpServer.addTool({
   },
 });
 
+/**
+ * Explain the rows whose `List:` line names a different list.
+ *
+ * listTasks passes include_timl, so the answer to "what is in this list"
+ * correctly includes tasks shared in from elsewhere — but formatTask renders
+ * each task's HOME list, so those rows look like they belong to some other list
+ * and read as a bug. Naming them is cheaper than suppressing them and far better
+ * than ClickUp's default, which is to omit them and let an empty result read as
+ * "that list is empty".
+ *
+ * Silent when nothing is shared in, which is the overwhelmingly common case.
+ */
+function sharedTaskNote(tasks: any[], listId: string): string {
+  const shared = tasks.filter((t) => t?.list?.id !== undefined && String(t.list.id) !== listId);
+  if (shared.length === 0) return '';
+  return `\n\n${shared.length} of these live in another list and appear here through Tasks in Multiple Lists, so `
+    + `their List: line names their home list rather than ${listId}: `
+    + `${shared.map((t) => `${t.id} (home: ${t.list.name ?? 'unnamed'})`).join(', ')}.`;
+}
+
 clickUpServer.addTool({
   name: 'listTasks',
   annotations: { readOnlyHint: true },
@@ -275,7 +298,9 @@ clickUpServer.addTool({
     + 'filters locally on date_closed (ClickUp\'s REST API has no server-side close-date filter). Each task reports '
     + 'its Parent ID when it is a subtask, so a hierarchy can be rebuilt from one call instead of a getTask per node; '
     + 'match that ID against the IDs already in this response rather than looking each one up (ClickUp includes no '
-    + 'parent name). Set subtasks=true or children are omitted entirely.',
+    + 'parent name). Set subtasks=true or children are omitted entirely. Tasks shared into this list from another '
+    + 'home list (Tasks in Multiple Lists) ARE included by default — their List: line names their home list, not '
+    + 'this one; set includeMultiListTasks=false for only the tasks that live here.',
   parameters: z.object({
     listId: z.string().describe('The list ID to get tasks from.'),
     archived: z.boolean().optional().default(false).describe('Include archived tasks.'),
@@ -285,6 +310,14 @@ clickUpServer.addTool({
     subtasks: z.boolean().optional().default(false).describe('Include subtasks.'),
     statuses: z.array(z.string()).optional().describe('Filter by status names.'),
     includeClosed: z.boolean().optional().default(false).describe('Include closed tasks. Automatically forced true when closedAfter/closedBefore is set.'),
+    // Read as `!== false` in the body rather than trusting this default: if the
+    // schema layer is ever bypassed, undefined must still mean ON, because the
+    // off direction fails by silently omitting tasks that are really there.
+    includeMultiListTasks: z.boolean().optional().default(true).describe(
+      'Include tasks shared into this list whose home list is elsewhere (ClickUp\'s include_timl). Defaults to TRUE: '
+      + 'ClickUp excludes them otherwise, so a task plainly sitting in the list reads back as absent. Set false to '
+      + 'list only tasks whose home list is this one.',
+    ),
     assignees: z.array(z.string()).optional().describe('Filter by assignee user IDs.'),
     closedAfter: z.string().optional().describe('Only return tasks closed at/after this time. ISO string or Unix ms. Enables auto-pagination + local date_closed filtering.'),
     closedBefore: z.string().optional().describe('Only return tasks closed at/before this time. ISO string or Unix ms. Enables auto-pagination + local date_closed filtering.'),
@@ -305,6 +338,7 @@ clickUpServer.addTool({
             subtasks: args.subtasks,
             statuses: args.statuses,
             include_closed: true,
+            include_timl: args.includeMultiListTasks !== false,
             assignees: args.assignees,
           });
           return res.tasks || [];
@@ -313,7 +347,7 @@ clickUpServer.addTool({
         win.to,
       );
       if (hitCap) throw new UserError(formatCloseWindowCapMessage(pagesScanned));
-      return formatTaskList(tasks);
+      return formatTaskList(tasks) + sharedTaskNote(tasks, args.listId);
     }
 
     const result = await client.getTasks(args.listId, {
@@ -324,9 +358,10 @@ clickUpServer.addTool({
       subtasks: args.subtasks,
       statuses: args.statuses,
       include_closed: args.includeClosed,
+      include_timl: args.includeMultiListTasks !== false,
       assignees: args.assignees,
     });
-    return formatTaskList(result.tasks || []);
+    return formatTaskList(result.tasks || []) + sharedTaskNote(result.tasks || [], args.listId);
   },
 });
 
@@ -1033,7 +1068,11 @@ clickUpServer.addTool({
     tags: z.array(z.string()).optional().describe('Filter to tasks with any of these tag names.'),
     spaceIds: z.array(z.string()).optional().describe('Narrow to tasks in these space IDs.'),
     projectIds: z.array(z.string()).optional().describe('Narrow to tasks in these folder (project) IDs.'),
-    listIds: z.array(z.string()).optional().describe('Narrow to tasks in these list IDs.'),
+    listIds: z.array(z.string()).optional().describe(
+      'Narrow to tasks whose HOME list is one of these IDs. ClickUp\'s Get Filtered Team Tasks has no include_timl '
+      + 'parameter, so a task shared into one of these lists from elsewhere (Tasks in Multiple Lists) is NOT matched '
+      + 'and cannot be — use listTasks for a list\'s complete membership.',
+    ),
     dateCreatedGt: z.string().optional().describe('Only tasks created at/after this time. ISO string or Unix ms.'),
     dateCreatedLt: z.string().optional().describe('Only tasks created at/before this time. ISO string or Unix ms.'),
     dateUpdatedGt: z.string().optional().describe('Only tasks updated at/after this time. ISO string or Unix ms. Use as a superset for "closed since T" queries — closing a task bumps date_updated.'),
@@ -1165,10 +1204,28 @@ clickUpServer.addTool({
   },
 });
 
+/**
+ * Render one task-type ID from a custom field's `applied_objects`.
+ *
+ * Only the two built-ins get names: ClickUp's field payload carries type IDs and
+ * no names anywhere, exactly like `custom_item_id` on a task, so resolving the
+ * rest would cost a workspace lookup this tool has no team ID for. Same call
+ * formatTask makes — print the number and point at listTaskTypes.
+ */
+function describeTaskTypeId(id: number): string {
+  if (id === 0) return 'Task (0, the default)';
+  if (id === 1) return 'Milestone (1)';
+  return String(id);
+}
+
 clickUpServer.addTool({
   name: 'getAccessibleCustomFields',
   annotations: { readOnlyHint: true },
-  description: 'List all custom fields available on a ClickUp list. Use this to discover field IDs for filtering or setting values.',
+  description: 'List all custom fields available on a ClickUp list. Use this to discover field IDs for filtering or '
+    + 'setting values. Read-only by necessity: ClickUp\'s public API can set and clear a field\'s VALUE on a task '
+    + '(setCustomFieldValue / removeCustomFieldValue) but has no endpoint to create a field, rename one, change its '
+    + 'type, or add drop-down or label options — those are only possible in the ClickUp UI, so do not offer to do '
+    + 'them here.',
   parameters: z.object({
     listId: z.string().describe('The list ID to get custom fields for.'),
   }),
@@ -1177,8 +1234,22 @@ clickUpServer.addTool({
     const result = await client.getAccessibleCustomFields(args.listId);
     const fields = result.fields || [];
     if (fields.length === 0) return 'No custom fields found on this list.';
-    return `Found ${fields.length} custom field(s):\n\n` + fields.map((f: any) => {
+    let anyTypeScoped = false;
+    const rendered = fields.map((f: any) => {
       const parts = [`Field: ${f.name}`, `  ID: ${f.id}`, `  Type: ${f.type}`];
+      // Which custom task types this field applies to. This is the ONLY place
+      // the omission described in the trailing note can be diagnosed from: the
+      // task payload simply lacks the field, with nothing in it to say whether
+      // the value is unset or the field inapplicable. An absent or empty array
+      // means it applies to every type -- the scoping is opt-in.
+      const applied = Array.isArray(f.applied_objects) ? f.applied_objects : [];
+      const typeIds = applied.map((o: any) => o?.object_id).filter((v: any) => typeof v === 'number');
+      if (typeIds.length) {
+        anyTypeScoped = true;
+        parts.push(`  Applies to task types: ${typeIds.map(describeTaskTypeId).join(', ')}`);
+      } else {
+        parts.push('  Applies to task types: all');
+      }
       if (f.type_config?.options) {
         parts.push('  Options:');
         f.type_config.options.forEach((o: any) => {
@@ -1188,6 +1259,21 @@ clickUpServer.addTool({
       }
       return parts.join('\n');
     }).join('\n\n');
+
+    // Verified live 2026-09-29: a field whose applied task types exclude a
+    // task's custom_item_id is absent from that task's payload ENTIRELY, even
+    // when a value is stored -- and it stays matchable by the searchTasks
+    // custom_fields filter, which runs server-side against the stored value. So
+    // "getTask did not show it" is not evidence the value is unset, and without
+    // this note the omission reads as exactly that.
+    const scopingNote = anyTypeScoped
+      ? `\n\nNote on the task types above: ClickUp omits a custom field from a task's payload when the field does not `
+        + `apply to that task's type, EVEN IF a value is stored. So getTask/listTasks/searchTasks can show none of these `
+        + `fields on a task that really has values set, and the value is still matched by the searchTasks custom_fields `
+        + `filter. Check the task's own type (formatTask prints "Task type" for anything but the default 0) against the `
+        + `types listed here before concluding a field is empty. Call listTaskTypes to resolve these numbers to names.`
+      : '';
+    return `Found ${fields.length} custom field(s):\n\n` + rendered + scopingNote;
   },
 });
 
@@ -1210,7 +1296,8 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'removeCustomFieldValue',
   annotations: { readOnlyHint: false, destructiveHint: true },
-  description: 'Remove/clear a custom field value from a ClickUp task.',
+  description: 'Remove/clear a custom field value from a ClickUp task. Clears the VALUE only — the field itself, and '
+    + 'any drop-down or label options on it, are untouched and cannot be deleted through ClickUp\'s API.',
   parameters: z.object({
     taskId: z.string().describe('The task ID.'),
     fieldId: z.string().describe('The custom field ID.'),

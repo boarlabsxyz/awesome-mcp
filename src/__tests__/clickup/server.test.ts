@@ -276,6 +276,56 @@ describe('ClickUp server tools', () => {
   });
 
   describe('listTasks', () => {
+    // === Tasks in Multiple Lists (include_timl) ===
+    //
+    // ClickUp EXCLUDES a task shared into the list unless include_timl is set,
+    // so the default behaviour made a task that plainly sits in the list read
+    // back as absent. These assert the default is on and that the rendering
+    // explains the rows whose home list is elsewhere.
+    it('sends include_timl by default so shared tasks are not omitted', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { tasks: [] } }]);
+      await callTool('listTasks', { listId: 'l1' });
+      assert.ok(calls[0].url.includes('include_timl=true'), calls[0].url);
+    });
+
+    it('omits include_timl when explicitly opted out', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { tasks: [] } }]);
+      await callTool('listTasks', { listId: 'l1', includeMultiListTasks: false });
+      assert.ok(!calls[0].url.includes('include_timl'), calls[0].url);
+    });
+
+    it('sends include_timl on the close-window path too', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { tasks: [] } }]);
+      await callTool('listTasks', { listId: 'l1', closedAfter: '2026-01-01' });
+      assert.ok(calls[0].url.includes('include_timl=true'), calls[0].url);
+    });
+
+    it('explains the rows whose List: line names a different list', async () => {
+      // Without this note a shared task reads as a bug: the caller asked for l1
+      // and got a row whose List: says Eng.
+      mockFetch([{
+        status: 200,
+        body: {
+          tasks: [
+            { id: 't1', name: 'Lives here', status: { status: 'open' }, list: { id: 'l1', name: 'Sprint 4' } },
+            { id: 't2', name: 'Shared in', status: { status: 'open' }, list: { id: 'l9', name: 'Eng' } },
+          ],
+        },
+      }]);
+      const result = await callTool('listTasks', { listId: 'l1' });
+      assert.ok(result.includes('1 of these live in another list'), result);
+      assert.ok(result.includes('t2 (home: Eng)'), result);
+    });
+
+    it('stays silent about shared tasks when there are none', async () => {
+      mockFetch([{
+        status: 200,
+        body: { tasks: [{ id: 't1', name: 'Lives here', status: { status: 'open' }, list: { id: 'l1', name: 'Sprint 4' } }] },
+      }]);
+      const result = await callTool('listTasks', { listId: 'l1' });
+      assert.ok(!result.includes('live in another list'));
+    });
+
     it('returns formatted task list', async () => {
       mockFetch([{
         status: 200,
@@ -1049,6 +1099,44 @@ describe('ClickUp server tools', () => {
       const result = await callTool('removeTaskFromList', { taskId: 't1', listId: 'l2' });
       assert.ok(result.includes('did NOT take effect'));
       assert.ok(result.includes('as its home list'));
+    });
+  });
+
+  describe('getAccessibleCustomFields task-type scoping', () => {
+    // Verified live on task 1245xawcvnn: of eight fields on the list, only
+    // "Mode" listed task type 0 in applied_objects, and only Mode appeared in
+    // the task payload -- the other five had values stored (the searchTasks
+    // filter matched them) and were omitted entirely. These lock in the one
+    // place that omission can be diagnosed from.
+    const liveShapedFields = {
+      fields: [
+        { id: 'f1', name: 'Mode', type: 'drop_down', applied_objects: [{ object_type: 19, object_id: 1007 }, { object_type: 19, object_id: 0 }] },
+        { id: 'f2', name: 'Function', type: 'drop_down', applied_objects: [{ object_type: 19, object_id: 1007 }] },
+        { id: 'f3', name: 'Reactions', type: 'number', applied_objects: [{ object_type: 19, object_id: 1011 }] },
+      ],
+    };
+
+    it('renders each field\'s applicable task types', async () => {
+      mockFetch([{ status: 200, body: liveShapedFields }]);
+      const result = await callTool('getAccessibleCustomFields', { listId: 'l1' });
+      assert.ok(result.includes('Applies to task types: 1007, Task (0, the default)'), result);
+      assert.ok(result.includes('Applies to task types: 1007\n'), result);
+      assert.ok(result.includes('Applies to task types: 1011'), result);
+    });
+
+    it('explains that an inapplicable field is omitted from a task even when set', async () => {
+      mockFetch([{ status: 200, body: liveShapedFields }]);
+      const result = await callTool('getAccessibleCustomFields', { listId: 'l1' });
+      assert.ok(result.includes('EVEN IF a value is stored'), result);
+      assert.ok(result.includes('listTaskTypes'), result);
+    });
+
+    it('reports a field with no applied_objects as applying to all types', async () => {
+      mockFetch([{ status: 200, body: { fields: [{ id: 'f1', name: 'Anywhere', type: 'text' }] } }]);
+      const result = await callTool('getAccessibleCustomFields', { listId: 'l1' });
+      assert.ok(result.includes('Applies to task types: all'), result);
+      // Nothing is type-scoped, so the caveat would be noise.
+      assert.ok(!result.includes('EVEN IF a value is stored'), result);
     });
   });
 
