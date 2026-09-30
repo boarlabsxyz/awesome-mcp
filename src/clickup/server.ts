@@ -17,6 +17,12 @@ import {
   parseTimestampInput,
 } from './apiHelpers.js';
 import { formatTask, formatTaskList } from './formatHelpers.js';
+import {
+  CustomFieldDefinition,
+  CustomFieldValueError,
+  needsFieldLookup,
+  prepareCustomFieldValue,
+} from './customFieldValue.js';
 import { fetchImageBytes } from './docImageStore.js';
 import { store as storeImageBlob, getImagePublicBaseUrl } from '../images/imageBlobStore.js';
 import {
@@ -1277,19 +1283,120 @@ clickUpServer.addTool({
   },
 });
 
+/**
+ * Best-effort read of one custom field's definition, so a value can be
+ * normalised against its real TYPE before the write.
+ *
+ * Two GETs (task -> its list -> that list's fields), and they are spent only
+ * when the value could still need them (needsFieldLookup): an array of UUIDs,
+ * a number or a boolean is already in ClickUp's shape, so the ordinary set
+ * still costs exactly one request -- the same rule updateTask's re-parent
+ * pre-flight follows.
+ *
+ * Deliberately NOT a hard gate. Nothing about the write depends on the lookup
+ * succeeding, and refusing a set because a read 500'd would be worse than
+ * falling back to the conservative string-revival path in
+ * prepareCustomFieldValue. When it does fail the response says so, because a
+ * labels write that silently skipped label-name resolution is the one case
+ * where the degraded path can still hand ClickUp something it rejects.
+ */
+async function lookupCustomFieldDefinition(
+  client: ClickUpClient,
+  taskId: string,
+  fieldId: string,
+): Promise<{ definition?: CustomFieldDefinition; failure?: string }> {
+  try {
+    const task = await client.getTask(taskId);
+    const listId = task?.list?.id;
+    if (!listId) return { failure: `ClickUp returned no list for task ${taskId}` };
+    const result = await client.getAccessibleCustomFields(String(listId));
+    const fields: any[] = result?.fields || [];
+    const definition = fields.find((f: any) => f?.id === fieldId);
+    if (!definition) {
+      return { failure: `field ${fieldId} is not among the custom fields accessible on list ${listId}` };
+    }
+    return { definition };
+  } catch (err: any) {
+    return { failure: String(err?.message || err) };
+  }
+}
+
 clickUpServer.addTool({
   name: 'setCustomFieldValue',
   annotations: { readOnlyHint: false },
-  description: 'Set a custom field value on a ClickUp task. Use getAccessibleCustomFields first to find the field ID and type. Value shape depends on field type: text/email/phone → string; number → number; drop_down → option orderindex (int); users → array of user IDs; labels → array of label UUIDs; date → unix ms. NOTE: drop_down uses orderindex here, but searchTasks custom_fields filter uses the option UUID — getAccessibleCustomFields returns both.',
+  description: 'Set a custom field value on a ClickUp task. Use getAccessibleCustomFields first to find the field ID '
+    + 'and type. Value shape by field type: text/email/phone → string; number → number; checkbox → boolean; date → '
+    + 'unix ms; drop_down → the option UUID or its orderindex (an option name is accepted and resolved for you); '
+    + 'labels → an ARRAY of label option UUIDs (label names are accepted and resolved); users and relationship '
+    + 'fields → an ARRAY of IDs, or ClickUp\'s incremental {"add": [...], "rem": [...]} object to change membership '
+    + 'without replacing it. Pass an array as a real JSON array, not as its text: ClickUp answers a stringified array '
+    + 'with "Value must be an array" (FIELD_144). A value that still arrives as a string is repaired here where the '
+    + 'field type makes that unambiguous. NOTE: drop_down can be set by orderindex, while the searchTasks '
+    + 'custom_fields filter matches only on the option UUID — getAccessibleCustomFields returns both. This endpoint '
+    + 'cannot clear a field; use removeCustomFieldValue.',
   parameters: z.object({
     taskId: z.string().describe('The task ID.'),
     fieldId: z.string().describe('The custom field ID (from getAccessibleCustomFields).'),
-    value: z.any().describe('The value to set. Format depends on field type: text=string, number=number, dropdown=orderindex (integer), users=array of user IDs, checkbox=boolean, date=unix timestamp ms, labels=array of label UUIDs. NOTE: For dropdowns, setCustomFieldValue uses orderindex but searchTasks custom_fields filter uses the option UUID (id) — use getAccessibleCustomFields to get both.'),
+    // An explicit union, not z.any(). z.any() renders as the empty JSON Schema
+    // `{}`, which gives a client nothing to validate an array against -- and an
+    // array handed over as its JSON *text* is exactly what ClickUp rejects with
+    // FIELD_144, which made every labels and users field unwritable (86cba13av).
+    value: z.union([
+      z.string(),
+      z.number(),
+      z.boolean(),
+      z.array(z.union([z.string(), z.number(), z.boolean()])),
+      z.record(z.any()),
+    ]).describe('The value to set. text=string, number=number, checkbox=boolean, date=unix ms, dropdown=option UUID '
+      + 'or orderindex (an option name is also accepted), labels=array of label option UUIDs or label names, '
+      + 'users/relationship=array of IDs or an {"add": [...], "rem": [...]} object. Send arrays as real JSON arrays, '
+      + 'never as the text of one.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
-    await client.setCustomFieldValue(args.taskId, args.fieldId, args.value);
-    return `Custom field ${args.fieldId} updated on task ${args.taskId}.`;
+
+    let definition: CustomFieldDefinition | undefined;
+    let lookupFailure: string | undefined;
+    if (needsFieldLookup(args.value)) {
+      ({ definition, failure: lookupFailure } = await lookupCustomFieldDefinition(
+        client,
+        args.taskId,
+        args.fieldId,
+      ));
+    }
+
+    let prepared;
+    try {
+      prepared = prepareCustomFieldValue(args.value, definition);
+    } catch (err) {
+      // Raised before anything is written, and it names the field and its real
+      // options -- which the raw 400 body does not.
+      if (err instanceof CustomFieldValueError) throw new UserError(err.message);
+      throw err;
+    }
+
+    await client.setCustomFieldValue(args.taskId, args.fieldId, prepared.value);
+
+    const label = definition?.name
+      ? `"${definition.name}" (${definition.type}, ${args.fieldId})`
+      : args.fieldId;
+    const lines = [
+      `Custom field ${label} updated on task ${args.taskId}.`,
+      `  Sent: ${JSON.stringify(prepared.value)}`,
+    ];
+    prepared.notes.forEach((note) => lines.push(`  • ${note}`));
+    if (lookupFailure) {
+      lines.push(
+        `  • Could not read the field definition (${lookupFailure}), so the value was sent with only the `
+        + `string-to-JSON repair applied — option names were not resolved.`,
+      );
+    }
+    // No re-read to confirm: ClickUp answers this POST 200 with an empty body,
+    // and it omits a field from a task's payload entirely when the field does
+    // not apply to that task's type, so a follow-up getTask cannot tell
+    // "written" from "not applicable to this task type" and would report a
+    // successful write as a failed one.
+    return lines.join('\n');
   },
 });
 

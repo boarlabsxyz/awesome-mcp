@@ -1140,6 +1140,115 @@ describe('ClickUp server tools', () => {
     });
   });
 
+  describe('setCustomFieldValue', () => {
+    // Ticket 86cba13av: every labels write failed with
+    // {"err":"Value must be an array","ECODE":"FIELD_144"} because the array
+    // reached the server as its JSON text.
+    const labelsField = {
+      id: 'lf1',
+      name: 'Scope',
+      type: 'labels',
+      type_config: {
+        options: [
+          { id: 'c17be179-de32-44d8-8cc9-56000f36aac3', label: 'SERVICE', orderindex: 0 },
+          { id: 'd28cf280-ef43-4ee5-9dd0-67111f47bbd4', label: 'PLATFORM', orderindex: 1 },
+        ],
+      },
+    };
+    // task lookup -> list fields -> the write itself.
+    const lookupResponses = [
+      { status: 200, body: { id: 't1', name: 'T', status: { status: 'to do' }, list: { id: 'l1', name: 'Tasks' } } },
+      { status: 200, body: { fields: [labelsField] } },
+      { status: 200, body: {} },
+    ];
+
+    it('sends a real array when the value arrives as a stringified one', async () => {
+      const { calls } = mockFetch(lookupResponses);
+      const result = await callTool('setCustomFieldValue', {
+        taskId: 't1',
+        fieldId: 'lf1',
+        value: '["c17be179-de32-44d8-8cc9-56000f36aac3"]',
+      });
+      const write = calls[2];
+      assert.equal(write.method, 'POST');
+      assert.ok(write.url.includes('/task/t1/field/lf1'), write.url);
+      assert.deepEqual(JSON.parse(write.body!), { value: ['c17be179-de32-44d8-8cc9-56000f36aac3'] });
+      assert.ok(result.includes('"Scope" (labels, lf1)'), result);
+      assert.ok(result.includes('FIELD_144'), result);
+    });
+
+    it('resolves a label name to its option UUID', async () => {
+      const { calls } = mockFetch(lookupResponses);
+      const result = await callTool('setCustomFieldValue', { taskId: 't1', fieldId: 'lf1', value: ['SERVICE'] });
+      assert.deepEqual(JSON.parse(calls[2].body!), { value: ['c17be179-de32-44d8-8cc9-56000f36aac3'] });
+      assert.ok(result.includes('Resolved label "SERVICE"'), result);
+    });
+
+    it('refuses an unknown label without writing, naming the real options', async () => {
+      const { calls } = mockFetch(lookupResponses);
+      await assert.rejects(
+        () => callTool('setCustomFieldValue', { taskId: 't1', fieldId: 'lf1', value: ['NOPE'] }),
+        (err: any) => {
+          assert.ok(err instanceof UserError);
+          assert.ok(err.message.includes('SERVICE'), err.message);
+          return true;
+        },
+      );
+      // Only the two lookups ran -- the POST never did.
+      assert.equal(calls.length, 2);
+    });
+
+    it('costs exactly one request when the value is already in ClickUp shape', async () => {
+      const { calls } = mockFetch([{ status: 200, body: {} }]);
+      await callTool('setCustomFieldValue', {
+        taskId: 't1',
+        fieldId: 'lf1',
+        value: ['c17be179-de32-44d8-8cc9-56000f36aac3'],
+      });
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].method, 'POST');
+    });
+
+    it('writes anyway when the field lookup fails, and says the resolution was skipped', async () => {
+      const { calls } = mockFetch([
+        { status: 500, text: 'boom' },
+        { status: 200, body: {} },
+      ]);
+      const result = await callTool('setCustomFieldValue', { taskId: 't1', fieldId: 'lf1', value: '["u1"]' });
+      assert.deepEqual(JSON.parse(calls[1].body!), { value: ['u1'] });
+      assert.ok(result.includes('Could not read the field definition'), result);
+    });
+
+    it('leaves a bracketed string alone on a text field', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: { id: 't1', name: 'T', status: { status: 'to do' }, list: { id: 'l1' } } },
+        { status: 200, body: { fields: [{ id: 'tf1', name: 'Notes', type: 'text' }] } },
+        { status: 200, body: {} },
+      ]);
+      await callTool('setCustomFieldValue', { taskId: 't1', fieldId: 'tf1', value: '["a"]' });
+      assert.deepEqual(JSON.parse(calls[2].body!), { value: '["a"]' });
+    });
+
+    it('forwards ClickUp\'s incremental add/rem object untouched on a users field', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: { id: 't1', name: 'T', status: { status: 'to do' }, list: { id: 'l1' } } },
+        { status: 200, body: { fields: [{ id: 'uf1', name: 'Reviewers', type: 'users' }] } },
+        { status: 200, body: {} },
+      ]);
+      await callTool('setCustomFieldValue', { taskId: 't1', fieldId: 'uf1', value: { add: [42], rem: [43] } });
+      // Wrapping this in an array would be neither shape ClickUp accepts.
+      assert.deepEqual(JSON.parse(calls[calls.length - 1].body!), { value: { add: [42], rem: [43] } });
+    });
+
+    it('declares a typed value parameter rather than an any-shaped one', () => {
+      const schema = toolMap.get('setCustomFieldValue')!.parameters;
+      const parsed = schema.safeParse({ taskId: 't', fieldId: 'f', value: ['a', 1] });
+      assert.equal(parsed.success, true);
+      // z.any() would have accepted this; the union must not.
+      assert.equal(schema.safeParse({ taskId: 't', fieldId: 'f', value: null }).success, false);
+    });
+  });
+
   describe('addTaskComment', () => {
     it('adds comment and returns comment ID', async () => {
       mockFetch([{ status: 200, body: { id: 'c99' } }]);
