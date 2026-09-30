@@ -55,11 +55,27 @@ const ARRAY_VALUED_FIELD_TYPES = new Set([
   'users',
   'tasks',
   'list_relationship',
-  'attachment',
 ]);
 
 export function isArrayValuedFieldType(type?: string): boolean {
   return typeof type === 'string' && ARRAY_VALUED_FIELD_TYPES.has(type);
+}
+
+/**
+ * ClickUp's INCREMENTAL form, documented for People (`users`) and relationship
+ * (`tasks`, `list_relationship`) fields: `{"add": [...], "rem": [...]}`, either
+ * key on its own. It is an object, not an array, so an array-valued type has
+ * two legal shapes and this one must survive untouched -- wrapping it in an
+ * array (or refusing it) breaks a call that worked before any of this existed,
+ * and it means something a plain array cannot say: add these without replacing
+ * the rest.
+ */
+export function isIncrementalUpdate(value: unknown): boolean {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj);
+  if (!keys.length || !keys.every((k) => k === 'add' || k === 'rem')) return false;
+  return keys.every((k) => Array.isArray(obj[k]));
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -138,51 +154,75 @@ function resolveLabelEntries(
   });
 }
 
+/**
+ * A drop-down has TWO working value forms, and which one we send matters.
+ *
+ * ClickUp documents the value as the option's UUID (`{"value": "option_id"}`),
+ * while this tool has always documented and sent the ORDERINDEX -- and that
+ * form is verified live (2026-09-29, re-setting a drop-down on a real task), so
+ * it is not legacy-in-name-only. Hence:
+ *
+ *   - an option UUID passes through UNCHANGED. It is already the documented
+ *     shape; converting it to an orderindex would trade a value ClickUp
+ *     documents for one it merely still accepts, and buy nothing.
+ *   - a NUMBER, or a numeric string, stays an orderindex. That is the contract
+ *     every existing caller was written against, and silently re-reading it as
+ *     something else would change which option they set.
+ *   - an option NAME resolves to that option's UUID, the documented form.
+ *
+ * The response says which form went out, so a rejection is diagnosable rather
+ * than a mystery about what the tool decided on the caller's behalf.
+ */
 function prepareDropDown(
   value: unknown,
   definition: CustomFieldDefinition,
   notes: string[],
 ): unknown {
-  if (typeof value === 'number') return value;
-  if (typeof value !== 'string') return value;
-  const needle = value.trim();
+  if (typeof value !== 'string' && typeof value !== 'number') return value;
+  const needle = String(value).trim();
   const options = definition.type_config?.options ?? [];
+  const fieldLabel = definition.name ?? definition.id;
 
-  const byId = options.find((o) => o.id === needle);
-  if (byId && typeof byId.orderindex === 'number') {
-    notes.push(`Resolved drop-down option ID ${needle} to its orderindex ${byId.orderindex}.`);
-    return byId.orderindex;
-  }
+  if (options.some((o) => o.id === needle)) return needle;
 
-  // A numeric string is an ORDERINDEX, never an option name -- that is the
-  // contract this tool has always had, and the two really can disagree: the
-  // live "Triage Score" field has options named "1".."10" whose orderindexes
-  // are 0..9, so name-matching here would quietly write 2 where the caller
-  // asked for 3. Flag the collision instead of resolving it silently.
   if (needle !== '' && Number.isFinite(Number(needle))) {
-    const sameName = options.find((o) => optionLabel(o) === needle);
-    if (sameName && sameName.orderindex !== Number(needle)) {
-      notes.push(
-        `Read "${value}" as the orderindex ${Number(needle)}, which is this tool's contract for drop-downs. This `
-        + `field also has an option NAMED "${needle}" whose orderindex is ${sameName.orderindex} — pass its option `
-        + `UUID (${sameName.id}) if that is the one you meant.`,
+    const orderindex = Number(needle);
+    // Refused rather than sent: every valid orderindex is one of the options'
+    // own, so one that matches none can only set the wrong option or nothing,
+    // and a silent no-op here reads as a successful write.
+    if (options.length && !options.some((o) => o.orderindex === orderindex)) {
+      throw new CustomFieldValueError(
+        `No option on drop-down field "${fieldLabel}" has orderindex ${orderindex}. Available: `
+        + `${describeOptions(definition)}. Nothing was written.`,
       );
-    } else {
-      notes.push(`Read the string "${value}" as the orderindex ${Number(needle)}.`);
     }
-    return Number(needle);
+    // A numeric string is an ORDERINDEX, never an option name -- the two really
+    // can disagree: the live "Triage Score" field has options named "1".."10"
+    // whose orderindexes are 0..9, so name-matching here would quietly write 2
+    // where the caller asked for 3. Flag the collision instead of resolving it.
+    const sameName = options.find((o) => optionLabel(o) === needle);
+    if (sameName && sameName.orderindex !== orderindex) {
+      notes.push(
+        `Sent ${orderindex} as the orderindex, which is this tool's contract for drop-downs. This field also has an `
+        + `option NAMED "${needle}" whose orderindex is ${sameName.orderindex} — pass its option UUID `
+        + `(${sameName.id}) if that is the one you meant.`,
+      );
+    } else if (typeof value === 'string') {
+      notes.push(`Read the string "${value}" as the orderindex ${orderindex}.`);
+    }
+    return orderindex;
   }
 
   const byLabel = options.find((o) => optionLabel(o).toLowerCase() === needle.toLowerCase());
-  if (byLabel && typeof byLabel.orderindex === 'number') {
-    notes.push(`Resolved drop-down option "${value}" to its orderindex ${byLabel.orderindex}.`);
-    return byLabel.orderindex;
+  if (byLabel?.id) {
+    notes.push(`Resolved drop-down option "${value}" to its option UUID ${byLabel.id}, the form ClickUp documents.`);
+    return byLabel.id;
   }
 
   if (options.length) {
     throw new CustomFieldValueError(
-      `"${value}" is not an option on drop-down field "${definition.name ?? definition.id}". Available: `
-      + `${describeOptions(definition)}. Nothing was written.`,
+      `"${value}" is not an option on drop-down field "${fieldLabel}". Available: ${describeOptions(definition)}. `
+      + `Nothing was written.`,
     );
   }
   return value;
@@ -224,6 +264,9 @@ export function prepareCustomFieldValue(
   }
 
   if (isArrayValuedFieldType(type)) {
+    // The incremental object is as legal as the array here, so it passes
+    // through in both the object and the serialised-string form.
+    if (isIncrementalUpdate(value)) return { value, notes };
     let entries: unknown[];
     if (Array.isArray(value)) {
       entries = value;
@@ -232,15 +275,27 @@ export function prepareCustomFieldValue(
       if (Array.isArray(parsed)) {
         entries = parsed;
         notes.push(`The value arrived as a JSON string and was parsed back into an array — a ${type} field is stored as an array and ClickUp rejects the string form with "Value must be an array" (FIELD_144).`);
+      } else if (isIncrementalUpdate(parsed)) {
+        notes.push('The value arrived as a JSON string and was parsed back into an add/rem object, which ClickUp accepts for this field type.');
+        return { value: parsed, notes };
       } else if (parsed !== undefined) {
         throw new CustomFieldValueError(
-          `Field "${definition?.name ?? definition?.id}" is of type ${type}, which ClickUp stores as an array, but the `
-          + `value parsed as a JSON object. Pass an array of entries. Nothing was written.`,
+          `Field "${definition?.name ?? definition?.id}" is of type ${type}, which ClickUp sets either from an array `
+          + `of entries or from an incremental {"add": [...], "rem": [...]} object. The value parsed as neither. `
+          + `Nothing was written.`,
         );
       } else {
         entries = [value];
         notes.push(`Wrapped the single value in an array — a ${type} field is stored as an array.`);
       }
+    } else if (value !== null && typeof value === 'object') {
+      // Never wrap an object: an array holding one would be neither shape, and
+      // the caller plainly meant the incremental form.
+      throw new CustomFieldValueError(
+        `Field "${definition?.name ?? definition?.id}" is of type ${type}, which ClickUp sets either from an array of `
+        + `entries or from an incremental {"add": [...], "rem": [...]} object whose keys are arrays. The object given `
+        + `is neither. Nothing was written.`,
+      );
     } else {
       entries = [value];
       notes.push(`Wrapped the single value in an array — a ${type} field is stored as an array.`);

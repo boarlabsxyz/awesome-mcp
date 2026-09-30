@@ -124,6 +124,43 @@ describe('clickup custom field value preparation', () => {
       const out = prepareCustomFieldValue('[42,43]', { id: 'u', name: 'Owner', type: 'users' });
       assert.deepEqual(out.value, [42, 43]);
     });
+
+    // ClickUp documents an incremental {add, rem} object for People and
+    // relationship fields. It is an object, so wrapping it in an array (or
+    // refusing it) would break a call that worked before any of this existed.
+    it('passes an add/rem object through untouched', () => {
+      const incremental = { add: [42], rem: [43] };
+      const out = prepareCustomFieldValue(incremental, { id: 'u', name: 'Owner', type: 'users' });
+      assert.deepEqual(out.value, incremental);
+      assert.deepEqual(out.notes, []);
+    });
+
+    it('accepts either key on its own, and revives the serialised form', () => {
+      assert.deepEqual(
+        prepareCustomFieldValue({ add: [42] }, { id: 'u', type: 'users' }).value,
+        { add: [42] },
+      );
+      const revived = prepareCustomFieldValue('{"rem":[43]}', { id: 'u', type: 'users' });
+      assert.deepEqual(revived.value, { rem: [43] });
+      assert.ok(revived.notes.some((n) => n.includes('add/rem')));
+    });
+
+    it('does the same for a relationship field', () => {
+      const out = prepareCustomFieldValue({ add: ['abc123'] }, { id: 'r', type: 'list_relationship' });
+      assert.deepEqual(out.value, { add: ['abc123'] });
+    });
+
+    it('refuses an object that is neither shape instead of wrapping it in an array', () => {
+      assert.throws(
+        () => prepareCustomFieldValue({ nope: [1] }, { id: 'u', name: 'Owner', type: 'users' }),
+        (err: any) => {
+          assert.ok(err instanceof CustomFieldValueError);
+          assert.ok(err.message.includes('add'), err.message);
+          assert.ok(err.message.includes('Nothing was written'));
+          return true;
+        },
+      );
+    });
   });
 
   describe('scalar types', () => {
@@ -141,13 +178,32 @@ describe('clickup custom field value preparation', () => {
       assert.equal(prepareCustomFieldValue('TRUE', { id: 'c', type: 'checkbox' }).value, true);
     });
 
-    it('resolves a drop-down by name and by option UUID to its orderindex', () => {
-      assert.equal(prepareCustomFieldValue('High', DROP_DOWN_FIELD).value, 3);
-      assert.equal(
-        prepareCustomFieldValue('bbbbbbbb-1111-2222-3333-444444444444', DROP_DOWN_FIELD).value,
-        3,
-      );
+    // ClickUp documents the drop-down value as the option UUID, while this
+    // tool has always sent the orderindex -- and that form is verified live.
+    // So a UUID is left alone, a number stays an orderindex, and only a name
+    // has to be resolved, to the documented UUID.
+    it('passes an option UUID through unchanged rather than downgrading it', () => {
+      const out = prepareCustomFieldValue('bbbbbbbb-1111-2222-3333-444444444444', DROP_DOWN_FIELD);
+      assert.equal(out.value, 'bbbbbbbb-1111-2222-3333-444444444444');
+      assert.deepEqual(out.notes, []);
+    });
+
+    it('resolves a drop-down name to its option UUID', () => {
+      const out = prepareCustomFieldValue('High', DROP_DOWN_FIELD);
+      assert.equal(out.value, 'bbbbbbbb-1111-2222-3333-444444444444');
+      assert.ok(out.notes.some((n) => n.includes('ClickUp documents')));
+    });
+
+    it('keeps a number as the orderindex — the contract existing callers were written against', () => {
       assert.equal(prepareCustomFieldValue(3, DROP_DOWN_FIELD).value, 3);
+      assert.equal(prepareCustomFieldValue('3', DROP_DOWN_FIELD).value, 3);
+    });
+
+    it('refuses an orderindex no option has, rather than setting the wrong option or nothing', () => {
+      assert.throws(
+        () => prepareCustomFieldValue(7, DROP_DOWN_FIELD),
+        (err: any) => err instanceof CustomFieldValueError && err.message.includes('orderindex 7'),
+      );
     });
 
     // Live shape from list 901523097822: options are NAMED "1".."10" while
@@ -162,6 +218,7 @@ describe('clickup custom field value preparation', () => {
         options: [
           { id: '7ab8d4c0-9d35-4c9e-a6c2-d10781197b68', name: '1', orderindex: 0 },
           { id: '610cfac3-ed75-4e6f-8665-b6542c71898d', name: '3', orderindex: 2 },
+          { id: '2a1a61ff-49eb-4946-a01f-508c85ace3f3', name: '4', orderindex: 3 },
         ],
       },
     };

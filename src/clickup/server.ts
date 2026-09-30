@@ -1326,13 +1326,14 @@ clickUpServer.addTool({
   annotations: { readOnlyHint: false },
   description: 'Set a custom field value on a ClickUp task. Use getAccessibleCustomFields first to find the field ID '
     + 'and type. Value shape by field type: text/email/phone → string; number → number; checkbox → boolean; date → '
-    + 'unix ms; drop_down → the option orderindex (the option name or UUID is accepted and resolved for you); '
-    + 'labels/users → an ARRAY (of label option UUIDs — label names are accepted and resolved — or of user IDs). '
-    + 'Pass an array as a real JSON array, not as its text: ClickUp answers a stringified array with "Value must be '
-    + 'an array" (FIELD_144). A value that still arrives as a string is repaired here where the field type makes that '
-    + 'unambiguous. NOTE: drop_down is set by orderindex, while the searchTasks custom_fields filter matches on the '
-    + 'option UUID — getAccessibleCustomFields returns both. This endpoint cannot clear a field; use '
-    + 'removeCustomFieldValue.',
+    + 'unix ms; drop_down → the option UUID or its orderindex (an option name is accepted and resolved for you); '
+    + 'labels → an ARRAY of label option UUIDs (label names are accepted and resolved); users and relationship '
+    + 'fields → an ARRAY of IDs, or ClickUp\'s incremental {"add": [...], "rem": [...]} object to change membership '
+    + 'without replacing it. Pass an array as a real JSON array, not as its text: ClickUp answers a stringified array '
+    + 'with "Value must be an array" (FIELD_144). A value that still arrives as a string is repaired here where the '
+    + 'field type makes that unambiguous. NOTE: drop_down can be set by orderindex, while the searchTasks '
+    + 'custom_fields filter matches only on the option UUID — getAccessibleCustomFields returns both. This endpoint '
+    + 'cannot clear a field; use removeCustomFieldValue.',
   parameters: z.object({
     taskId: z.string().describe('The task ID.'),
     fieldId: z.string().describe('The custom field ID (from getAccessibleCustomFields).'),
@@ -1346,9 +1347,10 @@ clickUpServer.addTool({
       z.boolean(),
       z.array(z.union([z.string(), z.number(), z.boolean()])),
       z.record(z.any()),
-    ]).describe('The value to set. text=string, number=number, checkbox=boolean, date=unix ms, dropdown=orderindex '
-      + '(name or option UUID also accepted), labels=array of label option UUIDs or label names, users=array of user '
-      + 'IDs. Send arrays as real JSON arrays, never as the text of one.'),
+    ]).describe('The value to set. text=string, number=number, checkbox=boolean, date=unix ms, dropdown=option UUID '
+      + 'or orderindex (an option name is also accepted), labels=array of label option UUIDs or label names, '
+      + 'users/relationship=array of IDs or an {"add": [...], "rem": [...]} object. Send arrays as real JSON arrays, '
+      + 'never as the text of one.'),
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);

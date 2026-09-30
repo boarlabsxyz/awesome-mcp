@@ -1229,6 +1229,17 @@ describe('ClickUp server tools', () => {
       assert.deepEqual(JSON.parse(calls[2].body!), { value: '["a"]' });
     });
 
+    it('forwards ClickUp\'s incremental add/rem object untouched on a users field', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: { id: 't1', name: 'T', status: { status: 'to do' }, list: { id: 'l1' } } },
+        { status: 200, body: { fields: [{ id: 'uf1', name: 'Reviewers', type: 'users' }] } },
+        { status: 200, body: {} },
+      ]);
+      await callTool('setCustomFieldValue', { taskId: 't1', fieldId: 'uf1', value: { add: [42], rem: [43] } });
+      // Wrapping this in an array would be neither shape ClickUp accepts.
+      assert.deepEqual(JSON.parse(calls[calls.length - 1].body!), { value: { add: [42], rem: [43] } });
+    });
+
     it('declares a typed value parameter rather than an any-shaped one', () => {
       const schema = toolMap.get('setCustomFieldValue')!.parameters;
       const parsed = schema.safeParse({ taskId: 't', fieldId: 'f', value: ['a', 1] });
