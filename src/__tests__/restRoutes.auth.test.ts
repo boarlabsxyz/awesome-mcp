@@ -152,6 +152,18 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/redmine/issues/123',
   '/api/v1/redmine/time-entries',
   '/api/v1/redmine/projects/my-project/wiki/Home',
+  // Google Sheets writes. '/api/v1/sheets' is in BOTH arrays — the GET lists
+  // spreadsheets, the POST creates one.
+  '/api/v1/sheets',
+  '/api/v1/sheets/sheet-123/write',
+  '/api/v1/sheets/sheet-123/append',
+  '/api/v1/sheets/sheet-123/batchUpdate',
+  '/api/v1/sheets/sheet-123/ranges/clear',
+  // Google Calendar writes. The events path is in both arrays for the same
+  // reason: GET lists, POST creates.
+  '/api/v1/calendars/primary/events',
+  '/api/v1/calendars/primary/events/evt-123',
+  '/api/v1/calendars/primary/events/evt-123/cancel',
 ];
 
 describe('REST data-plane: auth gate', () => {

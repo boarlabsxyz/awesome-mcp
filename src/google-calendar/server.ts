@@ -216,60 +216,188 @@ calendarServer.addTool({
   },
 });
 
+// Parameter schemas for the two event writes, lifted out of their addTool calls
+// and exported.
+//
+// They are the single validation contract for BOTH surfaces: the MCP tools take
+// them as `parameters`, and the REST routes
+// (POST /api/v1/calendars/{calendarId}/events and .../events/{eventId})
+// safeParse `req.body` with them. REST has no FastMCP Zod pass in front of it,
+// so before this the routes hand-rolled `if (!summary)` presence checks that
+// drifted from the tools and never checked a single type -- `attendees: "a@b.com"`
+// reached the Google API as a string.
+//
+// `sendUpdates` defaulting to 'none' is the load-bearing default here: it is
+// what stops a curl silently emailing every attendee on a calendar.
+export const createEventSchema = z.object({
+  calendarId: z.string().optional().default('primary')
+    .describe('The calendar ID. Use "primary" for the user\'s primary calendar.'),
+  summary: z.string().describe('The title of the event.'),
+  description: z.string().optional().describe('Description or notes for the event.'),
+  location: z.string().optional().describe('Geographic location of the event.'),
+  startDateTime: z.string().describe('Start time in ISO 8601 format (e.g., "2024-01-15T10:00:00-05:00").'),
+  endDateTime: z.string().describe('End time in ISO 8601 format (e.g., "2024-01-15T11:00:00-05:00").'),
+  timeZone: z.string().optional().describe('Time zone (e.g., "America/New_York"). Defaults to calendar\'s time zone.'),
+  attendees: z.array(z.string()).optional().describe('List of attendee email addresses.'),
+  addGoogleMeet: z.boolean().optional().default(false)
+    .describe('If true, generate a Google Meet video conference for this event. The Meet link is returned in the response and attached to the calendar invite.'),
+  sendUpdates: z.enum(['all', 'externalOnly', 'none']).optional().default('none')
+    .describe('Whether to send email notifications to attendees. Default "none" — attendees are NOT notified unless you pass "all" or "externalOnly".'),
+});
+
+export const updateEventSchema = z.object({
+  calendarId: z.string().optional().default('primary')
+    .describe('The calendar ID. Use "primary" for the user\'s primary calendar.'),
+  eventId: z.string().describe('The event ID to update.'),
+  summary: z.string().optional().describe('New title for the event.'),
+  description: z.string().optional().describe('New description for the event.'),
+  location: z.string().optional().describe('New location for the event.'),
+  startDateTime: z.string().optional().describe('New start time in ISO 8601 format.'),
+  endDateTime: z.string().optional().describe('New end time in ISO 8601 format.'),
+  timeZone: z.string().optional().describe('Time zone for the start/end times.'),
+  addGoogleMeet: z.boolean().optional().default(false)
+    .describe('If true, generate a Google Meet video conference for this event. Ignored if the event already has a conference. The Meet link is returned in the response.'),
+  sendUpdates: z.enum(['all', 'externalOnly', 'none']).optional().default('none')
+    .describe('Whether to send email notifications to attendees. Default "none" — attendees are NOT notified unless you pass "all" or "externalOnly".'),
+});
+
+// Destructive (destructiveHint on the tool), and the REST sibling is a POST to
+// an explicit /cancel path rather than a DELETE: the catalog's method union is
+// GET or POST, and an explicit verb reads as deliberate at the call site. The
+// legacy uncatalogued DELETE on the event path stays for ChatGPT compat.
+export const deleteEventSchema = z.object({
+  calendarId: z.string().optional().default('primary')
+    .describe('The calendar ID. Use "primary" for the user\'s primary calendar.'),
+  eventId: z.string().describe('The event ID to delete.'),
+  sendUpdates: z.enum(['all', 'externalOnly', 'none']).optional().default('none')
+    .describe('Whether to send email notifications to attendees. Default "none" — attendees are NOT notified unless you pass "all" or "externalOnly".'),
+});
+
+export type CreateEventArgs = z.infer<typeof createEventSchema>;
+export type UpdateEventArgs = z.infer<typeof updateEventSchema>;
+
+/**
+ * Insert an event. Returns Google's created event, unformatted.
+ *
+ * The half of createEvent that decides what the answer IS, so the MCP tool and
+ * the REST route cannot build a different request body from the same arguments
+ * -- the duplicated `eventResource` literal in webServer.ts is what let the two
+ * drift (the REST copy forgot Meet handling existed for a while).
+ */
+export async function performCreateEvent(
+  calendar: calendar_v3.Calendar,
+  args: CreateEventArgs,
+): Promise<calendar_v3.Schema$Event> {
+  const eventResource: calendar_v3.Schema$Event = {
+    summary: args.summary,
+    description: args.description,
+    location: args.location,
+    start: { dateTime: args.startDateTime, timeZone: args.timeZone },
+    end: { dateTime: args.endDateTime, timeZone: args.timeZone },
+  };
+  if (args.attendees && args.attendees.length > 0) {
+    eventResource.attendees = args.attendees.map(email => ({ email }));
+  }
+  if (args.addGoogleMeet) {
+    eventResource.conferenceData = buildMeetConferenceData();
+  }
+  const response = await calendar.events.insert({
+    calendarId: args.calendarId,
+    requestBody: eventResource,
+    sendUpdates: args.sendUpdates,
+    conferenceDataVersion: args.addGoogleMeet ? 1 : undefined,
+  });
+  return response.data;
+}
+
+/**
+ * Read-modify-write an event, preserving every field the caller did not name.
+ *
+ * The pre-flight get is not optional: Google's events.update REPLACES the
+ * resource, so sending only the changed fields would silently clear the rest.
+ * (events.patch would merge, but the merge the tool documents includes
+ * carrying `attendees` and `conferenceData` forward, which is explicit here.)
+ *
+ * Returns `wantsNewMeet` alongside the event because only this function knows
+ * whether a Meet was created on THIS call, which is what decides whether the
+ * caller should be told the link may take a moment to appear.
+ */
+export async function performUpdateEvent(
+  calendar: calendar_v3.Calendar,
+  args: UpdateEventArgs,
+): Promise<{ event: calendar_v3.Schema$Event; wantsNewMeet: boolean }> {
+  const existingResponse = await calendar.events.get({
+    calendarId: args.calendarId,
+    eventId: args.eventId,
+  });
+  const existingEvent = existingResponse.data;
+
+  const eventResource: calendar_v3.Schema$Event = {
+    summary: args.summary ?? existingEvent.summary,
+    description: args.description ?? existingEvent.description,
+    location: args.location ?? existingEvent.location,
+    start: args.startDateTime ? { dateTime: args.startDateTime, timeZone: args.timeZone } : existingEvent.start,
+    end: args.endDateTime ? { dateTime: args.endDateTime, timeZone: args.timeZone } : existingEvent.end,
+    attendees: existingEvent.attendees,
+    conferenceData: existingEvent.conferenceData,
+  };
+
+  const wantsNewMeet = Boolean(args.addGoogleMeet) && !hasExistingConference(existingEvent);
+  if (wantsNewMeet) {
+    eventResource.conferenceData = buildMeetConferenceData();
+  }
+
+  const response = await calendar.events.update({
+    calendarId: args.calendarId,
+    eventId: args.eventId,
+    requestBody: eventResource,
+    sendUpdates: args.sendUpdates,
+    conferenceDataVersion: wantsNewMeet ? 1 : undefined,
+  });
+  return { event: response.data, wantsNewMeet };
+}
+
+/**
+ * The JSON an event write returns over REST.
+ *
+ * A projection rather than Google's raw payload, because this shape is already
+ * the published contract of the three ChatGPT-compat routes and clients parse
+ * it. Defined here so the create, update and legacy PATCH routes cannot answer
+ * the same resource three slightly different ways -- they each had their own
+ * copy of this literal.
+ */
+export function projectEvent(event: calendar_v3.Schema$Event): Record<string, unknown> {
+  return {
+    id: event.id,
+    summary: event.summary || null,
+    description: event.description || null,
+    location: event.location || null,
+    start: event.start?.dateTime || event.start?.date || null,
+    end: event.end?.dateTime || event.end?.date || null,
+    status: event.status,
+    htmlLink: event.htmlLink || null,
+    hangoutLink: event.hangoutLink || null,
+    conferenceData: event.conferenceData || null,
+    creator: event.creator?.email || null,
+    organizer: event.organizer?.email || null,
+    attendees: (event.attendees || []).map((a) => ({
+      email: a.email,
+      responseStatus: a.responseStatus || 'needsAction',
+    })),
+  };
+}
+
 calendarServer.addTool({
   name: 'createEvent',
   annotations: { readOnlyHint: false },
   description: 'Creates a new calendar event.',
-  parameters: z.object({
-    calendarId: z.string().optional().default('primary')
-      .describe('The calendar ID. Use "primary" for the user\'s primary calendar.'),
-    summary: z.string().describe('The title of the event.'),
-    description: z.string().optional().describe('Description or notes for the event.'),
-    location: z.string().optional().describe('Geographic location of the event.'),
-    startDateTime: z.string().describe('Start time in ISO 8601 format (e.g., "2024-01-15T10:00:00-05:00").'),
-    endDateTime: z.string().describe('End time in ISO 8601 format (e.g., "2024-01-15T11:00:00-05:00").'),
-    timeZone: z.string().optional().describe('Time zone (e.g., "America/New_York"). Defaults to calendar\'s time zone.'),
-    attendees: z.array(z.string()).optional().describe('List of attendee email addresses.'),
-    addGoogleMeet: z.boolean().optional().default(false)
-      .describe('If true, generate a Google Meet video conference for this event. The Meet link is returned in the response and attached to the calendar invite.'),
-    sendUpdates: z.enum(['all', 'externalOnly', 'none']).optional().default('none')
-      .describe('Whether to send email notifications to attendees. Default "none" — attendees are NOT notified unless you pass "all" or "externalOnly".'),
-  }),
+  parameters: createEventSchema,
   execute: async (args, { log, session }) => {
     const calendar = getCalendarClient(session);
     log.info(`Creating event "${args.summary}" in calendar: ${args.calendarId}${args.addGoogleMeet ? ' (with Google Meet)' : ''}`);
 
     try {
-      const eventResource: calendar_v3.Schema$Event = {
-        summary: args.summary,
-        description: args.description,
-        location: args.location,
-        start: {
-          dateTime: args.startDateTime,
-          timeZone: args.timeZone,
-        },
-        end: {
-          dateTime: args.endDateTime,
-          timeZone: args.timeZone,
-        },
-      };
-
-      if (args.attendees && args.attendees.length > 0) {
-        eventResource.attendees = args.attendees.map(email => ({ email }));
-      }
-
-      if (args.addGoogleMeet) {
-        eventResource.conferenceData = buildMeetConferenceData();
-      }
-
-      const response = await calendar.events.insert({
-        calendarId: args.calendarId,
-        requestBody: eventResource,
-        sendUpdates: args.sendUpdates,
-        conferenceDataVersion: args.addGoogleMeet ? 1 : undefined,
-      });
-
-      const event = response.data;
+      const event = await performCreateEvent(calendar, args);
       let result = `Event created successfully!\n\n` +
         `**Title:** ${event.summary}\n` +
         `**ID:** ${event.id}\n` +
@@ -291,65 +419,13 @@ calendarServer.addTool({
   name: 'updateEvent',
   annotations: { readOnlyHint: false },
   description: 'Updates an existing calendar event.',
-  parameters: z.object({
-    calendarId: z.string().optional().default('primary')
-      .describe('The calendar ID. Use "primary" for the user\'s primary calendar.'),
-    eventId: z.string().describe('The event ID to update.'),
-    summary: z.string().optional().describe('New title for the event.'),
-    description: z.string().optional().describe('New description for the event.'),
-    location: z.string().optional().describe('New location for the event.'),
-    startDateTime: z.string().optional().describe('New start time in ISO 8601 format.'),
-    endDateTime: z.string().optional().describe('New end time in ISO 8601 format.'),
-    timeZone: z.string().optional().describe('Time zone for the start/end times.'),
-    addGoogleMeet: z.boolean().optional().default(false)
-      .describe('If true, generate a Google Meet video conference for this event. Ignored if the event already has a conference. The Meet link is returned in the response.'),
-    sendUpdates: z.enum(['all', 'externalOnly', 'none']).optional().default('none')
-      .describe('Whether to send email notifications to attendees. Default "none" — attendees are NOT notified unless you pass "all" or "externalOnly".'),
-  }),
+  parameters: updateEventSchema,
   execute: async (args, { log, session }) => {
     const calendar = getCalendarClient(session);
     log.info(`Updating event: ${args.eventId} in calendar: ${args.calendarId}${args.addGoogleMeet ? ' (adding Google Meet)' : ''}`);
 
     try {
-      // First, get the existing event
-      const existingResponse = await calendar.events.get({
-        calendarId: args.calendarId,
-        eventId: args.eventId,
-      });
-
-      const existingEvent = existingResponse.data;
-
-      // Build the update payload, preserving existing values
-      const eventResource: calendar_v3.Schema$Event = {
-        summary: args.summary ?? existingEvent.summary,
-        description: args.description ?? existingEvent.description,
-        location: args.location ?? existingEvent.location,
-        start: args.startDateTime ? {
-          dateTime: args.startDateTime,
-          timeZone: args.timeZone,
-        } : existingEvent.start,
-        end: args.endDateTime ? {
-          dateTime: args.endDateTime,
-          timeZone: args.timeZone,
-        } : existingEvent.end,
-        attendees: existingEvent.attendees,
-        conferenceData: existingEvent.conferenceData,
-      };
-
-      const wantsNewMeet = args.addGoogleMeet && !hasExistingConference(existingEvent);
-      if (wantsNewMeet) {
-        eventResource.conferenceData = buildMeetConferenceData();
-      }
-
-      const response = await calendar.events.update({
-        calendarId: args.calendarId,
-        eventId: args.eventId,
-        requestBody: eventResource,
-        sendUpdates: args.sendUpdates,
-        conferenceDataVersion: wantsNewMeet ? 1 : undefined,
-      });
-
-      const event = response.data;
+      const { event, wantsNewMeet } = await performUpdateEvent(calendar, args);
       let result = `Event updated successfully!\n\n` +
         `**Title:** ${event.summary}\n` +
         `**ID:** ${event.id}\n` +
@@ -372,13 +448,7 @@ calendarServer.addTool({
   name: 'deleteEvent',
   annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Deletes a calendar event.',
-  parameters: z.object({
-    calendarId: z.string().optional().default('primary')
-      .describe('The calendar ID. Use "primary" for the user\'s primary calendar.'),
-    eventId: z.string().describe('The event ID to delete.'),
-    sendUpdates: z.enum(['all', 'externalOnly', 'none']).optional().default('none')
-      .describe('Whether to send email notifications to attendees. Default "none" — attendees are NOT notified unless you pass "all" or "externalOnly".'),
-  }),
+  parameters: deleteEventSchema,
   execute: async (args, { log, session }) => {
     const calendar = getCalendarClient(session);
     log.info(`Deleting event: ${args.eventId} from calendar: ${args.calendarId}`);

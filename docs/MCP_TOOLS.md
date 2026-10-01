@@ -75,17 +75,17 @@ Source: `src/google-sheets/server.ts` — 12 tools.
 | Tool | Description | REST |
 |---|---|---|
 | `readSpreadsheet` | Reads data from a specific range in a Google Spreadsheet. | `GET /api/v1/sheets/{spreadsheetId}/ranges?range={range}` |
-| `writeSpreadsheet` | Writes data to a specific range in a Google Spreadsheet. Overwrites existing data in the range. | — |
-| `appendSpreadsheetRows` | Appends rows of data to the end of a sheet in a Google Spreadsheet. | — |
-| `clearSpreadsheetRange` | Clears all values from a specific range in a Google Spreadsheet. | — |
+| `writeSpreadsheet` | Writes data to a specific range in a Google Spreadsheet. Overwrites existing data in the range. | `POST /api/v1/sheets/{spreadsheetId}/write` |
+| `appendSpreadsheetRows` | Appends rows of data to the end of a sheet in a Google Spreadsheet. | `POST /api/v1/sheets/{spreadsheetId}/append` |
+| `clearSpreadsheetRange` | Clears all values from a specific range in a Google Spreadsheet. | `POST /api/v1/sheets/{spreadsheetId}/ranges/clear` |
 | `getSpreadsheetInfo` | Gets detailed information about a Google Spreadsheet including all sheets/tabs. | `GET /api/v1/sheets/{spreadsheetId}` |
 | `addSpreadsheetSheet` | Adds a new sheet/tab to an existing Google Spreadsheet. | — |
-| `createSpreadsheet` | Creates a new Google Spreadsheet (works with shared drives). | — |
+| `createSpreadsheet` | Creates a new Google Spreadsheet (works with shared drives). | `POST /api/v1/sheets` |
 | `listGoogleSheets` | Lists Google Spreadsheets from your Google Drive and shared drives with optional filtering. | `GET /api/v1/sheets` |
 | `findRowByValue` | Search a column for a specific value and return the 1-based row number where it was found. | `GET /api/v1/sheets/{spreadsheetId}/search` |
 | `readRowByField` | Look up a row by searching a column for a value, then return the row as a named JSON object using header names from row 1. | `GET /api/v1/sheets/{spreadsheetId}/rows/{rowNumber}` |
 | `updateCellByFieldName` | Find a row by searching a column for a value, then update a specific field (identified by header name) in that row. Assumes row 1 contains the header names. | — |
-| `batchUpdateSpreadsheet` | Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, column/row sizing, and tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet). | — |
+| `batchUpdateSpreadsheet` | Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, column/row sizing, and tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet). | `POST /api/v1/sheets/{spreadsheetId}/batchUpdate` |
 
 ## Google Calendar
 
@@ -96,9 +96,9 @@ Source: `src/google-calendar/server.ts` — 6 tools.
 | `listCalendars` | Lists all calendars accessible to the user. | `GET /api/v1/calendars` |
 | `listEvents` | Lists events from a calendar within a specified date range. | `GET /api/v1/calendars/{calendarId}/events` |
 | `getEvent` | Gets detailed information about a specific calendar event. | `GET /api/v1/calendars/{calendarId}/events/{eventId}` |
-| `createEvent` | Creates a new calendar event. | — |
-| `updateEvent` | Updates an existing calendar event. | — |
-| `deleteEvent` | Deletes a calendar event. | — |
+| `createEvent` | Creates a new calendar event. | `POST /api/v1/calendars/{calendarId}/events` |
+| `updateEvent` | Updates an existing calendar event. | `POST /api/v1/calendars/{calendarId}/events/{eventId}` |
+| `deleteEvent` | Deletes a calendar event. | `POST /api/v1/calendars/{calendarId}/events/{eventId}/cancel` |
 
 ## Google Drive
 

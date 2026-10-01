@@ -95,6 +95,135 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "createSpreadsheet",
+        "summary": "Create a spreadsheet, optionally seeded with rows",
+        "description": "Creates a new Google Spreadsheet through Drive, so it can be placed in a shared drive, and optionally writes initialData into the first sheet starting at A1. Answers 201 even when the seed write fails, because the spreadsheet itself exists by then: check initialDataWritten.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "title"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Title for the new spreadsheet."
+                  },
+                  "parentFolderId": {
+                    "type": "string",
+                    "description": "Folder to create it in. Omit for Drive root. For a shared drive, use a folder ID inside that drive."
+                  },
+                  "initialData": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "nullable": true,
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ],
+                        "description": "A cell value: string, number, boolean or null."
+                      }
+                    },
+                    "description": "Optional rows written to the first sheet starting at A1."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Spreadsheet created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "spreadsheetId": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "webViewLink": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "driveId": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Set when the file landed in a shared drive."
+                    },
+                    "initialDataWritten": {
+                      "type": "boolean",
+                      "description": "False when no initialData was sent, or when the seed write failed after the file was created."
+                    },
+                    "initialDataError": {
+                      "type": "string",
+                      "description": "Present only when the seed write failed."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spreadsheet or calendar resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/sheets/{spreadsheetId}": {
@@ -179,7 +308,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["range"],
+                "required": [
+                  "range"
+                ],
                 "properties": {
                   "range": {
                     "type": "string",
@@ -272,7 +403,10 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["range", "values"],
+                "required": [
+                  "range",
+                  "values"
+                ],
                 "properties": {
                   "range": {
                     "type": "string",
@@ -283,14 +417,29 @@
                     "items": {
                       "type": "array",
                       "items": {
-                        "type": "string"
+                        "nullable": true,
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ],
+                        "description": "A cell value: string, number, boolean or null."
                       }
                     },
                     "description": "2D array of cell values to write"
                   },
                   "valueInputOption": {
                     "type": "string",
-                    "enum": ["RAW", "USER_ENTERED"],
+                    "enum": [
+                      "RAW",
+                      "USER_ENTERED"
+                    ],
                     "default": "USER_ENTERED",
                     "description": "How input data should be interpreted (RAW or USER_ENTERED)"
                   }
@@ -379,7 +528,10 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["range", "values"],
+                "required": [
+                  "range",
+                  "values"
+                ],
                 "properties": {
                   "range": {
                     "type": "string",
@@ -390,14 +542,29 @@
                     "items": {
                       "type": "array",
                       "items": {
-                        "type": "string"
+                        "nullable": true,
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ],
+                        "description": "A cell value: string, number, boolean or null."
                       }
                     },
                     "description": "2D array of row values to append"
                   },
                   "valueInputOption": {
                     "type": "string",
-                    "enum": ["RAW", "USER_ENTERED"],
+                    "enum": [
+                      "RAW",
+                      "USER_ENTERED"
+                    ],
                     "default": "USER_ENTERED",
                     "description": "How input data should be interpreted (RAW or USER_ENTERED)"
                   }
@@ -453,6 +620,238 @@
           },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sheets/{spreadsheetId}/batchUpdate": {
+      "post": {
+        "operationId": "batchUpdateSpreadsheet",
+        "summary": "Apply formatting and sheet-lifecycle operations atomically",
+        "description": "Applies an ordered list of operations in a single atomic batch: if one is rejected, none of them apply. Sheet names are resolved against the live spreadsheet, including sheets added earlier in the same batch. WARNING: the deleteSheet operation destroys a tab and every value on it, and there is no confirmation step on this plane.",
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The spreadsheet ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "operations"
+                ],
+                "properties": {
+                  "operations": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": "Operations to apply in order. Each needs a `type` plus that type's own fields; see the batchUpdateSpreadsheet MCP tool for the per-type shape.",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "type"
+                      ],
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "numberFormat",
+                            "textStyle",
+                            "backgroundColor",
+                            "borders",
+                            "freeze",
+                            "conditionalFormat",
+                            "mergeCells",
+                            "unmergeCells",
+                            "columnWidth",
+                            "rowHeight",
+                            "updateSheetProperties",
+                            "deleteSheet",
+                            "duplicateSheet",
+                            "addSheet"
+                          ]
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Batch applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "spreadsheetId": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "applied": {
+                      "type": "integer",
+                      "description": "Number of operations Google replied for."
+                    },
+                    "operations": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "One line per operation, in order, for auditing a large batch."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spreadsheet or calendar resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sheets/{spreadsheetId}/ranges/clear": {
+      "post": {
+        "operationId": "clearSpreadsheetRange",
+        "summary": "Clear every value in a range",
+        "description": "DESTRUCTIVE and irreversible through this API: clears all values in the range. POST to an action path rather than DELETE on the range, so the call site reads as deliberate. The response reports the range Google actually cleared, which can be wider than the one requested when the request was unbounded.",
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The spreadsheet ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "range"
+                ],
+                "properties": {
+                  "range": {
+                    "type": "string",
+                    "description": "A1 notation range to clear (e.g. 'Sheet1!A1:B10')."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Range cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "clearedRange": {
+                      "type": "string",
+                      "description": "The range Google reports it cleared."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spreadsheet or calendar resource not found",
             "content": {
               "application/json": {
                 "schema": {

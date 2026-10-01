@@ -39,6 +39,157 @@ function getDriveClient(session?: UserSession): drive_v3.Drive {
   throw new UserError("Google Drive client is not available. Make sure you have granted drive access.");
 }
 
+// === SHARED WRITE SCHEMAS AND OPS ===
+//
+// Lifted out of the addTool calls and exported so the REST data plane can reuse
+// them verbatim. The POST routes safeParse `req.body` with these schemas; before
+// that the ChatGPT-compat routes hand-rolled `if (!range || !values)`, which
+// checks presence and nothing else -- `values: "a,b"` (a string, not a 2D array)
+// passed that check and reached the Google API, where it fails as an opaque
+// upstream 400. One schema for both surfaces is the only thing that keeps them
+// in step as either changes.
+
+export const writeSpreadsheetSchema = z.object({
+  spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
+  range: z.string().describe('A1 notation range to write to (e.g., "A1:B2" or "Sheet1!A1:B2").'),
+  values: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).describe('2D array of values to write. Each inner array represents a row.'),
+  valueInputOption: z.enum(['RAW', 'USER_ENTERED']).optional().default('USER_ENTERED')
+    .describe('How input data should be interpreted. RAW: values are stored as-is. USER_ENTERED: values are parsed as if typed by a user.'),
+});
+
+export const appendSpreadsheetRowsSchema = z.object({
+  spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
+  range: z.string().describe('A1 notation range indicating where to append (e.g., "A1" or "Sheet1!A1"). Data will be appended starting from this range.'),
+  values: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).describe('2D array of values to append. Each inner array represents a row.'),
+  valueInputOption: z.enum(['RAW', 'USER_ENTERED']).optional().default('USER_ENTERED')
+    .describe('How input data should be interpreted. RAW: values are stored as-is. USER_ENTERED: values are parsed as if typed by a user.'),
+});
+
+export const createSpreadsheetSchema = z.object({
+  title: z.string().min(1).describe('Title for the new spreadsheet.'),
+  parentFolderId: z.string().optional().describe('ID of folder where spreadsheet should be created. If not provided, creates in Drive root. For shared drives, use a folder ID within the shared drive.'),
+  initialData: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).optional().describe('Optional initial data to populate in the first sheet. Each inner array represents a row.'),
+});
+
+// Destructive (destructiveHint on the tool). Exported for the same reason as the
+// others: POST /api/v1/sheets/{spreadsheetId}/ranges/clear validates with it.
+export const clearSpreadsheetRangeSchema = z.object({
+  spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
+  range: z.string().describe('A1 notation range to clear (e.g., "A1:B10" or "Sheet1!A1:B10").'),
+});
+
+export const batchUpdateSpreadsheetSchema = z.object({
+  spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
+  operations: z.array(BatchUpdateOperationSchema).min(1).describe('Array of formatting operations to apply atomically.'),
+});
+
+export type CreateSpreadsheetArgs = z.infer<typeof createSpreadsheetSchema>;
+export type BatchUpdateSpreadsheetArgs = z.infer<typeof batchUpdateSpreadsheetSchema>;
+
+/**
+ * Create the spreadsheet through Drive, then optionally seed the first sheet.
+ *
+ * It goes through Drive rather than sheets.spreadsheets.create because only the
+ * Drive call can place the file in a shared drive (`supportsAllDrives`), which
+ * is the whole reason this tool exists in this shape.
+ *
+ * The seeding failure is reported, never thrown: the spreadsheet exists by then,
+ * and turning a partial success into an error would leave the caller believing
+ * nothing was created while an empty sheet sat in their Drive. REST answers 201
+ * with `initialDataWritten: false` for the same reason.
+ */
+export async function performCreateSpreadsheet(
+  drive: drive_v3.Drive,
+  sheets: sheets_v4.Sheets,
+  args: CreateSpreadsheetArgs,
+): Promise<{
+  file: drive_v3.Schema$File;
+  initialDataWritten: boolean;
+  initialDataError?: string;
+}> {
+  const spreadsheetMetadata: drive_v3.Schema$File = {
+    name: args.title,
+    mimeType: 'application/vnd.google-apps.spreadsheet',
+  };
+  if (args.parentFolderId) {
+    spreadsheetMetadata.parents = [args.parentFolderId];
+  }
+
+  const driveResponse = await drive.files.create({
+    requestBody: spreadsheetMetadata,
+    supportsAllDrives: true,
+    fields: 'id,name,webViewLink,driveId',
+  });
+
+  const spreadsheetId = driveResponse.data.id;
+  if (!spreadsheetId) {
+    throw new UserError('Failed to create spreadsheet - no ID returned.');
+  }
+
+  if (!args.initialData || args.initialData.length === 0) {
+    return { file: driveResponse.data, initialDataWritten: false };
+  }
+
+  try {
+    await SheetsHelpers.writeRange(sheets, spreadsheetId, 'A1', args.initialData, 'USER_ENTERED');
+    return { file: driveResponse.data, initialDataWritten: true };
+  } catch (contentError: any) {
+    return {
+      file: driveResponse.data,
+      initialDataWritten: false,
+      initialDataError: contentError?.message || String(contentError),
+    };
+  }
+}
+
+/**
+ * Translate the operation list into Google requests and apply them in one batch.
+ *
+ * The translation is the valuable part and the reason this is shared: each
+ * operation is resolved against the spreadsheet's live metadata (sheet names to
+ * sheetIds) through a `batchState` that also tracks sheets ADDED earlier in the
+ * same batch, so an addSheet followed by a format on that new sheet resolves.
+ * A per-operation failure is re-thrown with the operation's index and type,
+ * because "invalid request" against a 40-operation batch is undiagnosable.
+ */
+export async function performBatchUpdateSpreadsheet(
+  sheets: sheets_v4.Sheets,
+  args: BatchUpdateSpreadsheetArgs,
+): Promise<{ applied: number; title: string; summaries: string[] }> {
+  const metadata = await SheetsHelpers.getSpreadsheetMetadata(sheets, args.spreadsheetId);
+  const batchState = createBatchState(metadata);
+
+  const requests: sheets_v4.Schema$Request[] = [];
+  const summaries: string[] = [];
+  args.operations.forEach((op, i) => {
+    try {
+      requests.push(operationToRequest(op, metadata, batchState));
+      const target = 'range' in op ? op.range
+        : ('sheetName' in op && op.sheetName) ? op.sheetName
+        : ('sourceSheetName' in op && op.sourceSheetName) ? op.sourceSheetName
+        : ('title' in op && op.title) ? op.title
+        : '(first sheet)';
+      summaries.push(`  ${i}. ${op.type} → ${target}`);
+    } catch (e: any) {
+      if (e instanceof UserError) {
+        throw new UserError(`operation[${i}] (type=${op.type}): ${e.message}`);
+      }
+      throw e;
+    }
+  });
+
+  const response = await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: args.spreadsheetId,
+    requestBody: { requests },
+  });
+
+  return {
+    applied: response.data.replies?.length ?? requests.length,
+    title: metadata.properties?.title ?? args.spreadsheetId,
+    summaries,
+  };
+}
+
 // === TOOL DEFINITIONS ===
 
 sheetsServer.addTool({
@@ -84,13 +235,7 @@ sheetsServer.addTool({
   name: 'writeSpreadsheet',
   annotations: { readOnlyHint: false },
   description: 'Writes data to a specific range in a Google Spreadsheet. Overwrites existing data in the range.',
-  parameters: z.object({
-    spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
-    range: z.string().describe('A1 notation range to write to (e.g., "A1:B2" or "Sheet1!A1:B2").'),
-    values: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).describe('2D array of values to write. Each inner array represents a row.'),
-    valueInputOption: z.enum(['RAW', 'USER_ENTERED']).optional().default('USER_ENTERED')
-      .describe('How input data should be interpreted. RAW: values are stored as-is. USER_ENTERED: values are parsed as if typed by a user.'),
-  }),
+  parameters: writeSpreadsheetSchema,
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);
     console.error(`[Sheets Tool] writeSpreadsheet called by ${session?.email}: spreadsheetId=${args.spreadsheetId}, range=${args.range}`);
@@ -123,13 +268,7 @@ sheetsServer.addTool({
   name: 'appendSpreadsheetRows',
   annotations: { readOnlyHint: false },
   description: 'Appends rows of data to the end of a sheet in a Google Spreadsheet.',
-  parameters: z.object({
-    spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
-    range: z.string().describe('A1 notation range indicating where to append (e.g., "A1" or "Sheet1!A1"). Data will be appended starting from this range.'),
-    values: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).describe('2D array of values to append. Each inner array represents a row.'),
-    valueInputOption: z.enum(['RAW', 'USER_ENTERED']).optional().default('USER_ENTERED')
-      .describe('How input data should be interpreted. RAW: values are stored as-is. USER_ENTERED: values are parsed as if typed by a user.'),
-  }),
+  parameters: appendSpreadsheetRowsSchema,
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);
     log.info(`Appending rows to spreadsheet ${args.spreadsheetId}, starting at: ${args.range}`);
@@ -160,10 +299,7 @@ sheetsServer.addTool({
   name: 'clearSpreadsheetRange',
   annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Clears all values from a specific range in a Google Spreadsheet.',
-  parameters: z.object({
-    spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
-    range: z.string().describe('A1 notation range to clear (e.g., "A1:B10" or "Sheet1!A1:B10").'),
-  }),
+  parameters: clearSpreadsheetRangeSchema,
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);
     log.info(`Clearing range ${args.range} in spreadsheet ${args.spreadsheetId}`);
@@ -255,59 +391,26 @@ sheetsServer.addTool({
   name: 'createSpreadsheet',
   annotations: { readOnlyHint: false },
   description: 'Creates a new Google Spreadsheet (works with shared drives).',
-  parameters: z.object({
-    title: z.string().min(1).describe('Title for the new spreadsheet.'),
-    parentFolderId: z.string().optional().describe('ID of folder where spreadsheet should be created. If not provided, creates in Drive root. For shared drives, use a folder ID within the shared drive.'),
-    initialData: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).optional().describe('Optional initial data to populate in the first sheet. Each inner array represents a row.'),
-  }),
+  parameters: createSpreadsheetSchema,
   execute: async (args, { log, session }) => {
     const drive = getDriveClient(session);
     const sheets = getSheetsClient(session);
     log.info(`Creating new spreadsheet "${args.title}"`);
 
     try {
-      const spreadsheetMetadata: drive_v3.Schema$File = {
-        name: args.title,
-        mimeType: 'application/vnd.google-apps.spreadsheet',
-      };
-
-      if (args.parentFolderId) {
-        spreadsheetMetadata.parents = [args.parentFolderId];
+      const { file, initialDataWritten, initialDataError } = await performCreateSpreadsheet(drive, sheets, args);
+      const locationInfo = file.driveId ? ` (in shared drive ID: ${file.driveId})` : '';
+      let result = `Successfully created spreadsheet "${file.name}" (ID: ${file.id})${locationInfo}\nView Link: ${file.webViewLink}`;
+      if (initialDataWritten) {
+        result += `\n\nInitial data added to the spreadsheet.`;
+      } else if (initialDataError) {
+        log.warn(`Spreadsheet created but failed to add initial data: ${initialDataError}`);
+        result += `\n\nSpreadsheet created but failed to add initial data. You can add data manually.`;
       }
-
-      const driveResponse = await drive.files.create({
-        requestBody: spreadsheetMetadata,
-        supportsAllDrives: true,
-        fields: 'id,name,webViewLink,driveId',
-      });
-
-      const spreadsheetId = driveResponse.data.id;
-      if (!spreadsheetId) {
-        throw new UserError('Failed to create spreadsheet - no ID returned.');
-      }
-
-      const locationInfo = driveResponse.data.driveId ? ` (in shared drive ID: ${driveResponse.data.driveId})` : '';
-      let result = `Successfully created spreadsheet "${driveResponse.data.name}" (ID: ${spreadsheetId})${locationInfo}\nView Link: ${driveResponse.data.webViewLink}`;
-
-      if (args.initialData && args.initialData.length > 0) {
-        try {
-          await SheetsHelpers.writeRange(
-            sheets,
-            spreadsheetId,
-            'A1',
-            args.initialData,
-            'USER_ENTERED'
-          );
-          result += `\n\nInitial data added to the spreadsheet.`;
-        } catch (contentError: any) {
-          log.warn(`Spreadsheet created but failed to add initial data: ${contentError.message}`);
-          result += `\n\nSpreadsheet created but failed to add initial data. You can add data manually.`;
-        }
-      }
-
       return result;
     } catch (error: any) {
       log.error(`Error creating spreadsheet: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
       if (error.code === 404) throw new UserError("Parent folder not found. Check the folder ID.");
       if (error.code === 403) throw new UserError("Permission denied. Make sure you have write access to the destination folder.");
       throw new UserError(`Failed to create spreadsheet: ${error.message || 'Unknown error'}`);
@@ -467,44 +570,13 @@ sheetsServer.addTool({
   name: 'batchUpdateSpreadsheet',
   annotations: { readOnlyHint: false },
   description: 'Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, column/row sizing, and tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet).',
-  parameters: z.object({
-    spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
-    operations: z.array(BatchUpdateOperationSchema).min(1).describe('Array of formatting operations to apply atomically.'),
-  }),
+  parameters: batchUpdateSpreadsheetSchema,
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);
     log.info(`batchUpdateSpreadsheet: ${args.operations.length} ops on ${args.spreadsheetId}`);
 
     try {
-      const metadata = await SheetsHelpers.getSpreadsheetMetadata(sheets, args.spreadsheetId);
-      const batchState = createBatchState(metadata);
-
-      const requests: sheets_v4.Schema$Request[] = [];
-      const summaries: string[] = [];
-      args.operations.forEach((op, i) => {
-        try {
-          requests.push(operationToRequest(op, metadata, batchState));
-          const target = 'range' in op ? op.range
-            : ('sheetName' in op && op.sheetName) ? op.sheetName
-            : ('sourceSheetName' in op && op.sourceSheetName) ? op.sourceSheetName
-            : ('title' in op && op.title) ? op.title
-            : '(first sheet)';
-          summaries.push(`  ${i}. ${op.type} → ${target}`);
-        } catch (e: any) {
-          if (e instanceof UserError) {
-            throw new UserError(`operation[${i}] (type=${op.type}): ${e.message}`);
-          }
-          throw e;
-        }
-      });
-
-      const response = await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: args.spreadsheetId,
-        requestBody: { requests },
-      });
-
-      const applied = response.data.replies?.length ?? requests.length;
-      const title = metadata.properties?.title ?? args.spreadsheetId;
+      const { applied, title, summaries } = await performBatchUpdateSpreadsheet(sheets, args);
       return `Applied ${applied} operation(s) to "${title}".\n${summaries.join('\n')}`;
     } catch (error: any) {
       log.error(`batchUpdateSpreadsheet failed: ${error.message || error}`);

@@ -221,7 +221,11 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["summary", "startDateTime", "endDateTime"],
+                "required": [
+                  "summary",
+                  "startDateTime",
+                  "endDateTime"
+                ],
                 "properties": {
                   "summary": {
                     "type": "string",
@@ -264,7 +268,11 @@
                   },
                   "sendUpdates": {
                     "type": "string",
-                    "enum": ["all", "externalOnly", "none"],
+                    "enum": [
+                      "all",
+                      "externalOnly",
+                      "none"
+                    ],
                     "default": "none",
                     "description": "Whether to send email notifications to attendees"
                   }
@@ -469,7 +477,11 @@
                   },
                   "sendUpdates": {
                     "type": "string",
-                    "enum": ["all", "externalOnly", "none"],
+                    "enum": [
+                      "all",
+                      "externalOnly",
+                      "none"
+                    ],
                     "default": "none",
                     "description": "Whether to send email notifications to attendees"
                   }
@@ -560,7 +572,11 @@
             "required": false,
             "schema": {
               "type": "string",
-              "enum": ["all", "externalOnly", "none"],
+              "enum": [
+                "all",
+                "externalOnly",
+                "none"
+              ],
               "default": "none"
             },
             "description": "Whether to send email notifications to attendees"
@@ -614,6 +630,250 @@
           },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "updateCalendarEvent",
+        "summary": "Update an event, merging the fields given",
+        "description": "Updates an existing event. Fields that are omitted are preserved, not cleared: the handler reads the event first and merges, because the underlying Google call replaces the whole resource. Identical in behaviour to the legacy PATCH on this path, which shares the same handler; POST exists because the REST catalog's method union is GET or POST.",
+        "parameters": [
+          {
+            "name": "calendarId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "default": "primary"
+            },
+            "description": "The calendar ID, or 'primary'."
+          },
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The event ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string",
+                    "description": "New title for the event"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "New description for the event"
+                  },
+                  "location": {
+                    "type": "string",
+                    "description": "New location for the event"
+                  },
+                  "startDateTime": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "New start time in ISO 8601 format"
+                  },
+                  "endDateTime": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "New end time in ISO 8601 format"
+                  },
+                  "timeZone": {
+                    "type": "string",
+                    "description": "Time zone for the start/end times"
+                  },
+                  "addGoogleMeet": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true, generate a Google Meet video conference for this event. Ignored if the event already has a conference attached."
+                  },
+                  "sendUpdates": {
+                    "type": "string",
+                    "enum": [
+                      "all",
+                      "externalOnly",
+                      "none"
+                    ],
+                    "default": "none",
+                    "description": "Whether to send email notifications to attendees"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Event updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Event not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calendars/{calendarId}/events/{eventId}/cancel": {
+      "post": {
+        "operationId": "cancelCalendarEvent",
+        "summary": "Delete an event",
+        "description": "DESTRUCTIVE: deletes the event. POST to an action path rather than DELETE on the resource, so the call site reads as deliberate. sendUpdates defaults to 'none', so the deletion is silent unless this asks Google to notify attendees.",
+        "parameters": [
+          {
+            "name": "calendarId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "default": "primary"
+            },
+            "description": "The calendar ID, or 'primary'."
+          },
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The event ID."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sendUpdates": {
+                    "type": "string",
+                    "enum": [
+                      "all",
+                      "externalOnly",
+                      "none"
+                    ],
+                    "default": "none",
+                    "description": "Whether Google emails attendees. Default 'none' \u2014 attendees are NOT notified unless this says otherwise."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Event deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    },
+                    "calendarId": {
+                      "type": "string"
+                    },
+                    "eventId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Event not found",
             "content": {
               "application/json": {
                 "schema": {
