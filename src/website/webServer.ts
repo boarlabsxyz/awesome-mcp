@@ -4499,11 +4499,18 @@ function registerRestApiRoutes(app: express.Express): void {
       // is a bad request, not an upstream fault, and 502-ing it would send the
       // caller looking at Google instead of at their own operation list.
       //
+      // The status check comes FIRST and is load-bearing: the Sheets helpers raise
+      // UserError too, for Google's own 404s and 403s — the metadata read this op
+      // begins with is the usual source — and treating those as a bad request
+      // reported a spreadsheet that does not exist as "400, fix your operations".
+      // Those carry the upstream status (upstreamUserError in
+      // google-sheets/apiHelpers.ts); an operation-validation error carries none.
+      //
       // Matched by name, not `instanceof`: this module imports no part of
       // FastMCP — it is the web process — and pulling the MCP framework in to
       // narrow one error for one status code is not worth it. FastMCPError sets
       // `name = new.target.name` in its constructor, so the name is reliable.
-      if (err?.name === 'UserError') {
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
         res.status(400).json({ error: err.message });
         return;
       }

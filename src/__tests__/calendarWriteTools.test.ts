@@ -47,12 +47,26 @@ function mkCalendar(overrides: any = {}): any {
       get: mock.fn(async () => ({
         data: {
           id: 'evt-1',
+          etag: '"abc123"',
           summary: 'Existing',
           description: 'Existing notes',
           location: 'Room 1',
-          start: { dateTime: '2026-01-15T10:00:00-05:00' },
-          end: { dateTime: '2026-01-15T11:00:00-05:00' },
+          start: { dateTime: '2026-01-15T10:00:00-05:00', timeZone: 'America/New_York' },
+          end: { dateTime: '2026-01-15T11:00:00-05:00', timeZone: 'America/New_York' },
           attendees: [{ email: 'keep@example.com', responseStatus: 'accepted' }],
+          // Everything below is what a whitelist-based merge silently deleted on
+          // every update. recurrence is the worst of them: losing the RRULE stops
+          // the event repeating.
+          recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+          reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10 }] },
+          colorId: '5',
+          visibility: 'private',
+          transparency: 'transparent',
+          attachments: [{ fileId: 'file-1', title: 'Agenda' }],
+          extendedProperties: { private: { team: 'platform' } },
+          guestsCanModify: true,
+          guestsCanInviteOthers: false,
+          sequence: 3,
         },
       })),
       update: mock.fn(async (params: any) => ({ data: { id: 'evt-1', ...params.requestBody } })),
@@ -121,8 +135,25 @@ describe('calendar event write ops', () => {
       // on the real calendar. This is the assertion that pins the merge.
       assert.equal(sent.description, 'Existing notes');
       assert.equal(sent.location, 'Room 1');
-      assert.deepEqual(sent.start, { dateTime: '2026-01-15T10:00:00-05:00' });
+      assert.deepEqual(sent.start, { dateTime: '2026-01-15T10:00:00-05:00', timeZone: 'America/New_York' });
       assert.deepEqual(sent.attendees, [{ email: 'keep@example.com', responseStatus: 'accepted' }]);
+    });
+
+    it('preserves the fields a whitelist merge destroyed — recurrence above all', async () => {
+      const calendar = mkCalendar();
+      await performUpdateEvent(calendar, updateEventSchema.parse({ eventId: 'evt-1', summary: 'Renamed' }));
+      const sent = calendar.events.update.mock.calls[0].arguments[0].requestBody;
+      // Dropping the RRULE turns a weekly standup into a one-off, from a call
+      // that only changed the title.
+      assert.deepEqual(sent.recurrence, ['RRULE:FREQ=WEEKLY;BYDAY=MO']);
+      assert.deepEqual(sent.reminders, { useDefault: false, overrides: [{ method: 'popup', minutes: 10 }] });
+      assert.equal(sent.colorId, '5');
+      assert.equal(sent.visibility, 'private');
+      assert.equal(sent.transparency, 'transparent');
+      assert.deepEqual(sent.attachments, [{ fileId: 'file-1', title: 'Agenda' }]);
+      assert.deepEqual(sent.extendedProperties, { private: { team: 'platform' } });
+      assert.equal(sent.guestsCanModify, true);
+      assert.equal(sent.guestsCanInviteOthers, false);
     });
 
     it('replaces start/end only when new values are given', async () => {
@@ -134,7 +165,40 @@ describe('calendar event write ops', () => {
       }));
       const sent = calendar.events.update.mock.calls[0].arguments[0].requestBody;
       assert.deepEqual(sent.start, { dateTime: '2026-02-01T09:00:00Z', timeZone: 'UTC' });
-      assert.deepEqual(sent.end, { dateTime: '2026-01-15T11:00:00-05:00' });
+      assert.deepEqual(sent.end, { dateTime: '2026-01-15T11:00:00-05:00', timeZone: 'America/New_York' });
+    });
+
+    it('keeps the event time zone when a new time is given without one', async () => {
+      const calendar = mkCalendar();
+      await performUpdateEvent(calendar, updateEventSchema.parse({
+        eventId: 'evt-1',
+        startDateTime: '2026-02-01T09:00:00',
+      }));
+      const sent = calendar.events.update.mock.calls[0].arguments[0].requestBody;
+      // timeZone is optional on the schema, and Google REQUIRES one on a
+      // recurring event — dropping it here would break the fixture's RRULE.
+      assert.deepEqual(sent.start, { dateTime: '2026-02-01T09:00:00', timeZone: 'America/New_York' });
+    });
+
+    it('converts an all-day event to a timed one without sending date and dateTime together', async () => {
+      const calendar = mkCalendar({
+        events: {
+          get: mock.fn(async () => ({
+            data: { id: 'evt-allday', start: { date: '2026-03-01' }, end: { date: '2026-03-02' } },
+          })),
+        },
+      });
+      await performUpdateEvent(calendar, updateEventSchema.parse({
+        eventId: 'evt-allday',
+        startDateTime: '2026-03-01T09:00:00Z',
+        endDateTime: '2026-03-01T10:00:00Z',
+      }));
+      const sent = calendar.events.update.mock.calls[0].arguments[0].requestBody;
+      // Google rejects a start carrying both keys, which is what spreading the
+      // old all-day start over the new one would produce.
+      assert.deepEqual(Object.keys(sent.start).sort(), ['dateTime', 'timeZone']);
+      assert.equal(sent.start.date, undefined);
+      assert.equal(sent.start.dateTime, '2026-03-01T09:00:00Z');
     });
 
     it('adds a Meet when the event has none', async () => {
@@ -166,8 +230,25 @@ describe('calendar event write ops', () => {
       );
       assert.equal(wantsNewMeet, false);
       const sent = calendar.events.update.mock.calls[0].arguments[0];
-      assert.equal(sent.conferenceDataVersion, undefined);
+      // Version 1 even though no NEW Meet was asked for: under the default 0
+      // Google ignores conferenceData in the body, so carrying the existing
+      // conference through a full-resource update would rest on an unstated
+      // guarantee. wantsNewMeet stays false — that flag is about whether to warn
+      // the caller a fresh link may lag, not about the request version.
+      assert.equal(sent.conferenceDataVersion, 1);
       assert.deepEqual(sent.requestBody.conferenceData, { conferenceId: 'already-here' });
+    });
+
+    it('sends no conference version when the event has none and none was asked for', async () => {
+      const calendar = mkCalendar({
+        events: {
+          get: mock.fn(async () => ({
+            data: { id: 'evt-1', start: { dateTime: '2026-01-15T10:00:00Z' }, end: { dateTime: '2026-01-15T11:00:00Z' } },
+          })),
+        },
+      });
+      await performUpdateEvent(calendar, updateEventSchema.parse({ eventId: 'evt-1', summary: 'Renamed' }));
+      assert.equal(calendar.events.update.mock.calls[0].arguments[0].conferenceDataVersion, undefined);
     });
   });
 

@@ -313,14 +313,26 @@ export async function performCreateEvent(
 /**
  * Read-modify-write an event, preserving every field the caller did not name.
  *
- * The pre-flight get is not optional: Google's events.update REPLACES the
- * resource, so sending only the changed fields would silently clear the rest.
- * (events.patch would merge, but the merge the tool documents includes
- * carrying `attendees` and `conferenceData` forward, which is explicit here.)
+ * `events.update` REPLACES the resource, so any field absent from the body is
+ * DELETED on the real calendar. This started from a whitelist — summary,
+ * description, location, start, end, attendees, conferenceData — which silently
+ * destroyed everything else on every single update: `recurrence` (so a title
+ * change stopped a recurring event from repeating), `reminders`, `colorId`,
+ * `visibility`, `transparency`, `attachments`, `extendedProperties` and the
+ * `guestsCan*` settings. Hence the spread: start from the whole event as Google
+ * returned it, then override only what the caller supplied. Google ignores the
+ * output-only fields that come along for the ride (`etag`, `kind`, `created`,
+ * `htmlLink`, …), which is why the documented read-modify-write pattern does
+ * exactly this.
  *
  * Returns `wantsNewMeet` alongside the event because only this function knows
  * whether a Meet was created on THIS call, which is what decides whether the
  * caller should be told the link may take a moment to appear.
+ *
+ * Not conditioned on the event's ETag: a concurrent writer's change can still be
+ * overwritten between the read and the write. Adding `If-Match` would turn that
+ * into a 412 the MCP tools and the two REST routes would all have to surface, so
+ * it is a deliberate follow-up rather than a silent behaviour change here.
  */
 export async function performUpdateEvent(
   calendar: calendar_v3.Calendar,
@@ -333,13 +345,20 @@ export async function performUpdateEvent(
   const existingEvent = existingResponse.data;
 
   const eventResource: calendar_v3.Schema$Event = {
+    ...existingEvent,
     summary: args.summary ?? existingEvent.summary,
     description: args.description ?? existingEvent.description,
     location: args.location ?? existingEvent.location,
-    start: args.startDateTime ? { dateTime: args.startDateTime, timeZone: args.timeZone } : existingEvent.start,
-    end: args.endDateTime ? { dateTime: args.endDateTime, timeZone: args.timeZone } : existingEvent.end,
-    attendees: existingEvent.attendees,
-    conferenceData: existingEvent.conferenceData,
+    // A replacement start/end is built fresh rather than spread over the old
+    // one: an all-day event carries `date`, and `date` + `dateTime` together is
+    // rejected by Google. The time zone falls back to the event's own, because
+    // dropping it breaks a recurring event, which Google requires to carry one.
+    start: args.startDateTime
+      ? { dateTime: args.startDateTime, timeZone: args.timeZone ?? existingEvent.start?.timeZone ?? undefined }
+      : existingEvent.start,
+    end: args.endDateTime
+      ? { dateTime: args.endDateTime, timeZone: args.timeZone ?? existingEvent.end?.timeZone ?? undefined }
+      : existingEvent.end,
   };
 
   const wantsNewMeet = Boolean(args.addGoogleMeet) && !hasExistingConference(existingEvent);
@@ -347,12 +366,18 @@ export async function performUpdateEvent(
     eventResource.conferenceData = buildMeetConferenceData();
   }
 
+  // Version 1 whenever conference data rides in the body — newly requested OR
+  // carried over from the existing event. Under the default version 0 Google
+  // IGNORES `conferenceData`, so preserving an existing Meet across a
+  // full-resource update would be resting on an unstated guarantee.
+  const conferenceDataVersion = eventResource.conferenceData ? 1 : undefined;
+
   const response = await calendar.events.update({
     calendarId: args.calendarId,
     eventId: args.eventId,
     requestBody: eventResource,
     sendUpdates: args.sendUpdates,
-    conferenceDataVersion: wantsNewMeet ? 1 : undefined,
+    conferenceDataVersion,
   });
   return { event: response.data, wantsNewMeet };
 }

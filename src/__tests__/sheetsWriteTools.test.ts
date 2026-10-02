@@ -28,6 +28,8 @@ const {
   performBatchUpdateSpreadsheet,
 } = sheetsModule as any;
 
+const SheetsHelpers = await import('../google-sheets/apiHelpers.js');
+
 const noopLog = { info: () => {}, error: () => {}, warn: () => {} };
 
 function mkErr(code: number, message = 'boom'): any {
@@ -206,6 +208,52 @@ describe('performBatchUpdateSpreadsheet', () => {
       operations: [{ type: 'freeze', sheetName: 'Data', frozenRowCount: 1 }],
     }));
     assert.equal(out.applied, 1);
+  });
+});
+
+describe('upstream status survives the UserError wrapper', () => {
+  // The REST plane's sendUpstreamError reads err.code to answer 404/403. The
+  // helpers wrap Google's error in a UserError, and a bare `new UserError(msg)`
+  // dropped the code — so a missing spreadsheet reached a curl client as a flat
+  // 500 "Failed to write range". The message is unchanged; only the code is new.
+  for (const [label, code] of [['404', 404], ['403', 403], ['500', 500]] as const) {
+    it(`keeps ${label} on a write`, async () => {
+      const sheets = mkSheets({ values: { update: mock.fn(async () => { throw mkErr(code); }) } });
+      await assert.rejects(
+        () => SheetsHelpers.writeRange(sheets, 'ss-1', 'A1', [['a']]),
+        (err: any) => {
+          assert.ok(err instanceof UserError);
+          assert.equal((err as any).code, code);
+          return true;
+        },
+      );
+    });
+  }
+
+  it('keeps the status on the metadata read a batch starts with, so the route can answer 404', async () => {
+    const sheets = mkSheets({ spreadsheets: { get: mock.fn(async () => { throw mkErr(404); }) } });
+    await assert.rejects(
+      () => performBatchUpdateSpreadsheet(sheets, batchUpdateSpreadsheetSchema.parse({
+        spreadsheetId: 'ss-gone', operations: [{ type: 'freeze', sheetName: 'Data', frozenRowCount: 1 }],
+      })),
+      (err: any) => err.code === 404,
+    );
+  });
+
+  it('leaves an operation-validation error with no status — that absence is what makes it a 400', async () => {
+    await assert.rejects(
+      () => performBatchUpdateSpreadsheet(mkSheets(), batchUpdateSpreadsheetSchema.parse({
+        spreadsheetId: 'ss-1', operations: [{ type: 'freeze', sheetName: 'NoSuchSheet', frozenRowCount: 1 }],
+      })),
+      (err: any) => {
+        assert.ok(err instanceof UserError);
+        // The REST batch route reports a code-less UserError as 400 and a
+        // code-bearing one through sendUpstreamError. Collapsing the two
+        // reported a nonexistent spreadsheet as "fix your operations".
+        assert.equal((err as any).code, undefined);
+        return true;
+      },
+    );
   });
 });
 
