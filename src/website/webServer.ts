@@ -3987,396 +3987,288 @@ function registerRestApiRoutes(app: express.Express): void {
   // POST /api/v1/docs/:documentId/comments - Add a comment
   // === Google Docs writes ===
   //
-  // Nineteen endpoints, one per write tool. Every body is safeParsed with the
-  // schema the MCP tool uses (src/google-docs/writeSchemas.ts) and every handler
-  // calls that tool's op (src/google-docs/writeOps.ts), so the two surfaces run
-  // the same code and validate the same way. Those modules exist separately from
-  // google-docs/server.ts precisely so this file can import them: server.ts is the
-  // application entry point and imports createWebApp, so importing it back — even
-  // dynamically — would boot an MCP server from inside a REST handler.
+  // Nineteen endpoints, one per write tool, registered from a table rather than
+  // written out nineteen times. They differ only in schema, op, status code and
+  // response shape, so the hand-written version was ~380 lines of which Sonar
+  // measured 23% as duplicated — and every copy of a catch block is somewhere a
+  // fix can fail to be applied.
   //
-  // Path params are merged OVER the body, so a URL and a mismatched body key
-  // cannot disagree about which document is written.
+  // Every body is validated with the schema the MCP tool uses
+  // (src/google-docs/writeSchemas.ts) and every op comes from
+  // src/google-docs/writeOps.ts, so the two surfaces run the same code. Those
+  // modules exist separately from google-docs/server.ts precisely so this file can
+  // import them: server.ts is the application entry point and imports
+  // createWebApp, so importing it back — even dynamically — would boot an MCP
+  // server from inside a REST handler.
   //
   // These widen what the permanent dashboard API key can do: it reaches the same
   // createServiceAuth gate as the reads, so a key that could only read a document
   // can now rewrite, restyle, comment on and delete content in it.
-
-  /** Body-validation gate shared by all of them: 400 + Zod issues, before any Google call. */
-  function parseDocsBody<T>(schema: { safeParse: (v: unknown) => any }, body: unknown, res: express.Response): T | undefined {
-    const parsed = schema.safeParse(body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
-      return undefined;
-    }
-    return parsed.data as T;
+  interface DocsWriteRoute {
+    /** Express path. Registration order is the array order, so static paths first. */
+    path: string;
+    /** Success status. 201 where a resource is created, 200 for an in-place change. */
+    status?: 200 | 201;
+    notFound: string;
+    fallback: string;
+    /** Lazily imported so the web-only app never loads the Docs modules it does not use. */
+    load: () => Promise<{ schema: { safeParse: (v: unknown) => any }; run: (session: UserSession, args: any) => Promise<any> }>;
+    /** Response body. Defaults to the op result tagged with the documentId. */
+    project?: (result: any, args: any) => unknown;
   }
 
-  // --- Static paths first, so `import` is never read as a documentId ---
+  const docsSchemas = () => import('../google-docs/writeSchemas.js');
+  const docsOps = () => import('../google-docs/writeOps.js');
 
-  // POST /api/v1/docs/import - Create a doc from content
-  app.post('/api/v1/docs/import', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { importToGoogleDocSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(importToGoogleDocSchema, req.body, res);
-      if (!args) return;
-      const { performImportToGoogleDoc } = await import('../google-docs/writeOps.js');
-      const doc = await performImportToGoogleDoc(req.userSession!.googleDrive, args);
-      res.status(201).json(doc);
-    } catch (err: any) {
-      console.error('Error importing content to Google Doc:', err);
-      sendUpstreamError(res, err, { notFound: 'Parent folder not found', fallback: 'Failed to import content' });
-    }
-  });
+  /** The op result as it stands, for endpoints that answer with an upstream record. */
+  const rawResult = (result: any) => result;
 
-  // POST /api/v1/docs/import/docx - Convert a .docx in Drive into a Google Doc
-  app.post('/api/v1/docs/import/docx', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { importDocxSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(importDocxSchema, req.body, res);
-      if (!args) return;
-      const { performImportDocx } = await import('../google-docs/writeOps.js');
-      const doc = await performImportDocx(req.userSession!.googleDrive, args);
-      res.status(201).json(doc);
-    } catch (err: any) {
-      console.error('Error importing DOCX:', err);
-      // A non-docx source is refused by the op with a UserError, and it is the
-      // caller's input that is wrong, not Drive's answer.
-      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-      sendUpstreamError(res, err, { notFound: 'Source file not found', fallback: 'Failed to import DOCX' });
-    }
-  });
-
-  // --- Text content ---
-
-  // POST /api/v1/docs/:documentId/append - Append text to the end
-  app.post('/api/v1/docs/:documentId/append', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { appendToGoogleDocSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(appendToGoogleDocSchema, { ...req.body, documentId: req.params.documentId }, res);
-      if (!args) return;
-      const { performAppendToGoogleDoc } = await import('../google-docs/writeOps.js');
-      const result = await performAppendToGoogleDoc(req.userSession!.googleDocs, args);
-      res.json({ documentId: args.documentId, ...result });
-    } catch (err: any) {
-      console.error('Error appending to doc:', err);
-      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to append to document' });
-    }
-  });
-
-  // POST /api/v1/docs/:documentId/text - Insert text at an index
-  app.post('/api/v1/docs/:documentId/text', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { insertTextSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(insertTextSchema, { ...req.body, documentId: req.params.documentId }, res);
-      if (!args) return;
-      const { performInsertText } = await import('../google-docs/writeOps.js');
-      const result = await performInsertText(req.userSession!.googleDocs, args);
-      res.json({ documentId: args.documentId, ...result });
-    } catch (err: any) {
-      console.error('Error inserting text:', err);
-      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to insert text' });
-    }
-  });
-
-  // POST /api/v1/docs/:documentId/batchUpdate - Up to 50 operations atomically
-  app.post('/api/v1/docs/:documentId/batchUpdate', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { batchUpdateDocSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(batchUpdateDocSchema, { ...req.body, documentId: req.params.documentId }, res);
-      if (!args) return;
-      const { performBatchUpdateDoc } = await import('../google-docs/writeOps.js');
-      const result = await performBatchUpdateDoc(req.userSession!.googleDocs, args);
-      res.json({ documentId: args.documentId, ...result });
-    } catch (err: any) {
-      console.error('Error applying doc batch update:', err);
-      // Mixing global and index-based operations is refused by the op. That is a
-      // bad request, not an upstream fault.
-      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to apply batch update' });
-    }
-  });
-
-  // POST /api/v1/docs/:documentId/find-replace - Replace every occurrence
-  app.post('/api/v1/docs/:documentId/find-replace', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { findAndReplaceSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(findAndReplaceSchema, { ...req.body, documentId: req.params.documentId }, res);
-      if (!args) return;
-      const { performFindAndReplace } = await import('../google-docs/writeOps.js');
-      const result = await performFindAndReplace(req.userSession!.googleDocs, args);
-      // occurrencesChanged: 0 is a successful call that matched nothing.
-      res.json({ documentId: args.documentId, ...result });
-    } catch (err: any) {
-      console.error('Error in find and replace:', err);
-      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to replace text' });
-    }
-  });
-
-  // POST /api/v1/docs/:documentId/ranges/delete - DESTRUCTIVE, signed off
-  app.post('/api/v1/docs/:documentId/ranges/delete', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { deleteRangeSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(deleteRangeSchema, { ...req.body, documentId: req.params.documentId }, res);
-      if (!args) return;
-      const { performDeleteRange } = await import('../google-docs/writeOps.js');
-      const result = await performDeleteRange(req.userSession!.googleDocs, args);
-      res.json({ documentId: args.documentId, deleted: true, ...result });
-    } catch (err: any) {
-      console.error('Error deleting range:', err);
-      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to delete range' });
-    }
-  });
-
-  // --- Styling ---
-
-  // POST /api/v1/docs/:documentId/text-style - Character formatting
-  app.post('/api/v1/docs/:documentId/text-style', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { applyTextStyleSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(applyTextStyleSchema, { ...req.body, documentId: req.params.documentId }, res);
-      if (!args) return;
-      const { performApplyTextStyle } = await import('../google-docs/writeOps.js');
-      const result = await performApplyTextStyle(req.userSession!.googleDocs, args);
+  const DOCS_WRITE_ROUTES: ReadonlyArray<DocsWriteRoute> = [
+    // Static paths first, so `import` is never read as a documentId.
+    {
+      path: '/api/v1/docs/import',
+      status: 201,
+      notFound: 'Parent folder not found',
+      fallback: 'Failed to import content',
+      project: rawResult,
+      load: async () => ({
+        schema: (await docsSchemas()).importToGoogleDocSchema,
+        run: (session, args) => docsOps().then((m) => m.performImportToGoogleDoc(session.googleDrive, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/import/docx',
+      status: 201,
+      notFound: 'Source file not found',
+      fallback: 'Failed to import DOCX',
+      project: rawResult,
+      load: async () => ({
+        schema: (await docsSchemas()).importDocxSchema,
+        run: (session, args) => docsOps().then((m) => m.performImportDocx(session.googleDrive, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/append',
+      notFound: 'Document not found',
+      fallback: 'Failed to append to document',
+      load: async () => ({
+        schema: (await docsSchemas()).appendToGoogleDocSchema,
+        run: (session, args) => docsOps().then((m) => m.performAppendToGoogleDoc(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/text',
+      notFound: 'Document not found',
+      fallback: 'Failed to insert text',
+      load: async () => ({
+        schema: (await docsSchemas()).insertTextSchema,
+        run: (session, args) => docsOps().then((m) => m.performInsertText(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/batchUpdate',
+      notFound: 'Document not found',
+      fallback: 'Failed to apply batch update',
+      load: async () => ({
+        schema: (await docsSchemas()).batchUpdateDocSchema,
+        run: (session, args) => docsOps().then((m) => m.performBatchUpdateDoc(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/find-replace',
+      notFound: 'Document not found',
+      fallback: 'Failed to replace text',
+      load: async () => ({
+        schema: (await docsSchemas()).findAndReplaceSchema,
+        run: (session, args) => docsOps().then((m) => m.performFindAndReplace(session.googleDocs, args)),
+      }),
+    },
+    {
+      // DESTRUCTIVE and irreversible through this API, exposed with explicit
+      // sign-off. A POST to an action path rather than a DELETE on the range, so
+      // the call site reads as deliberate.
+      path: '/api/v1/docs/:documentId/ranges/delete',
+      notFound: 'Document not found',
+      fallback: 'Failed to delete range',
+      project: (result, args) => ({ documentId: args.documentId, deleted: true, ...result }),
+      load: async () => ({
+        schema: (await docsSchemas()).deleteRangeSchema,
+        run: (session, args) => docsOps().then((m) => m.performDeleteRange(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/text-style',
+      notFound: 'Document not found',
+      fallback: 'Failed to apply text style',
       // fields: null means no style key was recognised, so nothing was written —
       // reported as applied: false rather than as a success or an error.
-      res.json({ documentId: args.documentId, applied: result.fields !== null, ...result });
-    } catch (err: any) {
-      console.error('Error applying text style:', err);
-      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to apply text style' });
-    }
-  });
-
-  // POST /api/v1/docs/:documentId/paragraph-style - Paragraph formatting
-  app.post('/api/v1/docs/:documentId/paragraph-style', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { applyParagraphStyleSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(applyParagraphStyleSchema, { ...req.body, documentId: req.params.documentId }, res);
-      if (!args) return;
-      const { performApplyParagraphStyle } = await import('../google-docs/writeOps.js');
-      const result = await performApplyParagraphStyle(req.userSession!.googleDocs, args);
-      res.json({ documentId: args.documentId, applied: result.fields !== null, ...result });
-    } catch (err: any) {
-      console.error('Error applying paragraph style:', err);
-      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to apply paragraph style' });
-    }
-  });
-
-  // POST /api/v1/docs/:documentId/format-matching-text - Format the Nth match
-  app.post('/api/v1/docs/:documentId/format-matching-text', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { formatMatchingTextSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(formatMatchingTextSchema, { ...req.body, documentId: req.params.documentId }, res);
-      if (!args) return;
-      const { performFormatMatchingText } = await import('../google-docs/writeOps.js');
-      const result = await performFormatMatchingText(req.userSession!.googleDocs, args);
-      res.json({ documentId: args.documentId, applied: result.fields !== null, ...result });
-    } catch (err: any) {
-      console.error('Error formatting matching text:', err);
-      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to format text' });
-    }
-  });
-
-  // --- Structure ---
-
-  // POST /api/v1/docs/:documentId/tables - Insert a table
-  app.post('/api/v1/docs/:documentId/tables', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { insertTableSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(insertTableSchema, { ...req.body, documentId: req.params.documentId }, res);
-      if (!args) return;
-      const { performInsertTable } = await import('../google-docs/writeOps.js');
-      const result = await performInsertTable(req.userSession!.googleDocs, args);
-      res.status(201).json({ documentId: args.documentId, ...result });
-    } catch (err: any) {
-      console.error('Error inserting table:', err);
-      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to insert table' });
-    }
-  });
-
-  // POST /api/v1/docs/:documentId/page-breaks - Insert a page break
-  app.post('/api/v1/docs/:documentId/page-breaks', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { insertPageBreakSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(insertPageBreakSchema, { ...req.body, documentId: req.params.documentId }, res);
-      if (!args) return;
-      const { performInsertPageBreak } = await import('../google-docs/writeOps.js');
-      const result = await performInsertPageBreak(req.userSession!.googleDocs, args);
-      res.status(201).json({ documentId: args.documentId, ...result });
-    } catch (err: any) {
-      console.error('Error inserting page break:', err);
-      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to insert page break' });
-    }
-  });
-
-  // --- Images ---
-
-  // POST /api/v1/docs/:documentId/images/from-url - Insert from a public URL
-  app.post('/api/v1/docs/:documentId/images/from-url', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { insertImageFromUrlSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(insertImageFromUrlSchema, { ...req.body, documentId: req.params.documentId }, res);
-      if (!args) return;
-      const { performInsertImageFromUrl } = await import('../google-docs/writeOps.js');
-      const result = await performInsertImageFromUrl(req.userSession!.googleDocs, args);
-      res.status(201).json({ documentId: args.documentId, ...result });
-    } catch (err: any) {
-      console.error('Error inserting image from URL:', err);
-      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to insert image' });
-    }
-  });
-
-  // POST /api/v1/docs/:documentId/images - URL, Drive file, local path or base64
-  app.post('/api/v1/docs/:documentId/images', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { insertLocalImageSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(insertLocalImageSchema, { ...req.body, documentId: req.params.documentId }, res);
-      if (!args) return;
-      const { performInsertLocalImage } = await import('../google-docs/writeOps.js');
-      const result = await performInsertLocalImage(req.userSession!.googleDocs, req.userSession!.googleDrive, args);
-      res.status(201).json({ documentId: args.documentId, ...result });
-    } catch (err: any) {
-      console.error('Error inserting image:', err);
-      // Exactly-one-source and the base64 size cap are both UserErrors from the op.
-      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to insert image' });
-    }
-  });
-
-  // --- Export ---
-
-  // POST /api/v1/docs/:documentId/export/pdf - Export to PDF, saved in Drive
-  app.post('/api/v1/docs/:documentId/export/pdf', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { exportDocToPdfSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(exportDocToPdfSchema, { ...req.body, documentId: req.params.documentId }, res);
-      if (!args) return;
-      const { performExportDocToPdf } = await import('../google-drive/toolHandlers.js');
-      const pdf = await performExportDocToPdf(req.userSession!.googleDrive, args);
-      res.status(201).json(pdf);
-    } catch (err: any) {
-      console.error('Error exporting doc to PDF:', err);
-      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to export document' });
-    }
-  });
-
-  // --- Comments ---
-
-  // POST /api/v1/docs/:documentId/comments - Add a comment
-  //
-  // Catalogued now, but the path and response shape are unchanged from the
-  // ChatGPT-compat route this replaces: clients parse these keys. What changed is
-  // the validation — it was three hand-rolled presence checks.
-  app.post('/api/v1/docs/:documentId/comments', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { addCommentSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(addCommentSchema, { ...req.body, documentId: req.params.documentId }, res);
-      if (!args) return;
-      const { performAddComment } = await import('../google-docs/writeOps.js');
-      const comment = await performAddComment(req.userSession!.googleDocs, req.userSession!.googleDrive, args);
-      res.status(201).json({
+      project: (result, args) => ({ documentId: args.documentId, applied: result.fields !== null, ...result }),
+      load: async () => ({
+        schema: (await docsSchemas()).applyTextStyleSchema,
+        run: (session, args) => docsOps().then((m) => m.performApplyTextStyle(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/paragraph-style',
+      notFound: 'Document not found',
+      fallback: 'Failed to apply paragraph style',
+      project: (result, args) => ({ documentId: args.documentId, applied: result.fields !== null, ...result }),
+      load: async () => ({
+        schema: (await docsSchemas()).applyParagraphStyleSchema,
+        run: (session, args) => docsOps().then((m) => m.performApplyParagraphStyle(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/format-matching-text',
+      notFound: 'Document not found',
+      fallback: 'Failed to format text',
+      project: (result, args) => ({ documentId: args.documentId, applied: result.fields !== null, ...result }),
+      load: async () => ({
+        schema: (await docsSchemas()).formatMatchingTextSchema,
+        run: (session, args) => docsOps().then((m) => m.performFormatMatchingText(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/tables',
+      status: 201,
+      notFound: 'Document not found',
+      fallback: 'Failed to insert table',
+      load: async () => ({
+        schema: (await docsSchemas()).insertTableSchema,
+        run: (session, args) => docsOps().then((m) => m.performInsertTable(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/page-breaks',
+      status: 201,
+      notFound: 'Document not found',
+      fallback: 'Failed to insert page break',
+      load: async () => ({
+        schema: (await docsSchemas()).insertPageBreakSchema,
+        run: (session, args) => docsOps().then((m) => m.performInsertPageBreak(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/images/from-url',
+      status: 201,
+      notFound: 'Document not found',
+      fallback: 'Failed to insert image',
+      load: async () => ({
+        schema: (await docsSchemas()).insertImageFromUrlSchema,
+        run: (session, args) => docsOps().then((m) => m.performInsertImageFromUrl(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/images',
+      status: 201,
+      notFound: 'Document not found',
+      fallback: 'Failed to insert image',
+      load: async () => ({
+        schema: (await docsSchemas()).insertLocalImageSchema,
+        run: (session, args) => docsOps().then((m) => m.performInsertLocalImage(session.googleDocs, session.googleDrive, args)),
+      }),
+    },
+    {
+      // An export that MUTATES: the PDF is written to Drive. The op lives with the
+      // Drive handlers, which is where the tool already kept it.
+      path: '/api/v1/docs/:documentId/export/pdf',
+      status: 201,
+      notFound: 'Document not found',
+      fallback: 'Failed to export document',
+      project: rawResult,
+      load: async () => ({
+        schema: (await docsSchemas()).exportDocToPdfSchema,
+        run: (session, args) => import('../google-drive/toolHandlers.js').then((m) => m.performExportDocToPdf(session.googleDrive, args)),
+      }),
+    },
+    {
+      // Catalogued now, but the path and these response keys are unchanged from
+      // the ChatGPT-compat route this replaces: clients parse them. What changed
+      // is the validation, which was three hand-rolled presence checks.
+      path: '/api/v1/docs/:documentId/comments',
+      status: 201,
+      notFound: 'Document not found',
+      fallback: 'Failed to add comment',
+      project: (comment) => ({
         id: comment.id,
         content: comment.content,
         quotedText: comment.quotedFileContent?.value || null,
         author: comment.author?.displayName || 'Unknown',
         createdTime: comment.createdTime,
         resolved: comment.resolved || false,
-      });
-    } catch (err: any) {
-      console.error('Error adding comment:', err);
-      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to add comment' });
-    }
-  });
+      }),
+      load: async () => ({
+        schema: (await docsSchemas()).addCommentSchema,
+        run: (session, args) => docsOps().then((m) => m.performAddComment(session.googleDocs, session.googleDrive, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/comments/:commentId/replies',
+      status: 201,
+      notFound: 'Comment not found',
+      fallback: 'Failed to reply to comment',
+      project: rawResult,
+      load: async () => ({
+        schema: (await docsSchemas()).replyToCommentSchema,
+        run: (session, args) => docsOps().then((m) => m.performReplyToComment(session.googleDrive, args)),
+      }),
+    },
+    {
+      // `resolved` in the response is what Google reported on a re-read, not what
+      // was requested: the Drive API accepts this on a Google Doc and often does
+      // not persist it.
+      path: '/api/v1/docs/:documentId/comments/:commentId/resolve',
+      notFound: 'Comment not found',
+      fallback: 'Failed to resolve comment',
+      load: async () => ({
+        schema: (await docsSchemas()).resolveCommentSchema,
+        run: (session, args) => docsOps().then((m) => m.performResolveComment(session.googleDrive, args)),
+      }),
+    },
+    {
+      // DESTRUCTIVE, exposed with explicit sign-off. POST to an action path rather
+      // than DELETE on the resource.
+      path: '/api/v1/docs/:documentId/comments/:commentId/delete',
+      notFound: 'Comment not found',
+      fallback: 'Failed to delete comment',
+      load: async () => ({
+        schema: (await docsSchemas()).deleteCommentSchema,
+        run: (session, args) => docsOps().then((m) => m.performDeleteComment(session.googleDrive, args)),
+      }),
+    },
+  ];
 
-  // POST /api/v1/docs/:documentId/comments/:commentId/replies - Reply
-  app.post('/api/v1/docs/:documentId/comments/:commentId/replies', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { replyToCommentSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(replyToCommentSchema, {
-        ...req.body, documentId: req.params.documentId, commentId: req.params.commentId,
-      }, res);
-      if (!args) return;
-      const { performReplyToComment } = await import('../google-docs/writeOps.js');
-      const reply = await performReplyToComment(req.userSession!.googleDrive, args);
-      res.status(201).json(reply);
-    } catch (err: any) {
-      console.error('Error replying to comment:', err);
-      sendUpstreamError(res, err, { notFound: 'Comment not found', fallback: 'Failed to reply to comment' });
-    }
-  });
-
-  // POST /api/v1/docs/:documentId/comments/:commentId/resolve - Mark resolved
-  app.post('/api/v1/docs/:documentId/comments/:commentId/resolve', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { resolveCommentSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(resolveCommentSchema, {
-        ...req.body, documentId: req.params.documentId, commentId: req.params.commentId,
-      }, res);
-      if (!args) return;
-      const { performResolveComment } = await import('../google-docs/writeOps.js');
-      // `resolved` is what Google reported on a re-read, not what was asked for:
-      // the Drive API accepts this on a Google Doc and often does not persist it.
-      const result = await performResolveComment(req.userSession!.googleDrive, args);
-      res.json({ documentId: args.documentId, ...result });
-    } catch (err: any) {
-      console.error('Error resolving comment:', err);
-      sendUpstreamError(res, err, { notFound: 'Comment not found', fallback: 'Failed to resolve comment' });
-    }
-  });
-
-  // POST /api/v1/docs/:documentId/comments/:commentId/delete - DESTRUCTIVE, signed off
-  app.post('/api/v1/docs/:documentId/comments/:commentId/delete', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { deleteCommentSchema } = await import('../google-docs/writeSchemas.js');
-      const args = parseDocsBody<any>(deleteCommentSchema, {
-        ...req.body, documentId: req.params.documentId, commentId: req.params.commentId,
-      }, res);
-      if (!args) return;
-      const { performDeleteComment } = await import('../google-docs/writeOps.js');
-      const result = await performDeleteComment(req.userSession!.googleDrive, args);
-      res.json({ documentId: args.documentId, ...result });
-    } catch (err: any) {
-      console.error('Error deleting comment:', err);
-      sendUpstreamError(res, err, { notFound: 'Comment not found', fallback: 'Failed to delete comment' });
-    }
-  });
+  for (const route of DOCS_WRITE_ROUTES) {
+    app.post(route.path, requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const { schema, run } = await route.load();
+        // Path params are merged OVER the body, so a URL and a mismatched body key
+        // cannot disagree about which document or comment is written.
+        const parsed = schema.safeParse({ ...req.body, ...req.params });
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const result = await run(req.userSession!, parsed.data);
+        const body = route.project
+          ? route.project(result, parsed.data)
+          : { documentId: parsed.data.documentId, ...result };
+        res.status(route.status ?? 200).json(body);
+      } catch (err: any) {
+        console.error(`Error in POST ${route.path}:`, err);
+        // The ops raise UserError for input the caller can fix: an unknown tab, a
+        // non-docx source, a batch mixing global and index-based operations, a
+        // missing image source. The status check matters because helpers raise the
+        // same type for Google's own 404s and 403s (carrying the upstream code),
+        // and answering those as 400 would blame the caller for a missing document.
+        if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        sendUpstreamError(res, err, { notFound: route.notFound, fallback: route.fallback });
+      }
+    });
+  }
 
   // === Calendar REST API ===
 
