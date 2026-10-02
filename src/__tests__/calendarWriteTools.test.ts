@@ -268,6 +268,22 @@ describe('calendar event write ops', () => {
       assert.deepEqual(out.attendees, []);
     });
 
+    it('flattens an all-day end and surfaces creator and organizer emails', () => {
+      const out: any = projectEvent({
+        id: 'e2',
+        summary: 'Offsite',
+        start: { date: '2026-04-01' },
+        end: { date: '2026-04-02' },
+        creator: { email: 'organiser@example.com' },
+        organizer: { email: 'team@example.com' },
+        hangoutLink: 'https://meet.google.com/abc-defg-hij',
+      });
+      assert.equal(out.end, '2026-04-02');
+      assert.equal(out.creator, 'organiser@example.com');
+      assert.equal(out.organizer, 'team@example.com');
+      assert.equal(out.hangoutLink, 'https://meet.google.com/abc-defg-hij');
+    });
+
     it('defaults a missing attendee responseStatus to needsAction', () => {
       const out: any = projectEvent({ id: 'e1', attendees: [{ email: 'a@b.com' }] });
       assert.deepEqual(out.attendees, [{ email: 'a@b.com', responseStatus: 'needsAction' }]);

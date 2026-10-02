@@ -118,6 +118,19 @@ describe('performCreateSpreadsheet', () => {
     assert.match(out.initialDataError, /seed exploded/);
   });
 
+  it('reports the seed failure through the helper message, whatever was thrown', async () => {
+    // Even a thrown string arrives here already wrapped: writeRange has its own
+    // catch, so initialDataError always carries the helper's message. (The
+    // String(contentError) fallback behind it is defensive and unreachable
+    // through this path — not worth contorting the code to exercise.)
+    const sheets = mkSheets({ values: { update: mock.fn(async () => { throw 'quota exhausted'; }) } });
+    const out = await performCreateSpreadsheet(mkDrive(), sheets, createSpreadsheetSchema.parse({
+      title: 'Seeded', initialData: [['a']],
+    }));
+    assert.equal(out.initialDataWritten, false);
+    assert.match(out.initialDataError, /Failed to write range/);
+  });
+
   it('throws when Drive returns no id, since nothing can be seeded or reported', async () => {
     const drive = mkDrive({ files: { create: mock.fn(async () => ({ data: {} })) } });
     await assert.rejects(
@@ -199,6 +212,14 @@ describe('performBatchUpdateSpreadsheet', () => {
       // saying so beats an empty arrow.
       '4. freeze → (first sheet)',
     ]);
+  });
+
+  it('falls back to the spreadsheet id when the metadata carries no title', async () => {
+    const sheets = mkSheets({ spreadsheets: { get: mock.fn(async () => ({ data: { sheets: METADATA.sheets } })) } });
+    const out = await performBatchUpdateSpreadsheet(sheets, batchUpdateSpreadsheetSchema.parse({
+      spreadsheetId: 'ss-untitled', operations: [{ type: 'freeze', sheetName: 'Data', frozenRowCount: 1 }],
+    }));
+    assert.equal(out.title, 'ss-untitled');
   });
 
   it('falls back to the request count when Google replies with no replies array', async () => {
@@ -296,6 +317,26 @@ describe('sheets write tools', () => {
       googleSheets: mkSheets({ values: { update: mock.fn(async () => { throw new Error('nope'); }) } }),
     });
     assert.match(failed, /failed to add initial data/);
+  });
+
+  it('createSpreadsheet names the shared drive when the file landed in one', async () => {
+    const drive = mkDrive({
+      files: { create: mock.fn(async () => ({ data: { id: 'ss-sd', name: 'Team', webViewLink: 'https://docs/ss-sd', driveId: 'drive-9' } })) },
+    });
+    const out = await callTool('createSpreadsheet', createSpreadsheetSchema.parse({ title: 'Team' }), {
+      googleDrive: drive, googleSheets: mkSheets(),
+    });
+    assert.match(out, /shared drive ID: drive-9/);
+  });
+
+  it('createSpreadsheet passes a UserError through rather than relabelling it', async () => {
+    // performCreateSpreadsheet raises this when Drive answers without an id; the
+    // tool must not rewrite it into a generic "Failed to create spreadsheet".
+    const drive = mkDrive({ files: { create: mock.fn(async () => ({ data: {} })) } });
+    await assert.rejects(
+      () => callTool('createSpreadsheet', createSpreadsheetSchema.parse({ title: 'x' }), { googleDrive: drive, googleSheets: mkSheets() }),
+      (err: any) => err instanceof UserError && /no ID returned/.test(err.message),
+    );
   });
 
   it('createSpreadsheet explains a 403 on the destination folder', async () => {
