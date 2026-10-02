@@ -7,6 +7,22 @@ type Sheets = sheets_v4.Sheets; // Alias for convenience
 // --- Core Helper Functions ---
 
 /**
+ * Wrap an upstream Google failure in a UserError while KEEPING its HTTP status.
+ *
+ * The REST plane's `sendUpstreamError` reads `err.code` to decide 404 vs 403 vs
+ * 500, and a bare `new UserError(message)` drops it — so a missing spreadsheet
+ * reached a curl client as a flat 500 "Failed to write range", with nothing in
+ * it to act on. The message is unchanged, so the MCP tools that only print it
+ * are unaffected.
+ */
+function upstreamUserError(message: string, cause: any): UserError {
+  const err = new UserError(message);
+  const code = cause?.code ?? cause?.response?.status ?? cause?.status;
+  if (typeof code === 'number') (err as any).code = code;
+  return err;
+}
+
+/**
  * Converts A1 notation to row/column indices (0-based)
  * Example: "A1" -> {row: 0, col: 0}, "B2" -> {row: 1, col: 1}
  */
@@ -83,12 +99,12 @@ export async function readRange(
     return response.data;
   } catch (error: any) {
     if (error.code === 404) {
-      throw new UserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`);
+      throw upstreamUserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`, error);
     }
     if (error.code === 403) {
-      throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have read access.`);
+      throw upstreamUserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have read access.`, error);
     }
-    throw new UserError(`Failed to read range: ${error.message || 'Unknown error'}`);
+    throw upstreamUserError(`Failed to read range: ${error.message || 'Unknown error'}`, error);
   }
 }
 
@@ -114,12 +130,12 @@ export async function writeRange(
     return response.data;
   } catch (error: any) {
     if (error.code === 404) {
-      throw new UserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`);
+      throw upstreamUserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`, error);
     }
     if (error.code === 403) {
-      throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`);
+      throw upstreamUserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`, error);
     }
-    throw new UserError(`Failed to write range: ${error.message || 'Unknown error'}`);
+    throw upstreamUserError(`Failed to write range: ${error.message || 'Unknown error'}`, error);
   }
 }
 
@@ -146,12 +162,12 @@ export async function appendValues(
     return response.data;
   } catch (error: any) {
     if (error.code === 404) {
-      throw new UserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`);
+      throw upstreamUserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`, error);
     }
     if (error.code === 403) {
-      throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`);
+      throw upstreamUserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`, error);
     }
-    throw new UserError(`Failed to append values: ${error.message || 'Unknown error'}`);
+    throw upstreamUserError(`Failed to append values: ${error.message || 'Unknown error'}`, error);
   }
 }
 
@@ -171,12 +187,12 @@ export async function clearRange(
     return response.data;
   } catch (error: any) {
     if (error.code === 404) {
-      throw new UserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`);
+      throw upstreamUserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`, error);
     }
     if (error.code === 403) {
-      throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`);
+      throw upstreamUserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`, error);
     }
-    throw new UserError(`Failed to clear range: ${error.message || 'Unknown error'}`);
+    throw upstreamUserError(`Failed to clear range: ${error.message || 'Unknown error'}`, error);
   }
 }
 
@@ -195,12 +211,12 @@ export async function getSpreadsheetMetadata(
     return response.data;
   } catch (error: any) {
     if (error.code === 404) {
-      throw new UserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`);
+      throw upstreamUserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`, error);
     }
     if (error.code === 403) {
-      throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have read access.`);
+      throw upstreamUserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have read access.`, error);
     }
-    throw new UserError(`Failed to get spreadsheet metadata: ${error.message || 'Unknown error'}`);
+    throw upstreamUserError(`Failed to get spreadsheet metadata: ${error.message || 'Unknown error'}`, error);
   }
 }
 
@@ -230,12 +246,12 @@ export async function addSheet(
     return response.data;
   } catch (error: any) {
     if (error.code === 404) {
-      throw new UserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`);
+      throw upstreamUserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`, error);
     }
     if (error.code === 403) {
-      throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`);
+      throw upstreamUserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`, error);
     }
-    throw new UserError(`Failed to add sheet: ${error.message || 'Unknown error'}`);
+    throw upstreamUserError(`Failed to add sheet: ${error.message || 'Unknown error'}`, error);
   }
 }
 
@@ -491,13 +507,13 @@ export async function formatCells(
     return response.data;
   } catch (error: any) {
     if (error.code === 404) {
-      throw new UserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`);
+      throw upstreamUserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`, error);
     }
     if (error.code === 403) {
-      throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`);
+      throw upstreamUserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`, error);
     }
     if (error instanceof UserError) throw error;
-    throw new UserError(`Failed to format cells: ${error.message || 'Unknown error'}`);
+    throw upstreamUserError(`Failed to format cells: ${error.message || 'Unknown error'}`, error);
   }
 }
 

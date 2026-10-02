@@ -52,6 +52,11 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `readSpreadsheet` | `GET /api/v1/sheets/{spreadsheetId}/ranges?range={range}` | live | Read a range from a spreadsheet — _GET sibling of the existing POST /api/v1/sheets/{id}/read._ |
 | `readRowByField` | `GET /api/v1/sheets/{spreadsheetId}/rows/{rowNumber}` | live | Read a row by row number |
 | `findRowByValue` | `GET /api/v1/sheets/{spreadsheetId}/search` | live | Find a row by column value (?col=&val=) |
+| `createSpreadsheet` | `POST /api/v1/sheets` | live | Create a spreadsheet, optionally seeded with rows — _Body limit 5mb so initialData can carry a bulk seed. Not idempotent: each call creates another spreadsheet. A seed that fails still answers 201 with initialDataWritten false, because the file exists by then._ |
+| `writeSpreadsheet` | `POST /api/v1/sheets/{spreadsheetId}/write` | live | Overwrite a range with a 2D array of values — _Body limit 5mb. Overwrites whatever occupies the range. Was an uncatalogued ChatGPT-compat route; the path is unchanged and it now validates with the MCP tool schema._ |
+| `appendSpreadsheetRows` | `POST /api/v1/sheets/{spreadsheetId}/append` | live | Append rows to the end of a sheet — _Body limit 5mb. Not idempotent: repeating the call appends the rows a second time. Was an uncatalogued ChatGPT-compat route; path unchanged._ |
+| `batchUpdateSpreadsheet` | `POST /api/v1/sheets/{spreadsheetId}/batchUpdate` | live | Apply formatting and sheet-lifecycle operations atomically — _Body limit 5mb. WARNING: the operation list includes deleteSheet, which destroys a tab and every value on it, and a curl has no confirmation step. Reviewed and accepted when this endpoint was added. The whole batch is atomic, so one rejected operation applies none of them._ |
+| `clearSpreadsheetRange` | `POST /api/v1/sheets/{spreadsheetId}/ranges/clear` | live | Clear every value in a range — _DESTRUCTIVE and irreversible through this API. Exposed with explicit sign-off. POST to an action path rather than DELETE on the range, so the call site reads as deliberate._ |
 
 ### Google Calendar (`calendar`)
 
@@ -60,6 +65,9 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `listCalendars` | `GET /api/v1/calendars` | live | List calendars |
 | `listEvents` | `GET /api/v1/calendars/{calendarId}/events` | live | List events in a calendar |
 | `getEvent` | `GET /api/v1/calendars/{calendarId}/events/{eventId}` | live | Get a single event |
+| `createEvent` | `POST /api/v1/calendars/{calendarId}/events` | live | Create an event — _sendUpdates defaults to none, so attendees are NOT emailed unless the body asks. Not idempotent: each call creates another event. Was an uncatalogued ChatGPT-compat route; path unchanged and it now validates with the MCP tool schema._ |
+| `updateEvent` | `POST /api/v1/calendars/{calendarId}/events/{eventId}` | live | Update an event, merging the fields given — _POST because the catalog method union is GET or POST. The uncatalogued legacy PATCH on this same path stays for ChatGPT compat and shares this handler. Omitted fields are preserved, not cleared._ |
+| `deleteEvent` | `POST /api/v1/calendars/{calendarId}/events/{eventId}/cancel` | live | Delete an event — _DESTRUCTIVE. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Pass sendUpdates all to notify attendees; the default none deletes silently._ |
 
 ### Google Drive (`drive`)
 
@@ -255,4 +263,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 160 endpoints.
+Catalog size: 168 endpoints.

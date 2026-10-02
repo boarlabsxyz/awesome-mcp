@@ -1649,6 +1649,11 @@ function registerSharedRoutes(app: express.Express): void {
     '/api/v1/hubspot/notes',    // createNote — free text
     '/api/v1/hubspot/calls',    // logCall — can be a whole transcript
     '/api/v1/hubspot/meetings', // logMeeting — can be full minutes
+    // Sheets writes are the clearest case for this plane: `values` is a 2D array
+    // of rows, and bulk rows are the whole reason the endpoint exists, so the
+    // global 100kb would 413 the use case. Covers /write, /append, /batchUpdate,
+    // /ranges/clear and POST /api/v1/sheets (createSpreadsheet.initialData).
+    '/api/v1/sheets',
   ];
   for (const prefix of REST_LARGE_BODY_PREFIXES) {
     app.use(prefix, express.json({ limit: REST_LARGE_BODY_LIMIT }));
@@ -4188,166 +4193,118 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // === Google Calendar event writes ===
+  //
+  // Four routes, three handlers, ONE validation contract. Every body is
+  // safeParsed with the MCP tool's own exported schema
+  // (createEventSchema / updateEventSchema / deleteEventSchema) instead of the
+  // `if (!summary)` presence checks that used to live here: REST has no FastMCP
+  // Zod pass in front of it, so those checks were the only validation, and they
+  // never looked at a single type — `attendees: "a@b.com"` went to Google as a
+  // string and failed there as an opaque 400.
+  //
+  // The path param is merged OVER the body so a URL and a mismatched body key
+  // cannot disagree about which calendar or event is being written.
+  //
+  // These widen what the permanent dashboard API key can do: it reaches the same
+  // createServiceAuth gate as the reads, so a key that could only read a
+  // calendar yesterday can now create, change and delete events on it.
+
   // POST /api/v1/calendars/:calendarId/events - Create event
   app.post('/api/v1/calendars/:calendarId/events', requireCalendarApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const calendarId = req.params.calendarId as string;
-      const { summary, description, location, startDateTime, endDateTime, timeZone, attendees, addGoogleMeet = false, sendUpdates = 'none' } = req.body;
-
-      if (!summary) {
-        res.status(400).json({ error: 'summary is required' });
+      const { createEventSchema, performCreateEvent, projectEvent } = await import('../google-calendar/server.js');
+      const parsed = createEventSchema.safeParse({ ...req.body, calendarId: req.params.calendarId });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
         return;
       }
-      if (!startDateTime) {
-        res.status(400).json({ error: 'startDateTime is required' });
-        return;
-      }
-      if (!endDateTime) {
-        res.status(400).json({ error: 'endDateTime is required' });
-        return;
-      }
-
-      const calendar = req.userSession!.googleCalendar;
-
-      const eventResource: any = {
-        summary,
-        description,
-        location,
-        start: { dateTime: startDateTime, timeZone },
-        end: { dateTime: endDateTime, timeZone },
-      };
-
-      if (attendees && attendees.length > 0) {
-        eventResource.attendees = attendees.map((email: string) => ({ email }));
-      }
-
-      if (addGoogleMeet) {
-        eventResource.conferenceData = buildMeetConferenceData();
-      }
-
-      const response = await calendar.events.insert({
-        calendarId,
-        requestBody: eventResource,
-        sendUpdates,
-        conferenceDataVersion: addGoogleMeet ? 1 : undefined,
-      });
-
-      const event = response.data;
-      res.status(201).json({
-        id: event.id,
-        summary: event.summary || null,
-        description: event.description || null,
-        location: event.location || null,
-        start: event.start?.dateTime || event.start?.date || null,
-        end: event.end?.dateTime || event.end?.date || null,
-        status: event.status,
-        htmlLink: event.htmlLink || null,
-        hangoutLink: event.hangoutLink || null,
-        conferenceData: event.conferenceData || null,
-        creator: event.creator?.email || null,
-        organizer: event.organizer?.email || null,
-        attendees: (event.attendees || []).map((a: any) => ({
-          email: a.email,
-          responseStatus: a.responseStatus || 'needsAction',
-        })),
-      });
+      const event = await performCreateEvent(req.userSession!.googleCalendar, parsed.data);
+      res.status(201).json(projectEvent(event));
     } catch (err: any) {
       console.error('Error creating event:', err);
-      if (err.code === 403) {
-        res.status(403).json({ error: 'Permission denied' });
-      } else {
-        res.status(500).json({ error: err.message || 'Failed to create event' });
-      }
+      sendUpstreamError(res, err, { notFound: 'Calendar not found', fallback: 'Failed to create event' });
     }
   });
 
-  // PATCH /api/v1/calendars/:calendarId/events/:eventId - Update event
-  app.patch('/api/v1/calendars/:calendarId/events/:eventId', requireCalendarApiKey, async (req: ApiAuthenticatedRequest, res) => {
+  // Shared by the catalogued POST and the uncatalogued legacy PATCH on the same
+  // path. The PATCH is ChatGPT Custom Actions compat and its clients are already
+  // written against it; pointing both at one function is what stops the two
+  // verbs answering the same write differently, which they previously did (the
+  // PATCH copy built its own event resource and had drifted from the tool).
+  const handleCalendarEventUpdate = async (req: ApiAuthenticatedRequest, res: Response) => {
     try {
-      const { calendarId, eventId } = req.params;
-      const { summary, description, location, startDateTime, endDateTime, timeZone, addGoogleMeet = false, sendUpdates = 'none' } = req.body;
-      const calendar = req.userSession!.googleCalendar;
-
-      // Fetch existing event to merge fields
-      const existingResponse: any = await calendar.events.get({
-        calendarId: calendarId as string,
-        eventId: eventId as string,
+      const { updateEventSchema, performUpdateEvent, projectEvent } = await import('../google-calendar/server.js');
+      const parsed = updateEventSchema.safeParse({
+        ...req.body,
+        calendarId: req.params.calendarId,
+        eventId: req.params.eventId,
       });
-      const existingEvent = existingResponse.data;
-
-      const wantsNewMeet = addGoogleMeet && !hasExistingConference(existingEvent);
-      const eventResource: any = {
-        summary: summary ?? existingEvent.summary,
-        description: description ?? existingEvent.description,
-        location: location ?? existingEvent.location,
-        start: startDateTime ? { dateTime: startDateTime, timeZone } : existingEvent.start,
-        end: endDateTime ? { dateTime: endDateTime, timeZone } : existingEvent.end,
-        attendees: existingEvent.attendees,
-        conferenceData: wantsNewMeet ? buildMeetConferenceData() : existingEvent.conferenceData,
-      };
-
-      const response: any = await calendar.events.update({
-        calendarId: calendarId as string,
-        eventId: eventId as string,
-        requestBody: eventResource,
-        sendUpdates: sendUpdates as 'all' | 'externalOnly' | 'none',
-        conferenceDataVersion: wantsNewMeet ? 1 : undefined,
-      });
-
-      const event = response.data;
-      res.json({
-        id: event.id,
-        summary: event.summary || null,
-        description: event.description || null,
-        location: event.location || null,
-        start: event.start?.dateTime || event.start?.date || null,
-        end: event.end?.dateTime || event.end?.date || null,
-        status: event.status,
-        htmlLink: event.htmlLink || null,
-        hangoutLink: event.hangoutLink || null,
-        conferenceData: event.conferenceData || null,
-        creator: event.creator?.email || null,
-        organizer: event.organizer?.email || null,
-        attendees: (event.attendees || []).map((a: any) => ({
-          email: a.email,
-          responseStatus: a.responseStatus || 'needsAction',
-        })),
-      });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const { event } = await performUpdateEvent(req.userSession!.googleCalendar, parsed.data);
+      res.json(projectEvent(event));
     } catch (err: any) {
       console.error('Error updating event:', err);
-      if (err.code === 404) {
-        res.status(404).json({ error: 'Event not found' });
-      } else if (err.code === 403) {
-        res.status(403).json({ error: 'Permission denied' });
-      } else {
-        res.status(500).json({ error: err.message || 'Failed to update event' });
+      sendUpstreamError(res, err, { notFound: 'Event not found', fallback: 'Failed to update event' });
+    }
+  };
+
+  // POST /api/v1/calendars/:calendarId/events/:eventId - Update event
+  // POST rather than PATCH because the REST catalog's method union is GET | POST.
+  app.post('/api/v1/calendars/:calendarId/events/:eventId', requireCalendarApiKey, handleCalendarEventUpdate);
+  // PATCH /api/v1/calendars/:calendarId/events/:eventId - legacy, uncatalogued
+  app.patch('/api/v1/calendars/:calendarId/events/:eventId', requireCalendarApiKey, handleCalendarEventUpdate);
+
+  // POST /api/v1/calendars/:calendarId/events/:eventId/cancel - Delete event
+  //
+  // DESTRUCTIVE, exposed with explicit sign-off. POST to an action path rather
+  // than DELETE on the resource: DELETE is not in the catalog's method union,
+  // and an explicit verb reads as deliberate at the call site. sendUpdates
+  // defaults to 'none', so a deletion does NOT email attendees unless asked.
+  app.post('/api/v1/calendars/:calendarId/events/:eventId/cancel', requireCalendarApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { deleteEventSchema } = await import('../google-calendar/server.js');
+      const parsed = deleteEventSchema.safeParse({
+        ...req.body,
+        calendarId: req.params.calendarId,
+        eventId: req.params.eventId,
+      });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
       }
+      await req.userSession!.googleCalendar.events.delete({
+        calendarId: parsed.data.calendarId,
+        eventId: parsed.data.eventId,
+        sendUpdates: parsed.data.sendUpdates,
+      });
+      // Google answers 204 with no body, so there is nothing to echo and no
+      // re-read possible — the event is gone. Report what was deleted rather
+      // than a bare {success:true}, so a pipeline can log it.
+      res.json({ deleted: true, calendarId: parsed.data.calendarId, eventId: parsed.data.eventId });
+    } catch (err: any) {
+      console.error('Error deleting event:', err);
+      sendUpstreamError(res, err, { notFound: 'Event not found', fallback: 'Failed to delete event' });
     }
   });
 
-  // DELETE /api/v1/calendars/:calendarId/events/:eventId - Delete event
+  // DELETE /api/v1/calendars/:calendarId/events/:eventId - legacy, uncatalogued
   app.delete('/api/v1/calendars/:calendarId/events/:eventId', requireCalendarApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const { calendarId, eventId } = req.params;
-      const sendUpdates = (req.query.sendUpdates as string) || 'none';
-      const calendar = req.userSession!.googleCalendar;
-
-      await calendar.events.delete({
+      const sendUpdates = (qstr(req.query.sendUpdates, 'none') || 'none') as 'all' | 'externalOnly' | 'none';
+      await req.userSession!.googleCalendar.events.delete({
         calendarId: calendarId as string,
         eventId: eventId as string,
-        sendUpdates: sendUpdates as 'all' | 'externalOnly' | 'none',
+        sendUpdates,
       });
-
       res.json({ success: true });
     } catch (err: any) {
       console.error('Error deleting event:', err);
-      if (err.code === 404) {
-        res.status(404).json({ error: 'Event not found' });
-      } else if (err.code === 403) {
-        res.status(403).json({ error: 'Permission denied' });
-      } else {
-        res.status(500).json({ error: err.message || 'Failed to delete event' });
-      }
+      sendUpstreamError(res, err, { notFound: 'Event not found', fallback: 'Failed to delete event' });
     }
   });
 
@@ -4409,37 +4366,183 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
-  // POST /api/v1/sheets/:spreadsheetId/write - Write to a range
+  // === Google Sheets writes ===
+  //
+  // Every body is safeParsed with the MCP tool's own exported schema. The old
+  // `if (!range || !values)` checks here validated presence and nothing else, so
+  // `values: "a,b"` — a string, not the 2D array the API needs — passed and
+  // failed upstream as an opaque Google 400.
+  //
+  // Bodies on these paths are parsed with the 5mb limit from
+  // REST_LARGE_BODY_PREFIXES, not the global 100kb: bulk rows are the entire
+  // reason a spreadsheet write belongs on this plane, and the default would 413
+  // the use case with an HTML error page.
+  //
+  // As with the calendar writes, these widen what the permanent dashboard API
+  // key can mutate — it reaches the same createServiceAuth gate as the reads.
+
+  // POST /api/v1/sheets - Create a spreadsheet, optionally seeded with rows
+  app.post('/api/v1/sheets', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { createSpreadsheetSchema, performCreateSpreadsheet } = await import('../google-sheets/server.js');
+      const parsed = createSpreadsheetSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const result = await performCreateSpreadsheet(
+        req.userSession!.googleDrive,
+        req.userSession!.googleSheets,
+        parsed.data,
+      );
+      // 201 even when the seed failed: the spreadsheet exists by then, so an
+      // error status would tell a caller nothing was created and invite a retry
+      // that makes a second one. `initialDataWritten` is how they tell.
+      res.status(201).json({
+        spreadsheetId: result.file.id,
+        name: result.file.name ?? null,
+        webViewLink: result.file.webViewLink ?? null,
+        driveId: result.file.driveId ?? null,
+        initialDataWritten: result.initialDataWritten,
+        ...(result.initialDataError ? { initialDataError: result.initialDataError } : {}),
+      });
+    } catch (err: any) {
+      console.error('Error creating spreadsheet:', err);
+      sendUpstreamError(res, err, { notFound: 'Parent folder not found', fallback: 'Failed to create spreadsheet' });
+    }
+  });
+
+  // POST /api/v1/sheets/:spreadsheetId/write - Overwrite a range
   app.post('/api/v1/sheets/:spreadsheetId/write', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const { range, values, valueInputOption = 'USER_ENTERED' } = req.body;
-      if (!range || !values) { res.status(400).json({ error: 'range and values are required' }); return; }
-      const sheets = req.userSession!.googleSheets;
-      const result = await sheets.spreadsheets.values.update({
-        spreadsheetId: req.params.spreadsheetId as string, range,
-        valueInputOption,
-        requestBody: { values },
+      const { writeSpreadsheetSchema } = await import('../google-sheets/server.js');
+      const parsed = writeSpreadsheetSchema.safeParse({ ...req.body, spreadsheetId: req.params.spreadsheetId });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const SheetsHelpers = await import('../google-sheets/apiHelpers.js');
+      const result = await SheetsHelpers.writeRange(
+        req.userSession!.googleSheets,
+        parsed.data.spreadsheetId,
+        parsed.data.range,
+        parsed.data.values,
+        parsed.data.valueInputOption,
+      );
+      // Response keys unchanged from the pre-catalog route — ChatGPT Custom
+      // Actions clients parse this shape.
+      res.json({
+        updatedCells: result.updatedCells,
+        updatedRows: result.updatedRows,
+        updatedRange: result.updatedRange,
       });
-      res.json({ updatedCells: result.data.updatedCells, updatedRows: result.data.updatedRows, updatedRange: result.data.updatedRange });
     } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to write to range' });
+      console.error('Error writing range:', err);
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to write to range' });
     }
   });
 
   // POST /api/v1/sheets/:spreadsheetId/append - Append rows
   app.post('/api/v1/sheets/:spreadsheetId/append', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const { range, values, valueInputOption = 'USER_ENTERED' } = req.body;
-      if (!range || !values) { res.status(400).json({ error: 'range and values are required' }); return; }
-      const sheets = req.userSession!.googleSheets;
-      const result = await sheets.spreadsheets.values.append({
-        spreadsheetId: req.params.spreadsheetId as string, range,
-        valueInputOption, insertDataOption: 'INSERT_ROWS',
-        requestBody: { values },
-      });
-      res.json({ updates: result.data.updates });
+      const { appendSpreadsheetRowsSchema } = await import('../google-sheets/server.js');
+      const parsed = appendSpreadsheetRowsSchema.safeParse({ ...req.body, spreadsheetId: req.params.spreadsheetId });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const SheetsHelpers = await import('../google-sheets/apiHelpers.js');
+      const result = await SheetsHelpers.appendValues(
+        req.userSession!.googleSheets,
+        parsed.data.spreadsheetId,
+        parsed.data.range,
+        parsed.data.values,
+        parsed.data.valueInputOption,
+      );
+      res.json({ updates: result.updates });
     } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to append rows' });
+      console.error('Error appending rows:', err);
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to append rows' });
+    }
+  });
+
+  // POST /api/v1/sheets/:spreadsheetId/batchUpdate - Formatting + tab lifecycle
+  //
+  // The operation list reaches deleteSheet, which destroys a tab and every value
+  // on it, with no confirmation step behind a curl. Reviewed and accepted when
+  // this endpoint was added; the catalog notes carry the warning into the docs.
+  // Operation types are NOT filtered here on purpose: narrowing them would make
+  // this surface diverge from the schema the MCP tool validates against, which
+  // is the drift the shared schema exists to prevent.
+  app.post('/api/v1/sheets/:spreadsheetId/batchUpdate', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { batchUpdateSpreadsheetSchema, performBatchUpdateSpreadsheet } = await import('../google-sheets/server.js');
+      const parsed = batchUpdateSpreadsheetSchema.safeParse({ ...req.body, spreadsheetId: req.params.spreadsheetId });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const result = await performBatchUpdateSpreadsheet(req.userSession!.googleSheets, parsed.data);
+      res.json({
+        spreadsheetId: parsed.data.spreadsheetId,
+        title: result.title,
+        applied: result.applied,
+        // One line per operation, in order, so a 40-op batch can be audited
+        // against what was sent. The batch is atomic: if this answers, all of
+        // them applied.
+        operations: result.summaries.map((line) => line.trim()),
+      });
+    } catch (err: any) {
+      console.error('Error applying batch update:', err);
+      // A per-operation rejection (an unknown sheet name, a malformed range)
+      // arrives as a FastMCP UserError naming the operation's index and type. It
+      // is a bad request, not an upstream fault, and 502-ing it would send the
+      // caller looking at Google instead of at their own operation list.
+      //
+      // The status check comes FIRST and is load-bearing: the Sheets helpers raise
+      // UserError too, for Google's own 404s and 403s — the metadata read this op
+      // begins with is the usual source — and treating those as a bad request
+      // reported a spreadsheet that does not exist as "400, fix your operations".
+      // Those carry the upstream status (upstreamUserError in
+      // google-sheets/apiHelpers.ts); an operation-validation error carries none.
+      //
+      // Matched by name, not `instanceof`: this module imports no part of
+      // FastMCP — it is the web process — and pulling the MCP framework in to
+      // narrow one error for one status code is not worth it. FastMCPError sets
+      // `name = new.target.name` in its constructor, so the name is reliable.
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to apply batch update' });
+    }
+  });
+
+  // POST /api/v1/sheets/:spreadsheetId/ranges/clear - Clear every value in a range
+  //
+  // DESTRUCTIVE and irreversible through this API, exposed with explicit
+  // sign-off. POST to an action path rather than DELETE on the range.
+  app.post('/api/v1/sheets/:spreadsheetId/ranges/clear', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { clearSpreadsheetRangeSchema } = await import('../google-sheets/server.js');
+      const parsed = clearSpreadsheetRangeSchema.safeParse({ ...req.body, spreadsheetId: req.params.spreadsheetId });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const SheetsHelpers = await import('../google-sheets/apiHelpers.js');
+      const result = await SheetsHelpers.clearRange(
+        req.userSession!.googleSheets,
+        parsed.data.spreadsheetId,
+        parsed.data.range,
+      );
+      // Google reports the range it actually cleared, which can be wider than
+      // the one asked for (an unbounded "Sheet1!A:A" resolves to the used
+      // extent) — report its answer, not the request.
+      res.json({ clearedRange: result.clearedRange || parsed.data.range });
+    } catch (err: any) {
+      console.error('Error clearing range:', err);
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to clear range' });
     }
   });
 
