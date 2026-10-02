@@ -42,17 +42,41 @@ If the schema is currently inline in the `addTool({ parameters: z.object({...}) 
 
 `parsed.error.flatten()` gives `{ formErrors, fieldErrors }`, which is genuinely actionable in a curl response. Return it.
 
-## Body size
+## Body size — the limit goes in a prefix list, not next to the handler
 
-The global `app.use(express.json())` at line ~837 sets **no explicit limit**, so Express's 100 kb default applies. A write endpoint whose whole justification is a large request body will 413 at 100 kb with a raw Express HTML error, which is a bad look.
+The global `app.use(express.json())` sets no explicit limit, so Express's **100 kb** default applies, and a write whose whole justification is a large request body would 413 at 100 kb with Express's HTML error page.
 
-Mount a per-route parser with an explicit limit rather than raising the global one:
+**Do not mount a per-route parser.** It cannot work here, and the failure is silent:
 
 ```ts
-app.post('/api/v1/sheets/:spreadsheetId/rows', express.json({ limit: '5mb' }), requireSheetsApiKey, async (req, res) => {
+// WRONG — this parser never runs
+app.post('/api/v1/sheets/:spreadsheetId/write', express.json({ limit: '5mb' }), requireSheetsApiKey, handler);
 ```
 
-Pick the smallest limit that fits the use case and record it in the catalog `notes` so the docs state it. Note the ordering the file already uses for binary routes: a route-specific body parser must be registered before the handler, and the raw-body routes (`express.raw`) are deliberately mounted **before** the global `express.json()` — don't disturb that.
+`registerSharedRoutes` mounts the global `express.json()` long before the routes are registered, so by the time a request reaches the route chain the global parser has already read the body — and already 413'd it if it was oversize. `body-parser` also sets `req._body` on the first parse, so every later parser skips the request.
+
+Add the path prefix to `REST_LARGE_BODY_PREFIXES` instead (`webServer.ts`, in `registerSharedRoutes`, right above the global parser):
+
+```ts
+const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
+  '/api/v1/redmine/issues',   // createIssue / updateIssue — description and notes are full issue bodies
+  …
+  '/api/v1/sheets',           // values is a 2D array of rows; bulk rows are the point
+];
+```
+
+A prefix covers every method and sub-path under it, which is usually what you want (one entry served `/write`, `/append`, `/batchUpdate`, `/ranges/clear` and `POST /api/v1/sheets`). Record the limit in the catalog `notes` so the generated docs state it, and keep the `express.raw()` routes mounted ahead of the global parser undisturbed.
+
+**Test it, because nothing else will.** A 413 here is invisible until a real caller sends real data, and the assertion is cheap — post a body past 100 kb and expect validation, not 413:
+
+```ts
+const bigCell = 'x'.repeat(300_000);
+const res = await request(app).post('/api/v1/sheets/sheet-123/write').set(auth())
+  .send({ range: 'A1', values: bigCell });   // invalid on purpose: values must be rows
+assert.equal(res.status, 400, `expected validation, not 413; got ${res.status}`);
+```
+
+A 400 proves the body was parsed and reached the schema. (`413` means the prefix is missing or misspelled; `431`/HTML means you are looking at Express's default handler.)
 
 ## Status codes and response shape
 
@@ -66,6 +90,93 @@ Pick the smallest limit that fits the use case and record it in the catalog `not
 Follow `POST /api/v1/calendars/:calendarId/events`: it returns 201 with the created event's fields rather than a bare `{ ok: true }`. Callers chaining curls need the id, and a caller who has to issue a follow-up GET to learn what happened defeats the pipeline the endpoint exists to serve.
 
 Idempotency: HTTP POST isn't idempotent and this layer has no request-id dedupe. If the underlying operation is dangerous to repeat (creating a payment-ish record, sending a message), say so in the catalog `notes`. Don't invent a dedupe mechanism unilaterally — that's a design decision for the user.
+
+## Extract the op, not just the schema
+
+Lifting the Zod schema stops the two surfaces disagreeing about what is *valid*. It does nothing about them disagreeing on what the request *is* — and that drift is already in this repo's history: `webServer.ts` held its own copy of the Calendar event resource and response projection, and the copies had diverged from the MCP tool (the REST copy went a while without Meet handling).
+
+So when the handler would otherwise rebuild what the tool builds, export the body of the tool too and call it from both:
+
+```ts
+// src/google-calendar/server.ts
+export async function performCreateEvent(calendar, args: CreateEventArgs): Promise<calendar_v3.Schema$Event> { … }
+export async function performUpdateEvent(calendar, args): Promise<{ event; wantsNewMeet: boolean }> { … }
+export function projectEvent(event): Record<string, unknown> { … }   // the shape REST answers with
+```
+
+The tool keeps its formatter and error mapping; the route keeps its status codes and `sendUpstreamError`. Everything that decides *what the answer is* lives in one function. Precedents to match: `performCreateCompany` / `performCreateEngagement` exported from `src/hubspot/server.ts`, and `src/redmine/ops.ts` wholesale.
+
+Two payoffs beyond tidiness:
+
+- A shared projection means a `POST`, its legacy `PATCH` twin and the MCP tool cannot answer the same resource three slightly different ways. Point the legacy verb at the same handler function while you are there.
+- It is the only way to get the change past the coverage gate (below), because an exported op can be driven against a stub client while a route handler cannot.
+
+**Read-modify-write needs care when you extract it.** If the upstream call is a full replacement (Google's `events.update`, most `PUT`s), the op must start from the whole fetched resource and override only what the caller named. A whitelist of fields silently *deletes* everything it forgot — in this repo that meant every event update dropped `recurrence`, so changing a weekly meeting's title stopped it repeating. Spread the fetched object; do not rebuild it.
+
+## Reusing a provider's MCP helpers: keep the upstream status
+
+`sendUpstreamError` chooses 404 / 403 / 500 by reading `err.code`, then `err.response.status`, then `err.status`. A provider's MCP helpers often wrap the upstream failure for a human first:
+
+```ts
+if (error.code === 404) throw new UserError(`Spreadsheet not found (ID: ${spreadsheetId}).`);   // status lost
+```
+
+Reuse that helper from a REST route and every upstream failure becomes a flat 500 with a message the client cannot route on. Preserve the status when wrapping:
+
+```ts
+function upstreamUserError(message: string, cause: any): UserError {
+  const err = new UserError(message);
+  const code = cause?.code ?? cause?.response?.status ?? cause?.status;
+  if (typeof code === 'number') (err as any).code = code;   // numeric only — Node throws 'ECONNRESET'
+  return err;
+}
+```
+
+Two rules fall out of that, both learned the hard way:
+
+- **Only a numeric status, ever.** Node's own errors carry string codes (`ENOTFOUND`, `ECONNRESET`), and `res.status('ECONNRESET')` throws inside the error handler. A failure with no status must leave `code` unset — inventing one answers 404 for a DNS outage.
+- **Do not map `UserError` → 400 unconditionally.** It is tempting when the op raises `UserError` for genuinely bad input (an unknown sheet name in a batch), but the same type now carries the provider's 404s and 403s, so a nonexistent record gets reported as "fix your request". Branch on whether a numeric status survived: no status → 400, status → `sendUpstreamError`.
+
+Narrow it by **name**, not `instanceof`: `webServer.ts` imports no part of FastMCP, and pulling the framework into the web process to classify one error is not worth it. `FastMCPError` sets `name = new.target.name`, so `err?.name === 'UserError'` is reliable.
+
+## The coverage gate
+
+CI runs a SonarCloud quality gate that **fails the PR below 80% coverage of new code**, counting lines *and* branches. A write-endpoint change is unusually exposed to it, for a reason worth knowing up front: **the handler's success path cannot be covered by any test in this repo.**
+
+- For Google services the client comes off `req.userSession`, built from real tokens by `createUserSessionFromConnection`. There is no injection seam.
+- Stubbing `globalThis.fetch` — the trick `restRoutes.providers.test.ts` uses for HubSpot and Redmine — does not reach `googleapis`: `gaxios` imports **bundled `node-fetch`**, not the global.
+
+So plan for the handler lines staying uncovered and make the extracted op carry the ratio:
+
+- Drive the op against stub clients, the shape `driveToolHandlers.test.ts` established (`mkDrive()` / `mkSheets()` returning `mock.fn`s). Assert the request that would go to the provider — that is the part a caller cannot verify from outside.
+- Capture the tool bodies too, by patching `FastMCP.prototype.addTool` before importing the server (the ClickUp suite's trick), which covers each `execute`'s formatter and error mapping.
+- Keep the route-level tests on the `safeParse` branch: they are cheap, need no mock, and prove auth runs before validation.
+
+**Measure locally rather than pushing to find out** — the gate blends lines and branches, so a per-file *line* reading reads as passing when the real number is several points lower, and each CI round trip is ~12 minutes. Two steps:
+
+```bash
+# 1. lcov over the files you touched, from the suites that touch them
+npx c8 --reporter=lcovonly --report-dir=/tmp/cov \
+  --include 'src/google-sheets/server.ts' --include 'src/website/webServer.ts' \
+  node --import tsx --test src/__tests__/<suite>.test.ts …
+
+# 2. intersect it with the lines this branch added
+python3 .claude/skills/add-rest-endpoint/assets/scripts/new-code-coverage.py /tmp/cov/lcov.info \
+  src/google-sheets/server.ts src/website/webServer.ts
+```
+
+It prints per-file lines and branches, the uncovered line numbers to aim at, and the gate verdict using Sonar's own formula. Calibration: on the Sheets/Calendar pass it reported **83.9%** where CI's gate then measured **83.5%** — close enough to trust, which is why it also warns when the margin is under two points. Pass the same files you gave `c8`; one you forgot is reported as *not instrumented* rather than counted as zero.
+
+Also worth knowing before you start: a coverage reading taken **before** the review round is not the one that ships. Fixing review findings adds production lines of its own, and on this PR that alone moved the gate from 81.2% to 79.9% — below the threshold it had already passed.
+
+Read the per-file breakdown from Sonar itself when a run has already happened — it names exactly which files are dragging:
+
+```bash
+curl -s "https://sonarcloud.io/api/qualitygates/project_status?projectKey=<key>&pullRequest=<n>"
+curl -s "https://sonarcloud.io/api/measures/component_tree?component=<key>&pullRequest=<n>&metricKeys=new_lines_to_cover,new_uncovered_lines,new_coverage&qualifiers=FIL"
+```
+
+Finally: **do not chase a defensive branch you cannot reach honestly.** A `String(cause)` fallback behind a helper that always wraps, or a `throw e` that only fires on a bug in your own translation, are better left uncovered with a comment saying so than reached by contorting the code.
 
 ## Destructive operations
 
@@ -106,7 +217,15 @@ for (const path of NEW_REST_WRITE_ENDPOINTS) {
 
 A 401 on an empty body is the assertion that matters: it proves auth runs before validation, so an unauthenticated caller can't probe the schema by watching 400s.
 
-Beyond the gate, add a validation test for the `safeParse` branch — a malformed body returning 400 with issues, no upstream mock needed.
+Beyond the gate, add a validation test for the `safeParse` branch — a malformed body returning 400 with issues, no upstream mock needed. Authenticate the way `restRoutes.providers.test.ts` does (`createOrUpdateUser` for the bearer, pin the numeric id, then `createMcpInstance`), with one wrinkle: a **Google** service passes no `provider` argument at all —
+
+```ts
+await createMcpInstance(USER_ID, 'google-sheets', 'Test Sheets', dummyGoogleTokens, null);
+```
+
+— because `createServiceAuth` routes everything without a provider down the Google OAuth path, which is what puts `googleSheets` / `googleCalendar` / `googleDrive` on the session. Passing `null` for `provider` is also a type error, since the parameter is optional rather than nullable.
+
+One more hazard when running these suites: without `DATABASE_URL` the stores are JSON files under `data/`, and `node:test` runs test *files* concurrently in separate processes. Several REST suites writing a user and a connection at once can interleave their writes and leave `data/mcp-connections.json` unparseable — which then fails every suite that reads it, looking exactly like a code regression. If a passing suite suddenly fails with `Unexpected non-whitespace character after JSON`, truncate the file to its last valid array rather than debugging the handler.
 
 ## OpenAPI
 

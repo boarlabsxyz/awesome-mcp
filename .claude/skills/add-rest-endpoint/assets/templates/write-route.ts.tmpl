@@ -1,41 +1,44 @@
   // POST {{catalogPath}} - {{summary}}
   // Mirrors the MCP tool `{{mcpToolName}}`. Body is validated with that tool's
   // own Zod schema so the REST and MCP surfaces cannot drift.
-  // {{#largeBodyNote}}Body limit raised to {{bodyLimit}} — this endpoint exists to accept
-  // large payloads that would otherwise cross the LLM context window.{{/largeBodyNote}}
-  app.post(
-    '{{expressPath}}',
-    express.json({ limit: '{{bodyLimit}}' }),
-    {{authMiddleware}},
-    async (req: ApiAuthenticatedRequest, res) => {
-      try {
-        const {{paramName}} = req.params.{{paramName}} as string;
-
-        // Reuse the MCP tool's schema. If it is still inline in the addTool
-        // call, lift it to `export const {{SchemaName}} = z.object({...})` in
-        // src/{{provider}}/server.ts and reference it from both places.
-        const { {{SchemaName}} } = await import('../{{provider}}/server.js');
-        const parsed = {{SchemaName}}.safeParse(req.body);
-        if (!parsed.success) {
-          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
-          return;
-        }
-        const args = parsed.data;
-
-        const {{client}} = req.userSession!.{{sessionClient}};
-        const response = await {{client}}.{{sdkCall}}({
-          {{sdkArgs}}
-        });
-
-        // 201 + the created resource (callers chaining curls need the new id).
-        // Use 200 for updates and appends.
-        res.status(201).json(response.data);
-      } catch (err) {
-        console.error('Error in {{mcpToolName}} REST handler:', err);
-        sendUpstreamError(res, err, { notFound: '{{ResourceName}} not found', fallback: 'Failed to {{verbPhrase}}' });
+  // {{#largeBodyNote}}Bodies on this path are parsed with the {{bodyLimit}} limit from
+  // REST_LARGE_BODY_PREFIXES, not the global 100 kb — see the note below.{{/largeBodyNote}}
+  app.post('{{expressPath}}', {{authMiddleware}}, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      // Reuse the MCP tool's schema. If it is still inline in the addTool call,
+      // lift it to `export const {{SchemaName}} = z.object({...})` in
+      // src/{{provider}}/server.ts and reference it from both places.
+      //
+      // Path params are merged OVER the body so a URL and a mismatched body key
+      // cannot disagree about which record is being written.
+      const { {{SchemaName}} } = await import('../{{provider}}/server.js');
+      const parsed = {{SchemaName}}.safeParse({ ...req.body, {{paramName}}: req.params.{{paramName}} });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
       }
-    },
-  );
+
+      // Call the tool's exported op rather than rebuilding the request here —
+      // a second copy of the request-building drifts from the tool. See
+      // "Extract the op, not just the schema" in references/write-endpoints.md.
+      const { {{performOp}} } = await import('../{{provider}}/server.js');
+      const result = await {{performOp}}(req.userSession!.{{sessionClient}}, parsed.data);
+
+      // 201 + the created resource (callers chaining curls need the new id).
+      // Use 200 for updates and appends.
+      res.status(201).json({{projection}});
+    } catch (err: any) {
+      console.error('Error in {{mcpToolName}} REST handler:', err);
+      // If the op raises a provider UserError for genuinely bad input, answer 400
+      // ONLY when no upstream status survived — those helpers also wrap the
+      // provider's own 404s and 403s. See references/write-endpoints.md.
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendUpstreamError(res, err, { notFound: '{{ResourceName}} not found', fallback: 'Failed to {{verbPhrase}}' });
+    }
+  });
 
 // ---------------------------------------------------------------------------
 // Before using this template
@@ -54,18 +57,26 @@
 // 3. A destructiveHint: true tool needs explicit user sign-off, an action path
 //    (/{id}/archive, not DELETE /{id}), and a warning in the catalog `notes`.
 //
+// 4. A large body needs its path prefix added to REST_LARGE_BODY_PREFIXES in
+//    registerSharedRoutes. Do NOT mount express.json({ limit }) next to the
+//    handler — the global parser has already read (and 413'd) the body by then,
+//    so a per-route parser never runs. Then assert it: post >100 kb and expect
+//    validation, not 413.
+//
 // Placeholders
-//   {{bodyLimit}}        '1mb' | '5mb' — smallest that fits; record it in the
-//                        catalog `notes`. Omit the express.json() line entirely
-//                        to inherit the global parser (100 kb default).
-//   {{SchemaName}}       exported Zod schema, e.g. AppendRowsParams
+//   {{SchemaName}}       exported Zod schema, e.g. appendSpreadsheetRowsSchema
+//   {{performOp}}        exported op, e.g. performCreateSpreadsheet. Drop this
+//                        line only when the tool body is a single client call
+//                        the route can make directly.
+//   {{projection}}       `result` for raw upstream JSON, or the tool's exported
+//                        projection (e.g. projectEvent(result)) when one exists
+//                        — never a second inline copy of the response shape.
 //   {{authMiddleware}}   requireSheetsApiKey | requireClickUpApiKey | ...
 //   {{sessionClient}}    googleSheets | googleDocs | ... (Google), or build a
 //                        third-party client: const { XClient } = await
 //                        import('../{{provider}}/apiHelpers.js');
 //
-// `express` and `sendUpstreamError` are already imported in webServer.ts.
-// Route-specific body parsers go BEFORE the auth middleware in the chain, and
-// must not disturb the express.raw() routes mounted ahead of the global
-// express.json() at line ~837.
+// `express` and `sendUpstreamError` are already imported in webServer.ts, and
+// the express.raw() routes mounted ahead of the global express.json() must stay
+// undisturbed.
 // ---------------------------------------------------------------------------
