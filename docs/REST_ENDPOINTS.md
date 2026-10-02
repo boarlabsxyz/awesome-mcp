@@ -42,6 +42,25 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `listComments` | `GET /api/v1/docs/{documentId}/comments` | live | List comments on a Google Doc |
 | `getComment` | `GET /api/v1/docs/{documentId}/comments/{commentId}` | live | Get a single comment with its replies |
 | `inspectDocStructure` | `GET /api/v1/docs/{documentId}/structure` | live | Inspect the structure of a Google Doc — _Paragraph/table/section counts, headers and footers presence, tab hierarchy. Pass ?detailed=true for an element-by-element listing, ?tabId= to scope to one tab._ |
+| `importToGoogleDoc` | `POST /api/v1/docs/import` | live | Create a doc from text, HTML or markdown content — _Body limit 5mb: content carries the whole document. Not idempotent: each call creates another doc._ |
+| `importDocx` | `POST /api/v1/docs/import/docx` | live | Convert a .docx already in Drive into a Google Doc — _Takes a Drive file ID, not file bytes. Refuses anything whose mimeType is not .docx, since Drive would convert it into an unreadable doc._ |
+| `appendToGoogleDoc` | `POST /api/v1/docs/{documentId}/append` | live | Append text to the end of a doc or tab — _Body limit 5mb. Resolves the end index itself, so no index is needed._ |
+| `insertText` | `POST /api/v1/docs/{documentId}/text` | live | Insert text at a 1-based index — _Body limit 5mb. Indices shift as the doc changes; for several edits at once use batchUpdate, which orders them safely._ |
+| `batchUpdateDoc` | `POST /api/v1/docs/{documentId}/batchUpdate` | live | Apply up to 50 document operations in one batch — _Body limit 5mb. Index-based operations are applied in descending index order so they do not shift each other. Mixing global replacements with index-based operations is refused, not reordered. Includes delete_text, so it can remove content._ |
+| `findAndReplace` | `POST /api/v1/docs/{documentId}/find-replace` | live | Replace every occurrence of a string — _Reports occurrencesChanged, which is 0 when nothing matched — that is a successful call, not an error._ |
+| `applyTextStyle` | `POST /api/v1/docs/{documentId}/text-style` | live | Apply character formatting to a range or found text — _Answers with the range it resolved, which matters when the target was given as text to find rather than indices._ |
+| `applyParagraphStyle` | `POST /api/v1/docs/{documentId}/paragraph-style` | live | Apply paragraph formatting by text, index or range — _A text target is widened to the paragraph containing it, so the resolved range in the response is wider than the text matched._ |
+| `formatMatchingText` | `POST /api/v1/docs/{documentId}/format-matching-text` | live | Format the Nth instance of a string — _Flat-parameter alternative to text-style; same engine underneath._ |
+| `insertTable` | `POST /api/v1/docs/{documentId}/tables` | live | Insert a table of the given dimensions |
+| `insertPageBreak` | `POST /api/v1/docs/{documentId}/page-breaks` | live | Insert a page break at an index |
+| `insertImageFromUrl` | `POST /api/v1/docs/{documentId}/images/from-url` | live | Insert an inline image from a public URL — _Google fetches the URL server-side, so it must be publicly reachable._ |
+| `insertLocalImage` | `POST /api/v1/docs/{documentId}/images` | live | Insert an image from a URL, Drive file, local path or base64 — _Body limit 5mb for the base64 path (hard cap 20mb decoded). Every path except driveFileId UPLOADS a new file to the user Drive and returns its URL._ |
+| `exportDocToPdf` | `POST /api/v1/docs/{documentId}/export/pdf` | live | Export a doc to PDF and save it to Drive — _Writes a new PDF file to Drive; it is an export that mutates. Refuses anything that is not a Google Doc._ |
+| `addComment` | `POST /api/v1/docs/{documentId}/comments` | live | Add a comment quoting a text range — _Was an uncatalogued ChatGPT-compat route; path and response unchanged, now validated with the MCP tool schema. The Drive API ignores anchors on Google Docs, so the quoted text is the only record of which range the comment is about._ |
+| `replyToComment` | `POST /api/v1/docs/{documentId}/comments/{commentId}/replies` | live | Reply to a comment |
+| `resolveComment` | `POST /api/v1/docs/{documentId}/comments/{commentId}/resolve` | live | Mark a comment resolved — _The response reports the resolved flag Google returned on a re-read, not what was requested: the Drive API accepts this on a Google Doc and often does not persist it._ |
+| `deleteRange` | `POST /api/v1/docs/{documentId}/ranges/delete` | live | Delete a character range — _DESTRUCTIVE and irreversible through this API. Exposed with explicit sign-off. POST to an action path rather than DELETE on the range, so the call site reads as deliberate._ |
+| `deleteComment` | `POST /api/v1/docs/{documentId}/comments/{commentId}/delete` | live | Delete a comment thread — _DESTRUCTIVE. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource._ |
 
 ### Google Sheets (`sheets`)
 
@@ -263,4 +282,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 168 endpoints.
+Catalog size: 187 endpoints.

@@ -152,6 +152,27 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/redmine/issues/123',
   '/api/v1/redmine/time-entries',
   '/api/v1/redmine/projects/my-project/wiki/Home',
+  // Google Docs writes — one per write tool. Note '/api/v1/docs/{id}/comments'
+  // is in both arrays: GET lists the comments, POST adds one.
+  '/api/v1/docs/import',
+  '/api/v1/docs/import/docx',
+  '/api/v1/docs/doc-123/append',
+  '/api/v1/docs/doc-123/text',
+  '/api/v1/docs/doc-123/batchUpdate',
+  '/api/v1/docs/doc-123/find-replace',
+  '/api/v1/docs/doc-123/ranges/delete',
+  '/api/v1/docs/doc-123/text-style',
+  '/api/v1/docs/doc-123/paragraph-style',
+  '/api/v1/docs/doc-123/format-matching-text',
+  '/api/v1/docs/doc-123/tables',
+  '/api/v1/docs/doc-123/page-breaks',
+  '/api/v1/docs/doc-123/images/from-url',
+  '/api/v1/docs/doc-123/images',
+  '/api/v1/docs/doc-123/export/pdf',
+  '/api/v1/docs/doc-123/comments',
+  '/api/v1/docs/doc-123/comments/cmt-1/replies',
+  '/api/v1/docs/doc-123/comments/cmt-1/resolve',
+  '/api/v1/docs/doc-123/comments/cmt-1/delete',
   // Google Sheets writes. '/api/v1/sheets' is in BOTH arrays — the GET lists
   // spreadsheets, the POST creates one.
   '/api/v1/sheets',

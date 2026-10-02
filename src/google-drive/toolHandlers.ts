@@ -664,6 +664,48 @@ export async function handleListSharedDrives(
   }
 }
 
+/**
+ * Export a Google Doc to PDF and save the PDF into Drive. Returns the new file.
+ *
+ * Split out of handleExportDocToPdf so the REST route
+ * (POST /api/v1/docs/{documentId}/export/pdf) can answer with the file as JSON
+ * while the MCP tool keeps rendering its string — one implementation, two
+ * presentations. Note this MUTATES: a PDF now exists in the user Drive, which is
+ * why the tool is not readOnlyHint despite reading like an export.
+ */
+export async function performExportDocToPdf(
+  drive: drive_v3.Drive,
+  args: { documentId: string; pdfFilename?: string; folderId?: string },
+): Promise<drive_v3.Schema$File> {
+  const fileInfo = await drive.files.get({
+    fileId: args.documentId,
+    supportsAllDrives: true,
+    fields: 'mimeType,name',
+  });
+  // Checked first: Drive would export a Sheet or a Slide deck happily, and the
+  // caller would get a PDF of something they did not name.
+  if (fileInfo.data.mimeType !== 'application/vnd.google-apps.document') {
+    throw new UserError(`File is not a Google Doc (mimeType: ${fileInfo.data.mimeType}). Only Google Docs can be exported to PDF with this tool.`);
+  }
+  const docTitle = fileInfo.data.name || 'Untitled';
+  const pdfName = (args.pdfFilename || docTitle) + '.pdf';
+  const exportResponse = await drive.files.export({
+    fileId: args.documentId,
+    mimeType: 'application/pdf',
+  }, { responseType: 'arraybuffer' });
+  const pdfBuffer = Buffer.from(exportResponse.data as ArrayBuffer);
+  const { Readable } = await import('stream');
+  const fileMetadata: any = { name: pdfName, mimeType: 'application/pdf' };
+  if (args.folderId) fileMetadata.parents = [args.folderId];
+  const uploadResponse = await drive.files.create({
+    requestBody: fileMetadata,
+    media: { mimeType: 'application/pdf', body: Readable.from(pdfBuffer) },
+    supportsAllDrives: true,
+    fields: 'id,name,webViewLink,size',
+  });
+  return uploadResponse.data;
+}
+
 export async function handleExportDocToPdf(
   drive: drive_v3.Drive,
   args: { documentId: string; pdfFilename?: string; folderId?: string },
@@ -671,31 +713,7 @@ export async function handleExportDocToPdf(
 ): Promise<string> {
   log.info(`Exporting doc ${args.documentId} to PDF`);
   try {
-    const fileInfo = await drive.files.get({
-      fileId: args.documentId,
-      supportsAllDrives: true,
-      fields: 'mimeType,name',
-    });
-    if (fileInfo.data.mimeType !== 'application/vnd.google-apps.document') {
-      throw new UserError(`File is not a Google Doc (mimeType: ${fileInfo.data.mimeType}). Only Google Docs can be exported to PDF with this tool.`);
-    }
-    const docTitle = fileInfo.data.name || 'Untitled';
-    const pdfName = (args.pdfFilename || docTitle) + '.pdf';
-    const exportResponse = await drive.files.export({
-      fileId: args.documentId,
-      mimeType: 'application/pdf',
-    }, { responseType: 'arraybuffer' });
-    const pdfBuffer = Buffer.from(exportResponse.data as ArrayBuffer);
-    const { Readable } = await import('stream');
-    const fileMetadata: any = { name: pdfName, mimeType: 'application/pdf' };
-    if (args.folderId) fileMetadata.parents = [args.folderId];
-    const uploadResponse = await drive.files.create({
-      requestBody: fileMetadata,
-      media: { mimeType: 'application/pdf', body: Readable.from(pdfBuffer) },
-      supportsAllDrives: true,
-      fields: 'id,name,webViewLink,size',
-    });
-    const pdf = uploadResponse.data;
+    const pdf = await performExportDocToPdf(drive, args);
     return `PDF exported successfully:\n  File ID: ${pdf.id}\n  Name: ${pdf.name}\n  Size: ${pdf.size} bytes\n  Link: ${pdf.webViewLink}`;
   } catch (error: any) {
     if (error instanceof UserError) throw error;

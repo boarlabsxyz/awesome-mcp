@@ -23,6 +23,49 @@ BatchOperationSchema,
 BatchOperation
 } from '../types.js';
 import * as GDocsHelpers from './apiHelpers.js';
+// Write-tool schemas and ops live in their own modules so the REST data plane can
+// import them: this file is the application entry point (it imports createWebApp),
+// so webServer.ts cannot import it back.
+import {
+  addCommentSchema,
+  appendToGoogleDocSchema,
+  applyParagraphStyleSchema,
+  applyTextStyleSchema,
+  batchUpdateDocSchema,
+  deleteCommentSchema,
+  deleteRangeSchema,
+  findAndReplaceSchema,
+  formatMatchingTextSchema,
+  importDocxSchema,
+  importToGoogleDocSchema,
+  insertImageFromUrlSchema,
+  insertLocalImageSchema,
+  insertPageBreakSchema,
+  insertTableSchema,
+  insertTextSchema,
+  replyToCommentSchema,
+  resolveCommentSchema,
+} from './writeSchemas.js';
+import {
+  performAddComment,
+  performAppendToGoogleDoc,
+  performApplyParagraphStyle,
+  performApplyTextStyle,
+  performBatchUpdateDoc,
+  performDeleteComment,
+  performDeleteRange,
+  performFindAndReplace,
+  performFormatMatchingText,
+  performImportDocx,
+  performImportToGoogleDoc,
+  performInsertImageFromUrl,
+  performInsertLocalImage,
+  performInsertPageBreak,
+  performInsertTable,
+  performInsertText,
+  performReplyToComment,
+  performResolveComment,
+} from './writeOps.js';
 import { handleDriveError } from '../google-drive/driveHelpers.js';
 import {
   handleListGoogleDocs,
@@ -640,358 +683,129 @@ execute: async (args, { log, session }) => {
 });
 
 server.addTool({
-name: 'appendToGoogleDoc',
-annotations: { readOnlyHint: false },
-description: 'Appends text to the very end of a specific Google Document or tab. Equivalent to insertText at the document end; use this when you do not know the end index.',
-parameters: DocumentIdParameter.extend({
-textToAppend: z.string().min(1).describe('The text to add to the end.'),
-addNewlineIfNeeded: z.boolean().optional().default(true).describe("Automatically add a newline before the appended text if the doc doesn't end with one."),
-tabId: z.string().optional().describe('The ID of the specific tab to append to. If not specified, appends to the first tab (or legacy document.body for documents without tabs).')
-}),
-execute: async (args, { log, session }) => {
-const docs = await getDocsClient(session);
-log.info(`Appending to Google Doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
-
+  name: 'appendToGoogleDoc',
+  annotations: { readOnlyHint: false },
+  description: 'Appends text to the very end of a specific Google Document or tab. Equivalent to insertText at the document end; use this when you do not know the end index.',
+  parameters: appendToGoogleDocSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Appending to Google Doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
     try {
-        // Determine if we need tabs content
-        const needsTabsContent = !!args.tabId;
-
-        // Get the current end index
-        const docInfo = await docs.documents.get({
-            documentId: args.documentId,
-            includeTabsContent: needsTabsContent,
-            fields: needsTabsContent ? 'tabs' : 'body(content(endIndex)),documentStyle(pageSize)'
-        });
-
-        let endIndex = 1;
-        let bodyContent: any;
-
-        // If tabId is specified, find the specific tab
-        if (args.tabId) {
-            const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
-            if (!targetTab) {
-                throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
-            }
-            if (!targetTab.documentTab) {
-                throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
-            }
-            bodyContent = targetTab.documentTab.body?.content;
-        } else {
-            bodyContent = docInfo.data.body?.content;
-        }
-
-        if (bodyContent) {
-            const lastElement = bodyContent[bodyContent.length - 1];
-            if (lastElement?.endIndex) {
-                endIndex = lastElement.endIndex - 1; // Insert *before* the final newline of the doc typically
-            }
-        }
-
-        // Simpler approach: Always assume insertion is needed unless explicitly told not to add newline
-        const textToInsert = (args.addNewlineIfNeeded && endIndex > 1 ? '\n' : '') + args.textToAppend;
-
-        if (!textToInsert) return "Nothing to append.";
-
-        const location: any = { index: endIndex };
-        if (args.tabId) {
-            location.tabId = args.tabId;
-        }
-
-        const request: docs_v1.Schema$Request = { insertText: { location, text: textToInsert } };
-        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
-
-        log.info(`Successfully appended to doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
-        return `Successfully appended text to ${args.tabId ? `tab ${args.tabId} in ` : ''}document ${args.documentId}.`;
+      await performAppendToGoogleDoc(docs, args);
+      return `Successfully appended text to ${args.tabId ? `tab ${args.tabId} in ` : ''}document ${args.documentId}.`;
     } catch (error: any) {
-         log.error(`Error appending to doc ${args.documentId}: ${error.message || error}`);
-         if (error instanceof UserError) throw error;
-         if (error instanceof NotImplementedError) throw error;
-         throw new UserError(`Failed to append to doc: ${error.message || 'Unknown error'}`);
+      log.error(`Error appending to doc ${args.documentId}: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
+      if (error instanceof NotImplementedError) throw error;
+      throw new UserError(`Failed to append to doc: ${error.message || 'Unknown error'}`);
     }
-
-},
+  },
 });
 
 server.addTool({
-name: 'insertText',
-annotations: { readOnlyHint: false },
-description: 'Inserts text at a specific 1-based index within the document body or a specific tab. For end-of-document inserts where you do not have an index, prefer appendToGoogleDoc.',
-parameters: DocumentIdParameter.extend({
-textToInsert: z.string().min(1).describe('The text to insert.'),
-index: z.number().int().min(1).describe('The index (1-based) where the text should be inserted.'),
-tabId: z.string().optional().describe('The ID of the specific tab to insert into. If not specified, inserts into the first tab (or legacy document.body for documents without tabs).')
-}),
-execute: async (args, { log, session }) => {
-const docs = await getDocsClient(session);
-log.info(`Inserting text in doc ${args.documentId} at index ${args.index}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
-try {
-    if (args.tabId) {
-        // For tab-specific inserts, we need to verify the tab exists first
-        const docInfo = await docs.documents.get({
-            documentId: args.documentId,
-            includeTabsContent: true,
-            fields: 'tabs(tabProperties,documentTab)'
-        });
-        const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
-        if (!targetTab) {
-            throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
-        }
-        if (!targetTab.documentTab) {
-            throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
-        }
-
-        // Insert with tabId
-        const location: any = { index: args.index, tabId: args.tabId };
-        const request: docs_v1.Schema$Request = { insertText: { location, text: args.textToInsert } };
-        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
-    } else {
-        // Use existing helper for backward compatibility
-        await GDocsHelpers.insertText(docs, args.documentId, args.textToInsert, args.index);
+  name: 'insertText',
+  annotations: { readOnlyHint: false },
+  description: 'Inserts text at a specific 1-based index within the document body or a specific tab. For end-of-document inserts where you do not have an index, prefer appendToGoogleDoc.',
+  parameters: insertTextSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Inserting text in doc ${args.documentId} at index ${args.index}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
+    try {
+      await performInsertText(docs, args);
+      return `Successfully inserted text at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+    } catch (error: any) {
+      log.error(`Error inserting text in doc ${args.documentId}: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to insert text: ${error.message || 'Unknown error'}`);
     }
-    return `Successfully inserted text at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
-} catch (error: any) {
-log.error(`Error inserting text in doc ${args.documentId}: ${error.message || error}`);
-if (error instanceof UserError) throw error;
-throw new UserError(`Failed to insert text: ${error.message || 'Unknown error'}`);
-}
-}
+  },
 });
 
 server.addTool({
-name: 'deleteRange',
-annotations: { readOnlyHint: false, destructiveHint: true },
-description: 'Deletes content within a specified range (start index inclusive, end index exclusive) from the document or a specific tab.',
-parameters: DocumentIdParameter.extend({
-  startIndex: z.number().int().min(1).describe('The starting index of the text range (inclusive, starts from 1).'),
-  endIndex: z.number().int().min(1).describe('The ending index of the text range (exclusive).'),
-  tabId: z.string().optional().describe('The ID of the specific tab to delete from. If not specified, deletes from the first tab (or legacy document.body for documents without tabs).')
-}).refine(data => data.endIndex > data.startIndex, {
-  message: "endIndex must be greater than startIndex",
-  path: ["endIndex"],
-}),
-execute: async (args, { log, session }) => {
-const docs = await getDocsClient(session);
-log.info(`Deleting range ${args.startIndex}-${args.endIndex} in doc ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
-if (args.endIndex <= args.startIndex) {
-throw new UserError("End index must be greater than start index for deletion.");
-}
-try {
-    // If tabId is specified, verify the tab exists
-    if (args.tabId) {
-        const docInfo = await docs.documents.get({
-            documentId: args.documentId,
-            includeTabsContent: true,
-            fields: 'tabs(tabProperties,documentTab)'
-        });
-        const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
-        if (!targetTab) {
-            throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
-        }
-        if (!targetTab.documentTab) {
-            throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
-        }
+  name: 'deleteRange',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Deletes content within a specified range (start index inclusive, end index exclusive) from the document or a specific tab.',
+  parameters: deleteRangeSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Deleting range ${args.startIndex}-${args.endIndex} in doc ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
+    try {
+      await performDeleteRange(docs, args);
+      return `Successfully deleted content in range ${args.startIndex}-${args.endIndex}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+    } catch (error: any) {
+      log.error(`Error deleting range in doc ${args.documentId}: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to delete range: ${error.message || 'Unknown error'}`);
     }
-
-    const range: any = { startIndex: args.startIndex, endIndex: args.endIndex };
-    if (args.tabId) {
-        range.tabId = args.tabId;
-    }
-
-    const request: docs_v1.Schema$Request = {
-        deleteContentRange: { range }
-    };
-    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
-    return `Successfully deleted content in range ${args.startIndex}-${args.endIndex}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
-} catch (error: any) {
-    log.error(`Error deleting range in doc ${args.documentId}: ${error.message || error}`);
-    if (error instanceof UserError) throw error;
-    throw new UserError(`Failed to delete range: ${error.message || 'Unknown error'}`);
-}
-}
+  },
 });
 
 // --- Advanced Formatting & Styling Tools ---
 
 server.addTool({
-name: 'applyTextStyle',
-annotations: { readOnlyHint: false },
-description: 'Applies character-level formatting to a specific range or found text. Supported style keys: bold, italic, underline, strikethrough, fontSize, fontFamily, foregroundColor, backgroundColor, link.',
-parameters: ApplyTextStyleToolParameters,
-execute: async (args: ApplyTextStyleToolArgs, { log, session }) => {
-const docs = await getDocsClient(session);
-let { startIndex, endIndex } = args.target as any; // Will be updated if target is text
-
-        log.info(`Applying text style in doc ${args.documentId}. Target: ${JSON.stringify(args.target)}, Style: ${JSON.stringify(args.style)}`);
-
-        try {
-            // Determine target range
-            if ('textToFind' in args.target) {
-                const range = await GDocsHelpers.findTextRange(docs, args.documentId, args.target.textToFind, args.target.matchInstance);
-                if (!range) {
-                    throw new UserError(`Could not find instance ${args.target.matchInstance} of text "${args.target.textToFind}".`);
-                }
-                startIndex = range.startIndex;
-                endIndex = range.endIndex;
-                log.info(`Found text "${args.target.textToFind}" (instance ${args.target.matchInstance}) at range ${startIndex}-${endIndex}`);
-            }
-
-            if (startIndex === undefined || endIndex === undefined) {
-                 throw new UserError("Target range could not be determined.");
-            }
-             if (endIndex <= startIndex) {
-                 throw new UserError("End index must be greater than start index for styling.");
-            }
-
-            // Build the request
-            const requestInfo = GDocsHelpers.buildUpdateTextStyleRequest(startIndex, endIndex, args.style);
-            if (!requestInfo) {
-                 return "No valid text styling options were provided.";
-            }
-
-            await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request]);
-            return `Successfully applied text style (${requestInfo.fields.join(', ')}) to range ${startIndex}-${endIndex}.`;
-
-        } catch (error: any) {
-            log.error(`Error applying text style in doc ${args.documentId}: ${error.message || error}`);
-            if (error instanceof UserError) throw error;
-            if (error instanceof NotImplementedError) throw error; // Should not happen here
-            throw new UserError(`Failed to apply text style: ${error.message || 'Unknown error'}`);
-        }
+  name: 'applyTextStyle',
+  annotations: { readOnlyHint: false },
+  description: 'Applies character-level formatting to a specific range or found text. Supported style keys: bold, italic, underline, strikethrough, fontSize, fontFamily, foregroundColor, backgroundColor, link.',
+  parameters: applyTextStyleSchema,
+  execute: async (args: ApplyTextStyleToolArgs, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Applying text style in doc ${args.documentId}. Target: ${JSON.stringify(args.target)}, Style: ${JSON.stringify(args.style)}`);
+    try {
+      const { startIndex, endIndex, fields } = await performApplyTextStyle(docs, args);
+      if (!fields) return "No valid text styling options were provided.";
+      return `Successfully applied text style (${fields.join(', ')}) to range ${startIndex}-${endIndex}.`;
+    } catch (error: any) {
+      log.error(`Error applying text style in doc ${args.documentId}: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
+      if (error instanceof NotImplementedError) throw error;
+      throw new UserError(`Failed to apply text style: ${error.message || 'Unknown error'}`);
     }
-
+  },
 });
 
 server.addTool({
-name: 'applyParagraphStyle',
-annotations: { readOnlyHint: false },
-description: 'Applies paragraph-level formatting (alignment, spacing, named styles like Heading 1) to the paragraph(s) containing specific text, an index, or a range.',
-parameters: ApplyParagraphStyleToolParameters,
-execute: async (args: ApplyParagraphStyleToolArgs, { log, session }) => {
-const docs = await getDocsClient(session);
-let startIndex: number | undefined;
-let endIndex: number | undefined;
-
-        log.info(`Applying paragraph style to document ${args.documentId}`);
-        log.info(`Style options: ${JSON.stringify(args.style)}`);
-        log.info(`Target specification: ${JSON.stringify(args.target)}`);
-
-        try {
-            // STEP 1: Determine the target paragraph's range based on the targeting method
-            if ('textToFind' in args.target) {
-                // Find the text first
-                log.info(`Finding text "${args.target.textToFind}" (instance ${args.target.matchInstance || 1})`);
-                const textRange = await GDocsHelpers.findTextRange(
-                    docs,
-                    args.documentId,
-                    args.target.textToFind,
-                    args.target.matchInstance || 1
-                );
-
-                if (!textRange) {
-                    throw new UserError(`Could not find "${args.target.textToFind}" in the document.`);
-                }
-
-                log.info(`Found text at range ${textRange.startIndex}-${textRange.endIndex}, now locating containing paragraph`);
-
-                // Then find the paragraph containing this text
-                const paragraphRange = await GDocsHelpers.getParagraphRange(
-                    docs,
-                    args.documentId,
-                    textRange.startIndex
-                );
-
-                if (!paragraphRange) {
-                    throw new UserError(`Found the text but could not determine the paragraph boundaries.`);
-                }
-
-                startIndex = paragraphRange.startIndex;
-                endIndex = paragraphRange.endIndex;
-                log.info(`Text is contained within paragraph at range ${startIndex}-${endIndex}`);
-
-            } else if ('indexWithinParagraph' in args.target) {
-                // Find paragraph containing the specified index
-                log.info(`Finding paragraph containing index ${args.target.indexWithinParagraph}`);
-                const paragraphRange = await GDocsHelpers.getParagraphRange(
-                    docs,
-                    args.documentId,
-                    args.target.indexWithinParagraph
-                );
-
-                if (!paragraphRange) {
-                    throw new UserError(`Could not find paragraph containing index ${args.target.indexWithinParagraph}.`);
-                }
-
-                startIndex = paragraphRange.startIndex;
-                endIndex = paragraphRange.endIndex;
-                log.info(`Located paragraph at range ${startIndex}-${endIndex}`);
-
-            } else if ('startIndex' in args.target && 'endIndex' in args.target) {
-                // Use directly provided range
-                startIndex = args.target.startIndex;
-                endIndex = args.target.endIndex;
-                log.info(`Using provided paragraph range ${startIndex}-${endIndex}`);
-            }
-
-            // Verify that we have a valid range
-            if (startIndex === undefined || endIndex === undefined) {
-                throw new UserError("Could not determine target paragraph range from the provided information.");
-            }
-
-            if (endIndex <= startIndex) {
-                throw new UserError(`Invalid paragraph range: end index (${endIndex}) must be greater than start index (${startIndex}).`);
-            }
-
-            // STEP 2: Build and apply the paragraph style request
-            log.info(`Building paragraph style request for range ${startIndex}-${endIndex}`);
-            const requestInfo = GDocsHelpers.buildUpdateParagraphStyleRequest(startIndex, endIndex, args.style);
-
-            if (!requestInfo) {
-                return "No valid paragraph styling options were provided.";
-            }
-
-            log.info(`Applying styles: ${requestInfo.fields.join(', ')}`);
-            await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request]);
-
-            return `Successfully applied paragraph styles (${requestInfo.fields.join(', ')}) to the paragraph.`;
-
-        } catch (error: any) {
-            // Detailed error logging
-            log.error(`Error applying paragraph style in doc ${args.documentId}:`);
-            log.error(error.stack || error.message || error);
-
-            if (error instanceof UserError) throw error;
-            if (error instanceof NotImplementedError) throw error;
-
-            // Provide a more helpful error message
-            throw new UserError(`Failed to apply paragraph style: ${error.message || 'Unknown error'}`);
-        }
+  name: 'applyParagraphStyle',
+  annotations: { readOnlyHint: false },
+  description: 'Applies paragraph-level formatting (alignment, spacing, named styles like Heading 1) to the paragraph(s) containing specific text, an index, or a range.',
+  parameters: applyParagraphStyleSchema,
+  execute: async (args: ApplyParagraphStyleToolArgs, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Applying paragraph style to document ${args.documentId}`);
+    log.info(`Style options: ${JSON.stringify(args.style)}`);
+    log.info(`Target specification: ${JSON.stringify(args.target)}`);
+    try {
+      const { fields } = await performApplyParagraphStyle(docs, args);
+      if (!fields) return "No valid paragraph styling options were provided.";
+      return `Successfully applied paragraph styles (${fields.join(', ')}) to the paragraph.`;
+    } catch (error: any) {
+      log.error(`Error applying paragraph style in doc ${args.documentId}:`);
+      log.error(error.stack || error.message || error);
+      if (error instanceof UserError) throw error;
+      if (error instanceof NotImplementedError) throw error;
+      throw new UserError(`Failed to apply paragraph style: ${error.message || 'Unknown error'}`);
     }
+  },
 });
 
 // --- Structure & Content Tools ---
 
 server.addTool({
-name: 'insertTable',
-annotations: { readOnlyHint: false },
-description: 'Inserts a new table with the specified dimensions at a given index.',
-parameters: DocumentIdParameter.extend({
-rows: z.number().int().min(1).describe('Number of rows for the new table.'),
-columns: z.number().int().min(1).describe('Number of columns for the new table.'),
-index: z.number().int().min(1).describe('The index (1-based) where the table should be inserted.'),
-}),
-execute: async (args, { log, session }) => {
-const docs = await getDocsClient(session);
-log.info(`Inserting ${args.rows}x${args.columns} table in doc ${args.documentId} at index ${args.index}`);
-try {
-await GDocsHelpers.createTable(docs, args.documentId, args.rows, args.columns, args.index);
-// The API response contains info about the created table, but might be too complex to return here.
-return `Successfully inserted a ${args.rows}x${args.columns} table at index ${args.index}.`;
-} catch (error: any) {
-log.error(`Error inserting table in doc ${args.documentId}: ${error.message || error}`);
-if (error instanceof UserError) throw error;
-throw new UserError(`Failed to insert table: ${error.message || 'Unknown error'}`);
-}
-}
+  name: 'insertTable',
+  annotations: { readOnlyHint: false },
+  description: 'Inserts a new table with the specified dimensions at a given index.',
+  parameters: insertTableSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Inserting ${args.rows}x${args.columns} table in doc ${args.documentId} at index ${args.index}`);
+    try {
+      await performInsertTable(docs, args);
+      return `Successfully inserted a ${args.rows}x${args.columns} table at index ${args.index}.`;
+    } catch (error: any) {
+      log.error(`Error inserting table in doc ${args.documentId}: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to insert table: ${error.message || 'Unknown error'}`);
+    }
+  },
 });
 
 server.addTool({
@@ -1029,171 +843,75 @@ log.info(`Editing cell (${args.rowIndex}, ${args.columnIndex}) in table starting
 });
 
 server.addTool({
-name: 'insertPageBreak',
-annotations: { readOnlyHint: false },
-description: 'Inserts a page break at the specified index.',
-parameters: DocumentIdParameter.extend({
-index: z.number().int().min(1).describe('The index (1-based) where the page break should be inserted.'),
-}),
-execute: async (args, { log, session }) => {
-const docs = await getDocsClient(session);
-log.info(`Inserting page break in doc ${args.documentId} at index ${args.index}`);
-try {
-const request: docs_v1.Schema$Request = {
-insertPageBreak: {
-location: { index: args.index }
-}
-};
-await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
-return `Successfully inserted page break at index ${args.index}.`;
-} catch (error: any) {
-log.error(`Error inserting page break in doc ${args.documentId}: ${error.message || error}`);
-if (error instanceof UserError) throw error;
-throw new UserError(`Failed to insert page break: ${error.message || 'Unknown error'}`);
-}
-}
+  name: 'insertPageBreak',
+  annotations: { readOnlyHint: false },
+  description: 'Inserts a page break at the specified index.',
+  parameters: insertPageBreakSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Inserting page break in doc ${args.documentId} at index ${args.index}`);
+    try {
+      await performInsertPageBreak(docs, args);
+      return `Successfully inserted page break at index ${args.index}.`;
+    } catch (error: any) {
+      log.error(`Error inserting page break in doc ${args.documentId}: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to insert page break: ${error.message || 'Unknown error'}`);
+    }
+  },
 });
 
 // --- Image Insertion Tools ---
 
 server.addTool({
-name: 'insertImageFromUrl',
-annotations: { readOnlyHint: false },
-description: 'Inserts an inline image into a Google Document from a publicly accessible URL.',
-parameters: DocumentIdParameter.extend({
-imageUrl: z.string().url().describe('Publicly accessible URL to the image (must be http:// or https://).'),
-index: z.number().int().min(1).describe('The index (1-based) where the image should be inserted.'),
-width: z.number().min(1).optional().describe('Optional: Width of the image in points.'),
-height: z.number().min(1).optional().describe('Optional: Height of the image in points.'),
-}),
-execute: async (args, { log, session }) => {
-const docs = await getDocsClient(session);
-log.info(`Inserting image from URL ${args.imageUrl} at index ${args.index} in doc ${args.documentId}`);
-
-try {
-await GDocsHelpers.insertInlineImage(
-docs,
-args.documentId,
-args.imageUrl,
-args.index,
-args.width,
-args.height
-);
-
-let sizeInfo = '';
-if (args.width && args.height) {
-sizeInfo = ` with size ${args.width}x${args.height}pt`;
-}
-
-return `Successfully inserted image from URL at index ${args.index}${sizeInfo}.`;
-} catch (error: any) {
-log.error(`Error inserting image in doc ${args.documentId}: ${error.message || error}`);
-if (error instanceof UserError) throw error;
-throw new UserError(`Failed to insert image: ${error.message || 'Unknown error'}`);
-}
-}
+  name: 'insertImageFromUrl',
+  annotations: { readOnlyHint: false },
+  description: 'Inserts an inline image into a Google Document from a publicly accessible URL.',
+  parameters: insertImageFromUrlSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Inserting image from URL ${args.imageUrl} at index ${args.index} in doc ${args.documentId}`);
+    try {
+      await performInsertImageFromUrl(docs, args);
+      const sizeInfo = args.width && args.height ? ` with size ${args.width}x${args.height}pt` : '';
+      return `Successfully inserted image from URL at index ${args.index}${sizeInfo}.`;
+    } catch (error: any) {
+      log.error(`Error inserting image in doc ${args.documentId}: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to insert image: ${error.message || 'Unknown error'}`);
+    }
+  },
 });
 
 server.addTool({
-name: 'insertLocalImage',
-annotations: { readOnlyHint: false },
-description: 'Inserts an image into a Google Document. Provide one of: (1) imageUrl — a public HTTP(S) URL to fetch, (2) driveFileId — ID of an image already in Google Drive, (3) localImagePath — absolute path for local/stdio deployments, or (4) imageBase64 + fileName — base64-encoded content for small images.',
-parameters: DocumentIdParameter.extend({
-imageUrl: z.string().optional().describe('Public HTTP(S) URL of the image to fetch and insert (preferred for remote deployments).'),
-driveFileId: z.string().optional().describe('Google Drive file ID of an existing image. The image will be made publicly readable and inserted.'),
-localImagePath: z.string().optional().describe('Absolute path to a local image file (for local/stdio deployments only).'),
-imageBase64: z.string().optional().describe('Base64-encoded image content. Only for small images; prefer imageUrl for large files.'),
-fileName: z.string().optional().describe('File name with extension for MIME type detection (e.g. "photo.jpg"). Required when using imageBase64.'),
-index: z.number().int().min(1).describe('The index (1-based) where the image should be inserted in the document.'),
-width: z.number().min(1).optional().describe('Optional: Width of the image in points.'),
-height: z.number().min(1).optional().describe('Optional: Height of the image in points.'),
-uploadToSameFolder: z.boolean().optional().default(true).describe('If true, uploads the image to the same folder as the document. If false, uploads to Drive root.'),
-}),
-execute: async (args, { log, session }) => {
-const docs = await getDocsClient(session);
-const drive = await getDriveClient(session);
-
-// Validate inputs
-const strategy = GDocsHelpers.validateImageSource(args);
-
-const imageSource = args.imageUrl || args.driveFileId || args.localImagePath || args.fileName || 'base64 image';
-log.info(`Inserting image ${imageSource} at index ${args.index} in doc ${args.documentId}`);
-
-try {
-let resolvedImageUrl: string;
-
-if (strategy === 'driveFile') {
-// Image already in Drive — just make it public and get URL
-log.info(`Using existing Drive file: ${args.driveFileId}`);
-resolvedImageUrl = await GDocsHelpers.getPublicUrlForDriveFile(drive, args.driveFileId!);
-} else {
-// Need to upload to Drive first (from URL, local path, or base64)
-const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20 MB
-let imageBuffer: Buffer | undefined;
-if (args.imageBase64) {
-const b64 = args.imageBase64;
-if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) {
-throw new UserError('imageBase64 contains invalid characters. Provide a valid base64-encoded string.');
-}
-const decodedSize = Math.floor((b64.length * 3) / 4)
-  - (b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0);
-if (decodedSize > MAX_IMAGE_BYTES) {
-throw new UserError(`imageBase64 decodes to ${decodedSize} bytes, exceeding the ${MAX_IMAGE_BYTES} byte limit.`);
-}
-imageBuffer = Buffer.from(b64, 'base64');
-}
-
-// Get the document's parent folder if requested
-let parentFolderId: string | undefined;
-if (args.uploadToSameFolder) {
-try {
-const docInfo = await drive.files.get({
-fileId: args.documentId,
-fields: 'parents'
-});
-if (docInfo.data.parents && docInfo.data.parents.length > 0) {
-parentFolderId = docInfo.data.parents[0];
-log.info(`Will upload image to document's parent folder: ${parentFolderId}`);
-}
-} catch (folderError) {
-log.warn(`Could not determine document's parent folder, using Drive root: ${folderError}`);
-}
-}
-
-log.info(`Uploading image to Drive...`);
-resolvedImageUrl = await GDocsHelpers.uploadImageToDrive(
-drive,
-args.localImagePath,
-parentFolderId,
-imageBuffer,
-args.fileName,
-args.imageUrl
-);
-}
-log.info(`Image URL resolved: ${resolvedImageUrl}`);
-
-// Insert the image into the document
-await GDocsHelpers.insertInlineImage(
-docs,
-args.documentId,
-resolvedImageUrl,
-args.index,
-args.width,
-args.height
-);
-
-let sizeInfo = '';
-if (args.width && args.height) {
-sizeInfo = ` with size ${args.width}x${args.height}pt`;
-}
-
-return `Successfully inserted image at index ${args.index}${sizeInfo}.\nImage URL: ${resolvedImageUrl}`;
-} catch (error: any) {
-log.error(`Error inserting image in doc ${args.documentId}: ${error.message || error}`);
-if (error instanceof UserError) throw error;
-throw new UserError(`Failed to insert image: ${error.message || 'Unknown error'}`);
-}
-}
+  name: 'insertLocalImage',
+  annotations: { readOnlyHint: false },
+  description: 'Inserts an image into a Google Document. Provide one of: (1) imageUrl — a public HTTP(S) URL to fetch, (2) driveFileId — ID of an image already in Google Drive, (3) localImagePath — absolute path for local/stdio deployments, or (4) imageBase64 + fileName — base64-encoded content for small images.',
+  parameters: insertLocalImageSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    const drive = await getDriveClient(session);
+    const imageSource = args.imageUrl || args.driveFileId || args.localImagePath || args.fileName || 'base64 image';
+    log.info(`Inserting image ${imageSource} at index ${args.index} in doc ${args.documentId}`);
+    try {
+      // Opt in to the local-filesystem source only on a stdio deployment, where
+      // the caller owns the machine and the file. TRANSPORT is httpStream in the
+      // hosted image (see the Dockerfile), so the hosted MCP surface refuses it
+      // exactly like the REST plane does.
+      const { resolvedImageUrl } = await performInsertLocalImage(docs, drive, args, {
+        // Read from the env rather than the TRANSPORT const, which is declared
+        // further down the file for the startup path — same value, no
+        // forward-reference to reason about.
+        allowLocalFilesystem: (process.env.TRANSPORT || 'stdio') === 'stdio',
+      });
+      const sizeInfo = args.width && args.height ? ` with size ${args.width}x${args.height}pt` : '';
+      return `Successfully inserted image at index ${args.index}${sizeInfo}.\nImage URL: ${resolvedImageUrl}`;
+    } catch (error: any) {
+      log.error(`Error inserting image in doc ${args.documentId}: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to insert image: ${error.message || 'Unknown error'}`);
+    }
+  },
 });
 
 // --- Intelligent Assistance Tools (Examples/Stubs) ---
@@ -1238,7 +956,7 @@ server.addTool({
       const doc = await docsClient.documents.get({ documentId: args.documentId });
 
       // Use Drive API v3 with proper fields to get quoted content
-      const drive = google.drive({ version: 'v3', auth: getAuthClient(session) });
+      const drive = await getDriveClient(session);
       const response = await drive.comments.list({
         fileId: args.documentId,
         fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved)',
@@ -1293,7 +1011,7 @@ server.addTool({
     log.info(`Getting comment ${args.commentId} from document ${args.documentId}`);
 
     try {
-      const drive = google.drive({ version: 'v3', auth: getAuthClient(session) });
+      const drive = await getDriveClient(session);
       const response = await drive.comments.get({
         fileId: args.documentId,
         commentId: args.commentId,
@@ -1332,181 +1050,82 @@ server.addTool({
   name: 'addComment',
   annotations: { readOnlyHint: false },
   description: 'Adds a comment to a Google Document with quoted text context. NOTE: Due to Google Drive API limitations, comments cannot be anchored to specific text positions in Google Docs. The comment will appear in the Comments panel with the quoted text displayed, but won\'t highlight text in the document body.',
-  parameters: DocumentIdParameter.extend({
-    startIndex: z.number().int().min(1).describe('The starting index of the text range (inclusive, starts from 1).'),
-    endIndex: z.number().int().min(1).describe('The ending index of the text range (exclusive).'),
-    commentText: z.string().min(1).describe('The content of the comment.'),
-  }).refine(data => data.endIndex > data.startIndex, {
-    message: 'endIndex must be greater than startIndex',
-    path: ['endIndex'],
-  }),
+  parameters: addCommentSchema,
   execute: async (args, { log, session }) => {
     log.info(`Adding comment to range ${args.startIndex}-${args.endIndex} in doc ${args.documentId}`);
-
     try {
-      // First, get the text content that will be quoted
       const docsClient = await getDocsClient(session);
-      const doc = await docsClient.documents.get({ documentId: args.documentId });
-
-      // Extract the quoted text from the document
-      let quotedText = '';
-      const content = doc.data.body?.content || [];
-
-      for (const element of content) {
-        if (element.paragraph) {
-          const elements = element.paragraph.elements || [];
-          for (const textElement of elements) {
-            if (textElement.textRun) {
-              const elementStart = textElement.startIndex || 0;
-              const elementEnd = textElement.endIndex || 0;
-
-              // Check if this element overlaps with our range
-              if (elementEnd > args.startIndex && elementStart < args.endIndex) {
-                const text = textElement.textRun.content || '';
-                const startOffset = Math.max(0, args.startIndex - elementStart);
-                const endOffset = Math.min(text.length, args.endIndex - elementStart);
-                quotedText += text.substring(startOffset, endOffset);
-              }
-            }
-          }
-        }
-      }
-
-      // Use Drive API v3 for comments
-      const drive = google.drive({ version: 'v3', auth: getAuthClient(session) });
-
-      const response = await drive.comments.create({
-        fileId: args.documentId,
-        fields: 'id,content,quotedFileContent,author,createdTime,resolved',
-        requestBody: {
-          content: args.commentText,
-          quotedFileContent: {
-            value: quotedText,
-            mimeType: 'text/html'
-          }
-          // anchor removed - Google Drive API ignores it for Google Docs and causes "original content deleted"
-        }
-      });
-
-      return `Comment added successfully. Comment ID: ${response.data.id}`;
-
+      const drive = await getDriveClient(session);
+      const comment = await performAddComment(docsClient, drive, args);
+      return `Comment added successfully. Comment ID: ${comment.id}`;
     } catch (error: any) {
       log.error(`Error adding comment: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
       throw new UserError(`Failed to add comment: ${error.message || 'Unknown error'}`);
     }
-  }
+  },
 });
 
 server.addTool({
   name: 'replyToComment',
   annotations: { readOnlyHint: false },
   description: 'Adds a reply to an existing comment.',
-  parameters: DocumentIdParameter.extend({
-    commentId: z.string().describe('The ID of the comment to reply to'),
-    replyText: z.string().min(1).describe('The content of the reply')
-  }),
+  parameters: replyToCommentSchema,
   execute: async (args, { log, session }) => {
     log.info(`Adding reply to comment ${args.commentId} in doc ${args.documentId}`);
-
     try {
-      const drive = google.drive({ version: 'v3', auth: getAuthClient(session) });
-
-      const response = await drive.replies.create({
-        fileId: args.documentId,
-        commentId: args.commentId,
-        fields: 'id,content,author,createdTime',
-        requestBody: {
-          content: args.replyText
-        }
-      });
-
-      return `Reply added successfully. Reply ID: ${response.data.id}`;
-
+      const drive = await getDriveClient(session);
+      const reply = await performReplyToComment(drive, args);
+      return `Reply added successfully. Reply ID: ${reply.id}`;
     } catch (error: any) {
       log.error(`Error adding reply: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
       throw new UserError(`Failed to add reply: ${error.message || 'Unknown error'}`);
     }
-  }
+  },
 });
 
 server.addTool({
   name: 'resolveComment',
   annotations: { readOnlyHint: false },
   description: 'Marks a comment as resolved. NOTE: Due to Google API limitations, the Drive API does not support resolving comments on Google Docs files. This operation will attempt to update the comment but the resolved status may not persist in the UI. Comments can be resolved manually in the Google Docs interface.',
-  parameters: DocumentIdParameter.extend({
-    commentId: z.string().describe('The ID of the comment to resolve')
-  }),
+  parameters: resolveCommentSchema,
   execute: async (args, { log, session }) => {
     log.info(`Resolving comment ${args.commentId} in doc ${args.documentId}`);
-
     try {
-      const drive = google.drive({ version: 'v3', auth: getAuthClient(session) });
-
-      // First, get the current comment content (required by the API)
-      const currentComment = await drive.comments.get({
-        fileId: args.documentId,
-        commentId: args.commentId,
-        fields: 'content'
-      });
-
-      // Update with both content and resolved status
-      await drive.comments.update({
-        fileId: args.documentId,
-        commentId: args.commentId,
-        fields: 'id,resolved',
-        requestBody: {
-          content: currentComment.data.content,
-          resolved: true
-        }
-      });
-
-      // Verify the resolved status was set
-      const verifyComment = await drive.comments.get({
-        fileId: args.documentId,
-        commentId: args.commentId,
-        fields: 'resolved'
-      });
-
-      if (verifyComment.data.resolved) {
+      const drive = await getDriveClient(session);
+      const { resolved } = await performResolveComment(drive, args);
+      if (resolved) {
         return `Comment ${args.commentId} has been marked as resolved.`;
-      } else {
-        return `Attempted to resolve comment ${args.commentId}, but the resolved status may not persist in the Google Docs UI due to API limitations. The comment can be resolved manually in the Google Docs interface.`;
       }
-
+      return `Attempted to resolve comment ${args.commentId}, but the resolved status may not persist in the Google Docs UI due to API limitations. The comment can be resolved manually in the Google Docs interface.`;
     } catch (error: any) {
       log.error(`Error resolving comment: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
       const errorDetails = error.response?.data?.error?.message || error.message || 'Unknown error';
       const errorCode = error.response?.data?.error?.code;
       throw new UserError(`Failed to resolve comment: ${errorDetails}${errorCode ? ` (Code: ${errorCode})` : ''}`);
     }
-  }
+  },
 });
 
 server.addTool({
   name: 'deleteComment',
   annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Deletes a comment from the document.',
-  parameters: DocumentIdParameter.extend({
-    commentId: z.string().describe('The ID of the comment to delete')
-  }),
+  parameters: deleteCommentSchema,
   execute: async (args, { log, session }) => {
     log.info(`Deleting comment ${args.commentId} from doc ${args.documentId}`);
-
     try {
-      const drive = google.drive({ version: 'v3', auth: getAuthClient(session) });
-
-      await drive.comments.delete({
-        fileId: args.documentId,
-        commentId: args.commentId
-      });
-
+      const drive = await getDriveClient(session);
+      await performDeleteComment(drive, args);
       return `Comment ${args.commentId} has been deleted.`;
-
     } catch (error: any) {
       log.error(`Error deleting comment: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
       throw new UserError(`Failed to delete comment: ${error.message || 'Unknown error'}`);
     }
-  }
+  },
 });
 
 // --- Add Stubs for other advanced features ---
@@ -1530,122 +1149,38 @@ throw new NotImplementedError("Finding elements by complex criteria is not yet i
 
 // --- Preserve the existing formatMatchingText tool for backward compatibility ---
 server.addTool({
-name: 'formatMatchingText',
-annotations: { readOnlyHint: false },
-description: 'Finds specific text within a Google Document and applies character formatting (bold, italics, color, etc.) to the specified instance.',
-parameters: z.object({
-  documentId: z.string().describe('The ID of the Google Document.'),
-  textToFind: z.string().min(1).describe('The exact text string to find and format.'),
-  matchInstance: z.number().int().min(1).optional().default(1).describe('Which instance of the text to format (1st, 2nd, etc.). Defaults to 1.'),
-  // Re-use optional Formatting Parameters (SHARED)
-  bold: z.boolean().optional().describe('Apply bold formatting.'),
-  italic: z.boolean().optional().describe('Apply italic formatting.'),
-  underline: z.boolean().optional().describe('Apply underline formatting.'),
-  strikethrough: z.boolean().optional().describe('Apply strikethrough formatting.'),
-  fontSize: z.number().min(1).optional().describe('Set font size (in points, e.g., 12).'),
-  fontFamily: z.string().optional().describe('Set font family (e.g., "Arial", "Times New Roman").'),
-  foregroundColor: z.string()
-    .refine((color) => /^#?([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(color), {
-      message: "Invalid hex color format (e.g., #FF0000 or #F00)"
-    })
-    .optional()
-    .describe('Set text color using hex format (e.g., "#FF0000").'),
-  backgroundColor: z.string()
-    .refine((color) => /^#?([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(color), {
-      message: "Invalid hex color format (e.g., #00FF00 or #0F0)"
-    })
-    .optional()
-    .describe('Set text background color using hex format (e.g., "#FFFF00").'),
-  linkUrl: z.string().url().optional().describe('Make the text a hyperlink pointing to this URL.')
-})
-.refine(data => Object.keys(data).some(key => !['documentId', 'textToFind', 'matchInstance'].includes(key) && data[key as keyof typeof data] !== undefined), {
-    message: "At least one formatting option (bold, italic, fontSize, etc.) must be provided."
-}),
-execute: async (args, { log, session }) => {
-  // Adapt to use the new applyTextStyle implementation under the hood
-  const docs = await getDocsClient(session);
-  log.info(`Using formatMatchingText (legacy) for doc ${args.documentId}, target: "${args.textToFind}" (instance ${args.matchInstance})`);
-
-  try {
-    // Extract the style parameters
-    const styleParams: TextStyleArgs = {};
-    if (args.bold !== undefined) styleParams.bold = args.bold;
-    if (args.italic !== undefined) styleParams.italic = args.italic;
-    if (args.underline !== undefined) styleParams.underline = args.underline;
-    if (args.strikethrough !== undefined) styleParams.strikethrough = args.strikethrough;
-    if (args.fontSize !== undefined) styleParams.fontSize = args.fontSize;
-    if (args.fontFamily !== undefined) styleParams.fontFamily = args.fontFamily;
-    if (args.foregroundColor !== undefined) styleParams.foregroundColor = args.foregroundColor;
-    if (args.backgroundColor !== undefined) styleParams.backgroundColor = args.backgroundColor;
-    if (args.linkUrl !== undefined) styleParams.linkUrl = args.linkUrl;
-
-    // Find the text range
-    const range = await GDocsHelpers.findTextRange(docs, args.documentId, args.textToFind, args.matchInstance);
-    if (!range) {
-      throw new UserError(`Could not find instance ${args.matchInstance} of text "${args.textToFind}".`);
+  name: 'formatMatchingText',
+  annotations: { readOnlyHint: false },
+  description: 'Finds specific text within a Google Document and applies character formatting (bold, italics, color, etc.) to the specified instance.',
+  parameters: formatMatchingTextSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Using formatMatchingText (legacy) for doc ${args.documentId}, target: "${args.textToFind}" (instance ${args.matchInstance})`);
+    try {
+      const { fields } = await performFormatMatchingText(docs, args);
+      if (!fields) return "No valid text styling options were provided.";
+      return `Successfully applied formatting to instance ${args.matchInstance} of "${args.textToFind}".`;
+    } catch (error: any) {
+      log.error(`Error in formatMatchingText for doc ${args.documentId}: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to format text: ${error.message || 'Unknown error'}`);
     }
-
-    // Build and execute the request
-    const requestInfo = GDocsHelpers.buildUpdateTextStyleRequest(range.startIndex, range.endIndex, styleParams);
-    if (!requestInfo) {
-      return "No valid text styling options were provided.";
-    }
-
-    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request]);
-    return `Successfully applied formatting to instance ${args.matchInstance} of "${args.textToFind}".`;
-  } catch (error: any) {
-    log.error(`Error in formatMatchingText for doc ${args.documentId}: ${error.message || error}`);
-    if (error instanceof UserError) throw error;
-    throw new UserError(`Failed to format text: ${error.message || 'Unknown error'}`);
-  }
-}
+  },
 });
 
 // === FIND AND REPLACE TOOL ===
 
 server.addTool({
-name: 'findAndReplace',
-annotations: { readOnlyHint: false },
-description: 'Finds all occurrences of a text string in a Google Doc and replaces them. Returns the number of replacements made.',
-parameters: z.object({
-  documentId: z.string().describe('The ID of the Google Document.'),
-  findText: z.string().min(1).describe('The text to find.'),
-  replaceText: z.string().describe('The replacement text.'),
-  matchCase: z.boolean().optional().default(false).describe('Whether the search should be case-sensitive.'),
-  tabId: z.string().optional().describe('Optional tab ID to restrict the replacement to.'),
-}),
-execute: async (args, { log, session }) => {
-  const docs = await getDocsClient(session);
-  log.info(`Find and replace in doc ${args.documentId}: "${args.findText}" → "${args.replaceText}" (matchCase: ${args.matchCase})`);
-
-  const request: docs_v1.Schema$Request = {
-    replaceAllText: {
-      containsText: {
-        text: args.findText,
-        matchCase: args.matchCase ?? false,
-      },
-      replaceText: args.replaceText,
-    }
-  };
-
-  // If tabId specified, add tabsCriteria
-  if (args.tabId) {
-    (request.replaceAllText as any).tabsCriteria = { tabIds: [args.tabId] };
-  }
-
-  const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
-
-  // Extract occurrences changed from the reply
-  const replies = response.replies || [];
-  let occurrencesChanged = 0;
-  for (const reply of replies) {
-    if (reply.replaceAllText?.occurrencesChanged) {
-      occurrencesChanged += reply.replaceAllText.occurrencesChanged;
-    }
-  }
-
-  return `Replaced ${occurrencesChanged} occurrence(s) of "${args.findText}" with "${args.replaceText}".`;
-}
+  name: 'findAndReplace',
+  annotations: { readOnlyHint: false },
+  description: 'Finds all occurrences of a text string in a Google Doc and replaces them. Returns the number of replacements made.',
+  parameters: findAndReplaceSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Find and replace in doc ${args.documentId}: "${args.findText}" → "${args.replaceText}" (matchCase: ${args.matchCase})`);
+    const { occurrencesChanged } = await performFindAndReplace(docs, args);
+    return `Replaced ${occurrencesChanged} occurrence(s) of "${args.findText}" with "${args.replaceText}".`;
+  },
 });
 
 // === INSPECT DOCUMENT STRUCTURE TOOL ===
@@ -1704,162 +1239,50 @@ execute: async (args, { log, session }) => {
 // === IMPORT DOCX TOOL ===
 
 server.addTool({
-name: 'importDocx',
-annotations: { readOnlyHint: false },
-description: 'Converts a .docx file already in Google Drive into a Google Doc. Drive auto-converts the format. Returns the new Google Doc ID and link.',
-parameters: z.object({
-  fileId: z.string().describe('The Drive file ID of the .docx file to convert.'),
-  targetFolderId: z.string().optional().describe('Optional folder ID to place the converted Google Doc in.'),
-}),
-execute: async (args, { log, session }) => {
-  const drive = await getDriveClient(session);
-  log.info(`Importing DOCX ${args.fileId} as Google Doc`);
-
-  // Validate the source is a docx file
-  const fileInfo = await drive.files.get({
-    fileId: args.fileId,
-    supportsAllDrives: true,
-    fields: 'mimeType,name',
-  });
-
-  const mime = fileInfo.data.mimeType || '';
-  if (mime !== 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-    throw new UserError(`File is not a .docx file (mimeType: ${mime}). Only Word documents (.docx) can be imported.`);
-  }
-
-  // Copy the file with Google Docs mimeType — Drive auto-converts
-  const copyMetadata: any = {
-    mimeType: 'application/vnd.google-apps.document',
-  };
-  if (args.targetFolderId) {
-    copyMetadata.parents = [args.targetFolderId];
-  }
-
-  const copyResponse = await drive.files.copy({
-    fileId: args.fileId,
-    requestBody: copyMetadata,
-    supportsAllDrives: true,
-    fields: 'id,name,webViewLink',
-  });
-
-  const newDoc = copyResponse.data;
-  return `DOCX imported successfully as Google Doc:\n  Document ID: ${newDoc.id}\n  Title: ${newDoc.name}\n  Link: ${newDoc.webViewLink}`;
-}
+  name: 'importDocx',
+  annotations: { readOnlyHint: false },
+  description: 'Converts a .docx file already in Google Drive into a Google Doc. Drive auto-converts the format. Returns the new Google Doc ID and link.',
+  parameters: importDocxSchema,
+  execute: async (args, { log, session }) => {
+    const drive = await getDriveClient(session);
+    log.info(`Importing DOCX ${args.fileId} as Google Doc`);
+    const newDoc = await performImportDocx(drive, args);
+    return `DOCX imported successfully as Google Doc:\n  Document ID: ${newDoc.id}\n  Title: ${newDoc.name}\n  Link: ${newDoc.webViewLink}`;
+  },
 });
 
 // === BATCH UPDATE DOC TOOL ===
 
 server.addTool({
-name: 'batchUpdateDoc',
-annotations: { readOnlyHint: false },
-description: 'Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Index-based operations are automatically sorted in descending order to prevent index shifting.',
-parameters: z.object({
-  documentId: z.string().describe('The ID of the Google Document.'),
-  operations: z.array(BatchOperationSchema).min(1).max(50).describe('Array of operations to execute (1-50).'),
-}),
-execute: async (args, { log, session }) => {
-  const docs = await getDocsClient(session);
-  log.info(`Batch update on doc ${args.documentId}: ${args.operations.length} operation(s)`);
-
-  // Map all operations to API requests
-  const allRequests: docs_v1.Schema$Request[] = [];
-  const opSummary: string[] = [];
-
-  // Detect mixing of global (replace_text/find_replace) and index-based ops
-  const hasGlobal = args.operations.some(op => op.type === 'replace_text' || op.type === 'find_replace');
-  const hasIndexBased = args.operations.some(op => op.type !== 'replace_text' && op.type !== 'find_replace');
-
-  if (hasGlobal && hasIndexBased) {
-    throw new UserError(
-      'Cannot mix global operations (replace_text, find_replace) with index-based operations in the same batch. ' +
-      'Global replacements change document length and invalidate indices. Submit them in separate batches.'
-    );
-  }
-
-  // For index-based batches, sort in descending index order to prevent shifting
-  let opsToProcess: BatchOperation[];
-  if (hasIndexBased) {
-    opsToProcess = [...args.operations].sort((a, b) => {
-      const aIdx = ('index' in a ? (a as any).index : (a as any).startIndex) ?? 0;
-      const bIdx = ('index' in b ? (b as any).index : (b as any).startIndex) ?? 0;
-      return bIdx - aIdx;
-    });
-  } else {
-    opsToProcess = args.operations;
-  }
-
-  for (const op of opsToProcess) {
-    const requests = GDocsHelpers.mapBatchOperationToRequest(op);
-    if (requests.length > 0) {
-      allRequests.push(...requests);
-      opSummary.push(op.type);
-    }
-  }
-
-  if (allRequests.length === 0) {
-    return 'No valid operations to execute.';
-  }
-
-  await GDocsHelpers.executeBatchUpdate(docs, args.documentId, allRequests);
-
-  // Build summary
-  const typeCounts: Record<string, number> = {};
-  for (const t of opSummary) {
-    typeCounts[t] = (typeCounts[t] || 0) + 1;
-  }
-  const summary = Object.entries(typeCounts)
-    .map(([type, count]) => `${count}x ${type}`)
-    .join(', ');
-
-  return `Batch update completed: ${args.operations.length} operation(s) executed (${summary}).`;
-}
+  name: 'batchUpdateDoc',
+  annotations: { readOnlyHint: false },
+  description: 'Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Index-based operations are automatically sorted in descending order to prevent index shifting.',
+  parameters: batchUpdateDocSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Batch update on doc ${args.documentId}: ${args.operations.length} operation(s)`);
+    const { executed, typeCounts } = await performBatchUpdateDoc(docs, args);
+    if (executed === 0) return 'No valid operations to execute.';
+    const summary = Object.entries(typeCounts).map(([type, count]) => `${count}x ${type}`).join(', ');
+    return `Batch update completed: ${args.operations.length} operation(s) executed (${summary}).`;
+  },
 });
 server.addTool({
-name: 'importToGoogleDoc',
-annotations: { readOnlyHint: false },
-description: 'Import content (text, HTML, or markdown) into a new Google Doc. Google Drive auto-converts the content to Google Docs format.',
-parameters: z.object({
-  title: z.string().describe('Title for the new Google Doc.'),
-  content: z.string().describe('The content to import (text, HTML, or markdown string).'),
-  mimeType: z.enum([
-    'text/plain',
-    'text/html',
-    'text/markdown',
-  ]).optional().default('text/plain').describe('The mime type of the source content. For DOCX files already in Drive, use the importDocx tool instead.'),
-  parentFolderId: z.string().optional().describe('Optional Drive folder ID to create the doc in.'),
-}),
-execute: async (args, { log, session }) => {
-  const drive = await getDriveClient(session);
-  log.info(`Importing content as Google Doc: "${args.title}" (mimeType: ${args.mimeType})`);
-
-  try {
-    const { Readable } = await import('stream');
-
-    const fileMetadata: any = {
-      name: args.title,
-      mimeType: 'application/vnd.google-apps.document',
-    };
-    if (args.parentFolderId) {
-      fileMetadata.parents = [args.parentFolderId];
+  name: 'importToGoogleDoc',
+  annotations: { readOnlyHint: false },
+  description: 'Import content (text, HTML, or markdown) into a new Google Doc. Google Drive auto-converts the content to Google Docs format.',
+  parameters: importToGoogleDocSchema,
+  execute: async (args, { log, session }) => {
+    const drive = await getDriveClient(session);
+    log.info(`Importing content as Google Doc: "${args.title}" (mimeType: ${args.mimeType})`);
+    try {
+      const doc = await performImportToGoogleDoc(drive, args);
+      return `Google Doc created successfully:\n  Title: ${doc.name}\n  Document ID: ${doc.id}\n  Link: ${doc.webViewLink}`;
+    } catch (error: any) {
+      log.error(`Error importing to Google Doc: ${error.message || error}`);
+      handleDriveError(error, 'import content to', args.parentFolderId || args.title);
     }
-
-    const response = await drive.files.create({
-      requestBody: fileMetadata,
-      media: {
-        mimeType: args.mimeType || 'text/plain',
-        body: Readable.from(Buffer.from(args.content, 'utf-8')),
-      },
-      supportsAllDrives: true,
-      fields: 'id,name,webViewLink,mimeType',
-    });
-
-    const doc = response.data;
-    return `Google Doc created successfully:\n  Title: ${doc.name}\n  Document ID: ${doc.id}\n  Link: ${doc.webViewLink}`;
-  } catch (error: any) {
-    log.error(`Error importing to Google Doc: ${error.message || error}`);
-    handleDriveError(error, 'import content to', args.parentFolderId || args.title);
-  }
-}
+  },
 });
 
 // --- Environment variables for remote deployment ---
@@ -2089,7 +1512,26 @@ async function startServer() {
   }
 }
 
-startServer();
+/**
+ * Boot unless we are inside the test runner.
+ *
+ * This file is the application entry point (Dockerfile CMD and railway.json both
+ * run `node dist/google-docs/server.js`), and it called startServer() at import
+ * time — so importing it from a test started a real server, bound ports and
+ * reached for Google and Postgres. That is why nothing imported it, and why its
+ * ~770 executable lines, including every tool body, sat at 0% coverage.
+ *
+ * Phrased as "start unless under test", NOT as "start if this is the entry
+ * point", because the two fail in opposite directions. An entry-point check that
+ * guesses wrong about argv silently stops production from booting; this one, if
+ * it ever guessed wrong, would only boot a server inside a test — loud, local,
+ * and harmless. `NODE_TEST_CONTEXT` is set by `node --test` itself.
+ */
+const UNDER_TEST_RUNNER = process.env.NODE_TEST_CONTEXT !== undefined;
+
+if (!UNDER_TEST_RUNNER) {
+  startServer();
+}
 
 process.on('SIGTERM', async () => {
   console.error('SIGTERM received, shutting down...');

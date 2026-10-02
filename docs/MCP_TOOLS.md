@@ -40,33 +40,33 @@ Source: `src/google-docs/server.ts` — 30 tools.
 | `listGoogleDocs` | Lists Google Documents from your Google Drive and shared drives with optional filtering. | `GET /api/v1/docs` |
 | `searchGoogleDocs` | Searches for Google Documents by name, content, or other criteria across My Drive and shared drives. | `GET /api/v1/docs?q={query}` |
 | `getRecentGoogleDocs` | Gets the most recently modified Google Documents from My Drive and shared drives. | `GET /api/v1/docs/recent` |
-| `exportDocToPdf` | Exports a Google Doc as a PDF file and saves it to Google Drive. Returns the PDF file ID, name, and link. | — |
+| `exportDocToPdf` | Exports a Google Doc as a PDF file and saves it to Google Drive. Returns the PDF file ID, name, and link. | `POST /api/v1/docs/{documentId}/export/pdf` |
 | `readGoogleDoc` | Reads the content of a specific Google Document, optionally returning structured data. | `GET /api/v1/docs/{documentId}` |
 | `listDocumentTabs` | Lists all tabs in a Google Document, including their hierarchy, IDs, and structure. | `GET /api/v1/docs/{documentId}/tabs` |
-| `appendToGoogleDoc` | Appends text to the very end of a specific Google Document or tab. Equivalent to insertText at the document end; use this when you do not know the end index. | — |
-| `insertText` | Inserts text at a specific 1-based index within the document body or a specific tab. For end-of-document inserts where you do not have an index, prefer appendToGoogleDoc. | — |
-| `deleteRange` | Deletes content within a specified range (start index inclusive, end index exclusive) from the document or a specific tab. | — |
-| `applyTextStyle` | Applies character-level formatting to a specific range or found text. Supported style keys: bold, italic, underline, strikethrough, fontSize, fontFamily, foregroundColor, backgroundColor, link. | — |
-| `applyParagraphStyle` | Applies paragraph-level formatting (alignment, spacing, named styles like Heading 1) to the paragraph(s) containing specific text, an index, or a range. | — |
-| `insertTable` | Inserts a new table with the specified dimensions at a given index. | — |
+| `appendToGoogleDoc` | Appends text to the very end of a specific Google Document or tab. Equivalent to insertText at the document end; use this when you do not know the end index. | `POST /api/v1/docs/{documentId}/append` |
+| `insertText` | Inserts text at a specific 1-based index within the document body or a specific tab. For end-of-document inserts where you do not have an index, prefer appendToGoogleDoc. | `POST /api/v1/docs/{documentId}/text` |
+| `deleteRange` | Deletes content within a specified range (start index inclusive, end index exclusive) from the document or a specific tab. | `POST /api/v1/docs/{documentId}/ranges/delete` |
+| `applyTextStyle` | Applies character-level formatting to a specific range or found text. Supported style keys: bold, italic, underline, strikethrough, fontSize, fontFamily, foregroundColor, backgroundColor, link. | `POST /api/v1/docs/{documentId}/text-style` |
+| `applyParagraphStyle` | Applies paragraph-level formatting (alignment, spacing, named styles like Heading 1) to the paragraph(s) containing specific text, an index, or a range. | `POST /api/v1/docs/{documentId}/paragraph-style` |
+| `insertTable` | Inserts a new table with the specified dimensions at a given index. | `POST /api/v1/docs/{documentId}/tables` |
 | `editTableCell` | NOT IMPLEMENTED — always throws. Editing table cells requires non-trivial index calculation that has not been built yet. Use batchUpdateDoc with raw insert/delete requests if you need to modify table contents. | — |
-| `insertPageBreak` | Inserts a page break at the specified index. | — |
-| `insertImageFromUrl` | Inserts an inline image into a Google Document from a publicly accessible URL. | — |
-| `insertLocalImage` | Inserts an image into a Google Document. Provide one of: (1) imageUrl — a public HTTP(S) URL to fetch, (2) driveFileId — ID of an image already in Google Drive, (3) localImagePath — absolute path for local/stdio deployments, or (4) imageBase64 + fileName — base64-encoded content for small images. | — |
+| `insertPageBreak` | Inserts a page break at the specified index. | `POST /api/v1/docs/{documentId}/page-breaks` |
+| `insertImageFromUrl` | Inserts an inline image into a Google Document from a publicly accessible URL. | `POST /api/v1/docs/{documentId}/images/from-url` |
+| `insertLocalImage` | Inserts an image into a Google Document. Provide one of: (1) imageUrl — a public HTTP(S) URL to fetch, (2) driveFileId — ID of an image already in Google Drive, (3) localImagePath — absolute path for local/stdio deployments, or (4) imageBase64 + fileName — base64-encoded content for small images. | `POST /api/v1/docs/{documentId}/images` |
 | `fixListFormatting` | EXPERIMENTAL: Attempts to detect paragraphs that look like lists (e.g., starting with -, *, 1.) and convert them to proper Google Docs bulleted or numbered lists. Best used on specific sections. | — |
 | `listComments` | Lists all comments in a Google Document. | `GET /api/v1/docs/{documentId}/comments` |
 | `getComment` | Gets a specific comment with its full thread of replies. | `GET /api/v1/docs/{documentId}/comments/{commentId}` |
-| `addComment` | Adds a comment to a Google Document with quoted text context. NOTE: Due to Google Drive API limitations, comments cannot be anchored to specific text positions in Google Docs. The comment will appear in the Comments panel with the quoted text displayed, but won't highlight text in the document body. | — |
-| `replyToComment` | Adds a reply to an existing comment. | — |
-| `resolveComment` | Marks a comment as resolved. NOTE: Due to Google API limitations, the Drive API does not support resolving comments on Google Docs files. This operation will attempt to update the comment but the resolved status may not persist in the UI. Comments can be resolved manually in the Google Docs interface. | — |
-| `deleteComment` | Deletes a comment from the document. | — |
+| `addComment` | Adds a comment to a Google Document with quoted text context. NOTE: Due to Google Drive API limitations, comments cannot be anchored to specific text positions in Google Docs. The comment will appear in the Comments panel with the quoted text displayed, but won't highlight text in the document body. | `POST /api/v1/docs/{documentId}/comments` |
+| `replyToComment` | Adds a reply to an existing comment. | `POST /api/v1/docs/{documentId}/comments/{commentId}/replies` |
+| `resolveComment` | Marks a comment as resolved. NOTE: Due to Google API limitations, the Drive API does not support resolving comments on Google Docs files. This operation will attempt to update the comment but the resolved status may not persist in the UI. Comments can be resolved manually in the Google Docs interface. | `POST /api/v1/docs/{documentId}/comments/{commentId}/resolve` |
+| `deleteComment` | Deletes a comment from the document. | `POST /api/v1/docs/{documentId}/comments/{commentId}/delete` |
 | `findElement` | NOT IMPLEMENTED — always throws. For text search use findAndReplace or formatMatchingText; for structure exploration use inspectDocStructure. | — |
-| `formatMatchingText` | Finds specific text within a Google Document and applies character formatting (bold, italics, color, etc.) to the specified instance. | — |
-| `findAndReplace` | Finds all occurrences of a text string in a Google Doc and replaces them. Returns the number of replacements made. | — |
+| `formatMatchingText` | Finds specific text within a Google Document and applies character formatting (bold, italics, color, etc.) to the specified instance. | `POST /api/v1/docs/{documentId}/format-matching-text` |
+| `findAndReplace` | Finds all occurrences of a text string in a Google Doc and replaces them. Returns the number of replacements made. | `POST /api/v1/docs/{documentId}/find-replace` |
 | `inspectDocStructure` | Analyzes and returns the structure of a Google Doc: paragraph/table/section counts, headers/footers presence, tab hierarchy. Use detailed mode for element-by-element listing. | `GET /api/v1/docs/{documentId}/structure` |
-| `importDocx` | Converts a .docx file already in Google Drive into a Google Doc. Drive auto-converts the format. Returns the new Google Doc ID and link. | — |
-| `batchUpdateDoc` | Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Index-based operations are automatically sorted in descending order to prevent index shifting. | — |
-| `importToGoogleDoc` | Import content (text, HTML, or markdown) into a new Google Doc. Google Drive auto-converts the content to Google Docs format. | — |
+| `importDocx` | Converts a .docx file already in Google Drive into a Google Doc. Drive auto-converts the format. Returns the new Google Doc ID and link. | `POST /api/v1/docs/import/docx` |
+| `batchUpdateDoc` | Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Index-based operations are automatically sorted in descending order to prevent index shifting. | `POST /api/v1/docs/{documentId}/batchUpdate` |
+| `importToGoogleDoc` | Import content (text, HTML, or markdown) into a new Google Doc. Google Drive auto-converts the content to Google Docs format. | `POST /api/v1/docs/import` |
 
 ## Google Sheets
 
