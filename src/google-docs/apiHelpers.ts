@@ -536,6 +536,128 @@ export async function insertInlineImage(
     return executeBatchUpdate(docs, documentId, [request]);
 }
 
+// --- Guarded image fetch (shared) ---
+
+const MAX_IMAGE_FETCH_BYTES = 20 * 1024 * 1024; // 20 MB — matches the upload route's body cap
+const IMAGE_FETCH_TIMEOUT_MS = 30_000;
+const MAX_IMAGE_FETCH_REDIRECTS = 5;
+
+/**
+ * Race a promise against the fetch deadline, so a hanging DNS lookup cannot
+ * outlive IMAGE_FETCH_TIMEOUT_MS. The abort listener is always removed once the
+ * race settles.
+ */
+function raceAbort<T>(p: Promise<T>, signal: AbortSignal, url: string): Promise<T> {
+    const timeoutErr = () => new UserError(`Image fetch timed out after ${IMAGE_FETCH_TIMEOUT_MS / 1000}s: ${url}`);
+    if (signal.aborted) return Promise.reject(timeoutErr());
+    return new Promise<T>((resolve, reject) => {
+        const onAbort = () => reject(timeoutErr());
+        signal.addEventListener('abort', onAbort, { once: true });
+        p.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+    });
+}
+
+/**
+ * Fetch an image by URL with the SSRF guards applied to EVERY redirect hop.
+ *
+ * This is the one implementation of that loop, and it lives here because this is
+ * the module that owns validateFetchUrl and rejectPrivateAddress. It was
+ * previously inlined in clickup/docImageStore.ts, which meant uploadImageToDrive
+ * had its own copy that validated only the FIRST hostname and then called fetch
+ * with the default redirect:'follow' — so a public URL answering 302 to
+ * 169.254.169.254 or 127.0.0.1 was fetched unchecked, and its bytes were uploaded
+ * to the caller's Drive and published. That is the drift two copies of a security
+ * guard always produce, so there is now one copy and docImageStore delegates to
+ * it.
+ *
+ * Returns the content type alongside the bytes, because the caller needs it to
+ * name the upload when the URL carries no usable extension.
+ */
+export async function fetchImageWithRedirectGuard(url: string): Promise<{ bytes: Buffer; contentType: string | null }> {
+    // One timeout covers the whole operation — DNS/connect AND body streaming —
+    // so a slow drip on the body cannot hang past the deadline.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
+
+    try {
+        let currentUrl = validateFetchUrl(url).toString();
+        let response: Response;
+        let redirects = 0;
+
+        while (true) {
+            const parsed = validateFetchUrl(currentUrl);
+            await raceAbort(rejectPrivateAddress(parsed.hostname), controller.signal, url);
+
+            try {
+                response = await fetch(currentUrl, { signal: controller.signal, redirect: 'manual' });
+            } catch (err: any) {
+                if (err.name === 'AbortError') {
+                    throw new UserError(`Image fetch timed out after ${IMAGE_FETCH_TIMEOUT_MS / 1000}s: ${url}`);
+                }
+                throw new UserError(`Failed to fetch image from URL: ${err.message}`);
+            }
+
+            const location = response.headers.get('location');
+            if (response.status >= 300 && response.status < 400 && location) {
+                if (++redirects > MAX_IMAGE_FETCH_REDIRECTS) {
+                    throw new UserError(`Too many redirects (>${MAX_IMAGE_FETCH_REDIRECTS}) fetching image: ${url}`);
+                }
+                // Resolve a relative Location against the current URL, then loop so
+                // the destination is validated BEFORE it is fetched.
+                currentUrl = new URL(location, currentUrl).toString();
+                await response.body?.cancel().catch(() => { /* ignore */ });
+                continue;
+            }
+            break;
+        }
+
+        if (!response.ok) {
+            throw new UserError(`Failed to fetch image from URL (${response.status}): ${url}`);
+        }
+
+        // Reject early if Content-Length advertises an oversize payload.
+        const contentLength = Number(response.headers.get('content-length') || '0');
+        if (contentLength > MAX_IMAGE_FETCH_BYTES) {
+            throw new UserError(`Image too large (${contentLength} bytes, max ${MAX_IMAGE_FETCH_BYTES}): ${url}`);
+        }
+
+        // Stream with size enforcement rather than trusting Content-Length. The
+        // abort signal stays live, so the timeout still applies to the body.
+        const chunks: Uint8Array[] = [];
+        let totalBytes = 0;
+        const reader = response.body?.getReader();
+        if (!reader) {
+            throw new UserError(`No response body from URL: ${url}`);
+        }
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                totalBytes += value.byteLength;
+                if (totalBytes > MAX_IMAGE_FETCH_BYTES) {
+                    await reader.cancel().catch(() => { /* ignore */ });
+                    throw new UserError(`Image exceeds max size (${MAX_IMAGE_FETCH_BYTES} bytes): ${url}`);
+                }
+                chunks.push(value);
+            }
+        } catch (err: any) {
+            if (err.name === 'AbortError') {
+                throw new UserError(`Image fetch timed out after ${IMAGE_FETCH_TIMEOUT_MS / 1000}s: ${url}`);
+            }
+            throw err;
+        } finally {
+            reader.releaseLock();
+        }
+
+        return {
+            bytes: Buffer.concat(chunks.map((c) => Buffer.from(c))),
+            contentType: response.headers.get('content-type'),
+        };
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
 // --- URL validation for SSRF protection ---
 
 const PRIVATE_CIDR_PATTERNS = [
@@ -651,65 +773,18 @@ export async function uploadImageToDrive(
         mimeType = mimeTypeMap[ext] || 'application/octet-stream';
         body = Readable.from(imageBuffer);
     } else if (imageUrl) {
-        // Remote deployment: fetch from URL with SSRF and size protections
+        // Remote deployment: fetch through the shared guard, which re-validates
+        // EVERY redirect hop. This used to validate the first hostname only and
+        // then follow redirects blindly, so a public URL answering 302 to an
+        // internal address was fetched and published.
+        const fetched = await fetchImageWithRedirectGuard(imageUrl);
         const validated = validateFetchUrl(imageUrl);
-        await rejectPrivateAddress(validated.hostname);
-
-        const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
-        const FETCH_TIMEOUT_MS = 30_000;
-
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-        let response: Response;
-        try {
-            response = await fetch(imageUrl, { signal: controller.signal, redirect: 'follow' });
-        } catch (err: any) {
-            clearTimeout(timeout);
-            if (err.name === 'AbortError') {
-                throw new UserError(`Image fetch timed out after ${FETCH_TIMEOUT_MS / 1000}s: ${imageUrl}`);
-            }
-            throw new UserError(`Failed to fetch image from URL: ${err.message}`);
-        }
-        clearTimeout(timeout);
-
-        if (!response.ok) {
-            throw new UserError(`Failed to fetch image from URL (${response.status}): ${imageUrl}`);
-        }
-
-        // Reject early if Content-Length exceeds limit
-        const contentLength = Number(response.headers.get('content-length') || '0');
-        if (contentLength > MAX_IMAGE_SIZE) {
-            throw new UserError(`Image too large (${contentLength} bytes, max ${MAX_IMAGE_SIZE}): ${imageUrl}`);
-        }
-
-        // Stream with size enforcement instead of buffering entire response
-        const chunks: Uint8Array[] = [];
-        let totalBytes = 0;
-        const reader = response.body?.getReader();
-        if (!reader) {
-            throw new UserError(`No response body from URL: ${imageUrl}`);
-        }
-        try {
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                totalBytes += value.byteLength;
-                if (totalBytes > MAX_IMAGE_SIZE) {
-                    reader.cancel();
-                    throw new UserError(`Image exceeds max size (${MAX_IMAGE_SIZE} bytes): ${imageUrl}`);
-                }
-                chunks.push(value);
-            }
-        } finally {
-            reader.releaseLock();
-        }
-
-        // Derive filename from URL path
         resolvedFileName = fileName || path.basename(validated.pathname) || 'image.png';
         const ext = path.extname(resolvedFileName).toLowerCase();
-        mimeType = mimeTypeMap[ext] || response.headers.get('content-type') || 'application/octet-stream';
-        body = Readable.from(Buffer.concat(chunks.map(c => Buffer.from(c))));
+        // Extension first, then what the server said, then a type Drive will at
+        // least accept — an extensionless URL is common for CDN-hosted images.
+        mimeType = mimeTypeMap[ext] || fetched.contentType || 'application/octet-stream';
+        body = Readable.from(fetched.bytes);
     } else if (localFilePath) {
         // Local deployment: read from filesystem
         const fs = await import('fs');

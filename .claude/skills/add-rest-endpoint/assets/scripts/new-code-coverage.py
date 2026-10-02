@@ -36,6 +36,16 @@ def merge_base(base: str) -> str:
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
+# One set for both tracked and untracked discovery. They disagreed, so a changed
+# .tsx/.js/.mjs was dropped from the default scope and could produce a PASS
+# without being measured at all.
+SOURCE_EXTENSIONS = ('.ts', '.tsx', '.js', '.mjs')
+
+
+def is_source(path: str) -> bool:
+    return path.endswith(SOURCE_EXTENSIONS) and '__tests__' not in path
+
+
 def untracked_files(paths: list[str]) -> list[str]:
     """Non-ignored files git does not know about yet.
 
@@ -46,7 +56,7 @@ def untracked_files(paths: list[str]) -> list[str]:
     """
     out = subprocess.run(['git', 'ls-files', '--others', '--exclude-standard', '--'] + (paths or ['src']),
                          capture_output=True, text=True, check=True).stdout.split()
-    return [f for f in out if f.endswith(('.ts', '.tsx', '.js', '.mjs')) and '__tests__' not in f]
+    return [f for f in out if is_source(f)]
 
 
 def count_lines(path: str) -> int:
@@ -85,7 +95,7 @@ def changed_source_files(base: str) -> list[str]:
     cmd = ['git', 'diff', '--name-only', merge_base(base), '--', 'src']
     names = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.split()
     # Test files are not measured by the gate.
-    return [n for n in names if n.endswith('.ts') and '__tests__' not in n]
+    return [n for n in names if is_source(n)]
 
 
 def parse_lcov(path: str) -> tuple[dict, dict]:
@@ -157,12 +167,16 @@ def main() -> int:
 
     num = (tot_lines - tot_uncov) + cov_br
     den = tot_lines + cov_br + uncov_br
-    if den == 0:
-        print('\nNothing measurable.')
-        return 0
-    pct = 100 * num / den
-    print(f'\nnew_coverage = ({tot_lines - tot_uncov} lines + {cov_br} conditions)'
-          f' / ({tot_lines} lines + {cov_br + uncov_br} conditions) = {pct:.1f}%')
+    # The unmeasured check comes FIRST: when none of the changed files are in the
+    # report, den is 0, and returning "nothing measurable" there would pass a run
+    # that measured nothing at all.
+    if den > 0:
+        pct = 100 * num / den
+        print(f'\nnew_coverage = ({tot_lines - tot_uncov} lines + {cov_br} conditions)'
+              f' / ({tot_lines} lines + {cov_br + uncov_br} conditions) = {pct:.1f}%')
+    else:
+        pct = 0.0
+        print('\nNo measured lines among the changed files.')
     if unmeasured:
         # Never report a clean PASS over a partial scope: a well-covered file would
         # mask a changed one with no coverage data at all, and CI measures both.
@@ -170,8 +184,11 @@ def main() -> int:
         for f in unmeasured:
             print(f'  {f}')
         print('Re-run with those files in --include, or with tests that import them. '
-              'CI counts them as uncovered, so this number is optimistic.')
+              'CI counts them as uncovered, so any number above is optimistic.')
         return 2
+    if den == 0:
+        print('Nothing measurable: the changed files contain no executable lines.')
+        return 0
     print(f'gate = {args.gate:.0f}%  →  {"PASS" if pct >= args.gate else "FAIL"}')
     # A local subset can read slightly high: the suites you ran are a subset of
     # CI's, but CI also measures every added line, including files you did not

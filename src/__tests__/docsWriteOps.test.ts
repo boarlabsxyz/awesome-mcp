@@ -601,6 +601,52 @@ describe('docs image ops', () => {
       );
     });
 
+    // Reported on #183 alongside the filesystem finding. uploadImageToDrive used
+    // to validate the FIRST hostname and then call fetch with the default
+    // redirect:'follow', so a perfectly public URL answering 302 to
+    // 169.254.169.254 (cloud metadata) or 127.0.0.1 was fetched unchecked and its
+    // bytes uploaded to the caller's Drive and published with `anyone` reader.
+    it('refuses a redirect to an internal address, not just an internal first hop', async () => {
+      const realFetch = globalThis.fetch;
+      const seen: string[] = [];
+      globalThis.fetch = (async (input: any) => {
+        seen.push(String(input));
+        // A public first hop that redirects inward — the shape the first-hop-only
+        // check could not see.
+        return {
+          status: 302,
+          ok: false,
+          headers: new Headers({ location: 'http://169.254.169.254/latest/meta-data/' }),
+          body: { cancel: async () => {} },
+        } as any;
+      }) as any;
+      try {
+        await assert.rejects(
+          () => performInsertLocalImage(mkDocs(), mkDrive(), {
+            documentId: 'd1', imageUrl: 'https://example.com/innocent.png', index: 2, uploadToSameFolder: false,
+          } as any),
+          (err: any) => {
+            assert.ok(err instanceof UserError);
+            assert.match(err.message, /private\/internal address/);
+            return true;
+          },
+        );
+        // It fetched the first hop and stopped; the internal address was never requested.
+        assert.deepEqual(seen, ['https://example.com/innocent.png']);
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    });
+
+    it('refuses an internal first hop too', async () => {
+      await assert.rejects(
+        () => performInsertLocalImage(mkDocs(), mkDrive(), {
+          documentId: 'd1', imageUrl: 'http://127.0.0.1:8080/x.png', index: 2, uploadToSameFolder: false,
+        } as any),
+        (err: any) => err instanceof UserError && /private\/internal address/.test(err.message),
+      );
+    });
+
     it('refuses when no source was given at all', async () => {
       await assert.rejects(
         () => performInsertLocalImage(mkDocs(), mkDrive(), { documentId: 'd1', index: 2, uploadToSameFolder: true } as any),
