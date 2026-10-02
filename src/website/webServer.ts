@@ -1649,6 +1649,9 @@ function registerSharedRoutes(app: express.Express): void {
     '/api/v1/hubspot/notes',    // createNote — free text
     '/api/v1/hubspot/calls',    // logCall — can be a whole transcript
     '/api/v1/hubspot/meetings', // logMeeting — can be full minutes
+    // Docs writes carry document-sized payloads: appended text, an import body,
+    // a 50-operation batch, a base64 image.
+    '/api/v1/docs',
     // Sheets writes are the clearest case for this plane: `values` is a 2D array
     // of rows, and bulk rows are the whole reason the endpoint exists, so the
     // global 100kb would 413 the use case. Covers /write, /append, /batchUpdate,
@@ -3982,84 +3985,396 @@ function registerRestApiRoutes(app: express.Express): void {
   });
 
   // POST /api/v1/docs/:documentId/comments - Add a comment
+  // === Google Docs writes ===
+  //
+  // Nineteen endpoints, one per write tool. Every body is safeParsed with the
+  // schema the MCP tool uses (src/google-docs/writeSchemas.ts) and every handler
+  // calls that tool's op (src/google-docs/writeOps.ts), so the two surfaces run
+  // the same code and validate the same way. Those modules exist separately from
+  // google-docs/server.ts precisely so this file can import them: server.ts is the
+  // application entry point and imports createWebApp, so importing it back — even
+  // dynamically — would boot an MCP server from inside a REST handler.
+  //
+  // Path params are merged OVER the body, so a URL and a mismatched body key
+  // cannot disagree about which document is written.
+  //
+  // These widen what the permanent dashboard API key can do: it reaches the same
+  // createServiceAuth gate as the reads, so a key that could only read a document
+  // can now rewrite, restyle, comment on and delete content in it.
+
+  /** Body-validation gate shared by all of them: 400 + Zod issues, before any Google call. */
+  function parseDocsBody<T>(schema: { safeParse: (v: unknown) => any }, body: unknown, res: express.Response): T | undefined {
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+      return undefined;
+    }
+    return parsed.data as T;
+  }
+
+  // --- Static paths first, so `import` is never read as a documentId ---
+
+  // POST /api/v1/docs/import - Create a doc from content
+  app.post('/api/v1/docs/import', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { importToGoogleDocSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(importToGoogleDocSchema, req.body, res);
+      if (!args) return;
+      const { performImportToGoogleDoc } = await import('../google-docs/writeOps.js');
+      const doc = await performImportToGoogleDoc(req.userSession!.googleDrive, args);
+      res.status(201).json(doc);
+    } catch (err: any) {
+      console.error('Error importing content to Google Doc:', err);
+      sendUpstreamError(res, err, { notFound: 'Parent folder not found', fallback: 'Failed to import content' });
+    }
+  });
+
+  // POST /api/v1/docs/import/docx - Convert a .docx in Drive into a Google Doc
+  app.post('/api/v1/docs/import/docx', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { importDocxSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(importDocxSchema, req.body, res);
+      if (!args) return;
+      const { performImportDocx } = await import('../google-docs/writeOps.js');
+      const doc = await performImportDocx(req.userSession!.googleDrive, args);
+      res.status(201).json(doc);
+    } catch (err: any) {
+      console.error('Error importing DOCX:', err);
+      // A non-docx source is refused by the op with a UserError, and it is the
+      // caller's input that is wrong, not Drive's answer.
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendUpstreamError(res, err, { notFound: 'Source file not found', fallback: 'Failed to import DOCX' });
+    }
+  });
+
+  // --- Text content ---
+
+  // POST /api/v1/docs/:documentId/append - Append text to the end
+  app.post('/api/v1/docs/:documentId/append', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { appendToGoogleDocSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(appendToGoogleDocSchema, { ...req.body, documentId: req.params.documentId }, res);
+      if (!args) return;
+      const { performAppendToGoogleDoc } = await import('../google-docs/writeOps.js');
+      const result = await performAppendToGoogleDoc(req.userSession!.googleDocs, args);
+      res.json({ documentId: args.documentId, ...result });
+    } catch (err: any) {
+      console.error('Error appending to doc:', err);
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to append to document' });
+    }
+  });
+
+  // POST /api/v1/docs/:documentId/text - Insert text at an index
+  app.post('/api/v1/docs/:documentId/text', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { insertTextSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(insertTextSchema, { ...req.body, documentId: req.params.documentId }, res);
+      if (!args) return;
+      const { performInsertText } = await import('../google-docs/writeOps.js');
+      const result = await performInsertText(req.userSession!.googleDocs, args);
+      res.json({ documentId: args.documentId, ...result });
+    } catch (err: any) {
+      console.error('Error inserting text:', err);
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to insert text' });
+    }
+  });
+
+  // POST /api/v1/docs/:documentId/batchUpdate - Up to 50 operations atomically
+  app.post('/api/v1/docs/:documentId/batchUpdate', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { batchUpdateDocSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(batchUpdateDocSchema, { ...req.body, documentId: req.params.documentId }, res);
+      if (!args) return;
+      const { performBatchUpdateDoc } = await import('../google-docs/writeOps.js');
+      const result = await performBatchUpdateDoc(req.userSession!.googleDocs, args);
+      res.json({ documentId: args.documentId, ...result });
+    } catch (err: any) {
+      console.error('Error applying doc batch update:', err);
+      // Mixing global and index-based operations is refused by the op. That is a
+      // bad request, not an upstream fault.
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to apply batch update' });
+    }
+  });
+
+  // POST /api/v1/docs/:documentId/find-replace - Replace every occurrence
+  app.post('/api/v1/docs/:documentId/find-replace', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { findAndReplaceSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(findAndReplaceSchema, { ...req.body, documentId: req.params.documentId }, res);
+      if (!args) return;
+      const { performFindAndReplace } = await import('../google-docs/writeOps.js');
+      const result = await performFindAndReplace(req.userSession!.googleDocs, args);
+      // occurrencesChanged: 0 is a successful call that matched nothing.
+      res.json({ documentId: args.documentId, ...result });
+    } catch (err: any) {
+      console.error('Error in find and replace:', err);
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to replace text' });
+    }
+  });
+
+  // POST /api/v1/docs/:documentId/ranges/delete - DESTRUCTIVE, signed off
+  app.post('/api/v1/docs/:documentId/ranges/delete', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { deleteRangeSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(deleteRangeSchema, { ...req.body, documentId: req.params.documentId }, res);
+      if (!args) return;
+      const { performDeleteRange } = await import('../google-docs/writeOps.js');
+      const result = await performDeleteRange(req.userSession!.googleDocs, args);
+      res.json({ documentId: args.documentId, deleted: true, ...result });
+    } catch (err: any) {
+      console.error('Error deleting range:', err);
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to delete range' });
+    }
+  });
+
+  // --- Styling ---
+
+  // POST /api/v1/docs/:documentId/text-style - Character formatting
+  app.post('/api/v1/docs/:documentId/text-style', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { applyTextStyleSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(applyTextStyleSchema, { ...req.body, documentId: req.params.documentId }, res);
+      if (!args) return;
+      const { performApplyTextStyle } = await import('../google-docs/writeOps.js');
+      const result = await performApplyTextStyle(req.userSession!.googleDocs, args);
+      // fields: null means no style key was recognised, so nothing was written —
+      // reported as applied: false rather than as a success or an error.
+      res.json({ documentId: args.documentId, applied: result.fields !== null, ...result });
+    } catch (err: any) {
+      console.error('Error applying text style:', err);
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to apply text style' });
+    }
+  });
+
+  // POST /api/v1/docs/:documentId/paragraph-style - Paragraph formatting
+  app.post('/api/v1/docs/:documentId/paragraph-style', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { applyParagraphStyleSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(applyParagraphStyleSchema, { ...req.body, documentId: req.params.documentId }, res);
+      if (!args) return;
+      const { performApplyParagraphStyle } = await import('../google-docs/writeOps.js');
+      const result = await performApplyParagraphStyle(req.userSession!.googleDocs, args);
+      res.json({ documentId: args.documentId, applied: result.fields !== null, ...result });
+    } catch (err: any) {
+      console.error('Error applying paragraph style:', err);
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to apply paragraph style' });
+    }
+  });
+
+  // POST /api/v1/docs/:documentId/format-matching-text - Format the Nth match
+  app.post('/api/v1/docs/:documentId/format-matching-text', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { formatMatchingTextSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(formatMatchingTextSchema, { ...req.body, documentId: req.params.documentId }, res);
+      if (!args) return;
+      const { performFormatMatchingText } = await import('../google-docs/writeOps.js');
+      const result = await performFormatMatchingText(req.userSession!.googleDocs, args);
+      res.json({ documentId: args.documentId, applied: result.fields !== null, ...result });
+    } catch (err: any) {
+      console.error('Error formatting matching text:', err);
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to format text' });
+    }
+  });
+
+  // --- Structure ---
+
+  // POST /api/v1/docs/:documentId/tables - Insert a table
+  app.post('/api/v1/docs/:documentId/tables', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { insertTableSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(insertTableSchema, { ...req.body, documentId: req.params.documentId }, res);
+      if (!args) return;
+      const { performInsertTable } = await import('../google-docs/writeOps.js');
+      const result = await performInsertTable(req.userSession!.googleDocs, args);
+      res.status(201).json({ documentId: args.documentId, ...result });
+    } catch (err: any) {
+      console.error('Error inserting table:', err);
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to insert table' });
+    }
+  });
+
+  // POST /api/v1/docs/:documentId/page-breaks - Insert a page break
+  app.post('/api/v1/docs/:documentId/page-breaks', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { insertPageBreakSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(insertPageBreakSchema, { ...req.body, documentId: req.params.documentId }, res);
+      if (!args) return;
+      const { performInsertPageBreak } = await import('../google-docs/writeOps.js');
+      const result = await performInsertPageBreak(req.userSession!.googleDocs, args);
+      res.status(201).json({ documentId: args.documentId, ...result });
+    } catch (err: any) {
+      console.error('Error inserting page break:', err);
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to insert page break' });
+    }
+  });
+
+  // --- Images ---
+
+  // POST /api/v1/docs/:documentId/images/from-url - Insert from a public URL
+  app.post('/api/v1/docs/:documentId/images/from-url', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { insertImageFromUrlSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(insertImageFromUrlSchema, { ...req.body, documentId: req.params.documentId }, res);
+      if (!args) return;
+      const { performInsertImageFromUrl } = await import('../google-docs/writeOps.js');
+      const result = await performInsertImageFromUrl(req.userSession!.googleDocs, args);
+      res.status(201).json({ documentId: args.documentId, ...result });
+    } catch (err: any) {
+      console.error('Error inserting image from URL:', err);
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to insert image' });
+    }
+  });
+
+  // POST /api/v1/docs/:documentId/images - URL, Drive file, local path or base64
+  app.post('/api/v1/docs/:documentId/images', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { insertLocalImageSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(insertLocalImageSchema, { ...req.body, documentId: req.params.documentId }, res);
+      if (!args) return;
+      const { performInsertLocalImage } = await import('../google-docs/writeOps.js');
+      const result = await performInsertLocalImage(req.userSession!.googleDocs, req.userSession!.googleDrive, args);
+      res.status(201).json({ documentId: args.documentId, ...result });
+    } catch (err: any) {
+      console.error('Error inserting image:', err);
+      // Exactly-one-source and the base64 size cap are both UserErrors from the op.
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to insert image' });
+    }
+  });
+
+  // --- Export ---
+
+  // POST /api/v1/docs/:documentId/export/pdf - Export to PDF, saved in Drive
+  app.post('/api/v1/docs/:documentId/export/pdf', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { exportDocToPdfSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(exportDocToPdfSchema, { ...req.body, documentId: req.params.documentId }, res);
+      if (!args) return;
+      const { performExportDocToPdf } = await import('../google-drive/toolHandlers.js');
+      const pdf = await performExportDocToPdf(req.userSession!.googleDrive, args);
+      res.status(201).json(pdf);
+    } catch (err: any) {
+      console.error('Error exporting doc to PDF:', err);
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to export document' });
+    }
+  });
+
+  // --- Comments ---
+
+  // POST /api/v1/docs/:documentId/comments - Add a comment
+  //
+  // Catalogued now, but the path and response shape are unchanged from the
+  // ChatGPT-compat route this replaces: clients parse these keys. What changed is
+  // the validation — it was three hand-rolled presence checks.
   app.post('/api/v1/docs/:documentId/comments', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const documentId = req.params.documentId as string;
-      const { startIndex, endIndex, commentText } = req.body;
-
-      if (!commentText) {
-        res.status(400).json({ error: 'commentText is required' });
-        return;
-      }
-
-      if (startIndex === undefined || endIndex === undefined) {
-        res.status(400).json({ error: 'startIndex and endIndex are required' });
-        return;
-      }
-
-      if (endIndex <= startIndex) {
-        res.status(400).json({ error: 'endIndex must be greater than startIndex' });
-        return;
-      }
-
-      // Get the quoted text from the document
-      const docs = req.userSession!.googleDocs;
-      const doc = await docs.documents.get({ documentId });
-
-      let quotedText = '';
-      const content = doc.data.body?.content || [];
-
-      for (const element of content) {
-        if (element.paragraph) {
-          const elements = element.paragraph.elements || [];
-          for (const textElement of elements) {
-            if (textElement.textRun) {
-              const elementStart = textElement.startIndex || 0;
-              const elementEnd = textElement.endIndex || 0;
-
-              if (elementEnd > startIndex && elementStart < endIndex) {
-                const text = textElement.textRun.content || '';
-                const startOffset = Math.max(0, startIndex - elementStart);
-                const endOffset = Math.min(text.length, endIndex - elementStart);
-                quotedText += text.substring(startOffset, endOffset);
-              }
-            }
-          }
-        }
-      }
-
-      // Create the comment using Drive API
-      const drive = google.drive({ version: 'v3', auth: req.userSession!.oauthClient });
-
-      const response = await drive.comments.create({
-        fileId: documentId,
-        fields: 'id,content,quotedFileContent,author,createdTime,resolved',
-        requestBody: {
-          content: commentText,
-          quotedFileContent: {
-            value: quotedText,
-            mimeType: 'text/html',
-          },
-        },
-      });
-
+      const { addCommentSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(addCommentSchema, { ...req.body, documentId: req.params.documentId }, res);
+      if (!args) return;
+      const { performAddComment } = await import('../google-docs/writeOps.js');
+      const comment = await performAddComment(req.userSession!.googleDocs, req.userSession!.googleDrive, args);
       res.status(201).json({
-        id: response.data.id,
-        content: response.data.content,
-        quotedText: response.data.quotedFileContent?.value || null,
-        author: response.data.author?.displayName || 'Unknown',
-        createdTime: response.data.createdTime,
-        resolved: response.data.resolved || false,
+        id: comment.id,
+        content: comment.content,
+        quotedText: comment.quotedFileContent?.value || null,
+        author: comment.author?.displayName || 'Unknown',
+        createdTime: comment.createdTime,
+        resolved: comment.resolved || false,
       });
     } catch (err: any) {
       console.error('Error adding comment:', err);
-      if (err.code === 404) {
-        res.status(404).json({ error: 'Document not found' });
-      } else if (err.code === 403) {
-        res.status(403).json({ error: 'Permission denied' });
-      } else {
-        res.status(500).json({ error: err.message || 'Failed to add comment' });
-      }
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to add comment' });
+    }
+  });
+
+  // POST /api/v1/docs/:documentId/comments/:commentId/replies - Reply
+  app.post('/api/v1/docs/:documentId/comments/:commentId/replies', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { replyToCommentSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(replyToCommentSchema, {
+        ...req.body, documentId: req.params.documentId, commentId: req.params.commentId,
+      }, res);
+      if (!args) return;
+      const { performReplyToComment } = await import('../google-docs/writeOps.js');
+      const reply = await performReplyToComment(req.userSession!.googleDrive, args);
+      res.status(201).json(reply);
+    } catch (err: any) {
+      console.error('Error replying to comment:', err);
+      sendUpstreamError(res, err, { notFound: 'Comment not found', fallback: 'Failed to reply to comment' });
+    }
+  });
+
+  // POST /api/v1/docs/:documentId/comments/:commentId/resolve - Mark resolved
+  app.post('/api/v1/docs/:documentId/comments/:commentId/resolve', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { resolveCommentSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(resolveCommentSchema, {
+        ...req.body, documentId: req.params.documentId, commentId: req.params.commentId,
+      }, res);
+      if (!args) return;
+      const { performResolveComment } = await import('../google-docs/writeOps.js');
+      // `resolved` is what Google reported on a re-read, not what was asked for:
+      // the Drive API accepts this on a Google Doc and often does not persist it.
+      const result = await performResolveComment(req.userSession!.googleDrive, args);
+      res.json({ documentId: args.documentId, ...result });
+    } catch (err: any) {
+      console.error('Error resolving comment:', err);
+      sendUpstreamError(res, err, { notFound: 'Comment not found', fallback: 'Failed to resolve comment' });
+    }
+  });
+
+  // POST /api/v1/docs/:documentId/comments/:commentId/delete - DESTRUCTIVE, signed off
+  app.post('/api/v1/docs/:documentId/comments/:commentId/delete', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { deleteCommentSchema } = await import('../google-docs/writeSchemas.js');
+      const args = parseDocsBody<any>(deleteCommentSchema, {
+        ...req.body, documentId: req.params.documentId, commentId: req.params.commentId,
+      }, res);
+      if (!args) return;
+      const { performDeleteComment } = await import('../google-docs/writeOps.js');
+      const result = await performDeleteComment(req.userSession!.googleDrive, args);
+      res.json({ documentId: args.documentId, ...result });
+    } catch (err: any) {
+      console.error('Error deleting comment:', err);
+      sendUpstreamError(res, err, { notFound: 'Comment not found', fallback: 'Failed to delete comment' });
     }
   });
 

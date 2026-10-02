@@ -64,6 +64,7 @@ describe('REST data plane: Google Sheets and Calendar write validation', () => {
     // No `provider` argument: these are Google connections, so createServiceAuth
     // builds the session down its Google OAuth path, which is what gives the
     // handler googleSheets / googleCalendar / googleDrive clients.
+    await createMcpInstance(USER_ID, 'google-docs', 'Test Docs', dummyGoogleTokens, null);
     await createMcpInstance(USER_ID, 'google-sheets', 'Test Sheets', dummyGoogleTokens, null);
     await createMcpInstance(USER_ID, 'google-calendar', 'Test Calendar', dummyGoogleTokens, null);
   });
@@ -129,6 +130,94 @@ describe('REST data plane: Google Sheets and Calendar write validation', () => {
     });
   });
 
+  describe('Docs', () => {
+    // Nineteen docs write endpoints share one validation gate. These cover the
+    // shapes the hand-rolled checks on the old addComment route let through, plus
+    // the index rules that are easy to get wrong from a curl.
+    it('rejects an append with no text', async () => {
+      await expectInvalid('/api/v1/docs/doc-123/append', {}, 'textToAppend');
+    });
+
+    it('rejects an insert at index 0 — Docs indices are 1-based', async () => {
+      await expectInvalid('/api/v1/docs/doc-123/text', { textToInsert: 'x', index: 0 }, 'index');
+    });
+
+    it('rejects a delete whose end is not past its start', async () => {
+      const res = await request(app).post('/api/v1/docs/doc-123/ranges/delete').set(auth())
+        .send({ startIndex: 10, endIndex: 10 });
+      assert.equal(res.status, 400);
+      // A zero-width range is accepted by the Docs API as a no-op, which would
+      // read as a successful delete.
+      assert.ok(res.body.issues.fieldErrors.endIndex);
+    });
+
+    it('rejects an empty batch and one with an unknown operation type', async () => {
+      await expectInvalid('/api/v1/docs/doc-123/batchUpdate', { operations: [] }, 'operations');
+      await expectInvalid('/api/v1/docs/doc-123/batchUpdate', { operations: [{ type: 'nope' }] }, 'operations');
+    });
+
+    it('rejects a batch over the 50-operation cap', async () => {
+      const operations = Array.from({ length: 51 }, (_, i) => ({ type: 'insert_text', index: i + 1, text: 'x' }));
+      await expectInvalid('/api/v1/docs/doc-123/batchUpdate', { operations }, 'operations');
+    });
+
+    it('rejects a find-replace with nothing to find', async () => {
+      await expectInvalid('/api/v1/docs/doc-123/find-replace', { findText: '', replaceText: 'b' }, 'findText');
+    });
+
+    it('rejects an image URL that is not a URL', async () => {
+      await expectInvalid('/api/v1/docs/doc-123/images/from-url', { imageUrl: 'nope', index: 1 }, 'imageUrl');
+    });
+
+    it('rejects a table with zero rows', async () => {
+      await expectInvalid('/api/v1/docs/doc-123/tables', { rows: 0, columns: 2, index: 1 }, 'rows');
+    });
+
+    it('rejects a comment on an inverted range, and one with no text', async () => {
+      const res = await request(app).post('/api/v1/docs/doc-123/comments').set(auth())
+        .send({ startIndex: 9, endIndex: 4, commentText: 'hi' });
+      assert.equal(res.status, 400);
+      assert.ok(res.body.issues.fieldErrors.endIndex);
+      await expectInvalid('/api/v1/docs/doc-123/comments', { startIndex: 1, endIndex: 5 }, 'commentText');
+    });
+
+    it('rejects an empty reply', async () => {
+      await expectInvalid('/api/v1/docs/doc-123/comments/cmt-1/replies', { replyText: '' }, 'replyText');
+    });
+
+    it('rejects an import with no title', async () => {
+      await expectInvalid('/api/v1/docs/import', { content: 'hello' }, 'title');
+    });
+
+    it('rejects an import whose mimeType Drive cannot convert', async () => {
+      await expectInvalid(
+        '/api/v1/docs/import',
+        { title: 'T', content: 'x', mimeType: 'application/pdf' },
+        'mimeType',
+      );
+    });
+
+    it('rejects a docx import with no fileId', async () => {
+      await expectInvalid('/api/v1/docs/import/docx', {}, 'fileId');
+    });
+
+    it('rejects a text style with no target', async () => {
+      await expectInvalid('/api/v1/docs/doc-123/text-style', { style: { bold: true } }, 'target');
+    });
+
+    it('rejects format-matching-text with no formatting option at all', async () => {
+      // The schema refines on "at least one style key", so this lands on the form
+      // errors rather than a single field.
+      const res = await request(app).post('/api/v1/docs/doc-123/format-matching-text').set(auth())
+        .send({ textToFind: 'x' });
+      assert.equal(res.status, 400);
+      assert.ok(
+        res.body.issues.formErrors?.length || Object.keys(res.body.issues.fieldErrors || {}).length,
+        'expected the refinement to be reported',
+      );
+    });
+  });
+
   describe('body size', () => {
     // The point of a spreadsheet write on this plane is bulk rows, and the global
     // express.json() limit is 100kb — so without '/api/v1/sheets' in
@@ -144,6 +233,17 @@ describe('REST data plane: Google Sheets and Calendar write validation', () => {
         .send({ range: 'A1', values: bigCell } as object);
       assert.equal(res.status, 400, `expected validation, not 413; got ${res.status}`);
       assert.ok(res.body.issues.fieldErrors.values);
+    });
+
+    it('parses a document-sized append body', async () => {
+      const res = await request(app).post('/api/v1/docs/doc-123/append').set(auth())
+        // Large AND invalid on purpose: tabId must be a string, so validation
+        // rejects it only after the 300kb body has been parsed.
+        .send({ textToAppend: bigCell, tabId: 42 } as object);
+      // 400 (not 413) proves /api/v1/docs is in REST_LARGE_BODY_PREFIXES: an
+      // appended document body is exactly what this endpoint is for.
+      assert.equal(res.status, 400, `expected validation, not 413; got ${res.status}`);
+      assert.ok(res.body.issues.fieldErrors.tabId);
     });
 
     it('parses a large seed body on create', async () => {

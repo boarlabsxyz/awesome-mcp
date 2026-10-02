@@ -28,7 +28,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["documentId"],
+                "required": [
+                  "documentId"
+                ],
                 "properties": {
                   "documentId": {
                     "type": "string",
@@ -36,7 +38,10 @@
                   },
                   "format": {
                     "type": "string",
-                    "enum": ["text", "json"],
+                    "enum": [
+                      "text",
+                      "json"
+                    ],
                     "default": "text",
                     "description": "Output format: 'text' for plain text, 'json' for raw structure"
                   },
@@ -67,8 +72,12 @@
                     },
                     "content": {
                       "oneOf": [
-                        { "type": "string" },
-                        { "type": "object" }
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object"
+                        }
                       ],
                       "description": "The document content (string for text format, object for json format)"
                     },
@@ -202,7 +211,7 @@
       "post": {
         "operationId": "addComment",
         "summary": "Add a comment to a document",
-        "description": "Adds a comment to a Google Document with quoted text context. The comment will appear in the Comments panel.",
+        "description": "Adds a comment quoting the given range. The Drive API ignores anchors on Google Docs, so the quoted text is the only record of which range the comment refers to \u2014 it is read out of the document here. endIndex must be greater than startIndex.",
         "parameters": [
           {
             "name": "documentId",
@@ -220,7 +229,11 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["startIndex", "endIndex", "commentText"],
+                "required": [
+                  "startIndex",
+                  "endIndex",
+                  "commentText"
+                ],
                 "properties": {
                   "startIndex": {
                     "type": "integer",
@@ -285,6 +298,2031 @@
           },
           "404": {
             "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/import": {
+      "post": {
+        "operationId": "importToGoogleDoc",
+        "summary": "Create a doc from text, HTML or markdown content",
+        "description": "Uploads the content and lets Drive convert it into a Google Doc. The body limit on this path is 5mb, because the content is the whole document. Not idempotent: each call creates another doc.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "The document content, in the source format named by mimeType."
+                  },
+                  "mimeType": {
+                    "type": "string",
+                    "enum": [
+                      "text/plain",
+                      "text/html",
+                      "text/markdown"
+                    ],
+                    "default": "text/plain",
+                    "description": "The SOURCE format Drive converts from, not the result."
+                  },
+                  "parentFolderId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title",
+                  "content"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Document created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "webViewLink": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Parent folder not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/import/docx": {
+      "post": {
+        "operationId": "importDocx",
+        "summary": "Convert a .docx already in Drive into a Google Doc",
+        "description": "Copies the file with the Google Docs mimeType so Drive converts it. Takes a Drive file ID, not file bytes. Anything whose mimeType is not .docx is refused with 400, because Drive would convert it into an unreadable document.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fileId": {
+                    "type": "string",
+                    "description": "Drive file ID of the .docx."
+                  },
+                  "targetFolderId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "fileId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Document created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "webViewLink": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Source file not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/append": {
+      "post": {
+        "operationId": "appendToGoogleDoc",
+        "summary": "Append text to the end of a doc or tab",
+        "description": "Resolves the end index itself, so no index is needed. The body limit on this path is 5mb. The response reports the index used and whether a newline was prepended.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "textToAppend": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "addNewlineIfNeeded": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab ID. Defaults to the first tab."
+                  }
+                },
+                "required": [
+                  "textToAppend"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Appended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "index": {
+                      "type": "integer"
+                    },
+                    "appendedNewline": {
+                      "type": "boolean"
+                    },
+                    "characters": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/text": {
+      "post": {
+        "operationId": "insertText",
+        "summary": "Insert text at a 1-based index",
+        "description": "Indices shift as the document changes. For several edits at once use batchUpdate, which orders them so they do not invalidate each other.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "textToInsert": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "index": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "1-based index."
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab ID. Defaults to the first tab."
+                  }
+                },
+                "required": [
+                  "textToInsert",
+                  "index"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Inserted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "index": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/batchUpdate": {
+      "post": {
+        "operationId": "batchUpdateDoc",
+        "summary": "Apply up to 50 document operations in one batch",
+        "description": "Index-based operations are applied in descending index order so they do not shift each other. Mixing global replacements (replace_text, find_replace) with index-based operations is refused with 400 rather than reordered, since no ordering preserves the caller intent. Includes delete_text, so this endpoint can remove content.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "operations": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "description": "Each operation needs a `type` plus that type fields. Types: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list.",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "type"
+                      ],
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "insert_text",
+                            "delete_text",
+                            "replace_text",
+                            "format_text",
+                            "update_paragraph_style",
+                            "insert_table",
+                            "insert_page_break",
+                            "find_replace",
+                            "create_bullet_list"
+                          ]
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                },
+                "required": [
+                  "operations"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Batch applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "requested": {
+                      "type": "integer"
+                    },
+                    "executed": {
+                      "type": "integer"
+                    },
+                    "typeCounts": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/find-replace": {
+      "post": {
+        "operationId": "findAndReplace",
+        "summary": "Replace every occurrence of a string",
+        "description": "The response reports occurrencesChanged, which is 0 when nothing matched \u2014 a successful call, not an error.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "findText": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "replaceText": {
+                    "type": "string"
+                  },
+                  "matchCase": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab ID. Defaults to the first tab."
+                  }
+                },
+                "required": [
+                  "findText",
+                  "replaceText"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replaced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "occurrencesChanged": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/ranges/delete": {
+      "post": {
+        "operationId": "deleteDocRange",
+        "summary": "Delete a character range",
+        "description": "DESTRUCTIVE and irreversible through this API. A POST to an action path rather than a DELETE on the range, so the call site reads as deliberate. endIndex must be greater than startIndex: a zero-width range is a no-op the API would accept, which would read as a successful delete.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "startIndex": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "1-based index."
+                  },
+                  "endIndex": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Exclusive."
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab ID. Defaults to the first tab."
+                  }
+                },
+                "required": [
+                  "startIndex",
+                  "endIndex"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "startIndex": {
+                      "type": "integer"
+                    },
+                    "endIndex": {
+                      "type": "integer"
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/text-style": {
+      "post": {
+        "operationId": "applyTextStyle",
+        "summary": "Apply character formatting to a range or found text",
+        "description": "The response reports the range that was resolved, which matters when the target was given as text to find. `applied: false` with `fields: null` means no recognised style key was supplied and nothing was written.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "type": "object",
+                    "description": "One of: {textToFind, matchInstance}, or {startIndex, endIndex}, or (paragraph only) {indexWithinParagraph}.",
+                    "additionalProperties": true
+                  },
+                  "style": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "target",
+                  "style"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Style applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "startIndex": {
+                      "type": "integer"
+                    },
+                    "endIndex": {
+                      "type": "integer"
+                    },
+                    "applied": {
+                      "type": "boolean"
+                    },
+                    "fields": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/paragraph-style": {
+      "post": {
+        "operationId": "applyParagraphStyle",
+        "summary": "Apply paragraph formatting by text, index or range",
+        "description": "A text target is widened to the paragraph containing it, so the resolved range in the response is wider than the text matched. `applied: false` means nothing was written.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "type": "object",
+                    "description": "One of: {textToFind, matchInstance}, or {startIndex, endIndex}, or (paragraph only) {indexWithinParagraph}.",
+                    "additionalProperties": true
+                  },
+                  "style": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "target",
+                  "style"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Style applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "startIndex": {
+                      "type": "integer"
+                    },
+                    "endIndex": {
+                      "type": "integer"
+                    },
+                    "applied": {
+                      "type": "boolean"
+                    },
+                    "fields": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/format-matching-text": {
+      "post": {
+        "operationId": "formatMatchingText",
+        "summary": "Format the Nth instance of a string",
+        "description": "Flat-parameter alternative to text-style, same engine underneath. At least one formatting option must be present or the body is refused.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "textToFind": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "matchInstance": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 1
+                  },
+                  "bold": {
+                    "type": "boolean"
+                  },
+                  "italic": {
+                    "type": "boolean"
+                  },
+                  "underline": {
+                    "type": "boolean"
+                  },
+                  "strikethrough": {
+                    "type": "boolean"
+                  },
+                  "fontSize": {
+                    "type": "number",
+                    "minimum": 1
+                  },
+                  "fontFamily": {
+                    "type": "string"
+                  },
+                  "foregroundColor": {
+                    "type": "string",
+                    "description": "Hex, e.g. #FF0000."
+                  },
+                  "backgroundColor": {
+                    "type": "string",
+                    "description": "Hex, e.g. #FFFF00."
+                  },
+                  "linkUrl": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": [
+                  "textToFind"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Style applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "startIndex": {
+                      "type": "integer"
+                    },
+                    "endIndex": {
+                      "type": "integer"
+                    },
+                    "applied": {
+                      "type": "boolean"
+                    },
+                    "fields": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/tables": {
+      "post": {
+        "operationId": "insertDocTable",
+        "summary": "Insert a table of the given dimensions",
+        "description": "Inserts an empty table at the index.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "rows": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "columns": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "index": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "1-based index."
+                  }
+                },
+                "required": [
+                  "rows",
+                  "columns",
+                  "index"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Table inserted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "type": "integer"
+                    },
+                    "columns": {
+                      "type": "integer"
+                    },
+                    "index": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/page-breaks": {
+      "post": {
+        "operationId": "insertPageBreak",
+        "summary": "Insert a page break at an index",
+        "description": "Inserts a page break at the index.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "index": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "1-based index."
+                  }
+                },
+                "required": [
+                  "index"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Page break inserted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "index": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/images/from-url": {
+      "post": {
+        "operationId": "insertImageFromUrl",
+        "summary": "Insert an inline image from a public URL",
+        "description": "Google fetches the URL server-side, so it must be publicly reachable. Width and height are only applied when both are given.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "imageUrl": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "index": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "1-based index."
+                  },
+                  "width": {
+                    "type": "number",
+                    "minimum": 1,
+                    "description": "Points."
+                  },
+                  "height": {
+                    "type": "number",
+                    "minimum": 1,
+                    "description": "Points."
+                  }
+                },
+                "required": [
+                  "imageUrl",
+                  "index"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Image inserted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "index": {
+                      "type": "integer"
+                    },
+                    "imageUrl": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/images": {
+      "post": {
+        "operationId": "insertDocImage",
+        "summary": "Insert an image from a URL, Drive file, local path or base64",
+        "description": "Exactly one source must be given. Every source except driveFileId UPLOADS a new file to the user Drive and returns its URL, which is a side effect worth knowing about. The base64 path is capped at 20mb decoded, checked from the string length before any buffer is allocated; the body limit on this path is 5mb.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "imageUrl": {
+                    "type": "string",
+                    "description": "Public HTTP(S) URL to fetch."
+                  },
+                  "driveFileId": {
+                    "type": "string",
+                    "description": "An image already in Drive. Made publicly readable so Google can fetch it."
+                  },
+                  "localImagePath": {
+                    "type": "string",
+                    "description": "Local/stdio deployments only."
+                  },
+                  "imageBase64": {
+                    "type": "string"
+                  },
+                  "fileName": {
+                    "type": "string",
+                    "description": "Required with imageBase64, for MIME detection."
+                  },
+                  "index": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "1-based index."
+                  },
+                  "width": {
+                    "type": "number",
+                    "minimum": 1
+                  },
+                  "height": {
+                    "type": "number",
+                    "minimum": 1
+                  },
+                  "uploadToSameFolder": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                },
+                "required": [
+                  "index"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Image inserted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "index": {
+                      "type": "integer"
+                    },
+                    "resolvedImageUrl": {
+                      "type": "string"
+                    },
+                    "uploadedToDrive": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/export/pdf": {
+      "post": {
+        "operationId": "exportDocToPdf",
+        "summary": "Export a doc to PDF and save it to Drive",
+        "description": "An export that MUTATES: the PDF is written to Drive and the new file is returned. Anything that is not a Google Doc is refused with 400.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pdfFilename": {
+                    "type": "string",
+                    "description": "Without extension. Defaults to the document title."
+                  },
+                  "folderId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "PDF created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "size": {
+                      "type": "string"
+                    },
+                    "webViewLink": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/comments/{commentId}/replies": {
+      "post": {
+        "operationId": "replyToDocComment",
+        "summary": "Reply to a comment",
+        "description": "Adds a reply under an existing comment thread.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          },
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The comment ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "replyText": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "replyText"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Reply created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "content": {
+                      "type": "string"
+                    },
+                    "createdTime": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Comment not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/comments/{commentId}/resolve": {
+      "post": {
+        "operationId": "resolveDocComment",
+        "summary": "Mark a comment resolved",
+        "description": "The `resolved` field in the response is what Google reported on a RE-READ, not what was requested: the Drive API accepts resolving a Google Docs comment and frequently does not persist it. A false value means the call succeeded and the flag did not stick.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          },
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The comment ID."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resolve attempted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "commentId": {
+                      "type": "string"
+                    },
+                    "resolved": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Comment not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/comments/{commentId}/delete": {
+      "post": {
+        "operationId": "deleteDocComment",
+        "summary": "Delete a comment thread",
+        "description": "DESTRUCTIVE. A POST to an action path rather than a DELETE on the resource.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          },
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The comment ID."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "commentId": {
+                      "type": "string"
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Comment not found",
             "content": {
               "application/json": {
                 "schema": {
