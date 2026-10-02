@@ -304,7 +304,9 @@ import { getOAuthState, deleteOAuthState, storeAuthCode, storeClient, getClient,
 import { createSession, getSession, deleteSession, Session } from './sessionStore.js';
 import { consumeLoginAttempt, resetLoginAttempts, RateLimitVerdict, LOGIN_RATE_LIMIT } from './loginRateLimit.js';
 import { sendMail, isMailConfigured, MailNotConfiguredError } from './mailer.js';
-import { verificationEmail, alreadyRegisteredEmail } from './authEmails.js';
+import { verificationEmail, alreadyRegisteredEmail, orgInviteEmail } from './authEmails.js';
+import * as orgStore from '../orgStore.js';
+import type { OrgRole } from '../orgStore.js';
 import { createPendingRegistration, consumePendingRegistration, deletePendingRegistration, restorePendingRegistration, PENDING_REGISTRATION } from './pendingRegistrationStore.js';
 import { lookupRestToken } from './restTokenStore.js';
 import { mapSlackErrorToHttpStatus } from './slackErrorMapper.js';
@@ -520,7 +522,7 @@ export function sanitizePostLoginRedirect(value: unknown): string | null {
   if (!value.startsWith('/')) return null;
   if (value.startsWith('//') || value.includes('\\')) return null;
   const path = value.split('?')[0];
-  const allowed = path === '/dashboard' || path.startsWith('/connect/');
+  const allowed = path === '/dashboard' || path === '/invite' || path.startsWith('/connect/');
   return allowed ? value : null;
 }
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
@@ -1289,6 +1291,12 @@ function registerSharedRoutes(app: express.Express): void {
       // Clear cached session so new tokens take effect immediately
       clearSessionCache(user.apiKey);
 
+      // Attribute to an org by verified email domain. Best-effort by contract —
+      // attributeUserToOrgByDomain never throws — because a sign-in must not
+      // fail over an org lookup. Runs on every sign-in, not just the first, so a
+      // domain verified after someone joined the platform still picks them up.
+      if (user.id) await orgStore.attributeUserToOrgByDomain(user.id, user.email);
+
       console.error(`User registered/updated: ${user.email} (API key: ${user.apiKey.substring(0, 8)}...)`);
 
       // Check if this is an MCP OAuth flow
@@ -1362,6 +1370,11 @@ function registerSharedRoutes(app: express.Express): void {
    * post-login destination the user was parked at, if any.
    */
   async function completeSignIn(req: Request, res: Response, user: UserRecord): Promise<string> {
+    // Every dashboard sign-in re-checks domain attribution, so a domain verified
+    // after a user joined the platform picks them up on their next login rather
+    // than never. Never throws, by contract.
+    if (user.id) await orgStore.attributeUserToOrgByDomain(user.id, user.email);
+
     const sessionId = await createSession({ userId: user.id, googleId: user.googleId ?? undefined });
     res.cookie('session', sessionId, AUTH_COOKIE_OPTIONS);
 
@@ -3246,6 +3259,493 @@ function registerSharedRoutes(app: express.Express): void {
     } catch (err: any) {
       console.error('Error fetching admin users:', err);
       res.status(500).json({ error: 'Failed to fetch users' });
+    }
+  });
+
+  // === Orgs (admin-org policy enforcement layer) ===
+  //
+  // Two distinct roles live here and must not be conflated. ADMIN_EMAILS +
+  // requireAdmin above is the PLATFORM operator: it can see every account, and
+  // it is the only thing that may create an org or verify a domain. An ORG
+  // admin (org_members.role = 'admin') governs exactly one org and must never be
+  // able to read another's members or policy — which is why every org-admin
+  // route derives its orgId from the caller's own membership and never from a
+  // path parameter.
+
+  /** The invite link's TTL, in days, for the mail copy. */
+  const INVITE_TTL_DAYS = Math.round(orgStore.INVITE_TTL_MS / (24 * 60 * 60 * 1000));
+
+  interface OrgAdminRequest extends AuthenticatedRequest {
+    orgUser?: UserRecord;
+    orgMembership?: orgStore.OrgMembership;
+  }
+
+  /**
+   * Gate an org-admin route, resolving the caller's org from their membership.
+   *
+   * A platform admin is NOT automatically an org admin: they have no membership,
+   * so they have no org for these routes to act on, and letting ADMIN_EMAILS act
+   * as "the admin of whichever org they name" is exactly the cross-org authz
+   * mistake this layout exists to avoid. Platform operators use /api/admin/orgs.
+   */
+  async function requireOrgAdmin(
+    req: OrgAdminRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    await new Promise<void>((resolve) => {
+      requireAuth(req, res, () => resolve());
+    });
+    if (res.headersSent) return;
+
+    const user = await resolveSessionUser(req.session);
+    if (!user?.id) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+    const membership = await orgStore.getMembershipForUser(user.id);
+    if (!membership) {
+      res.status(403).json({ error: 'You do not belong to an organisation' });
+      return;
+    }
+    if (membership.role !== 'admin') {
+      res.status(403).json({ error: 'Organisation admin access required' });
+      return;
+    }
+    req.orgUser = user;
+    req.orgMembership = membership;
+    next();
+  }
+
+  function parseOrgRole(value: unknown): OrgRole | undefined {
+    return value === 'admin' || value === 'member' ? value : undefined;
+  }
+
+  app.get('/admin/org', (_req, res) => {
+    res.sendFile(path.join(publicDir, 'org-admin.html'));
+  });
+
+  // The invite landing page. Inert by design: it only renders, and the POST the
+  // page submits is what joins the org. A GET that redeemed the token would be
+  // completed by any mail scanner that follows links (Outlook SafeLinks does),
+  // burning the recipient's invitation before they ever clicked it — the same
+  // failure /auth/verify was restructured to avoid.
+  app.get('/invite', async (req: AuthenticatedRequest, res) => {
+    // The token rides in the query string, so keep it out of the Referer of
+    // anything this page goes on to load — same reason /auth/verify does it.
+    res.setHeader('Referrer-Policy', 'no-referrer');
+
+    // Accepting requires knowing who is accepting, so an unauthenticated visitor
+    // has to sign in first. Park the whole URL (token included) in the same
+    // signed, short-lived cookie /connect uses, or the user comes back from
+    // login with no idea which invitation they were answering and has to dig the
+    // mail out again.
+    const sessionId = req.signedCookies?.session;
+    const session = sessionId ? await getSession(sessionId) : undefined;
+    if (!session || session.expiresAt <= Date.now()) {
+      res.cookie(POST_LOGIN_REDIRECT_COOKIE, req.originalUrl, {
+        signed: true,
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: POST_LOGIN_REDIRECT_MAX_AGE,
+      });
+      res.redirect('/login');
+      return;
+    }
+    res.sendFile(path.join(publicDir, 'invite.html'));
+  });
+
+  // --- Any authenticated user ---
+
+  app.get('/api/org/me', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await resolveSessionUser(req.session);
+      if (!user?.id) { res.status(401).json({ error: 'Not authenticated' }); return; }
+      const membership = await orgStore.getMembershipForUser(user.id);
+      res.json({
+        org: membership ? { id: membership.org.id, name: membership.org.name, slug: membership.org.slug } : null,
+        role: membership?.role ?? null,
+        source: membership?.source ?? null,
+        isPlatformAdmin: ADMIN_EMAILS.includes(user.email.toLowerCase()),
+      });
+    } catch (err) {
+      console.error('[orgs] /api/org/me error:', err);
+      res.status(500).json({ error: 'Failed to load organisation' });
+    }
+  });
+
+  /**
+   * Read an invitation without consuming it, so the landing page can name the
+   * org before the user commits. Deliberately reachable by an authenticated
+   * user who is not yet a member — that is the entire population that needs it.
+   *
+   * Unlike /auth/verify, this DOES distinguish unknown from used from expired.
+   * That endpoint collapses them because telling a probe which tokens once
+   * existed is the whole risk there; here the caller already had to present a
+   * 32-byte token, so there is nothing to enumerate, and the distinction is what
+   * lets an expired invitation say "ask for a new one" instead of stranding
+   * someone on a generic refusal.
+   */
+  app.get('/api/org/invites/preview', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      res.setHeader('Referrer-Policy', 'no-referrer');
+      const token = typeof req.query.token === 'string' ? req.query.token : '';
+      if (!token) { res.status(400).json({ error: 'token is required' }); return; }
+      const invite = await orgStore.peekInvite(token);
+      if (!invite) { res.status(404).json({ error: 'This invitation is not valid.' }); return; }
+      const org = await orgStore.getOrgById(invite.orgId);
+      const expired = Date.parse(invite.expiresAt) <= Date.now();
+      res.json({
+        orgName: org?.name ?? null,
+        email: invite.email,
+        role: invite.role,
+        status: invite.acceptedAt ? 'accepted' : expired ? 'expired' : 'pending',
+      });
+    } catch (err) {
+      console.error('[orgs] invite preview error:', err);
+      res.status(500).json({ error: 'Failed to read invitation' });
+    }
+  });
+
+  app.post('/api/org/invites/accept', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await resolveSessionUser(req.session);
+      if (!user?.id) { res.status(401).json({ error: 'Not authenticated' }); return; }
+      const { token } = req.body as { token?: string };
+      if (!token) { res.status(400).json({ error: 'token is required' }); return; }
+
+      const result = await orgStore.redeemInvite(token, user.id);
+      if (result.ok && result.membership) {
+        console.error(`[orgs] user ${user.id} joined org ${result.membership.org.id} via invite`);
+        res.json({
+          success: true,
+          org: { id: result.membership.org.id, name: result.membership.org.name, slug: result.membership.org.slug },
+          role: result.membership.role,
+        });
+        return;
+      }
+      // 'already-in-org' is a 409 because the request was well-formed and the
+      // link was genuine — the caller simply cannot hold two memberships.
+      const status = result.failure === 'already-in-org' ? 409 : 400;
+      const messages: Record<string, string> = {
+        invalid: 'This invitation is not valid.',
+        expired: 'This invitation has expired. Ask an organisation admin to send a new one.',
+        'already-accepted': 'This invitation has already been used.',
+        'already-in-org': 'You already belong to an organisation. A user can belong to one organisation at a time.',
+      };
+      res.status(status).json({ error: messages[result.failure ?? 'invalid'] });
+    } catch (err) {
+      console.error('[orgs] invite accept error:', err);
+      res.status(500).json({ error: 'Failed to accept invitation' });
+    }
+  });
+
+  // --- Org admin (scoped to the caller's own org) ---
+
+  app.get('/api/org/members', requireOrgAdmin, async (req: OrgAdminRequest, res) => {
+    try {
+      const orgId = req.orgMembership!.org.id;
+      const members = await orgStore.listOrgMembers(orgId);
+      const rows = await Promise.all(members.map(async (m) => {
+        const u = await getUserById(m.userId);
+        return {
+          userId: m.userId,
+          email: u?.email ?? null,
+          name: u?.name ?? null,
+          role: m.role,
+          source: m.source,
+          joinedAt: m.createdAt,
+        };
+      }));
+      res.json({
+        org: req.orgMembership!.org,
+        members: rows,
+        domains: await orgStore.listOrgDomains(orgId),
+        pendingInvites: await orgStore.listPendingInvites(orgId),
+        adminCount: rows.filter(r => r.role === 'admin').length,
+      });
+    } catch (err) {
+      console.error('[orgs] list members error:', err);
+      res.status(500).json({ error: 'Failed to load members' });
+    }
+  });
+
+  app.post('/api/org/invites', requireOrgAdmin, express.json(), async (req: OrgAdminRequest, res) => {
+    try {
+      const org = req.orgMembership!.org;
+      const { email, role } = req.body as { email?: string; role?: string };
+      if (!email || !email.includes('@') || email.length > 255) {
+        res.status(400).json({ error: 'A valid email is required' });
+        return;
+      }
+      const inviteRole = parseOrgRole(role) ?? 'member';
+
+      // Refuse before minting a token the recipient could never use — a spent
+      // invitation in their inbox is worse than a clear refusal here.
+      const existingUser = await getUserByEmail(email.trim().toLowerCase());
+      if (existingUser?.id) {
+        const existing = await orgStore.getMembershipForUser(existingUser.id);
+        if (existing) {
+          const sameOrg = existing.org.id === org.id;
+          res.status(409).json({
+            error: sameOrg
+              ? 'That person is already a member of this organisation.'
+              : 'That person already belongs to another organisation.',
+          });
+          return;
+        }
+      }
+
+      // Create, then mail, then delete the record if the mail did not go out.
+      // The token existed only inside this request, so an undelivered invite is
+      // an unreachable row — and leaving it pending makes the members list claim
+      // an invitation is outstanding when nothing was ever delivered. Same
+      // clean-up-when-WE-fail discipline as pendingRegistrationStore.
+      const { invite, token } = await orgStore.createInvite({
+        orgId: org.id, email, role: inviteRole, invitedBy: req.orgUser!.id ?? null,
+      });
+      const acceptUrl = `${BASE_URL}/invite?token=${encodeURIComponent(token)}`;
+      try {
+        await sendMail(orgInviteEmail(invite.email, org.name, acceptUrl, INVITE_TTL_DAYS));
+      } catch (err: any) {
+        await orgStore.revokeInvite(org.id, invite.id);
+        if (err instanceof MailNotConfiguredError) {
+          res.status(503).json({ error: 'Email is not configured on this deployment, so the invitation was not sent.' });
+          return;
+        }
+        console.error('[orgs] invite mail failed:', err?.message || err);
+        res.status(502).json({ error: 'Could not send the invitation email. Nothing was created.' });
+        return;
+      }
+
+      console.error(`[orgs] org ${org.id} invited a ${inviteRole} (invite ${invite.id})`);
+      res.status(201).json({ success: true, invite });
+    } catch (err) {
+      console.error('[orgs] create invite error:', err);
+      res.status(500).json({ error: 'Failed to create invitation' });
+    }
+  });
+
+  app.delete('/api/org/invites/:inviteId', requireOrgAdmin, async (req: OrgAdminRequest, res) => {
+    try {
+      const orgId = req.orgMembership!.org.id;
+      const inviteId = Number.parseInt(req.params.inviteId as string, 10);
+      if (!Number.isInteger(inviteId)) { res.status(400).json({ error: 'Invalid invite id' }); return; }
+      const removed = await orgStore.revokeInvite(orgId, inviteId);
+      if (!removed) { res.status(404).json({ error: 'No pending invitation with that id' }); return; }
+      res.json({ success: true });
+    } catch (err) {
+      console.error('[orgs] revoke invite error:', err);
+      res.status(500).json({ error: 'Failed to revoke invitation' });
+    }
+  });
+
+  app.patch('/api/org/members/:userId', requireOrgAdmin, express.json(), async (req: OrgAdminRequest, res) => {
+    try {
+      const orgId = req.orgMembership!.org.id;
+      const userId = Number.parseInt(req.params.userId as string, 10);
+      const role = parseOrgRole((req.body as { role?: string }).role);
+      if (!Number.isInteger(userId)) { res.status(400).json({ error: 'Invalid user id' }); return; }
+      if (!role) { res.status(400).json({ error: "role must be 'admin' or 'member'" }); return; }
+
+      // Demoting the last admin leaves the org with no one who can set policy
+      // or invite anybody — recoverable only by a platform operator, so refuse.
+      if (role === 'member' && await orgStore.countOrgAdmins(orgId) <= 1) {
+        const members = await orgStore.listOrgMembers(orgId);
+        if (members.find(m => m.userId === userId)?.role === 'admin') {
+          res.status(409).json({ error: 'An organisation must keep at least one admin. Promote someone else first.' });
+          return;
+        }
+      }
+
+      const updated = await orgStore.setMemberRole(orgId, userId, role);
+      if (!updated) { res.status(404).json({ error: 'Not a member of this organisation' }); return; }
+      res.json({ success: true, role: updated.role });
+    } catch (err) {
+      console.error('[orgs] set member role error:', err);
+      res.status(500).json({ error: 'Failed to update member' });
+    }
+  });
+
+  app.delete('/api/org/members/:userId', requireOrgAdmin, async (req: OrgAdminRequest, res) => {
+    try {
+      const orgId = req.orgMembership!.org.id;
+      const userId = Number.parseInt(req.params.userId as string, 10);
+      if (!Number.isInteger(userId)) { res.status(400).json({ error: 'Invalid user id' }); return; }
+
+      const members = await orgStore.listOrgMembers(orgId);
+      const target = members.find(m => m.userId === userId);
+      if (!target) { res.status(404).json({ error: 'Not a member of this organisation' }); return; }
+      if (target.role === 'admin' && await orgStore.countOrgAdmins(orgId) <= 1) {
+        res.status(409).json({ error: 'An organisation must keep at least one admin.' });
+        return;
+      }
+
+      await orgStore.removeOrgMember(orgId, userId);
+      console.error(`[orgs] org ${orgId} removed member ${userId}`);
+      res.json({ success: true });
+    } catch (err) {
+      console.error('[orgs] remove member error:', err);
+      res.status(500).json({ error: 'Failed to remove member' });
+    }
+  });
+
+  // --- Platform operator (ADMIN_EMAILS) ---
+  //
+  // Org creation, domain claims and domain VERIFICATION live here rather than on
+  // the org-admin surface. Verification is the switch that turns a typed string
+  // into an attribution rule that silently pulls future sign-ups into an org, so
+  // it must not be reachable by whoever typed the string. Self-service
+  // verification needs a DNS or postmaster challenge first.
+
+  app.get('/api/admin/orgs', requireAdmin, async (_req: AuthenticatedRequest, res) => {
+    try {
+      const orgs = await orgStore.listOrgs();
+      const rows = await Promise.all(orgs.map(async (org) => ({
+        ...org,
+        memberCount: (await orgStore.listOrgMembers(org.id)).length,
+        adminCount: await orgStore.countOrgAdmins(org.id),
+        domains: await orgStore.listOrgDomains(org.id),
+      })));
+      res.json({ orgs: rows });
+    } catch (err) {
+      console.error('[orgs] admin list orgs error:', err);
+      res.status(500).json({ error: 'Failed to list organisations' });
+    }
+  });
+
+  app.post('/api/admin/orgs', requireAdmin, express.json(), async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await resolveSessionUser(req.session);
+      const { name, slug, adminEmail } = req.body as { name?: string; slug?: string; adminEmail?: string };
+      if (!name || name.trim().length === 0 || name.length > 255) {
+        res.status(400).json({ error: 'name is required (1-255 characters)' });
+        return;
+      }
+
+      let org;
+      try {
+        org = await orgStore.createOrg({ name: name.trim(), slug, createdBy: user?.id ?? null });
+      } catch (err: any) {
+        if (err.name === 'OrgSlugTakenError') { res.status(409).json({ error: err.message }); return; }
+        throw err;
+      }
+
+      // Seeding the first admin is optional but is what makes the org usable:
+      // an org with no admin cannot invite anyone, so it would need a second
+      // operator call before it did anything at all.
+      let seededAdmin: number | null = null;
+      if (adminEmail) {
+        const target = await getUserByEmail(adminEmail.trim().toLowerCase());
+        if (!target?.id) {
+          res.status(201).json({
+            org,
+            warning: `No account exists for ${adminEmail}, so no admin was seeded. The org has no admin yet.`,
+          });
+          return;
+        }
+        try {
+          await orgStore.addOrgMember(org.id, target.id, 'admin', 'manual');
+          seededAdmin = target.id;
+        } catch (err: any) {
+          if (err.name === 'AlreadyInOrgError') {
+            res.status(201).json({ org, warning: `${adminEmail} already belongs to another organisation; no admin was seeded.` });
+            return;
+          }
+          throw err;
+        }
+      }
+
+      console.error(`[orgs] platform admin created org ${org.id} (${org.slug}), seeded admin ${seededAdmin ?? 'none'}`);
+      res.status(201).json({ org, adminUserId: seededAdmin });
+    } catch (err) {
+      console.error('[orgs] admin create org error:', err);
+      res.status(500).json({ error: 'Failed to create organisation' });
+    }
+  });
+
+  app.post('/api/admin/orgs/:orgId/members', requireAdmin, express.json(), async (req: AuthenticatedRequest, res) => {
+    try {
+      const orgId = Number.parseInt(req.params.orgId as string, 10);
+      const { email, role } = req.body as { email?: string; role?: string };
+      if (!Number.isInteger(orgId)) { res.status(400).json({ error: 'Invalid org id' }); return; }
+      if (!await orgStore.getOrgById(orgId)) { res.status(404).json({ error: 'Organisation not found' }); return; }
+      if (!email) { res.status(400).json({ error: 'email is required' }); return; }
+
+      const target = await getUserByEmail(email.trim().toLowerCase());
+      if (!target?.id) { res.status(404).json({ error: `No account exists for ${email}` }); return; }
+
+      try {
+        const member = await orgStore.addOrgMember(orgId, target.id, parseOrgRole(role) ?? 'member', 'manual');
+        res.status(201).json({ success: true, member });
+      } catch (err: any) {
+        if (err.name === 'AlreadyInOrgError') {
+          res.status(409).json({ error: err.message, existingOrgId: err.existingOrgId });
+          return;
+        }
+        throw err;
+      }
+    } catch (err) {
+      console.error('[orgs] admin add member error:', err);
+      res.status(500).json({ error: 'Failed to add member' });
+    }
+  });
+
+  app.post('/api/admin/orgs/:orgId/domains', requireAdmin, express.json(), async (req: AuthenticatedRequest, res) => {
+    try {
+      const orgId = Number.parseInt(req.params.orgId as string, 10);
+      const { domain, verify } = req.body as { domain?: string; verify?: boolean };
+      if (!Number.isInteger(orgId)) { res.status(400).json({ error: 'Invalid org id' }); return; }
+      if (!await orgStore.getOrgById(orgId)) { res.status(404).json({ error: 'Organisation not found' }); return; }
+      if (!domain) { res.status(400).json({ error: 'domain is required' }); return; }
+
+      let record;
+      try {
+        record = await orgStore.claimDomain(orgId, domain);
+      } catch (err: any) {
+        if (err.name === 'DomainClaimedError') { res.status(409).json({ error: err.message }); return; }
+        if (err.name === 'PublicDomainError') { res.status(400).json({ error: err.message }); return; }
+        if (/Invalid domain/.test(err?.message || '')) { res.status(400).json({ error: err.message }); return; }
+        throw err;
+      }
+      if (verify) {
+        record = await orgStore.verifyDomain(orgId, record.domain) ?? record;
+      }
+      console.error(`[orgs] org ${orgId} claimed domain ${record.domain} (verified: ${record.verifiedAt !== null})`);
+      res.status(201).json({ success: true, domain: record });
+    } catch (err) {
+      console.error('[orgs] admin claim domain error:', err);
+      res.status(500).json({ error: 'Failed to claim domain' });
+    }
+  });
+
+  app.post('/api/admin/orgs/:orgId/domains/verify', requireAdmin, express.json(), async (req: AuthenticatedRequest, res) => {
+    try {
+      const orgId = Number.parseInt(req.params.orgId as string, 10);
+      const { domain } = req.body as { domain?: string };
+      if (!Number.isInteger(orgId)) { res.status(400).json({ error: 'Invalid org id' }); return; }
+      if (!domain) { res.status(400).json({ error: 'domain is required' }); return; }
+      const record = await orgStore.verifyDomain(orgId, domain);
+      if (!record) { res.status(404).json({ error: 'That domain is not claimed by this organisation' }); return; }
+      console.error(`[orgs] org ${orgId} domain ${record.domain} verified — it will now auto-join matching sign-ups`);
+      res.json({ success: true, domain: record });
+    } catch (err) {
+      console.error('[orgs] admin verify domain error:', err);
+      res.status(500).json({ error: 'Failed to verify domain' });
+    }
+  });
+
+  app.delete('/api/admin/orgs/:orgId/domains/:domain', requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const orgId = Number.parseInt(req.params.orgId as string, 10);
+      if (!Number.isInteger(orgId)) { res.status(400).json({ error: 'Invalid org id' }); return; }
+      const removed = await orgStore.removeOrgDomain(orgId, req.params.domain as string);
+      if (!removed) { res.status(404).json({ error: 'That domain is not claimed by this organisation' }); return; }
+      res.json({ success: true });
+    } catch (err) {
+      console.error('[orgs] admin remove domain error:', err);
+      res.status(500).json({ error: 'Failed to remove domain' });
     }
   });
 

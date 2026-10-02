@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <meta name="referrer" content="no-referrer">
+  <title>Organisation invitation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    .hidden { display: none !important; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #000;
+      color: #ededed;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+    :focus-visible { outline: 2px solid #0070f3; outline-offset: 2px; border-radius: 4px; }
+    .card {
+      width: 100%;
+      max-width: 460px;
+      background: #0a0a0a;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      padding: 2rem;
+    }
+    h1 { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.75rem; }
+    p { font-size: 0.95rem; color: #888; line-height: 1.6; }
+    p + p { margin-top: 0.85rem; }
+    p strong { color: #ededed; }
+    .meta {
+      margin-top: 1.25rem;
+      padding: 0.85rem 1rem;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      font-size: 0.85rem;
+      color: #888;
+    }
+    .meta div + div { margin-top: 0.35rem; }
+    .actions { margin-top: 1.5rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    button, .btn-link {
+      font: inherit;
+      padding: 0.65rem 1.25rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 500;
+      text-decoration: none;
+      transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+      touch-action: manipulation;
+    }
+    .btn-primary { background: #0070f3; color: #fff; border: 1px solid #0070f3; }
+    .btn-primary:hover:not(:disabled) { background: #0060d3; }
+    .btn-primary:disabled { opacity: 0.6; cursor: default; }
+    .btn-link { background: transparent; color: #888; border: 1px solid rgba(255,255,255,0.15); }
+    .btn-link:hover { background: #111; color: #ededed; }
+    .error {
+      background: rgba(220,53,69,0.15);
+      border: 1px solid rgba(220,53,69,0.3);
+      border-radius: 8px;
+      padding: 0.9rem 1rem;
+      color: #dc3545;
+      font-size: 0.9rem;
+    }
+    .success {
+      background: rgba(40,167,69,0.15);
+      border: 1px solid rgba(40,167,69,0.3);
+      border-radius: 8px;
+      padding: 0.9rem 1rem;
+      color: #28a745;
+      font-size: 0.9rem;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div id="loading" aria-live="polite"><p>Loading invitation…</p></div>
+
+    <div id="error" class="error hidden" role="alert" aria-live="polite"></div>
+
+    <div id="invite" class="hidden">
+      <h1 id="inviteTitle">Join an organisation</h1>
+      <p id="inviteBody"></p>
+      <div class="meta">
+        <div>Invited address: <strong id="inviteEmail"></strong></div>
+        <div>Role: <strong id="inviteRole"></strong></div>
+      </div>
+      <div class="actions">
+        <button id="acceptBtn" class="btn-primary" type="button">Accept invitation</button>
+        <a class="btn-link" href="/dashboard">Not now</a>
+      </div>
+    </div>
+
+    <div id="done" class="hidden">
+      <div class="success" role="status" aria-live="polite" id="doneMessage"></div>
+      <div class="actions">
+        <a class="btn-primary" href="/dashboard">Go to dashboard</a>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    function show(id) { document.getElementById(id).classList.remove('hidden'); }
+    function hide(id) { document.getElementById(id).classList.add('hidden'); }
+
+    function fail(message) {
+      hide('loading');
+      hide('invite');
+      const el = document.getElementById('error');
+      el.textContent = message;
+      show('error');
+    }
+
+    const token = new URLSearchParams(window.location.search).get('token') || '';
+
+    async function init() {
+      if (!token) { fail('This link is missing its invitation token.'); return; }
+      try {
+        const res = await fetch('/api/org/invites/preview?token=' + encodeURIComponent(token), {
+          credentials: 'same-origin',
+        });
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { fail(data.error || 'This invitation is not valid.'); return; }
+
+        if (data.status === 'accepted') { fail('This invitation has already been used.'); return; }
+        if (data.status === 'expired') {
+          fail('This invitation has expired. Ask an organisation admin to send a new one.');
+          return;
+        }
+
+        const orgName = data.orgName || 'an organisation';
+        document.getElementById('inviteTitle').textContent = 'Join ' + orgName;
+        document.getElementById('inviteBody').textContent =
+          'Once you accept, the tools you connect follow the access policies ' + orgName +
+          ' sets. You can belong to one organisation at a time.';
+        document.getElementById('inviteEmail').textContent = data.email || '—';
+        document.getElementById('inviteRole').textContent = data.role === 'admin' ? 'Organisation admin' : 'Member';
+        hide('loading');
+        show('invite');
+      } catch (err) {
+        fail('Could not load the invitation: ' + err.message);
+      }
+    }
+
+    document.getElementById('acceptBtn').addEventListener('click', async (event) => {
+      const btn = event.currentTarget;
+      btn.disabled = true;
+      btn.textContent = 'Accepting…';
+      hide('error');
+      try {
+        const res = await fetch('/api/org/invites/accept', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          btn.disabled = false;
+          btn.textContent = 'Accept invitation';
+          const el = document.getElementById('error');
+          el.textContent = data.error || 'Could not accept the invitation.';
+          show('error');
+          return;
+        }
+        hide('invite');
+        document.getElementById('doneMessage').textContent =
+          'You have joined ' + (data.org && data.org.name ? data.org.name : 'the organisation') + '.';
+        show('done');
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Accept invitation';
+        const el = document.getElementById('error');
+        el.textContent = 'Could not accept the invitation: ' + err.message;
+        show('error');
+      }
+    });
+
+    init();
+  </script>
+</body>
+</html>
