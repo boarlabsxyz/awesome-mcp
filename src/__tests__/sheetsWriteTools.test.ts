@@ -174,6 +174,31 @@ describe('performBatchUpdateSpreadsheet', () => {
     );
   });
 
+  it('labels each operation by whatever names its target — range, sheet, source, title, or the first sheet', async () => {
+    // The summary line is the only audit trail a 40-operation batch leaves, and
+    // each operation type names its target with a different key.
+    const sheets = mkSheets();
+    const out = await performBatchUpdateSpreadsheet(sheets, batchUpdateSpreadsheetSchema.parse({
+      spreadsheetId: 'ss-1',
+      operations: [
+        { type: 'backgroundColor', range: 'Data!A1:B1', color: '#FF0000' },
+        { type: 'freeze', sheetName: 'Data', frozenColumnCount: 1 },
+        { type: 'duplicateSheet', sourceSheetName: 'Data', newSheetName: 'Data copy' },
+        { type: 'addSheet', title: 'Fresh tab' },
+        { type: 'freeze', frozenRowCount: 1 },
+      ],
+    }));
+    assert.deepEqual(out.summaries.map((l: string) => l.trim()), [
+      '0. backgroundColor → Data!A1:B1',
+      '1. freeze → Data',
+      '2. duplicateSheet → Data',
+      '3. addSheet → Fresh tab',
+      // No range and no sheetName: the op applies to the first sheet, and
+      // saying so beats an empty arrow.
+      '4. freeze → (first sheet)',
+    ]);
+  });
+
   it('falls back to the request count when Google replies with no replies array', async () => {
     const sheets = mkSheets({ spreadsheets: { batchUpdate: mock.fn(async () => ({ data: {} })) } });
     const out = await performBatchUpdateSpreadsheet(sheets, batchUpdateSpreadsheetSchema.parse({
