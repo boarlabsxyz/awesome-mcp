@@ -146,6 +146,19 @@ CI runs a SonarCloud quality gate that **fails the PR below 80% coverage of new 
 - For Google services the client comes off `req.userSession`, built from real tokens by `createUserSessionFromConnection`. There is no injection seam.
 - Stubbing `globalThis.fetch` — the trick `restRoutes.providers.test.ts` uses for HubSpot and Redmine — does not reach `googleapis`: `gaxios` imports **bundled `node-fetch`**, not the global.
 
+**If the provider's server module is the entry point, its tool bodies are uncoverable until you make it importable.** `src/google-docs/server.ts` called `startServer()` at import, so no test could import it and its ~770 executable lines — every tool body — sat at 0% coverage, which Sonar counts in full. Guard the boot:
+
+```ts
+// Phrased as "start unless testing", NOT "start if this is the entry point":
+// the two fail in opposite directions. A wrong argv check silently stops
+// production from booting; a wrong test check only boots a server inside a
+// test. NODE_TEST_CONTEXT is set by `node --test`.
+const UNDER_TEST_RUNNER = process.env.NODE_TEST_CONTEXT !== undefined;
+if (!UNDER_TEST_RUNNER) startServer();
+```
+
+Check how production launches it first (`Dockerfile` CMD, `railway.json` startCommand) and say so in the commit — this is a change to how the app boots.
+
 So plan for the handler lines staying uncovered and make the extracted op carry the ratio:
 
 - Drive the op against stub clients, the shape `driveToolHandlers.test.ts` established (`mkDrive()` / `mkSheets()` returning `mock.fn`s). Assert the request that would go to the provider — that is the part a caller cannot verify from outside.
@@ -177,6 +190,49 @@ curl -s "https://sonarcloud.io/api/measures/component_tree?component=<key>&pullR
 ```
 
 Finally: **do not chase a defensive branch you cannot reach honestly.** A `String(cause)` fallback behind a helper that always wraps, or a `throw e` that only fires on a bug in your own translation, are better left uncovered with a comment saying so than reached by contorting the code.
+
+## Read the parameters as an attack surface, not just a schema
+
+The destructiveness check asks what the endpoint does to the *user's* data. This one asks what it does to the **server**, and it is where the two worst findings of the Docs pass came from — both of them reachable through an endpoint that looked like an ordinary image insert.
+
+Before exposing a write, look at every parameter and ask where the value is *used*:
+
+| Parameter shape | What it becomes | What to do |
+|---|---|---|
+| A filesystem path (`localImagePath`, `filePath`, `outputDir`) | `fs.createReadStream` **on the server** | Refuse it over REST |
+| A URL the server fetches itself | an outbound request from inside your network | Guard every redirect hop |
+| A URL the *provider* fetches (`insertImageFromUrl`) | Google's request, not yours | No server-side exposure |
+| A redirect/callback/webhook target | somewhere your credential goes | Validate against an allowlist |
+
+**The threat model changes when a tool moves to REST**, and that is the whole point. On the MCP stdio path the caller owns the machine, so reading a local file is the feature. Over REST the caller is anyone holding a credential — including the permanent dashboard API key — so the same parameter is a file-read primitive. `insertLocalImage` accepted `localImagePath`, and the helper beneath it read the path, uploaded the bytes to the caller's Drive, granted `anyone` reader, and returned the link. Nothing checked the extension or MIME type (it falls back to `application/octet-stream`), so `/proc/self/environ` or a credentials file went through whole, and the upload completed before the insert, so a later failure did not undo it.
+
+Fix it at **both** levels, because they are different boundaries:
+
+```ts
+// 1. The REST schema refuses the field, so the 400 names it rather than
+//    degrading into "no image source given".
+export const insertImageRestSchema = insertLocalImageSchema.refine(
+  (v) => v.localImagePath === undefined,
+  { message: 'localImagePath is not accepted over REST: it would read a file from the server filesystem.',
+    path: ['localImagePath'] },
+);
+
+// 2. The op refuses it unless the caller opts in, so no future call site
+//    inherits the hole. The MCP tool opts in only under stdio.
+if (args.localImagePath && !opts.allowLocalFilesystem) throw new UserError(…);
+```
+
+**This is the one sanctioned exception to "reuse the tool's schema verbatim".** The rule exists to stop the surfaces drifting on what is *valid*; it does not mean they must agree on what is *permitted*, because they do not share a trust model. Derive the REST variant from the tool's schema (`.refine`, `.omit`) so the rest of the contract still cannot drift, name the divergence in a comment, and say why.
+
+**If the server fetches a URL, guard every hop.** Validating the first hostname and then calling `fetch` with the default `redirect: 'follow'` is not a guard: a public URL answering 302 to `169.254.169.254` or `127.0.0.1` is fetched unchecked. Follow redirects manually with `redirect: 'manual'`, re-validate each destination before requesting it, and cap the hops.
+
+**Look for the existing guard before writing one.** That redirect loop already existed twice in this repo (`clickup/docImageStore.ts`, `slack/fileDownload.ts`) while a third call site had a weaker copy — which is exactly how the hole survived. Grep first, and if the correct version is inlined somewhere, hoist it to one place and delegate rather than adding a fourth:
+
+```bash
+grep -rn "redirect: 'manual'\|rejectPrivateAddress\|checkBaseUrl" src --include "*.ts" | grep -v __tests__
+```
+
+Where it lands matters: put the shared guard in the module that owns the validators it calls, or you create an import cycle. Here that is `google-docs/apiHelpers.ts`, which owns `validateFetchUrl` and `rejectPrivateAddress`.
 
 ## Destructive operations
 

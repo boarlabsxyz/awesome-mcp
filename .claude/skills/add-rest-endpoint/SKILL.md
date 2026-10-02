@@ -39,6 +39,14 @@ Grep `src/<provider>/server.ts` for `name: '<mcpToolName>'`. Note three things:
 - **The upstream client call in its `execute`.** The REST handler makes the same call and returns raw upstream JSON instead of a formatted string.
 - **Its Zod `parameters` schema.** For reads this tells you the query params. For writes this schema is **reused verbatim** to validate `req.body` — that's the mechanism that stops the REST and MCP surfaces from drifting.
 
+**Check the tool is actually implemented.** `NOT_IMPLEMENTED` in `e2e/tools.ts` lists tools that exist and throw — `editTableCell`, `fixListFormatting`, `findElement` today. An endpoint for one of those advertises a 500, so exclude it and say so in the report rather than shipping it for completeness.
+
+```bash
+grep -n "NOT_IMPLEMENTED" e2e/tools.ts
+```
+
+Also check what is already live before promising a count: on a mature service the reads may all be wired already, so "every tool" can turn out to be a writes-only pass (Docs: 8 of 9 reads live, the 9th unimplemented).
+
 Then **check whether the route already exists**, before designing a path:
 
 ```bash
@@ -109,6 +117,14 @@ Read `references/route-pattern.md` first. Then generate from:
 - `assets/templates/third-party-route.ts.tmpl` — GET, a `new XClient(token)` imported dynamically.
 - `assets/templates/write-route.ts.tmpl` — POST. Also read `references/write-endpoints.md`.
 
+**First, check whether the provider's server module is safe to import.** If `src/<provider>/server.ts` is the application entry point, `webServer.ts` cannot import it in either direction — not statically, and not with a dynamic `await import()` inside a handler, because in web-only mode that boots an entire MCP server to validate a request body:
+
+```bash
+grep -n "createWebApp\|startServer()" src/<provider>/server.ts
+```
+
+A hit means the schemas and ops go in their own modules (`writeSchemas.ts`, `writeOps.ts`) that both surfaces import. `src/google-docs/server.ts` is the one today. When in doubt do it anyway — separate modules are never wrong here.
+
 Placement rules:
 
 - Group with the service's other routes; don't append at the bottom of a 5000-line file.
@@ -147,6 +163,8 @@ npm test
 ```
 
 Then eyeball the diff of `docs/REST_ENDPOINTS.md` — if your endpoint isn't in it, the catalog line broke the parser regex (step 2), which is the single most common failure here.
+
+**The gate has a second condition that a batch trips: duplication.** `new_duplicated_lines_density` must stay under 3%, and near-identical handlers are the usual cause — see [the table rule](#past-about-four-endpoints-register-them-from-a-table). Structurally identical one-line catalog entries also register as duplicated; that is what a data table looks like and is not worth deforming, but it means the budget for duplicated handler bodies is smaller than it looks.
 
 **Then check the coverage gate, before you push.** CI runs a SonarCloud quality gate that fails the PR at **under 80% coverage of new code**, and a write-endpoint change lands squarely in its blast radius: the handler's success path cannot be covered by any test in this repo (see [The coverage gate](references/write-endpoints.md#the-coverage-gate)), so the op you extracted has to carry the ratio. Two things make this wasteful to get wrong — the gate blends **lines and branches**, so a per-file line reading looks like it passes when it does not, and each CI round trip is ~12 minutes. Measure locally instead; the recipe is in that section.
 
@@ -215,12 +233,42 @@ Full detail in `references/write-endpoints.md`. The load-bearing ones:
 - **201 for create, 200 for update.** Return the created/updated resource, not just an id.
 - **Never expose a `destructiveHint: true` tool** without explicit user sign-off in the conversation, recorded in the catalog `notes`.
 - **Flag the auth widening.** `createServiceAuth` accepts the permanent dashboard API key alongside the 5-minute bearer. A key that could only read yesterday can mutate once you ship a write endpoint. State that consequence when proposing the first one.
+- **Read the parameters as an attack surface.** A parameter naming a filesystem path, or a URL the *server* fetches, means something different once anyone with a key can set it: the Docs pass shipped both, and both were file/network exfiltration primitives until fixed. The table and the two-level fix are in `references/write-endpoints.md` — do this before the endpoint exists, not after review finds it.
 
 ## Batch mode (scope phrase)
 
-For "wire the hubspot endpoints": step 3 once (middleware + session branch — the expensive, easy-to-miss part), then steps 4–5 per endpoint, then steps 6–7 once. Flip each `status` to `live` only as its route lands, so a partial batch never advertises endpoints that 404.
+For "wire the hubspot endpoints": step 3 once (middleware + session branch — the expensive, easy-to-miss part), then step 4 once as a **table** (below), step 5 one line per endpoint, then steps 6–7 once. Flip each `status` to `live` only as its route lands, so a partial batch never advertises endpoints that 404.
 
 Prefer wiring a whole service in one pass — the session-branch work dominates, and the auth test grows by one line per route.
+
+### Past about four endpoints, register them from a table
+
+Hand-writing N handlers that differ only in schema, op, status code and response shape **fails the duplication gate**, and it is the wrong shape anyway. Nineteen Docs write handlers measured **23% duplicated** (88 of 384 new lines), taking the project over the 3% `new_duplicated_lines_density` threshold and failing the PR after everything else was green.
+
+Write it as a table of route descriptors plus one generic handler:
+
+```ts
+interface DocsWriteRoute {
+  path: string;                      // Express path; array order IS registration order
+  status?: 200 | 201;                // 201 where a resource is created
+  notFound: string;
+  fallback: string;
+  load: () => Promise<{ schema: { safeParse(v: unknown): any }; run: (s: UserSession, args: any) => Promise<any> }>;
+  project?: (result: any, args: any) => unknown;   // defaults to tagging the result with the id
+}
+
+for (const route of DOCS_WRITE_ROUTES) {
+  app.post(route.path, requireApiKey, async (req: ApiAuthenticatedRequest, res) => { /* one handler */ });
+}
+```
+
+Three things get better, not just the duplication number:
+
+- **Coverage goes up.** One handler the tests reach beats N copies they do not: on the Docs pass this moved new-code coverage from 81.4% to 91.4%, because `webServer`'s new lines fell from 374 to 283 with 86% of them covered.
+- **The cross-cutting rules live in one place** — the path-params-over-body merge (`{...req.body, ...req.params}`), the `safeParse` 400, the `UserError`-versus-upstream-status branch. Nineteen copies of a catch block is nineteen places a later fix can fail to be applied.
+- **It is shorter.** The table version of those nineteen routes was 108 lines less than the hand-written one.
+
+Static paths still have to come first — put them at the top of the array, since array order is registration order.
 
 ## Failure modes
 
@@ -237,6 +285,8 @@ Prefer wiring a whole service in one pass — the session-branch work dominates,
 - **A per-route `express.json({ limit })` next to the handler** — never runs, and the endpoint 413s at 100 kb anyway. The limit belongs in `REST_LARGE_BODY_PREFIXES`; see `references/write-endpoints.md`.
 - **Upstream 404/403 answered as 500** — the provider's MCP helpers may wrap errors in a `UserError` that drops `err.code`, which is what `sendUpstreamError` reads. Check before reusing a helper.
 - **An MCP `UserError` mapped straight to 400** — those helpers raise `UserError` for the provider's own 404s too, so a missing record gets reported as "fix your request". Branch on whether a numeric status survived.
+- **The duplication gate fails the PR** — N near-identical handlers. Expected past about four endpoints; use the table (see Batch mode) rather than writing them out and refactoring afterwards.
+- **An endpoint shipped for a tool that throws** — check `NOT_IMPLEMENTED` in `e2e/tools.ts` (step 1).
 - **The Sonar new-code coverage gate fails the PR** — expected on a write change, and not a reason to waive the gate. Cover the extracted op; see `references/write-endpoints.md`.
 
 ## File layout
