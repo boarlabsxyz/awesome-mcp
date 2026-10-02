@@ -42,8 +42,10 @@ Grep `src/<provider>/server.ts` for `name: '<mcpToolName>'`. Note three things:
 Then **check whether the route already exists**, before designing a path:
 
 ```bash
-grep -n "api/v1/<service>" src/website/webServer.ts | grep -E "app\.(get|post|patch|delete)"
+grep -nE -A1 "app\.(get|post|patch|delete)\(" src/website/webServer.ts | grep "api/v1/<service>"
 ```
+
+The `-A1` is not decoration: some registrations put the path on the *next* line (`app.post(\n  '/api/v1/images', …`), and a pipeline expecting `app.post(` and the path to share a line silently reports no route where one exists — the single failure this step exists to prevent.
 
 A hit that is absent from `restCatalog.ts` is job 2 above, and it changes what you do: the ChatGPT Custom Actions compat routes have been served for a long time, clients parse their response bodies, and they typically validate with `if (!field)` presence checks. **Keep the path and the response keys exactly as they are** and change only the validation, or you break a live integration to gain a tidier URL. Three of the eight endpoints in the Sheets/Calendar write pass were already there this way.
 

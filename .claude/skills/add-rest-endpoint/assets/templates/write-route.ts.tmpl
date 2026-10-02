@@ -6,12 +6,20 @@
   app.post('{{expressPath}}', {{authMiddleware}}, async (req: ApiAuthenticatedRequest, res) => {
     try {
       // Reuse the MCP tool's schema. If it is still inline in the addTool call,
-      // lift it to `export const {{SchemaName}} = z.object({...})` in
-      // src/{{provider}}/server.ts and reference it from both places.
+      // lift it to an exported `export const {{SchemaName}} = z.object({...})`.
+      //
+      // WHERE it goes matters: importing `src/{{provider}}/server.ts` is only safe
+      // for a provider whose server module has no boot side effects.
+      // src/google-docs/server.ts is the application ENTRY POINT — it imports
+      // createWebApp, and it used to call startServer() at import time — so for it,
+      // and any provider like it, the schemas and ops live in their own modules
+      // (writeSchemas.ts / writeOps.ts) that BOTH surfaces import. When in doubt
+      // put them in their own module: it is never wrong, and it stops the web-only
+      // app loading an MCP server just to validate a request body.
       //
       // Path params are merged OVER the body so a URL and a mismatched body key
       // cannot disagree about which record is being written.
-      const { {{SchemaName}} } = await import('../{{provider}}/server.js');
+      const { {{SchemaName}} } = await import('../{{provider}}/writeSchemas.js');
       const parsed = {{SchemaName}}.safeParse({ ...req.body, {{paramName}}: req.params.{{paramName}} });
       if (!parsed.success) {
         res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
@@ -21,7 +29,7 @@
       // Call the tool's exported op rather than rebuilding the request here —
       // a second copy of the request-building drifts from the tool. See
       // "Extract the op, not just the schema" in references/write-endpoints.md.
-      const { {{performOp}} } = await import('../{{provider}}/server.js');
+      const { {{performOp}} } = await import('../{{provider}}/writeOps.js');
       const result = await {{performOp}}(req.userSession!.{{sessionClient}}, parsed.data);
 
       // 201 + the created resource (callers chaining curls need the new id).
@@ -64,7 +72,10 @@
 //    validation, not 413.
 //
 // Placeholders
-//   {{SchemaName}}       exported Zod schema, e.g. appendSpreadsheetRowsSchema
+//   {{SchemaName}}       exported Zod schema, e.g. appendSpreadsheetRowsSchema.
+//                        Import from the provider's writeSchemas.ts, or from its
+//                        server.ts ONLY when that module has no boot side effects
+//                        — see the note in the handler above.
 //   {{performOp}}        exported op, e.g. performCreateSpreadsheet. Drop this
 //                        line only when the tool body is a single client call
 //                        the route can make directly.

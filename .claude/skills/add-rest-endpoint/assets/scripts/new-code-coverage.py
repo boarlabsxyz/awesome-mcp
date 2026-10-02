@@ -36,12 +36,34 @@ def merge_base(base: str) -> str:
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
+def untracked_files(paths: list[str]) -> list[str]:
+    """Non-ignored files git does not know about yet.
+
+    `git diff` cannot see these, so a brand-new module — exactly what this skill
+    tells you to create for the op and the schemas — would be left out of both the
+    numerator and the denominator, and a well-covered diff could report PASS while
+    a whole new file went unmeasured.
+    """
+    out = subprocess.run(['git', 'ls-files', '--others', '--exclude-standard', '--'] + (paths or ['src']),
+                         capture_output=True, text=True, check=True).stdout.split()
+    return [f for f in out if f.endswith(('.ts', '.tsx', '.js', '.mjs')) and '__tests__' not in f]
+
+
+def count_lines(path: str) -> int:
+    try:
+        with open(path) as fh:
+            return sum(1 for _ in fh)
+    except OSError:
+        return 0
+
+
 def added_lines(base: str, paths: list[str]) -> dict[str, set[int]]:
     """Post-image line numbers added by this branch, per file.
 
     Diffs the merge base against the WORKING TREE, not against HEAD: the whole
     point is to check the gate before committing and pushing, and `base...HEAD`
-    silently reports nothing for work that is not committed yet.
+    silently reports nothing for work that is not committed yet. Untracked files
+    are added separately, with every line counted as new.
     """
     cmd = ['git', 'diff', '-U0', merge_base(base), '--'] + paths
     diff = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
@@ -93,19 +115,24 @@ def main() -> int:
     ap.add_argument('paths', nargs='*', help='files to measure (default: changed src files)')
     args = ap.parse_args()
 
-    paths = args.paths or changed_source_files(args.base)
+    paths = args.paths or changed_source_files(args.base) + untracked_files([])
     if not paths:
         print('No changed source files to measure.')
         return 0
     added = added_lines(args.base, paths)
+    # Untracked files carry no diff, so every line of them is new.
+    for f in untracked_files(paths):
+        added.setdefault(f, set()).update(range(1, count_lines(f) + 1))
     lines, branches = parse_lcov(args.lcov)
 
     tot_lines = tot_uncov = cov_br = uncov_br = 0
+    unmeasured: list[str] = []
     print(f'{"lines":>12}  {"branches":>10}  file')
     for f in sorted(added):
         aset = added[f]
         if f not in lines:
-            print(f'{"—":>12}  {"—":>10}  {f}  (not instrumented — add it to c8 --include)')
+            print(f'{"—":>12}  {"—":>10}  {f}  (NOT INSTRUMENTED — add it to c8 --include)')
+            unmeasured.append(f)
             continue
         to_cover = [l for l in aset if l in lines[f]]
         uncovered = [l for l in to_cover if lines[f][l] == 0]
@@ -136,6 +163,15 @@ def main() -> int:
     pct = 100 * num / den
     print(f'\nnew_coverage = ({tot_lines - tot_uncov} lines + {cov_br} conditions)'
           f' / ({tot_lines} lines + {cov_br + uncov_br} conditions) = {pct:.1f}%')
+    if unmeasured:
+        # Never report a clean PASS over a partial scope: a well-covered file would
+        # mask a changed one with no coverage data at all, and CI measures both.
+        print(f'gate = {args.gate:.0f}%  →  INCOMPLETE — {len(unmeasured)} changed file(s) have no coverage data:')
+        for f in unmeasured:
+            print(f'  {f}')
+        print('Re-run with those files in --include, or with tests that import them. '
+              'CI counts them as uncovered, so this number is optimistic.')
+        return 2
     print(f'gate = {args.gate:.0f}%  →  {"PASS" if pct >= args.gate else "FAIL"}')
     # A local subset can read slightly high: the suites you ran are a subset of
     # CI's, but CI also measures every added line, including files you did not
