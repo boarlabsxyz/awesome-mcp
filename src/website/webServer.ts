@@ -4164,7 +4164,10 @@ function registerRestApiRoutes(app: express.Express): void {
       notFound: 'Document not found',
       fallback: 'Failed to insert image',
       load: async () => ({
-        schema: (await docsSchemas()).insertLocalImageSchema,
+        // insertImageRestSchema, not insertLocalImageSchema: the REST variant
+        // refuses localImagePath, which would read a file from the SERVER's
+        // filesystem and publish it to Drive. See writeSchemas.ts.
+        schema: (await docsSchemas()).insertImageRestSchema,
         run: (session, args) => docsOps().then((m) => m.performInsertLocalImage(session.googleDocs, session.googleDrive, args)),
       }),
     },

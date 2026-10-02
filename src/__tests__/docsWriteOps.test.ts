@@ -241,6 +241,65 @@ describe('docs text ops', () => {
   });
 });
 
+describe('upstream status survives the UserError wrapper', () => {
+  // The docs helpers wrap Google's 404s and 403s for a human, and a bare
+  // `new UserError(message)` drops `error.code` — which is what sendUpstreamError
+  // reads. Reported on #183: a missing document came back as 400 ("fix your
+  // request body") from the routes that map a code-less UserError, and as a flat
+  // 500 from the rest. The status now rides along, so both answer 404.
+  function throwingDocs(code: number): any {
+    const err: any = new Error('upstream');
+    err.code = code;
+    return {
+      documents: {
+        get: mock.fn(async () => { throw err; }),
+        batchUpdate: mock.fn(async () => { throw err; }),
+      },
+    };
+  }
+
+  for (const code of [404, 403] as const) {
+    it(`keeps ${code} through a write`, async () => {
+      await assert.rejects(
+        () => performInsertPageBreak(throwingDocs(code), { documentId: 'd1', index: 2 } as any),
+        (err: any) => {
+          assert.ok(err instanceof UserError);
+          assert.equal((err as any).code, code);
+          return true;
+        },
+      );
+    });
+
+    it(`keeps ${code} through a text search`, async () => {
+      await assert.rejects(
+        () => performApplyTextStyle(throwingDocs(code), {
+          documentId: 'd1', target: { textToFind: 'x', matchInstance: 1 }, style: { bold: true },
+        } as any),
+        (err: any) => (err as any).code === code,
+      );
+    });
+
+    it(`keeps ${code} through a paragraph lookup`, async () => {
+      await assert.rejects(
+        () => performApplyParagraphStyle(throwingDocs(code), {
+          documentId: 'd1', target: { indexWithinParagraph: 2 }, style: { alignment: 'CENTER' },
+        } as any),
+        (err: any) => (err as any).code === code,
+      );
+    });
+  }
+
+  it('keeps 400 on an invalid batch request, which is genuinely the caller\'s fault', async () => {
+    const err: any = new Error('Invalid requests[0]');
+    err.code = 400;
+    const docs = { documents: { batchUpdate: mock.fn(async () => { throw err; }) } } as any;
+    await assert.rejects(
+      () => performInsertPageBreak(docs, { documentId: 'd1', index: 2 } as any),
+      (e: any) => (e as any).code === 400 && /Invalid request sent to Google Docs API/.test(e.message),
+    );
+  });
+});
+
 describe('docs styling ops', () => {
   it('performApplyTextStyle resolves a text target to a range', async () => {
     const docs = mkDocs();
@@ -502,6 +561,43 @@ describe('docs image ops', () => {
           documentId: 'd1', imageBase64: huge, fileName: 'a.png', index: 2, uploadToSameFolder: false,
         } as any),
         (err: any) => err instanceof UserError && /exceeding the/.test(err.message),
+      );
+    });
+
+    // CWE-73. Reported on #183: over REST this was a complete file-exfiltration
+    // primitive for anyone holding an API key. The helper reads the path with
+    // fs.createReadStream, uploads the bytes to the caller's Drive, grants
+    // `anyone` reader and returns the link — and nothing downstream checks the
+    // extension or MIME type (it falls back to application/octet-stream), so
+    // /proc/self/environ or a credentials file goes through whole. The upload
+    // completes before the insert, so a later failure does not undo the leak.
+    it('refuses localImagePath unless the caller explicitly opts in', async () => {
+      const drive = mkDrive();
+      await assert.rejects(
+        () => performInsertLocalImage(mkDocs(), drive, {
+          documentId: 'd1', localImagePath: '/proc/self/environ', index: 2, uploadToSameFolder: false,
+        } as any),
+        (err: any) => {
+          assert.ok(err instanceof UserError);
+          assert.match(err.message, /only accepted on a local \(stdio\) deployment/);
+          return true;
+        },
+      );
+      // Nothing was read and nothing was published.
+      assert.equal(drive.files.create.mock.calls.length, 0);
+      assert.equal(drive.permissions.create.mock.calls.length, 0);
+    });
+
+    it('allows localImagePath when the caller opts in, which only stdio does', async () => {
+      // The opt-in exists for the documented local deployment, where the caller
+      // owns the filesystem being read. The upload itself is stubbed here; what
+      // matters is that the gate lets it through rather than refusing.
+      const drive = mkDrive({ files: { create: mock.fn(async () => { throw new Error('upload reached'); }) } });
+      await assert.rejects(
+        () => performInsertLocalImage(mkDocs(), drive, {
+          documentId: 'd1', localImagePath: '/tmp/x.png', index: 2, uploadToSameFolder: false,
+        } as any, { allowLocalFilesystem: true }),
+        (err: any) => !/only accepted on a local/.test(err.message),
       );
     });
 

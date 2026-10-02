@@ -201,6 +201,40 @@ describe('REST data plane: Google Sheets and Calendar write validation', () => {
       await expectInvalid('/api/v1/docs/import/docx', {}, 'fileId');
     });
 
+    // CWE-73, reported on #183. The REST plane must refuse the field outright:
+    // it reads a file from the SERVER filesystem, uploads it to the caller's
+    // Drive and grants `anyone` reader. Refused at the schema so the 400 names
+    // the field rather than reporting "no image source given".
+    it('refuses localImagePath on the image route, naming the field', async () => {
+      const res = await request(app).post('/api/v1/docs/doc-123/images').set(auth())
+        .send({ localImagePath: '/proc/self/environ', index: 1 });
+      assert.equal(res.status, 400);
+      assert.ok(
+        res.body.issues.fieldErrors.localImagePath,
+        `expected the refusal to name localImagePath, got ${JSON.stringify(res.body.issues)}`,
+      );
+    });
+
+    it('still accepts the safe image sources', async () => {
+      // Asserted on the schema, not through the route: a valid body would get
+      // past validation and reach the real Google client, which retries with
+      // backoff and hangs the suite. What matters is that the refusal is scoped
+      // to localImagePath rather than blanket.
+      const { insertImageRestSchema } = await import('../google-docs/writeSchemas.js');
+      assert.equal(insertImageRestSchema.safeParse({ documentId: 'd1', driveFileId: 'img-1', index: 1 }).success, true);
+      assert.equal(insertImageRestSchema.safeParse({ documentId: 'd1', imageUrl: 'https://x/a.png', index: 1 }).success, true);
+      assert.equal(
+        insertImageRestSchema.safeParse({ documentId: 'd1', imageBase64: 'AAAA', fileName: 'a.png', index: 1 }).success,
+        true,
+      );
+      // And the MCP schema still accepts it, because the stdio caller owns the file.
+      const { insertLocalImageSchema } = await import('../google-docs/writeSchemas.js');
+      assert.equal(
+        insertLocalImageSchema.safeParse({ documentId: 'd1', localImagePath: '/tmp/a.png', index: 1 }).success,
+        true,
+      );
+    });
+
     it('rejects a text style with no target', async () => {
       await expectInvalid('/api/v1/docs/doc-123/text-style', { style: { bold: true } }, 'target');
     });

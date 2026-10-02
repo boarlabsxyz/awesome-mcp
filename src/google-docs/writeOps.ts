@@ -348,7 +348,26 @@ export async function performInsertLocalImage(
   docs: Docs,
   drive: Drive,
   args: InsertLocalImageArgs,
+  opts: { allowLocalFilesystem?: boolean } = {},
 ): Promise<{ index: number; resolvedImageUrl: string; uploadedToDrive: boolean }> {
+  // `localImagePath` reads a file from the SERVER's filesystem, uploads it to the
+  // caller's Drive and grants `anyone` reader on it. On a hosted deployment that
+  // is a complete file-exfiltration primitive for anyone holding a credential —
+  // /proc/self/environ, a credentials file, anything the process can read — and
+  // nothing downstream checks the extension or MIME type (it falls back to
+  // application/octet-stream, so any bytes go through).
+  //
+  // So it is refused unless the caller explicitly opts in. The MCP tool opts in
+  // only in stdio mode, where the user owns the process and the file, which is
+  // what its description has always claimed. The REST plane never opts in, and
+  // refuses the field at the schema so the error names it.
+  if (args.localImagePath && !opts.allowLocalFilesystem) {
+    throw new UserError(
+      'localImagePath is only accepted on a local (stdio) deployment, where the caller owns the filesystem being '
+      + 'read. On a hosted deployment it would read a file from the SERVER and publish it. Use imageUrl, '
+      + 'driveFileId, or imageBase64 + fileName instead.',
+    );
+  }
   const strategy = GDocsHelpers.validateImageSource(args);
   let resolvedImageUrl: string;
 

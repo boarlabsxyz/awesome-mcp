@@ -11,6 +11,27 @@ type Docs = docs_v1.Docs; // Alias for convenience
 const MAX_BATCH_UPDATE_REQUESTS = 50; // Google API limits batch size
 
 // --- Core Helper to Execute Batch Updates ---
+/**
+ * Wrap an upstream Google failure in a UserError while KEEPING its HTTP status.
+ *
+ * The REST plane's `sendUpstreamError` reads `err.code` to answer 404 vs 403 vs
+ * 500, and a bare `new UserError(message)` drops it. That had two consequences
+ * once these helpers were reachable over REST: a handler that maps a code-less
+ * UserError to 400 reported a MISSING DOCUMENT as "fix your request body", and a
+ * handler without that mapping returned a flat 500. The message is unchanged, so
+ * the MCP tools that only print it are unaffected.
+ *
+ * Mirrors upstreamUserError in google-sheets/apiHelpers.ts; keep the two in step.
+ */
+function upstreamUserError(message: string, cause: any): UserError {
+  const err = new UserError(message);
+  const code = cause?.code ?? cause?.response?.status ?? cause?.status;
+  // Numeric only: Node hands out string codes (ENOTFOUND, ECONNRESET), and
+  // res.status('ENOTFOUND') throws inside the error handler.
+  if (typeof code === 'number') (err as any).code = code;
+  return err;
+}
+
 export async function executeBatchUpdate(docs: Docs, documentId: string, requests: docs_v1.Schema$Request[]): Promise<docs_v1.Schema$BatchUpdateDocumentResponse> {
 if (!requests || requests.length === 0) {
 // console.warn("executeBatchUpdate called with no requests.");
@@ -38,10 +59,10 @@ return {}; // Nothing to do
              if (details && Array.isArray(details)) {
                  detailMsg = details.map(d => d.description || JSON.stringify(d)).join('; ');
              }
-            throw new UserError(`Invalid request sent to Google Docs API. Details: ${detailMsg || error.message}`);
+            throw upstreamUserError(`Invalid request sent to Google Docs API. Details: ${detailMsg || error.message}`, error);
         }
-        if (error.code === 404) throw new UserError(`Document not found (ID: ${documentId}). Check the ID.`);
-        if (error.code === 403) throw new UserError(`Permission denied for document (ID: ${documentId}). Ensure the authenticated user has edit access.`);
+        if (error.code === 404) throw upstreamUserError(`Document not found (ID: ${documentId}). Check the ID.`, error);
+        if (error.code === 403) throw upstreamUserError(`Permission denied for document (ID: ${documentId}). Ensure the authenticated user has edit access.`, error);
         // Generic internal error for others
         throw new Error(`Google API Error (${error.code}): ${error.message}`);
     }
@@ -175,8 +196,8 @@ try {
     return null; // Instance not found or mapping failed for all attempts
 } catch (error: any) {
     console.error(`Error finding text "${textToFind}" in doc ${documentId}: ${error.message || 'Unknown error'}`);
-    if (error.code === 404) throw new UserError(`Document not found while searching text (ID: ${documentId}).`);
-    if (error.code === 403) throw new UserError(`Permission denied while searching text in doc ${documentId}.`);
+    if (error.code === 404) throw upstreamUserError(`Document not found while searching text (ID: ${documentId}).`, error);
+    if (error.code === 403) throw upstreamUserError(`Permission denied while searching text in doc ${documentId}.`, error);
     throw new Error(`Failed to retrieve doc for text searching: ${error.message || 'Unknown error'}`);
 }
 }
@@ -253,8 +274,8 @@ try {
 
 } catch (error: any) {
     console.error(`Error getting paragraph range for index ${indexWithin} in doc ${documentId}: ${error.message || 'Unknown error'}`);
-    if (error.code === 404) throw new UserError(`Document not found while finding paragraph (ID: ${documentId}).`);
-    if (error.code === 403) throw new UserError(`Permission denied while accessing doc ${documentId}.`);
+    if (error.code === 404) throw upstreamUserError(`Document not found while finding paragraph (ID: ${documentId}).`, error);
+    if (error.code === 403) throw upstreamUserError(`Permission denied while accessing doc ${documentId}.`, error);
     throw new Error(`Failed to find paragraph: ${error.message || 'Unknown error'}`);
 }
 }

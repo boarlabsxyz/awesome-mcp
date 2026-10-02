@@ -134,6 +134,25 @@ export const insertLocalImageSchema = DocumentIdParameter.extend({
     .describe('If true, uploads the image to the same folder as the document. If false, Drive root.'),
 });
 
+/**
+ * The REST variant: identical, except `localImagePath` is refused.
+ *
+ * This is the one place the two surfaces deliberately DIVERGE, and the reason is
+ * a trust boundary rather than drift. The field reads a file from the server
+ * filesystem and publishes it to Drive with `anyone` reader; on the MCP stdio
+ * path the caller owns that filesystem, while on the REST plane the caller is
+ * anyone holding an API key. Refused at the schema rather than silently stripped,
+ * so the 400 names the field instead of reporting "no image source given".
+ */
+export const insertImageRestSchema = insertLocalImageSchema.refine(
+  (value) => value.localImagePath === undefined,
+  {
+    message: 'localImagePath is not accepted over REST: it would read a file from the server filesystem. Use '
+      + 'imageUrl, driveFileId, or imageBase64 + fileName.',
+    path: ['localImagePath'],
+  },
+);
+
 // === Comments ===
 
 export const addCommentSchema = DocumentIdParameter.extend({

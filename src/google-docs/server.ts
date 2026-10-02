@@ -894,7 +894,16 @@ server.addTool({
     const imageSource = args.imageUrl || args.driveFileId || args.localImagePath || args.fileName || 'base64 image';
     log.info(`Inserting image ${imageSource} at index ${args.index} in doc ${args.documentId}`);
     try {
-      const { resolvedImageUrl } = await performInsertLocalImage(docs, drive, args);
+      // Opt in to the local-filesystem source only on a stdio deployment, where
+      // the caller owns the machine and the file. TRANSPORT is httpStream in the
+      // hosted image (see the Dockerfile), so the hosted MCP surface refuses it
+      // exactly like the REST plane does.
+      const { resolvedImageUrl } = await performInsertLocalImage(docs, drive, args, {
+        // Read from the env rather than the TRANSPORT const, which is declared
+        // further down the file for the startup path — same value, no
+        // forward-reference to reason about.
+        allowLocalFilesystem: (process.env.TRANSPORT || 'stdio') === 'stdio',
+      });
       const sizeInfo = args.width && args.height ? ` with size ${args.width}x${args.height}pt` : '';
       return `Successfully inserted image at index ${args.index}${sizeInfo}.\nImage URL: ${resolvedImageUrl}`;
     } catch (error: any) {
