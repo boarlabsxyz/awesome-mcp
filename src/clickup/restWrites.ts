@@ -27,6 +27,7 @@
 // above become indistinguishable at the call site.
 import { UserError } from 'fastmcp';
 import { z } from 'zod';
+import { parseTimestampInput } from './apiHelpers.js';
 import type { ClickUpClient } from './apiHelpers.js';
 import { getImagePublicBaseUrl } from '../images/imageBlobStore.js';
 import { assertOneImageSource, isImageUrlOnOurHost, storeImageFromArgs } from './docImageIngest.js';
@@ -84,6 +85,30 @@ export const updateTaskRestSchema = z.object(taskUpdateFields).refine(
 export type UpdateTaskRestArgs = z.infer<typeof updateTaskRestSchema>;
 
 /**
+ * Convert a caller-supplied date to the Unix-ms ClickUp wants, REFUSING anything
+ * that does not parse.
+ *
+ * `new Date(x).getTime()` is not safe here and silently destroys data. These
+ * fields are documented as "ISO string or Unix timestamp in ms", but
+ * `new Date("1700000000000")` is an Invalid Date, so `.getTime()` is NaN and
+ * `JSON.stringify` serialises that as **null** — which ClickUp accepts as
+ * "clear the date" and answers 200. A caller using the documented millisecond
+ * format, or merely typo-ing an ISO string, would therefore wipe the due date and
+ * be told it worked. `parseTimestampInput` handles both documented forms; a
+ * rejection here carries no numeric status, so the route answers 400.
+ */
+export function toClickUpTimestamp(field: string, raw: string): number {
+  const ts = parseTimestampInput(raw);
+  if (Number.isNaN(ts)) {
+    throw new UserError(
+      `${field} is not a valid date: ${JSON.stringify(raw)}. Pass an ISO 8601 string `
+      + `(2026-03-01T00:00:00Z) or a Unix timestamp in milliseconds (1700000000000).`,
+    );
+  }
+  return ts;
+}
+
+/**
  * Build ClickUp's native update body from the camelCase parameters.
  *
  * Shared with nothing yet, but kept separate from the request so the field
@@ -99,8 +124,8 @@ export function buildTaskUpdateBody(args: UpdateTaskRestArgs, parentId?: string)
   else if (args.description !== undefined) data.description = args.description;
   if (args.status !== undefined) data.status = args.status;
   if (args.priority !== undefined) data.priority = args.priority;
-  if (args.dueDate !== undefined) data.due_date = new Date(args.dueDate).getTime();
-  if (args.startDate !== undefined) data.start_date = new Date(args.startDate).getTime();
+  if (args.dueDate !== undefined) data.due_date = toClickUpTimestamp('dueDate', args.dueDate);
+  if (args.startDate !== undefined) data.start_date = toClickUpTimestamp('startDate', args.startDate);
   if (args.addAssignees || args.removeAssignees) {
     data.assignees = { add: args.addAssignees || [], rem: args.removeAssignees || [] };
   }
@@ -176,6 +201,7 @@ export const updateListRestSchema = z.object(listUpdateFields).refine(
   { message: 'Provide at least one field to update (name, content, dueDate, or priority).' },
 );
 
+/** Update a list, converting camelCase fields to ClickUp's native keys. */
 export async function performUpdateList(
   client: ClickUpClient,
   listId: string,
@@ -184,7 +210,7 @@ export async function performUpdateList(
   const data: Record<string, unknown> = {};
   if (args.name !== undefined) data.name = args.name;
   if (args.content !== undefined) data.content = args.content;
-  if (args.dueDate !== undefined) data.due_date = new Date(args.dueDate).getTime();
+  if (args.dueDate !== undefined) data.due_date = toClickUpTimestamp('dueDate', args.dueDate);
   if (args.priority !== undefined) data.priority = args.priority;
   return client.updateList(listId, data);
 }
@@ -301,6 +327,7 @@ export const createPageFields = {
 
 export const createPageRestSchema = z.object(createPageFields);
 
+/** Create a page in a doc. Content is sent as markdown; `parentPageId` nests it. */
 export async function performCreatePage(
   client: ClickUpClient,
   workspaceId: string,
@@ -328,6 +355,10 @@ export const editPageRestSchema = z.object(editPageFields).refine(
   { message: 'Provide name, content, or both.' },
 );
 
+/**
+ * Edit a page. `editMode: 'replace'` (the default) overwrites the whole body, so it
+ * destroys existing content even though the tool carries no destructive annotation.
+ */
 export async function performEditPage(
   client: ClickUpClient,
   workspaceId: string,

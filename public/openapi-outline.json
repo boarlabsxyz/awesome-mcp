@@ -638,6 +638,16 @@
                 }
               }
             }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -800,6 +810,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record",
             "content": {
               "application/json": {
                 "schema": {
@@ -1148,6 +1168,16 @@
                 }
               }
             }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -1315,6 +1345,16 @@
                 }
               }
             }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -1406,6 +1446,16 @@
                 }
               }
             }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -1476,6 +1526,16 @@
                 }
               }
             }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -1539,6 +1599,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record",
             "content": {
               "application/json": {
                 "schema": {
@@ -1721,6 +1791,16 @@
                 }
               }
             }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -1753,11 +1833,15 @@
                     "type": "string"
                   },
                   "description": {
-                    "type": "string"
+                    "type": "string",
+                    "nullable": true,
+                    "description": "New description. Pass null to clear it."
                   },
                   "color": {
                     "type": "string",
-                    "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$"
+                    "nullable": true,
+                    "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+                    "description": "New hex color. Pass null to clear it."
                   }
                 }
               }
@@ -1807,6 +1891,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record",
             "content": {
               "application/json": {
                 "schema": {
@@ -1899,10 +1993,10 @@
       }
     },
     "/api/v1/outline/collections/{collectionId}/export": {
-      "get": {
+      "post": {
         "operationId": "exportOutlineCollection",
         "summary": "Start an async export of a collection",
-        "description": "STARTS a server-side job and returns a fileOperation id plus state. It does NOT return the export, and every call queues another one. Poll Outline for completion.",
+        "description": "QUEUES a server-side export job and returns a fileOperation id plus state \u2014 it does NOT return the export. Poll Outline for completion. A POST rather than a GET because each call queues ANOTHER job, and a GET is fair game for a proxy or retry middleware to repeat after a timeout.",
         "parameters": [
           {
             "name": "collectionId",
@@ -1912,23 +2006,30 @@
               "type": "string"
             },
             "description": "The Outline collection ID"
-          },
-          {
-            "name": "format",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "outline-markdown",
-                "json",
-                "html"
-              ],
-              "default": "outline-markdown"
-            },
-            "description": "Export format. An unrecognised value falls back to outline-markdown rather than erroring."
           }
         ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "format": {
+                    "type": "string",
+                    "enum": [
+                      "outline-markdown",
+                      "json",
+                      "html"
+                    ],
+                    "default": "outline-markdown",
+                    "description": "Export format. Defaults to outline-markdown."
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Export queued",
@@ -1941,7 +2042,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request body",
             "content": {
               "application/json": {
                 "schema": {
@@ -1972,6 +2073,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no file operation",
             "content": {
               "application/json": {
                 "schema": {
@@ -1984,27 +2095,32 @@
       }
     },
     "/api/v1/outline/exports": {
-      "get": {
+      "post": {
         "operationId": "exportAllOutlineCollections",
         "summary": "Start an async export of the whole workspace",
-        "description": "Same shape as the per-collection export: starts a job, returns a fileOperation id and state, and queues another export on every call.",
-        "parameters": [
-          {
-            "name": "format",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "outline-markdown",
-                "json",
-                "html"
-              ],
-              "default": "outline-markdown"
-            },
-            "description": "Export format. An unrecognised value falls back to outline-markdown rather than erroring."
+        "description": "QUEUES a server-side export job and returns a fileOperation id plus state \u2014 it does NOT return the export. Poll Outline for completion. A POST rather than a GET because each call queues ANOTHER job, and a GET is fair game for a proxy or retry middleware to repeat after a timeout. This one exports the ENTIRE workspace, so a repeated request is correspondingly expensive.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "format": {
+                    "type": "string",
+                    "enum": [
+                      "outline-markdown",
+                      "json",
+                      "html"
+                    ],
+                    "default": "outline-markdown",
+                    "description": "Export format. Defaults to outline-markdown."
+                  }
+                }
+              }
+            }
           }
-        ],
+        },
         "responses": {
           "200": {
             "description": "Export queued",
@@ -2017,7 +2133,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request body",
             "content": {
               "application/json": {
                 "schema": {
@@ -2048,6 +2164,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no file operation",
             "content": {
               "application/json": {
                 "schema": {

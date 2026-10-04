@@ -147,6 +147,41 @@ describe('REST data plane: ClickUp and Outline handler bodies', () => {
       assert.equal(sent.name, 'Renamed');
       assert.equal(sent.due_date, Date.parse('2026-03-01T00:00:00.000Z'));
       assert.equal(sent.priority, 2);
+      assert.ok(Number.isFinite(sent.due_date), 'due_date must be a number, never NaN/null');
+    });
+
+    it('accepts the documented Unix-ms date format as a real timestamp', async () => {
+      reset();
+      when('/task/task-1', { json: { id: 'task-1' } });
+      await request(app).post('/api/v1/clickup/tasks/task-1/update').set(auth())
+        .send({ dueDate: '1700000000000', startDate: '2026-03-01T00:00:00.000Z' }).expect(200);
+      const sent = callsTo('/task/task-1')[0].body as any;
+      // new Date("1700000000000") is an Invalid Date, so the obvious conversion
+      // yields NaN, which JSON.stringify sends as null — and ClickUp reads a null
+      // due_date as CLEAR THE DATE and answers 200. Both documented formats must
+      // survive as numbers.
+      assert.equal(sent.due_date, 1700000000000);
+      assert.equal(sent.start_date, Date.parse('2026-03-01T00:00:00.000Z'));
+    });
+
+    it('refuses an unparseable date instead of silently clearing it', async () => {
+      reset();
+      for (const body of [{ dueDate: '2026-13-01' }, { startDate: 'tomorrow' }, { dueDate: '' }]) {
+        const res = await request(app).post('/api/v1/clickup/tasks/task-1/update').set(auth()).send(body);
+        assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(body)}`);
+        assert.match(res.body.error, /not a valid date/i);
+      }
+      // The whole point: nothing reached ClickUp, so no date was wiped.
+      assert.equal(calls.length, 0);
+    });
+
+    it('refuses an unparseable list dueDate too', async () => {
+      reset();
+      const res = await request(app).post('/api/v1/clickup/lists/list-1/update').set(auth())
+        .send({ dueDate: 'next friday' });
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /not a valid date/i);
+      assert.equal(calls.length, 0);
     });
 
     it('prefers markdownContent over description on a task update', async () => {
@@ -643,20 +678,7 @@ describe('REST data plane: ClickUp and Outline handler bodies', () => {
       if (res.status === 200) assert.match(res.body.note, /credential/i);
     });
 
-    it('defaults an unknown export format instead of erroring', async () => {
-      reset();
-      when('/api/collections.export', { json: { data: { fileOperation: { id: 'f1' } } } });
-      await request(app).get('/api/v1/outline/collections/col-1/export?format=pdf').set(auth()).expect(200);
-      assert.equal((callsTo('collections.export')[0].body as any).format, 'outline-markdown');
-    });
 
-    it('starts a workspace-wide export from the static /exports path', async () => {
-      reset();
-      when('/api/collections.export_all', { json: { data: { fileOperation: { id: 'f2' } } } });
-      const res = await request(app).get('/api/v1/outline/exports?format=json').set(auth());
-      assert.equal(res.status, 200);
-      assert.equal((callsTo('export_all')[0].body as any).format, 'json');
-    });
   });
 
   // ===================== Outline writes =====================
@@ -788,13 +810,61 @@ describe('REST data plane: ClickUp and Outline handler bodies', () => {
       assert.equal(calls.length, 0);
     });
 
-    it('reports an empty Outline write response as 400 rather than a fake success', async () => {
+    it('reports an empty Outline write response as 502, not 400 or a fake success', async () => {
       reset();
       when('/api/documents.create', { json: {} });
       const res = await request(app).post('/api/v1/outline/documents').set(auth())
         .send({ title: 'New', collectionId: 'col-1' });
-      assert.equal(res.status, 400);
+      // The request reached Outline and was accepted, so the failure is upstream.
+      // A 400 would tell the caller to fix a request that was valid.
+      assert.equal(res.status, 502);
       assert.match(res.body.error, /returned no document/i);
+    });
+
+    it('queues a collection export via POST, defaulting the format', async () => {
+      reset();
+      when('/api/collections.export', { json: { data: { fileOperation: { id: 'f1' } } } });
+      const res = await request(app).post('/api/v1/outline/collections/col-1/export').set(auth()).send({});
+      assert.equal(res.status, 200);
+      assert.equal((callsTo('collections.export')[0].body as any).format, 'outline-markdown');
+    });
+
+    it('rejects an unknown export format rather than silently defaulting it', async () => {
+      reset();
+      // As a POST the format is schema-validated, so a typo is a 400 instead of a
+      // silently different export — the old GET coerced it to the default.
+      const res = await request(app).post('/api/v1/outline/collections/col-1/export').set(auth())
+        .send({ format: 'pdf' });
+      assert.equal(res.status, 400);
+      assert.equal(calls.length, 0);
+    });
+
+    it('queues a whole-workspace export via POST', async () => {
+      reset();
+      when('/api/collections.export_all', { json: { data: { fileOperation: { id: 'f2' } } } });
+      const res = await request(app).post('/api/v1/outline/exports').set(auth()).send({ format: 'json' });
+      assert.equal(res.status, 200);
+      assert.equal((callsTo('export_all')[0].body as any).format, 'json');
+    });
+
+    it('reports an empty export response as 502, not 400', async () => {
+      reset();
+      when('/api/collections.export_all', { json: {} });
+      const res = await request(app).post('/api/v1/outline/exports').set(auth()).send({});
+      assert.equal(res.status, 502);
+    });
+
+    it('clears a collection description and color with an explicit null', async () => {
+      reset();
+      when('/api/collections.update', { json: { data: { id: 'col-1' } } });
+      const res = await request(app).post('/api/v1/outline/collections/col-1').set(auth())
+        .send({ description: null, color: null });
+      assert.equal(res.status, 200);
+      const sent = callsTo('collections.update')[0].body as any;
+      // Forwarded unchanged: Outline applies null as a clear, so translating it to
+      // undefined would silently drop the only way to empty the field.
+      assert.equal(sent.description, null);
+      assert.equal(sent.color, null);
     });
 
     it('accepts a document body well past the 100kb Express default', async () => {

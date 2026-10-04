@@ -275,8 +275,8 @@ Source: `src/outline/server.ts` — 27 tools.
 | `createCollection` | Creates a new Outline collection. | `POST /api/v1/outline/collections` |
 | `updateCollection` | Updates an Outline collection's name, description, or color. Provide at least one field. | `POST /api/v1/outline/collections/{collectionId}` |
 | `deleteCollection` | Permanently deletes an Outline collection AND all documents in it. This cannot be undone. | — |
-| `exportCollection` | Starts an async export of an Outline collection. Returns a file operation ID and status. | `GET /api/v1/outline/collections/{collectionId}/export` |
-| `exportAllCollections` | Starts an async export of the entire Outline workspace. Returns a file operation ID and status. | `GET /api/v1/outline/exports` |
+| `exportCollection` | Starts an async export of an Outline collection. Returns a file operation ID and status. | `POST /api/v1/outline/collections/{collectionId}/export` |
+| `exportAllCollections` | Starts an async export of the entire Outline workspace. Returns a file operation ID and status. | `POST /api/v1/outline/exports` |
 | `listDocumentComments` | Lists comments on an Outline document (paginated). | `GET /api/v1/outline/documents/{documentId}/comments` |
 | `getComment` | Retrieves a single Outline comment by ID. | `GET /api/v1/outline/comments/{commentId}` |
 | `addComment` | Adds a comment on an Outline document, or replies to an existing comment. | `POST /api/v1/outline/documents/{documentId}/comments` |

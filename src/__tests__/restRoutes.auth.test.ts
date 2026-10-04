@@ -148,10 +148,8 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/outline/documents/doc-123/attachments',
   '/api/v1/outline/collections',
   '/api/v1/outline/collections/col-123/structure',
-  '/api/v1/outline/collections/col-123/export',
   '/api/v1/outline/comments/cmt-123',
   '/api/v1/outline/attachments/att-123/url',
-  '/api/v1/outline/exports',
 ];
 
 // POST endpoints — same auth gate, exercised with the right verb. Bodies are
@@ -247,6 +245,10 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/outline/documents/doc-123/comments',
   '/api/v1/outline/collections',
   '/api/v1/outline/collections/col-123',
+  // The two export starters are POSTs, not GETs: each call queues another
+  // server-side export job, and a GET invites a proxy to repeat it.
+  '/api/v1/outline/collections/col-123/export',
+  '/api/v1/outline/exports',
 ];
 
 describe('REST data-plane: auth gate', () => {

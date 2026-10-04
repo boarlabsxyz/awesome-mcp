@@ -40,6 +40,7 @@ import {
   insertImageFields,
   listUpdateFields,
   taskUpdateFields,
+  toClickUpTimestamp,
 } from './restWrites.js';
 import {
   CAPTURED_EVENTS,
@@ -326,8 +327,8 @@ clickUpServer.addTool({
       assignees: args.assignees,
       status: args.status,
       priority: args.priority,
-      due_date: args.dueDate ? new Date(args.dueDate).getTime() : undefined,
-      start_date: args.startDate ? new Date(args.startDate).getTime() : undefined,
+      due_date: args.dueDate ? toClickUpTimestamp('dueDate', args.dueDate) : undefined,
+      start_date: args.startDate ? toClickUpTimestamp('startDate', args.startDate) : undefined,
       tags: args.tags,
       time_estimate: args.timeEstimate,
       parent: args.parentTaskId,
@@ -443,8 +444,8 @@ clickUpServer.addTool({
     }
     if (args.status !== undefined) data.status = args.status;
     if (args.priority !== undefined) data.priority = args.priority;
-    if (args.dueDate !== undefined) data.due_date = new Date(args.dueDate).getTime();
-    if (args.startDate !== undefined) data.start_date = new Date(args.startDate).getTime();
+    if (args.dueDate !== undefined) data.due_date = toClickUpTimestamp('dueDate', args.dueDate);
+    if (args.startDate !== undefined) data.start_date = toClickUpTimestamp('startDate', args.startDate);
     if (args.addAssignees || args.removeAssignees) {
       data.assignees = { add: args.addAssignees || [], rem: args.removeAssignees || [] };
     }
@@ -1751,7 +1752,7 @@ clickUpServer.addTool({
     const data: any = {};
     if (args.name !== undefined) data.name = args.name;
     if (args.content !== undefined) data.content = args.content;
-    if (args.dueDate !== undefined) data.due_date = new Date(args.dueDate).getTime();
+    if (args.dueDate !== undefined) data.due_date = toClickUpTimestamp('dueDate', args.dueDate);
     if (args.priority !== undefined) data.priority = args.priority;
     const list = await client.updateList(args.listId, data);
     return `List updated:\n  Name: ${list.name}\n  ID: ${list.id}`;
@@ -2129,8 +2130,8 @@ clickUpServer.addTool({
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
     const result = await client.getTimeEntries(args.workspaceId, {
-      start_date: args.startDate ? new Date(args.startDate).getTime() : undefined,
-      end_date: args.endDate ? new Date(args.endDate).getTime() : undefined,
+      start_date: args.startDate ? toClickUpTimestamp('startDate', args.startDate) : undefined,
+      end_date: args.endDate ? toClickUpTimestamp('endDate', args.endDate) : undefined,
       assignee: args.assignee,
     });
     const entries = result.data || [];

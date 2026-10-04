@@ -7355,6 +7355,10 @@ function registerRestApiRoutes(app: express.Express): void {
    * which sendUpstreamError reads, so the upstream status survives.
    */
   function sendOutlineError(res: Response, err: unknown, notFound: string, fallback: string): void {
+    if ((err as any)?.name === 'UpstreamEmptyError') {
+      res.status(502).json({ error: (err as any).message });
+      return;
+    }
     if ((err as any)?.name === 'UserError' && typeof (err as any)?.code !== 'number') {
       res.status(400).json({ error: (err as any).message });
       return;
@@ -7383,15 +7387,6 @@ function registerRestApiRoutes(app: express.Express): void {
     const err = new Error(message);
     (err as any).status = 404;
     return err;
-  }
-
-  /** Export format, defaulting rather than 400ing on an unknown value. */
-  const OUTLINE_EXPORT_FORMATS = ['outline-markdown', 'json', 'html'] as const;
-  function outlineExportFormat(req: ApiAuthenticatedRequest): (typeof OUTLINE_EXPORT_FORMATS)[number] {
-    const raw = qstr(req.query.format, 'outline-markdown');
-    return (OUTLINE_EXPORT_FORMATS as ReadonlyArray<string>).includes(raw)
-      ? (raw as (typeof OUTLINE_EXPORT_FORMATS)[number])
-      : 'outline-markdown';
   }
 
   /** Statuses Outline's search accepts; anything else is dropped rather than forwarded. */
@@ -7565,19 +7560,6 @@ function registerRestApiRoutes(app: express.Express): void {
       }),
     },
     {
-      path: '/api/v1/outline/collections/:collectionId/export',
-      notFound: 'Collection not found',
-      fallback: 'Failed to start collection export',
-      run: async (client, req) => {
-        const op = await client.exportCollection(
-          req.params.collectionId as string,
-          outlineExportFormat(req),
-        );
-        if (!op) throw usrError('Outline accepted the request but returned no file operation.');
-        return op;
-      },
-    },
-    {
       path: '/api/v1/outline/collections',
       notFound: 'Collection not found',
       fallback: 'Failed to list collections',
@@ -7613,23 +7595,17 @@ function registerRestApiRoutes(app: express.Express): void {
         return { attachmentId: req.params.attachmentId, url, note: 'Pre-signed and time-limited. Treat it as a credential.' };
       },
     },
-    {
-      path: '/api/v1/outline/exports',
-      notFound: 'Workspace not found',
-      fallback: 'Failed to start workspace export',
-      run: async (client, req) => {
-        const op = await client.exportAllCollections(outlineExportFormat(req));
-        if (!op) throw usrError('Outline accepted the request but returned no file operation.');
-        return op;
-      },
-    },
   ];
 
   for (const route of OUTLINE_READ_ROUTES) {
     app.get(route.path, requireOutlineApiKey, async (req: ApiAuthenticatedRequest, res) => {
-      const client = await outlineRestClient(req, res);
-      if (!client) return;
       try {
+        // Inside the try on purpose: resolving the client imports a module and may
+        // refresh a rotating OAuth token, and anything thrown out there would reach
+        // Express's default handler as an HTML error page — undiagnosable for a
+        // client that was told this API speaks JSON.
+        const client = await outlineRestClient(req, res);
+        if (!client) return;
         const result = await route.run(client, req);
         if (route.asMarkdown) {
           res.type('text/markdown; charset=utf-8').send(String(result ?? ''));
@@ -7730,6 +7706,29 @@ function registerRestApiRoutes(app: express.Express): void {
       },
     },
     {
+      // Static, so it precedes nothing ambiguous — but kept adjacent to the
+      // per-collection export so the pair reads as one feature.
+      path: '/api/v1/outline/exports',
+      notFound: 'Workspace not found',
+      fallback: 'Failed to start workspace export',
+      load: async () => {
+        const m = await import('../outline/restOps.js');
+        return { schema: m.exportRestSchema, run: (c, a) => m.performExport(c, undefined, a) };
+      },
+    },
+    {
+      path: '/api/v1/outline/collections/:collectionId/export',
+      notFound: 'Collection not found',
+      fallback: 'Failed to start collection export',
+      load: async () => {
+        const m = await import('../outline/restOps.js');
+        return {
+          schema: m.exportRestSchema,
+          run: (c, a, p) => m.performExport(c, p.collectionId as string, a),
+        };
+      },
+    },
+    {
       path: '/api/v1/outline/collections',
       status: 201,
       notFound: 'Collection not found',
@@ -7755,9 +7754,11 @@ function registerRestApiRoutes(app: express.Express): void {
 
   for (const route of OUTLINE_WRITE_ROUTES) {
     app.post(route.path, requireOutlineApiKey, async (req: ApiAuthenticatedRequest, res) => {
-      const client = await outlineRestClient(req, res);
-      if (!client) return;
       try {
+        // See the read loop above: client resolution belongs inside the try so a
+        // failed token refresh answers JSON rather than Express's HTML page.
+        const client = await outlineRestClient(req, res);
+        if (!client) return;
         const { schema, run } = await route.load();
         let args: unknown = {};
         if (schema) {
