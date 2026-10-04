@@ -23,8 +23,24 @@ import {
   needsFieldLookup,
   prepareCustomFieldValue,
 } from './customFieldValue.js';
-import { fetchImageBytes } from './docImageStore.js';
-import { store as storeImageBlob, getImagePublicBaseUrl } from '../images/imageBlobStore.js';
+import { getImagePublicBaseUrl } from '../images/imageBlobStore.js';
+import {
+  assertOneImageSource,
+  isImageUrlOnOurHost,
+  storeImageFromArgs,
+} from './docImageIngest.js';
+// The camelCase write-parameter fields are defined ONCE in ./restWrites.js and
+// composed by both surfaces: the tools below add the id as a parameter, the REST
+// routes take it from the path. Copying them would let the two drift on what is
+// valid, which is exactly what the shared definition prevents.
+import {
+  createDocFields,
+  createPageFields,
+  editPageFields,
+  insertImageFields,
+  listUpdateFields,
+  taskUpdateFields,
+} from './restWrites.js';
 import {
   CAPTURED_EVENTS,
   debugTaskEventSubscriptionFlow,
@@ -50,102 +66,9 @@ function getClickUpClient(session?: UserSession): ClickUpClient {
   return new ClickUpClient(session.clickUpAccessToken);
 }
 
-// Base64 ingest is a fallback for clients that can't reach POST /images/upload.
-// Caps are much tighter than the URL path's 20MB because the payload rides in the
-// calling model's context window. The 2MB post-recompression cap in store() still
-// applies afterward.
-const MAX_BASE64_STRING_BYTES = 2 * 1024 * 1024;    // reject the string before decode
-const MAX_BASE64_DECODED_BYTES = 1.5 * 1024 * 1024; // reject decoded bytes
-
-// Exactly one of imageUrl / imageBase64 must be present. Never echoes values.
-function assertOneImageSource(args: { imageUrl?: string; imageBase64?: string }): void {
-  const hasUrl = typeof args.imageUrl === 'string' && args.imageUrl.length > 0;
-  const hasB64 = typeof args.imageBase64 === 'string' && args.imageBase64.length > 0;
-  if (hasUrl && hasB64) {
-    throw new UserError('Provide only one of imageUrl or imageBase64, not both.');
-  }
-  if (!hasUrl && !hasB64) {
-    throw new UserError('Provide exactly one of imageUrl or imageBase64.');
-  }
-}
-
-// Decode a base64 image payload to raw bytes. Does NOT validate the image format
-// or normalize it — that stays store()'s single responsibility. CRITICAL: never
-// put the payload (or any slice of it) into an error; it can be ~2MB and would
-// blow up the caller's context and flood logs. Only fileName + sizes appear.
-function decodeBase64Image(raw: string, fileName?: string): Buffer {
-  const where = fileName ? ` (${fileName})` : '';
-
-  // Strip a data-URL prefix (data:image/png;base64,....) if present.
-  let s = raw;
-  if (s.startsWith('data:')) {
-    const comma = s.indexOf(',');
-    if (comma !== -1) s = s.slice(comma + 1);
-  }
-  // Strip all whitespace / newlines.
-  s = s.replace(/\s+/g, '');
-
-  if (s.length === 0) {
-    throw new UserError(`imageBase64${where} is empty.`);
-  }
-  // Reject the STRING before decoding.
-  if (s.length > MAX_BASE64_STRING_BYTES) {
-    throw new UserError(`imageBase64${where} is too large (${s.length} chars). base64 is for small images (~100KB); use imageUrl for anything larger.`);
-  }
-  // Validate it is actually base64 BEFORE decoding — Buffer.from silently drops
-  // invalid characters and returns garbage otherwise, which would reach sharp as
-  // nonsense bytes.
-  if (s.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(s)) {
-    throw new UserError(`imageBase64${where} is not valid base64.`);
-  }
-
-  const buf = Buffer.from(s, 'base64');
-  if (buf.length === 0) {
-    throw new UserError(`imageBase64${where} decoded to zero bytes.`);
-  }
-  if (buf.length > MAX_BASE64_DECODED_BYTES) {
-    throw new UserError(`Decoded image${where} is too large (${buf.length} bytes, max ${MAX_BASE64_DECODED_BYTES}). base64 is for small images; use imageUrl for anything larger.`);
-  }
-  return buf;
-}
-
-// Produce raw image bytes from whichever source the caller supplied. Assumes
-// assertOneImageSource() already ran. Both branches converge on store().
-async function imageBytesFromArgs(
-  args: { imageUrl?: string; imageBase64?: string; fileName?: string },
-): Promise<Buffer> {
-  if (typeof args.imageBase64 === 'string' && args.imageBase64.length > 0) {
-    return decodeBase64Image(args.imageBase64, args.fileName);
-  }
-  return fetchImageBytes(args.imageUrl as string);
-}
-
-// The single write path for image bytes: source → store() (magic-byte validation,
-// WebP normalization, 2MB cap, dedup) → public URL to embed.
-async function storeImageFromArgs(
-  args: { imageUrl?: string; imageBase64?: string; fileName?: string },
-): Promise<string> {
-  const bytes = await imageBytesFromArgs(args);
-  const { url } = await storeImageBlob(bytes, '');
-  return url;
-}
-
-// True only when imageUrl is an http(s) URL actually served by our image host:
-// same origin as the public base AND a /images/ path. A naive startsWith(base)
-// check would wrongly match https://host.example.evil.com/... (a different
-// origin that merely shares the base as a string prefix).
-function isImageUrlOnOurHost(imageUrl: string, publicBase: string): boolean {
-  let parsed: URL;
-  let base: URL;
-  try {
-    parsed = new URL(imageUrl);
-    base = new URL(publicBase);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-  return parsed.origin === base.origin && parsed.pathname.startsWith('/images/');
-}
+// The image ingest path (base64 decode, URL fetch with its per-hop SSRF guard,
+// store(), and the already-on-our-host check) lives in ./docImageIngest.js so the
+// REST data plane reuses the same one rather than growing a second copy.
 
 // formatTask / formatCustomFieldValue / formatTaskList moved to ./formatHelpers.js
 // so the REST data plane (webServer.ts) can reuse the same rendering when
@@ -428,26 +351,7 @@ clickUpServer.addTool({
     + 'response is the only record. moveTask changes a task\'s LIST, not its parent — the two are independent.',
   parameters: z.object({
     taskId: z.string().describe('The task ID to update.'),
-    name: z.string().optional().describe('New task name.'),
-    description: z.string().optional().describe('New description (plain text). Use markdownContent instead for formatted text.'),
-    markdownContent: z.string().optional().describe('New description in markdown format. Takes precedence over description. Supports bold, italic, code blocks, lists, etc.'),
-    status: z.string().optional().describe('New status name.'),
-    priority: z.number().int().min(1).max(4).nullable().optional().describe('Priority: 1=Urgent, 2=High, 3=Normal, 4=Low, null=none.'),
-    dueDate: z.string().optional().describe('New due date as ISO string or Unix timestamp in ms.'),
-    startDate: z.string().optional().describe('New start date as ISO string or Unix timestamp in ms.'),
-    addAssignees: z.array(z.number()).optional().describe('User IDs to add as assignees.'),
-    removeAssignees: z.array(z.number()).optional().describe('User IDs to remove from assignees.'),
-    timeEstimate: z.number().int().optional().describe('Time estimate in milliseconds.'),
-    archived: z.boolean().optional().describe('Archive or unarchive the task.'),
-    taskTypeId: z.number().int().min(0).optional().describe(
-      'Task type (ClickUp custom item type) as a number: 0 = Task (the default), 1 = Milestone, and workspace-specific types above that. Call listTaskTypes to resolve a name like "Bug" to its number. Changing the type changes which custom fields apply to the task.',
-    ),
-    parentTaskId: z.string().nullable().optional().describe(
-      'Re-parent this task: move it under a different parent task in place, keeping its ID, comments, history and custom field values. '
-      + 'Its own subtasks come along. Must be a ClickUp internal task ID (custom task IDs are not supported here). '
-      + 'ClickUp cannot convert a subtask back into a top-level task, so null is rejected with an explanation rather than sent. '
-      + 'Issue a re-parent as its own updateTask call: ClickUp applies the PUT atomically, so if it rejects the parent, the other fields in the same call are lost too.'
-    ),
+    ...taskUpdateFields,
   }),
   execute: async (args, { session, log }) => {
     const client = getClickUpClient(session);
@@ -1840,10 +1744,7 @@ clickUpServer.addTool({
   description: 'Update properties of an existing ClickUp list.',
   parameters: z.object({
     listId: z.string().describe('The list ID to update.'),
-    name: z.string().optional().describe('New name for the list.'),
-    content: z.string().optional().describe('New description/content.'),
-    dueDate: z.string().optional().describe('New due date as ISO string.'),
-    priority: z.number().int().min(1).max(4).optional().describe('Priority: 1=Urgent, 2=High, 3=Normal, 4=Low.'),
+    ...listUpdateFields,
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
@@ -1994,13 +1895,7 @@ clickUpServer.addTool({
   description: 'Create a new ClickUp Doc in a workspace. Optionally place it inside a Space, Folder, or List by providing parent ID and type.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
-    name: z.string().min(1).describe('Title of the new doc.'),
-    content: z.string().optional().describe('Initial content of the doc (markdown supported).'),
-    parentId: z.string().optional().describe('ID of the parent (Space, Folder, or List) to place the doc in.'),
-    // NOT the same parameter as searchDocs.parentType, despite the name: this
-    // one is a numeric code in the POST body, that one is a string filter in
-    // the query string. Do not "unify" them.
-    parentType: z.number().optional().describe('Type of parent: 4 = Space, 5 = Folder, 6 = List. Required if parentId is provided.'),
+    ...createDocFields,
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
@@ -2072,9 +1967,7 @@ clickUpServer.addTool({
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID.'),
     docId: z.string().describe('The doc ID.'),
-    name: z.string().optional().describe('Name of the new page.'),
-    content: z.string().optional().describe('Content of the page (markdown).'),
-    parentPageId: z.string().optional().describe('ID of the parent page for nesting.'),
+    ...createPageFields,
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
@@ -2095,9 +1988,7 @@ clickUpServer.addTool({
     workspaceId: z.string().describe('The workspace (team) ID.'),
     docId: z.string().describe('The doc ID.'),
     pageId: z.string().describe('The page ID.'),
-    name: z.string().optional().describe('New name for the page.'),
-    content: z.string().optional().describe('New content (markdown).'),
-    editMode: z.enum(['replace', 'append', 'prepend']).optional().default('replace').describe('How to apply content: replace (default), append, or prepend.'),
+    ...editPageFields,
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
@@ -2121,12 +2012,7 @@ clickUpServer.addTool({
     workspaceId: z.string().describe('The workspace (team) ID.'),
     docId: z.string().describe('The doc ID.'),
     pageId: z.string().describe('The page ID to add the image to.'),
-    imageUrl: z.string().optional().describe('Public http(s) URL of the image (jpg, png, gif, bmp, or webp; max 20 MB). Provide exactly one of imageUrl or imageBase64; prefer imageUrl when a public URL exists.'),
-    imageBase64: z.string().optional().describe('Base64-encoded image bytes (a data:...;base64, prefix is accepted and stripped). For SMALL images only — ~100KB ideal, hard limit ~1.5 MB decoded — because the payload consumes the calling model context. Provide exactly one of imageUrl or imageBase64.'),
-    fileName: z.string().optional().describe('Optional filename, used only for error messages/logging. NOT used to determine the image format (magic bytes decide).'),
-    altText: z.string().optional().default('').describe('Alt text for the image.'),
-    editMode: z.enum(['append', 'prepend', 'replace']).optional().default('append').describe('How to place the image: append (default), prepend, or replace the page content.'),
-    skipRehost: z.boolean().optional().default(false).describe('Embed imageUrl as-is without fetching/re-hosting it (applies to imageUrl only). Auto-enabled when imageUrl is already on this server.'),
+    ...insertImageFields,
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
