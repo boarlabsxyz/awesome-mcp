@@ -7086,6 +7086,17 @@ function registerRestApiRoutes(app: express.Express): void {
   // These are ACTION paths (/tasks/{id}/update, not a POST verb on /tasks/{id})
   // because the older ChatGPT-compat routes above already own the bare resource
   // paths with a ClickUp-native snake_case body. One path, one body shape.
+  /** Narrow shape every table below validates a body against. */
+  type BodySchema = { safeParse(v: unknown): { success: boolean; data?: any; error?: any } };
+  /** Params as Express hands them over, after the path-over-body merge. */
+  type RouteParams = Record<string, string>;
+
+  // The ops modules are imported ONCE by the generic handler and injected into
+  // each row, rather than every row carrying its own `await import`. Dynamic so
+  // they (and the image store one reaches) stay out of the web server's startup
+  // import graph; Node caches after the first request.
+  type ClickUpOps = typeof import('../clickup/restWrites.js');
+
   interface ClickUpWriteRoute {
     /** Express path. Array order IS registration order. */
     path: string;
@@ -7093,15 +7104,9 @@ function registerRestApiRoutes(app: express.Express): void {
     status?: 200 | 201;
     notFound: string;
     fallback: string;
-    /**
-     * Lazily pull the schema and op out of src/clickup/restWrites.ts. Dynamic so
-     * the module (and the image store it reaches) stays out of the web server's
-     * startup import graph; Node caches it after the first request.
-     */
-    load: () => Promise<{
-      schema?: { safeParse(v: unknown): { success: boolean; data?: any; error?: any } };
-      run: (client: ClickUpClient, args: any, params: Record<string, string>) => Promise<unknown>;
-    }>;
+    /** Body schema, picked out of the ops module. Omit for a body-less route. */
+    schema?: (m: ClickUpOps) => BodySchema;
+    run: (m: ClickUpOps, client: ClickUpClient, args: any, p: RouteParams) => Promise<unknown>;
   }
 
   const CLICKUP_WRITE_ROUTES: ReadonlyArray<ClickUpWriteRoute> = [
@@ -7109,159 +7114,106 @@ function registerRestApiRoutes(app: express.Express): void {
       path: '/api/v1/clickup/tasks/:taskId/update',
       notFound: 'Task not found',
       fallback: 'Failed to update task',
-      load: async () => {
-        const m = await import('../clickup/restWrites.js');
-        return {
-          schema: m.updateTaskRestSchema,
-          run: (client, args, p) => m.performUpdateTask(client, p.taskId as string, args),
-        };
-      },
+      schema: (m) => m.updateTaskRestSchema,
+      run: (m, client, args, p) => m.performUpdateTask(client, p.taskId, args),
     },
     {
       path: '/api/v1/clickup/tasks/:taskId/delete',
       notFound: 'Task not found',
       fallback: 'Failed to delete task',
-      load: async () => ({
-        run: async (client, _args, p) => {
-          await client.deleteTask(p.taskId as string);
-          return { taskId: p.taskId, deleted: true };
-        },
-      }),
+      run: async (_m, client, _args, p) => {
+        await client.deleteTask(p.taskId);
+        return { taskId: p.taskId, deleted: true };
+      },
     },
     {
       path: '/api/v1/clickup/lists/:listId/update',
       notFound: 'List not found',
       fallback: 'Failed to update list',
-      load: async () => {
-        const m = await import('../clickup/restWrites.js');
-        return {
-          schema: m.updateListRestSchema,
-          run: (client, args, p) => m.performUpdateList(client, p.listId as string, args),
-        };
-      },
+      schema: (m) => m.updateListRestSchema,
+      run: (m, client, args, p) => m.performUpdateList(client, p.listId, args),
     },
     {
       path: '/api/v1/clickup/lists/:listId/delete',
       notFound: 'List not found',
       fallback: 'Failed to delete list',
-      load: async () => ({
-        run: async (client, _args, p) => {
-          await client.deleteList(p.listId as string);
-          return { listId: p.listId, deleted: true };
-        },
-      }),
+      run: async (_m, client, _args, p) => {
+        await client.deleteList(p.listId);
+        return { listId: p.listId, deleted: true };
+      },
     },
     {
       path: '/api/v1/clickup/tasks/:taskId/fields/:fieldId/remove',
       notFound: 'Task or custom field not found',
       fallback: 'Failed to clear custom field value',
-      load: async () => ({
-        run: async (client, _args, p) => {
-          await client.removeCustomFieldValue(p.taskId as string, p.fieldId as string);
-          return { taskId: p.taskId, fieldId: p.fieldId, cleared: true };
-        },
-      }),
+      run: async (_m, client, _args, p) => {
+        await client.removeCustomFieldValue(p.taskId, p.fieldId);
+        return { taskId: p.taskId, fieldId: p.fieldId, cleared: true };
+      },
     },
     {
       path: '/api/v1/clickup/tasks/:taskId/lists/:listId/remove',
       notFound: 'Task or list not found',
       fallback: 'Failed to remove task from list',
-      load: async () => {
-        const m = await import('../clickup/restWrites.js');
-        return {
-          run: (client, _args, p) =>
-            m.performTaskListMembership(client, 'remove', p.taskId as string, p.listId as string),
-        };
-      },
+      run: (m, client, _args, p) => m.performTaskListMembership(client, 'remove', p.taskId, p.listId),
     },
     {
       path: '/api/v1/clickup/tasks/:taskId/lists/:listId',
       notFound: 'Task or list not found',
       fallback: 'Failed to add task to list',
-      load: async () => {
-        const m = await import('../clickup/restWrites.js');
-        return {
-          run: (client, _args, p) =>
-            m.performTaskListMembership(client, 'add', p.taskId as string, p.listId as string),
-        };
-      },
+      run: (m, client, _args, p) => m.performTaskListMembership(client, 'add', p.taskId, p.listId),
     },
     {
       path: '/api/v1/clickup/tasks/:taskId/tags/:tagName/remove',
       notFound: 'Task or tag not found',
       fallback: 'Failed to remove tag from task',
-      load: async () => ({
-        run: async (client, _args, p) => {
-          await client.removeTagFromTask(p.taskId as string, p.tagName as string);
-          return { taskId: p.taskId, tagName: p.tagName, removed: true };
-        },
-      }),
+      run: async (_m, client, _args, p) => {
+        await client.removeTagFromTask(p.taskId, p.tagName);
+        return { taskId: p.taskId, tagName: p.tagName, removed: true };
+      },
     },
     {
       path: '/api/v1/clickup/tasks/:taskId/tags/:tagName',
       notFound: 'Task not found',
       fallback: 'Failed to add tag to task',
-      load: async () => ({
-        run: async (client, _args, p) => {
-          await client.addTagToTask(p.taskId as string, p.tagName as string);
-          // ClickUp auto-creates an unknown tag in the task's space, so a typo
-          // succeeds and makes a new tag. Said here as well as in the docs
-          // because a bare {added:true} reads as "the tag you meant".
-          return { taskId: p.taskId, tagName: p.tagName, added: true, autoCreatedIfMissing: true };
-        },
-      }),
+      run: async (_m, client, _args, p) => {
+        await client.addTagToTask(p.taskId, p.tagName);
+        // ClickUp auto-creates an unknown tag in the task's space, so a typo
+        // succeeds and makes a new tag. Said here as well as in the docs because a
+        // bare {added:true} reads as "the tag you meant".
+        return { taskId: p.taskId, tagName: p.tagName, added: true, autoCreatedIfMissing: true };
+      },
     },
     {
       path: '/api/v1/clickup/workspaces/:workspaceId/docs',
       status: 201,
       notFound: 'Workspace not found',
       fallback: 'Failed to create doc',
-      load: async () => {
-        const m = await import('../clickup/restWrites.js');
-        return {
-          schema: m.createDocRestSchema,
-          run: (client, args, p) => m.performCreateDoc(client, p.workspaceId as string, args),
-        };
-      },
+      schema: (m) => m.createDocRestSchema,
+      run: (m, client, args, p) => m.performCreateDoc(client, p.workspaceId, args),
     },
     {
       path: '/api/v1/clickup/workspaces/:workspaceId/docs/:docId/pages/:pageId/images',
       notFound: 'Doc or page not found',
       fallback: 'Failed to add image to page',
-      load: async () => {
-        const m = await import('../clickup/restWrites.js');
-        return {
-          schema: m.insertImageRestSchema,
-          run: (client, args, p) =>
-            m.performInsertImageIntoPage(client, p.workspaceId as string, p.docId as string, p.pageId as string, args),
-        };
-      },
+      schema: (m) => m.insertImageRestSchema,
+      run: (m, client, args, p) =>
+        m.performInsertImageIntoPage(client, p.workspaceId, p.docId, p.pageId, args),
     },
     {
       path: '/api/v1/clickup/workspaces/:workspaceId/docs/:docId/pages/:pageId',
       notFound: 'Doc or page not found',
       fallback: 'Failed to edit page',
-      load: async () => {
-        const m = await import('../clickup/restWrites.js');
-        return {
-          schema: m.editPageRestSchema,
-          run: (client, args, p) =>
-            m.performEditPage(client, p.workspaceId as string, p.docId as string, p.pageId as string, args),
-        };
-      },
+      schema: (m) => m.editPageRestSchema,
+      run: (m, client, args, p) => m.performEditPage(client, p.workspaceId, p.docId, p.pageId, args),
     },
     {
       path: '/api/v1/clickup/workspaces/:workspaceId/docs/:docId/pages',
       status: 201,
       notFound: 'Doc not found',
       fallback: 'Failed to create page',
-      load: async () => {
-        const m = await import('../clickup/restWrites.js');
-        return {
-          schema: m.createPageRestSchema,
-          run: (client, args, p) => m.performCreatePage(client, p.workspaceId as string, p.docId as string, args),
-        };
-      },
+      schema: (m) => m.createPageRestSchema,
+      run: (m, client, args, p) => m.performCreatePage(client, p.workspaceId, p.docId, args),
     },
   ];
 
@@ -7270,9 +7222,10 @@ function registerRestApiRoutes(app: express.Express): void {
       try {
         const { ClickUpClient } = await import('../clickup/apiHelpers.js');
         const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
-        const { schema, run } = await route.load();
+        const ops = await import('../clickup/restWrites.js');
 
         let args: unknown = {};
+        const schema = route.schema?.(ops);
         if (schema) {
           const parsed = schema.safeParse(req.body ?? {});
           if (!parsed.success) {
@@ -7282,7 +7235,7 @@ function registerRestApiRoutes(app: express.Express): void {
           args = parsed.data;
         }
 
-        const result = await run(client, args, req.params as Record<string, string>);
+        const result = await route.run(ops, client, args, req.params as RouteParams);
         res.status(route.status ?? 200).json(result);
       } catch (err: any) {
         // ClickUpClient raises a UserError for BOTH kinds of failure, and tags the
@@ -7619,15 +7572,16 @@ function registerRestApiRoutes(app: express.Express): void {
   }
 
   // --- Writes ---
+  type OutlineOps = typeof import('../outline/restOps.js');
+
   interface OutlineWriteRoute {
     path: string;
     status?: 200 | 201;
     notFound: string;
     fallback: string;
-    load: () => Promise<{
-      schema?: { safeParse(v: unknown): { success: boolean; data?: any; error?: any } };
-      run: (client: OutlineClient, args: any, params: Record<string, string>) => Promise<unknown>;
-    }>;
+    /** Body schema, picked out of the ops module. Omit for a body-less route. */
+    schema?: (m: OutlineOps) => BodySchema;
+    run: (m: OutlineOps, client: OutlineClient, args: any, p: RouteParams) => Promise<unknown>;
   }
 
   const OUTLINE_WRITE_ROUTES: ReadonlyArray<OutlineWriteRoute> = [
@@ -7636,74 +7590,48 @@ function registerRestApiRoutes(app: express.Express): void {
       status: 201,
       notFound: 'Collection not found',
       fallback: 'Failed to create document',
-      load: async () => {
-        const m = await import('../outline/restOps.js');
-        return { schema: m.createDocumentRestSchema, run: (c, a) => m.performCreateDocument(c, a) };
-      },
+      schema: (m) => m.createDocumentRestSchema,
+      run: (m, c, a) => m.performCreateDocument(c, a),
     },
     {
       path: '/api/v1/outline/documents/:documentId/move',
       notFound: 'Document not found',
       fallback: 'Failed to move document',
-      load: async () => {
-        const m = await import('../outline/restOps.js');
-        return {
-          schema: m.moveDocumentRestSchema,
-          run: (c, a, p) => m.performMoveDocument(c, p.documentId as string, a),
-        };
-      },
+      schema: (m) => m.moveDocumentRestSchema,
+      run: (m, c, a, p) => m.performMoveDocument(c, p.documentId, a),
     },
     {
       path: '/api/v1/outline/documents/:documentId/archive',
       notFound: 'Document not found',
       fallback: 'Failed to archive document',
-      load: async () => {
-        const m = await import('../outline/restOps.js');
-        return { run: (c, _a, p) => m.performDocumentLifecycle(c, 'archive', p.documentId as string) };
-      },
+      run: (m, c, _a, p) => m.performDocumentLifecycle(c, 'archive', p.documentId),
     },
     {
       path: '/api/v1/outline/documents/:documentId/unarchive',
       notFound: 'Document not found',
       fallback: 'Failed to unarchive document',
-      load: async () => {
-        const m = await import('../outline/restOps.js');
-        return { run: (c, _a, p) => m.performDocumentLifecycle(c, 'unarchive', p.documentId as string) };
-      },
+      run: (m, c, _a, p) => m.performDocumentLifecycle(c, 'unarchive', p.documentId),
     },
     {
       path: '/api/v1/outline/documents/:documentId/restore',
       notFound: 'Document not found',
       fallback: 'Failed to restore document',
-      load: async () => {
-        const m = await import('../outline/restOps.js');
-        return { run: (c, _a, p) => m.performDocumentLifecycle(c, 'restore', p.documentId as string) };
-      },
+      run: (m, c, _a, p) => m.performDocumentLifecycle(c, 'restore', p.documentId),
     },
     {
       path: '/api/v1/outline/documents/:documentId/comments',
       status: 201,
       notFound: 'Document not found',
       fallback: 'Failed to add comment',
-      load: async () => {
-        const m = await import('../outline/restOps.js');
-        return {
-          schema: m.addCommentRestSchema,
-          run: (c, a, p) => m.performAddComment(c, p.documentId as string, a),
-        };
-      },
+      schema: (m) => m.addCommentRestSchema,
+      run: (m, c, a, p) => m.performAddComment(c, p.documentId, a),
     },
     {
       path: '/api/v1/outline/documents/:documentId',
       notFound: 'Document not found',
       fallback: 'Failed to update document',
-      load: async () => {
-        const m = await import('../outline/restOps.js');
-        return {
-          schema: m.updateDocumentRestSchema,
-          run: (c, a, p) => m.performUpdateDocument(c, p.documentId as string, a),
-        };
-      },
+      schema: (m) => m.updateDocumentRestSchema,
+      run: (m, c, a, p) => m.performUpdateDocument(c, p.documentId, a),
     },
     {
       // Static, so it precedes nothing ambiguous — but kept adjacent to the
@@ -7711,44 +7639,30 @@ function registerRestApiRoutes(app: express.Express): void {
       path: '/api/v1/outline/exports',
       notFound: 'Workspace not found',
       fallback: 'Failed to start workspace export',
-      load: async () => {
-        const m = await import('../outline/restOps.js');
-        return { schema: m.exportRestSchema, run: (c, a) => m.performExport(c, undefined, a) };
-      },
+      schema: (m) => m.exportRestSchema,
+      run: (m, c, a) => m.performExport(c, undefined, a),
     },
     {
       path: '/api/v1/outline/collections/:collectionId/export',
       notFound: 'Collection not found',
       fallback: 'Failed to start collection export',
-      load: async () => {
-        const m = await import('../outline/restOps.js');
-        return {
-          schema: m.exportRestSchema,
-          run: (c, a, p) => m.performExport(c, p.collectionId as string, a),
-        };
-      },
+      schema: (m) => m.exportRestSchema,
+      run: (m, c, a, p) => m.performExport(c, p.collectionId, a),
     },
     {
       path: '/api/v1/outline/collections',
       status: 201,
       notFound: 'Collection not found',
       fallback: 'Failed to create collection',
-      load: async () => {
-        const m = await import('../outline/restOps.js');
-        return { schema: m.createCollectionRestSchema, run: (c, a) => m.performCreateCollection(c, a) };
-      },
+      schema: (m) => m.createCollectionRestSchema,
+      run: (m, c, a) => m.performCreateCollection(c, a),
     },
     {
       path: '/api/v1/outline/collections/:collectionId',
       notFound: 'Collection not found',
       fallback: 'Failed to update collection',
-      load: async () => {
-        const m = await import('../outline/restOps.js');
-        return {
-          schema: m.updateCollectionRestSchema,
-          run: (c, a, p) => m.performUpdateCollection(c, p.collectionId as string, a),
-        };
-      },
+      schema: (m) => m.updateCollectionRestSchema,
+      run: (m, c, a, p) => m.performUpdateCollection(c, p.collectionId, a),
     },
   ];
 
@@ -7759,8 +7673,9 @@ function registerRestApiRoutes(app: express.Express): void {
         // failed token refresh answers JSON rather than Express's HTML page.
         const client = await outlineRestClient(req, res);
         if (!client) return;
-        const { schema, run } = await route.load();
+        const ops = await import('../outline/restOps.js');
         let args: unknown = {};
+        const schema = route.schema?.(ops);
         if (schema) {
           const parsed = schema.safeParse(req.body ?? {});
           if (!parsed.success) {
@@ -7769,7 +7684,7 @@ function registerRestApiRoutes(app: express.Express): void {
           }
           args = parsed.data;
         }
-        const result = await run(client, args, req.params as Record<string, string>);
+        const result = await route.run(ops, client, args, req.params as RouteParams);
         res.status(route.status ?? 200).json(result);
       } catch (err) {
         sendOutlineError(res, err, route.notFound, route.fallback);
