@@ -1,6 +1,6 @@
 ---
 name: add-rest-endpoint
-description: Add or wire a REST data-plane endpoint (GET or POST /api/v1/*) in this repo — the curl-able passthrough surface documented in docs/REST_ENDPOINTS.md. Adds the entry to src/restCatalog.ts (the single source of truth), registers the Express handler in src/website/webServer.ts with the right service auth middleware, adds the auth-gate test, and regenerates docs/REST_ENDPOINTS.md + public/openapi.json + docs/MCP_TOOLS.md. Use whenever the user wants to add, wire, expose, or promote a REST endpoint, give an MCP tool a curl/HTTP sibling, flip a `planned` catalog entry to `live`, ship the REST siblings for a service (outline is the last one catalogued but unwired), or expose a write/mutation tool over HTTP POST. Also use when invoked as `/add-rest-endpoint <mcpToolName> [service]`.
+description: Add or wire a REST data-plane endpoint (GET or POST /api/v1/*) in this repo — the curl-able passthrough surface documented in docs/REST_ENDPOINTS.md. Adds the entry to src/restCatalog.ts (the single source of truth), registers the Express handler in src/website/webServer.ts with the right service auth middleware, adds the auth-gate test, and regenerates docs/REST_ENDPOINTS.md + public/openapi.json + docs/MCP_TOOLS.md. Use whenever the user wants to add, wire, expose, or promote a REST endpoint, give an MCP tool a curl/HTTP sibling, flip a `planned` catalog entry to `live`, ship the whole REST surface for a service, or expose a write/mutation tool over HTTP POST. Also invoked automatically by `add-mcp-server` (its step 6e) to wire a newly scaffolded service's endpoints, which ship as their own pull request. Also use when invoked as `/add-rest-endpoint <mcpToolName|service> [service]`.
 metadata:
   argument-hint: <mcpToolName|service> [service]
 ---
@@ -17,14 +17,14 @@ Adding an endpoint touches six files, three of them generated. This SKILL.md is 
 
 ## Inputs
 
-- `<mcpToolName>` — the MCP tool getting a REST sibling (e.g. `getEmployee`), **or** a scope phrase ("wire all the hubspot endpoints"). A scope phrase expands to every `planned` catalog entry for that service.
+- `<mcpToolName>` — the MCP tool getting a REST sibling (e.g. `getEmployee`), **or** a scope phrase ("wire all the hubspot endpoints"), **or** a bare service slug. A scope phrase expands to every `planned` catalog entry for that service; a bare slug is how `add-mcp-server` invokes this skill and means *the service's whole tool surface* — every implemented read, plus every write that passes the [gate](#is-this-write-worth-a-rest-sibling). On that path expect some tools to be declined, and say which and why in the report.
 - `[service]` — one of the `RestService` union values in `src/restCatalog.ts`: `docs`, `sheets`, `calendar`, `drive`, `gmail`, `slides`, `clickup`, `slack`, `outline`, `peopleforce`, `hubspot`. Infer from the tool's home server; ask only if genuinely ambiguous.
 
 If neither is given, ask which service.
 
 ## Four jobs, tell them apart first
 
-1. **Promote `planned` → `live`** — the catalog entry already exists (all of outline, peopleforce, hubspot today). Skip step 2 except to flip `status`; do steps 3–8. **Check `src/restCatalog.ts` first — this is the most common case.**
+1. **Promote `planned` → `live`** — the catalog entry already exists, which is the normal state for a service freshly scaffolded by `add-mcp-server` (its step 6a writes the read entries at `planned`). Skip step 2 except to flip `status`; do steps 3–8. **Check `src/restCatalog.ts` first — this is the most common case.**
 2. **Catalogue a route that already exists** — no catalog entry, but `webServer.ts` already serves the path. The ChatGPT Custom Actions compat routes are uncatalogued and invisible in every generated doc, and they hand-roll their validation. Do steps 1–8, but **keep the path, the response shape, AND the body shape** (see step 1). That last one is the trap: an old route's body may be the *provider's* native field names while the MCP tool's parameters are a camelCase translation of them, in which case "validate with the tool's own schema" would reject every existing caller. Diff them before assuming they agree.
 3. **New read endpoint** — nothing exists. Do steps 1–8.
 4. **New write endpoint** — do the [prerequisites](#write-endpoints-post) once, then steps 1–8 with the write variants called out inline.
@@ -192,9 +192,15 @@ Typecheck: <pass | N errors>
 Tests: <pass | N failing>
 New-code coverage: <N>%   ← gate is 80%, lines + branches (POST changes only)
 
+Declined (if any):
+  <toolName>   ← why: no large body, no pipeline / destructive, no sign-off
+
 Next:
   /update-openapi <provider>   ← required for POST (the stub has no requestBody)
+  open a SEPARATE pull request for this pass   ← never folded into a scaffold or feature PR
 ```
+
+Name the declined tools explicitly. Silence reads as "every tool is covered", and the gap is then found by whoever reaches for the missing endpoint rather than by the person who could have overruled the gate.
 
 ## Write endpoints (POST)
 
@@ -249,6 +255,13 @@ For "wire the hubspot endpoints": step 3 once (middleware + session branch — t
 
 Prefer wiring a whole service in one pass — the session-branch work dominates, and the auth test grows by one line per route.
 
+**A brand-new service, chained from `add-mcp-server`, is the batch case by default.** It arrives with read entries already written at `planned` (that skill's step 6a), so it is job 1 for the reads and job 3/4 for anything else. Two extras on that path:
+
+- The scaffold templates omit `registerMintRestBearerForCurl` / `registerListRestEndpoints`, so step 2's registration requirement always applies — without them the service's first `live` entry fails `sharedToolsRegistration.test.ts`.
+- There is no `public/openapi-<slug>.json` yet, so every POST would get only the body-less stub. Write the per-service spec in the same change (see step 6), and add the file to `SERVICE_PREFIX` in `scripts/buildRootOpenapi.mjs` or the merge step skips it with a warning.
+
+Ship the result as its own PR — see [One pass, one PR](#one-pass-one-pr).
+
 ### Past about four endpoints, register them from a table
 
 Hand-writing N handlers that differ only in schema, op, status code and response shape **fails the duplication gate**, and it is the wrong shape anyway. Nineteen Docs write handlers measured **23% duplicated** (88 of 384 new lines), taking the project over the 3% `new_duplicated_lines_density` threshold and failing the PR after everything else was green.
@@ -285,6 +298,30 @@ Three things get better, not just the duplication number:
 - **It is shorter.** The table version of those nineteen routes was 108 lines less than the hand-written one.
 
 Static paths still have to come first — put them at the top of the array, since array order is registration order.
+
+## One pass, one PR
+
+**A REST pass ships as its own pull request, never folded into a larger change.** That applies whether this skill was invoked directly or chained from `add-mcp-server` step 6e.
+
+The reason is what the diff contains. A REST pass is where two decisions live that a reviewer must actually see:
+
+- **The auth widening.** `createServiceAuth` accepts the permanent dashboard API key, so every write endpoint enlarges what a long-lived credential can mutate.
+- **Any destructive exposure**, with its sign-off recorded in the catalog `notes`.
+
+Both get rubber-stamped when they arrive inside a 10k-line scaffold. Separately, the generated artifacts (`public/openapi.json`, the two `docs/*.md`) are large and noisy, which is another reason not to mix them with hand-written code a reviewer needs to read closely.
+
+Practicalities, in the order they bite:
+
+- **When chained from a scaffold, branch off the scaffold's branch, not `main`.** The routes import the provider's server module, so `main` cannot typecheck them until the scaffold lands. The REST PR is therefore stacked — rebase or retarget it onto `main` after the scaffold merges.
+- **After any merge, verify nothing was stranded.** A PR that merges at an older commit silently drops whatever was pushed afterwards, and the branch still looks merged. Check each commit you expected to ship:
+
+  ```bash
+  git fetch origin
+  for c in <sha> <sha>; do git merge-base --is-ancestor $c origin/main && echo "$c in" || echo "$c NOT in"; done
+  ```
+
+  This is not hypothetical: a pass ended with a data-loss fix and a skill update both pushed after the merge point, and both were left behind on a branch GitHub reported as merged.
+- **Keep a follow-up fix in its own PR too** when the original has already merged — especially a correctness fix, which should not wait on a docs review.
 
 ## Failure modes
 
@@ -336,6 +373,7 @@ add-rest-endpoint/
 
 ## Relationship to other skills
 
-- **`add-mcp-tool`** creates the MCP tool — the prerequisite for an endpoint here. Its step 9 offers `/update-openapi` but not this skill, because most tools never need a REST sibling; only bulk reads and large-body writes do.
+- **`add-mcp-server`** **hard-chains into this skill at its step 6e**, with the new service's slug as the scope phrase, right after it writes the catalog entries at `planned`. So the common way this skill runs is not one tool at a time but a whole new service at once — see [Batch mode](#batch-mode-scope-phrase), and note that the scaffold templates do **not** include `registerMintRestBearerForCurl` / `registerListRestEndpoints`, so step 2's registration requirement always applies on that path. **That chain's output belongs in its own PR, separate from the scaffold** — see [One pass, one PR](#one-pass-one-pr).
+- **`add-mcp-tool`** creates the MCP tool — the prerequisite for an endpoint here. Its step 9 offers `/update-openapi` but not this skill, because a single new tool rarely needs a REST sibling; only bulk reads and large-body writes do. Whole-service coverage arrives via `add-mcp-server` instead.
 - **`update-openapi`** upgrades the auto-generated stub into a spec with real request/response schemas. Optional for GET, **required for POST**.
 - **`add-e2e-test`** covers MCP tools through a live client, not REST routes. The REST equivalent is the auth-gate array in step 5.
