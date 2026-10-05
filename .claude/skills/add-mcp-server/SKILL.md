@@ -187,7 +187,9 @@ Third-party entry — same shape plus `provider`, `oauthAuthorizationUrl`, `oaut
 
 The two markdown docs under `docs/` are generated. Both need the new service registered before regeneration.
 
-**a. `src/restCatalog.ts`** — add the slug to the `RestService` union type. Then append entries for every *read-only* tool (annotations `readOnlyHint: true`). Mark each `status: 'planned'` unless you're also wiring the actual `/api/v1/<slug>/*` routes in `src/website/webServer.ts` right now (usually you aren't — that's a follow-up). `openapiOperationId` values must be unique globally, so prefix common names with the service (`getComment` → `getOutlineComment`).
+**a. `src/restCatalog.ts`** — add the slug to the `RestService` union type. Then append entries for every *read-only* tool (annotations `readOnlyHint: true`), each `status: 'planned'`. `openapiOperationId` values must be unique globally, so prefix common names with the service (`getComment` → `getOutlineComment`).
+
+Leave them `planned` here even though step 6e goes on to wire them: `planned` entries are excluded from `public/openapi.json` and from the REST column of `docs/MCP_TOOLS.md` precisely so the docs never advertise a route that 404s, and the scaffold commit has no routes yet. Step 6e flips them.
 
 Then add the slug to the `SERVICE_VALUES` array in **`src/sharedTools/listRestEndpoints.ts`** — it's a *separate* `z.enum` from the `RestService` union, and a slug missing there is silently rejected when a client calls `listRestEndpoints({ service: '<slug>' })`, even though the catalog has entries. `src/__tests__/restCatalog.test.ts` guards this (it asserts every in-catalog service validates), so a miss shows up as a test failure, not just a typecheck error.
 
@@ -201,6 +203,30 @@ node scripts/buildMcpToolsDoc.mjs
 node scripts/buildRestEndpointsDoc.mjs
 ```
 Both are idempotent. `docs/MCP_TOOLS.md` and `docs/REST_ENDPOINTS.md` update in place. The MCP_TOOLS.md REST column intentionally shows `—` for `planned` entries — the cross-ref only fires once you flip status to `live`.
+
+**e. Chain `/add-rest-endpoint <slug>` to wire the routes — as its OWN pull request.**
+
+This is a **hard chain**, not a suggestion: a service whose catalog entries all sit at `planned` has a REST surface that exists only on paper, and every pass that left it for "a follow-up" never came back (Outline's 13 entries sat `planned` from the day they were written until someone wired them much later). Invoke it with the service as a scope phrase so it covers the whole tool surface in one pass:
+
+```
+/add-rest-endpoint <slug>
+```
+
+Two things about what that skill will and will not do, so you can set expectations rather than promise coverage it deliberately withholds:
+
+- **Reads are the easy half** — it wires every implemented read tool and flips those entries to `live`. It also adds `registerMintRestBearerForCurl` / `registerListRestEndpoints` to the new server, which the scaffold templates do NOT include and which are required before any entry may go live.
+- **Writes go through its gate, which is a safety property — do not ask it to skip it.** A write earns a REST sibling only when its request body is large or it belongs in a shell pipeline, and `destructiveHint: true` tools need explicit user sign-off recorded in the catalog `notes`. The reason is concrete: `createServiceAuth` accepts the *permanent dashboard API key*, so every write endpoint widens what a long-lived credential can mutate, and a curl has no confirmation affordance. "Endpoints for every tool" means *consider* every tool; the gate decides.
+
+**Ship it as a separate PR from the scaffold.** Keep the two apart:
+
+| PR | Contains |
+|---|---|
+| 1 — scaffold | `src/<slug>/*`, registration, catalog entries at `planned`, regenerated docs |
+| 2 — REST | `webServer.ts` routes, catalog flipped to `live`, auth-gate test, `public/openapi-<slug>.json`, regenerated docs |
+
+Why it is worth the extra PR rather than one big one: the scaffold is mechanical and reviewable in minutes, while the REST surface is where the auth-widening and destructive-exposure decisions live — burying those in a 10k-line scaffold diff is how they get rubber-stamped. The scaffold also has value on its own if the REST review stalls.
+
+**Branch PR 2 off PR 1's branch, not off `main`.** The routes import the server module, so `main` cannot typecheck them until the scaffold lands. That makes PR 2 stacked: retarget or rebase it onto `main` once PR 1 merges, and **re-check that nothing was stranded** — a merge that lands at an older commit silently drops anything pushed afterwards, so verify with `git merge-base --is-ancestor <sha> origin/main` for each commit you expected to ship.
 
 ### 7. Update `CLAUDE.md` (lightly)
 
@@ -236,7 +262,7 @@ End with a tight summary:
   - Add OAuth scopes / register the app in the provider console.
   - Wire a new route in `webServer.ts` if a new Google API was introduced.
   - Wire web+mcp combined mode (port constant, `.start()` call, `createWebApp` signature, proxy route) if skipped in step 5b.
-  - Wire the planned REST routes in `webServer.ts` and flip `status: 'planned'` → `'live'` in `src/restCatalog.ts`, then re-run the doc generators.
+  - **Review and merge the REST pull request from step 6e** — it is a second PR on purpose, and it is where the auth-widening and any destructive-exposure decisions sit. If `/add-rest-endpoint` declined a write under its gate, say which ones and why, so the user can overrule knowingly rather than discover the gap later.
   - Set the `<SLUG_UPPER>_MCP_URL` env var in each Railway service that runs the combined web app (dev/prod). Without it the catalog seeds `isLocal: true` and the mcpUrl defaults to the relative `/<route>`, which works only in single-service `MCP_MODE=all` deployments.
   - For a per-service (`MCP_MODE=mcp`) deploy, the new service needs `TRANSPORT=httpStream`, `MCP_MODE=mcp`, and `MCP_SLUG=<slug>` (match a working sibling). A `TRANSPORT` typo silently falls back to stdio and fails the healthcheck — see failure modes.
   - For a paste-token provider, redeploy the **web** service after step 5f so the updated `public/dashboard.html` ships (it's baked into the image at build).
@@ -313,6 +339,7 @@ add-mcp-server/
 
 ## Relationship to other skills
 
-- **`add-mcp-tool`** owns the canonical tool shape (`references/tool-pattern.md` over there). This skill's `ping` example deliberately stays minimal — for real tools, the user follows up with `/add-mcp-tool <name>` (offered as a soft chain in step 8).
+- **`add-mcp-tool`** owns the canonical tool shape (`references/tool-pattern.md` over there). This skill's `ping` example deliberately stays minimal — for real tools, the user follows up with `/add-mcp-tool <name>` (offered as a soft chain in step 9).
 - **`add-e2e-test`** scaffolds smoke tests. Not chained from here directly — the chain goes via `/add-mcp-tool`, which offers it for the tool the user just added.
-- **`update-integrations`** adds the new MCP's `SAMPLE_PROMPTS` entry so its card on the public `/integrations` page ships with real prompts instead of the "coming soon" placeholder. Invoked from step 8 once the catalog is seeded — the card renders automatically, but the prompts are the one hand-maintained piece.
+- **`update-integrations`** adds the new MCP's `SAMPLE_PROMPTS` entry so its card on the public `/integrations` page ships with real prompts instead of the "coming soon" placeholder. Invoked from step 9 once the catalog is seeded — the card renders automatically, but the prompts are the one hand-maintained piece.
+- **`add-rest-endpoint`** is a **hard chain from step 6e**: this skill writes the catalog entries at `planned`, that skill wires the `/api/v1/<slug>/*` routes and flips them to `live`, **in a separate PR**. It is chained rather than suggested because a `planned`-only service has a REST surface that exists only in the catalog, and left as an optional follow-up it does not get done. Note it applies its own write gate (large body or shell pipeline, plus explicit sign-off for `destructiveHint` tools) — that gate is a safety property, since REST writes are reachable with the permanent dashboard API key, so do not instruct it to bypass the gate in the name of covering every tool.
