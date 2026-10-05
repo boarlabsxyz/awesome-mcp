@@ -12,7 +12,7 @@ Three things stack up:
 2. **REST bypasses FastMCP's Zod layer.** MCP tool arguments are schema-validated before `execute` runs. `req.body` is whatever the caller sent. Reusing the tool's schema (below) is what closes that gap.
 3. **No `destructiveHint`.** MCP clients can surface a confirmation prompt off that annotation. A curl has nothing equivalent.
 
-## Body validation — reuse the tool's Zod schema
+## Body validation — share the tool's Zod fields
 
 The legacy POST routes in `webServer.ts` hand-roll their checks:
 
@@ -38,7 +38,29 @@ if (!parsed.success) {
 const args = parsed.data;
 ```
 
-If the schema is currently inline in the `addTool({ parameters: z.object({...}) })` call, lift it to a named `export const XParams = z.object({...})` and reference it from the tool. That refactor is part of adding the endpoint, not a separate cleanup — it's the single mechanism keeping the two surfaces in sync. Shared fragments already live in `src/types.ts` (`DocumentIdParameter`, `RangeParameters`, `TextStyleParameters`) — prefer those.
+If the schema is currently inline in the `addTool({ parameters: z.object({...}) })` call, lift it out and reference it from the tool. That refactor is part of adding the endpoint, not a separate cleanup — it's the single mechanism keeping the two surfaces in sync. Shared fragments already live in `src/types.ts` (`DocumentIdParameter`, `RangeParameters`, `TextStyleParameters`) — prefer those.
+
+**Lift a field OBJECT, not a finished schema.** A single `export const XParams = z.object({...})` only works when both surfaces want the identical shape, and usually they do not: the tool takes the resource id as a parameter while the route takes it from the path, and the route often needs a `.refine()` the tool expresses in prose instead (an empty body is a silent 200 no-op over curl, whereas the tool's caller gets the outcome narrated). Export the fields and let each side compose them:
+
+```ts
+// src/clickup/restWrites.ts — one definition, with the .describe() text
+export const taskUpdateFields = {
+  name: z.string().optional().describe('New task name.'),
+  dueDate: z.string().optional().describe('ISO string or Unix timestamp in ms.'),
+  …
+} as const;
+
+// the REST route: id comes from the path, plus a guard the tool states in prose
+export const updateTaskRestSchema = z.object(taskUpdateFields)
+  .refine((v) => Object.values(v).some((x) => x !== undefined), { message: 'Provide at least one field.' });
+
+// src/clickup/server.ts — the tool adds the id as a parameter
+parameters: z.object({ taskId: z.string().describe('The task ID.'), ...taskUpdateFields }),
+```
+
+Then **test the sharing**, because it rots in two ways that break no shape: someone re-adds a field to the tool's inline object instead of the group (the route silently stops accepting it), and the extraction drops a `.describe()` (invisible — nothing fails, the LLM just loses the parameter's documentation). `src/__tests__/restWriteSchemaSharing.test.ts` asserts the exact key set per group, that every field still has a description, and that no group declares its own route's path params.
+
+**On an already-served route, `z.object()` is not a safe drop-in for a raw passthrough.** Zod **strips unknown keys**, so adding a strict schema to a route that previously forwarded `req.body` verbatim silently deletes any field the schema forgot — a caller sending `custom_fields` on a create would stop getting custom fields, with a 200 either way. If you are adding validation to an existing passthrough, use `.passthrough()` so unknown keys still reach the provider, and check the published spec's property list first (see the `openapi-<service>.json` recipe in SKILL.md step 1): if it documents the provider's native names and the tool takes camelCase, that route has its own contract and the tool's schema would reject every existing caller.
 
 `parsed.error.flatten()` gives `{ formErrors, fieldErrors }`, which is genuinely actionable in a curl response. Return it.
 
@@ -86,10 +108,34 @@ A 400 proves the body was parsed and reached the schema. (`413` means the prefix
 | Updated / appended | `200` | The updated resource or a result summary |
 | Body failed validation | `400` | `{ error, issues }` from `flatten()` |
 | Upstream 404/403 | via `sendUpstreamError` | `{ error }` |
+| Provider accepted it but returned no record | `502` | `{ error }` — the request was valid, so 400 would send the caller to fix it |
+| This deployment has not configured the feature | `503` | `{ error }` naming the missing config — a 500 asks for a bug report when the fix is an env var |
+
+`sendUpstreamError` only knows 404 and 403; every other status collapses to 500, so the last two rows must be answered directly. Tag the error by `name` and branch on it, since a bare `.status` will not survive the mapper.
 
 Follow `POST /api/v1/calendars/:calendarId/events`: it returns 201 with the created event's fields rather than a bare `{ ok: true }`. Callers chaining curls need the id, and a caller who has to issue a follow-up GET to learn what happened defeats the pipeline the endpoint exists to serve.
 
 Idempotency: HTTP POST isn't idempotent and this layer has no request-id dedupe. If the underlying operation is dangerous to repeat (creating a payment-ish record, sending a message), say so in the catalog `notes`. Don't invent a dedupe mechanism unilaterally — that's a design decision for the user.
+
+## Converting caller input: a NaN is a silent DELETE
+
+The highest-severity finding of the ClickUp pass was four characters of arithmetic, and it is a class worth checking for on every write.
+
+`dueDate` was documented as "ISO string or Unix timestamp in ms" and converted with `new Date(x).getTime()`. But `new Date("1700000000000")` is an **Invalid Date**, so that is `NaN` — and `JSON.stringify` serialises `NaN` as **`null`**, which ClickUp accepts as *clear the date* and answers 200. So a caller using the documented millisecond format, or merely typo-ing `2026-13-01`, wiped the field and was told it worked.
+
+The rule: **whenever a conversion can yield `NaN` or `Infinity`, and the provider treats `null` as "clear this field", a bad input is a silent delete.** Check it directly rather than reasoning about it:
+
+```bash
+node -e 'console.log(JSON.stringify({d: new Date("1700000000000").getTime()}))'   # {"d":null}
+```
+
+Three things fell out of fixing it:
+
+- **Use the repo's existing parser.** `parseTimestampInput` (`src/clickup/apiHelpers.ts`) already handled both documented forms. Grep before writing a conversion.
+- **Validate with `Number.isFinite`, not `!Number.isNaN`.** A parser that ends in `Number(digits)` returns `Infinity` for a long enough digit string — not `NaN`, so a NaN-only guard passes it, and `Infinity` also serialises to `null`. Same silent delete through a different door. Add a range check too (`Math.abs(ts) <= 8_640_000_000_000_000`, the ECMAScript max time value): a finite value past that is in range for JSON but nonsense as a date.
+- **Fix every call site sharing the promise, not just the new one.** The same conversion sat at four pre-existing MCP call sites. Once the surfaces share one field object, its `.describe()` is a contract both make, so leaving the tool broken means the tool lies about its own documented input.
+
+Truncate the offending value in the error message (`raw.length > 64 ? …` ) — a 5000-character payload echoed back floods logs, and on the MCP path it burns the caller's context.
 
 ## Extract the op, not just the schema
 
@@ -136,6 +182,14 @@ Two rules fall out of that, both learned the hard way:
 
 - **Only a numeric status, ever.** Node's own errors carry string codes (`ENOTFOUND`, `ECONNRESET`), and `res.status('ECONNRESET')` throws inside the error handler. A failure with no status must leave `code` unset — inventing one answers 404 for a DNS outage.
 - **Do not map `UserError` → 400 unconditionally.** It is tempting when the op raises `UserError` for genuinely bad input (an unknown sheet name in a batch), but the same type now carries the provider's 404s and 403s, so a nonexistent record gets reported as "fix your request". Branch on whether a numeric status survived: no status → 400, status → `sendUpstreamError`.
+- **The status may be on a Symbol key, where nothing generic can see it.** `sendUpstreamError` reads `err.code`, `err.response.status`, `err.status`. `ClickUpClient.request` sets neither — it throws a `UserError` tagged under a module-private Symbol, readable only through its own `clickUpErrorStatus(err)`. The result was that **every** ClickUp 404 came out as 400 ("fix your request", because the error *is* a `UserError` with no numeric code) or as a flat 500. Check how the client tags its status before trusting a generic mapper, and copy it onto `.code` first:
+
+  ```bash
+  grep -n "throw\|status\|Symbol(" src/<provider>/apiHelpers.ts | head -30
+  ```
+
+  Note the ~24 pre-existing ClickUp GET routes still have this defect; a generic mapper being *present* is not evidence it works for that provider.
+- **`sendUpstreamError` only special-cases 404 and 403.** Everything else collapses to 500, so any other status you want must be answered directly. Two that matter: a write the provider accepted while returning no record is **502** (the request was valid — 400 would send the caller to fix it), and a feature this deployment has not configured, such as a missing `IMAGE_PUBLIC_BASE_URL`, is **503** — a 500 tells the caller to report a bug when the fix is a config value. Tag those by `name` and branch on it, since `.status` alone will not survive the mapper.
 
 Narrow it by **name**, not `instanceof`: `webServer.ts` imports no part of FastMCP, and pulling the framework into the web process to classify one error is not worth it. `FastMCPError` sets `name = new.target.name`, so `err?.name === 'UserError'` is reliable.
 
@@ -237,6 +291,12 @@ Where it lands matters: put the shared guard in the module that owns the validat
 ## Destructive operations
 
 A tool annotated `destructiveHint: true` (delete/remove/clear/archive/trash/resolve) needs explicit user sign-off in the conversation before it gets a REST sibling. There is no confirmation affordance behind a curl, and the permanent API key is in scope.
+
+**Check first whether the capability already exists uncatalogued, because it changes what you are asking.** ClickUp already served `DELETE /tasks/{id}`, `DELETE /lists/{id}` and `DELETE /tasks/{id}/fields/{fieldId}` as compat routes, so the permanent API key could already delete tasks and lists — cataloguing them made existing blast radius *visible* rather than creating it. Say which it is when you ask: "this exposes a new destructive capability" and "this documents one you already have" deserve different answers, and conflating them either alarms the user or hides a real change. Grep before asking:
+
+```bash
+grep -nE -A1 "app\.(delete|patch|post)\(" src/website/webServer.ts | grep "api/v1/<service>"
+```
 
 If the user does sign off:
 
