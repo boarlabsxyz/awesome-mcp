@@ -84,6 +84,9 @@ export const updateTaskRestSchema = z.object(taskUpdateFields).refine(
 
 export type UpdateTaskRestArgs = z.infer<typeof updateTaskRestSchema>;
 
+/** ECMAScript's maximum time value — the widest a JS Date can represent. */
+const MAX_TIME_VALUE = 8_640_000_000_000_000;
+
 /**
  * Convert a caller-supplied date to the Unix-ms ClickUp wants, REFUSING anything
  * that does not parse.
@@ -99,10 +102,18 @@ export type UpdateTaskRestArgs = z.infer<typeof updateTaskRestSchema>;
  */
 export function toClickUpTimestamp(field: string, raw: string): number {
   const ts = parseTimestampInput(raw);
-  if (Number.isNaN(ts)) {
+  // `Number.isFinite` rather than `!Number.isNaN`, and a range check on top.
+  // parseTimestampInput returns Number(x) for ANY digit string, so a long enough
+  // one yields Infinity — which is not NaN, passes a NaN-only check, and
+  // serialises as null, landing straight back in the silent-clear this function
+  // exists to prevent. A finite value past the ECMAScript max time value is in
+  // range for JSON but nonsense as a date, so it is refused too rather than
+  // handed to ClickUp.
+  if (!Number.isFinite(ts) || Math.abs(ts) > MAX_TIME_VALUE) {
     throw new UserError(
-      `${field} is not a valid date: ${JSON.stringify(raw)}. Pass an ISO 8601 string `
-      + `(2026-03-01T00:00:00Z) or a Unix timestamp in milliseconds (1700000000000).`,
+      `${field} is not a valid date: ${JSON.stringify(raw.length > 64 ? `${raw.slice(0, 64)}…` : raw)}. `
+      + `Pass an ISO 8601 string (2026-03-01T00:00:00Z) or a Unix timestamp in milliseconds `
+      + `(1700000000000), within ±${MAX_TIME_VALUE} ms of the epoch.`,
     );
   }
   return ts;
