@@ -81,6 +81,19 @@ export interface UserSession {
    * resolveRedmineAuthMode in src/redmine/authMode.ts.
    */
   redmineAuthMode?: 'oauth' | 'apiKey';
+  /**
+   * Browserbase API key. Used for BOTH upstreams this connector talks to: the
+   * REST API (x-bb-api-key) and the hosted MCP server it proxies the browser
+   * tools to (Authorization: Bearer). There is deliberately no
+   * browserbaseBaseUrl — Browserbase is SaaS with one API host, so a
+   * configurable base URL would only ever be a place to send someone else's
+   * credential.
+   */
+  browserbaseAccessToken?: string;
+  /** Browserbase project id, discovered at connect time. Optional upstream (inferred from the key). */
+  browserbaseProjectId?: string;
+  /** Connection instance id, so per-call domain rules can be re-read from the store. */
+  browserbaseInstanceId?: string;
 }
 
 // Cache sessions to avoid recreating clients per request
@@ -571,6 +584,57 @@ export function createRedmineSession(
     redmineInstanceId: connection.instanceId,
     redmineAuthMode: authMode,
     // Null placeholders for Google clients (Redmine MCP won't use them)
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
+  };
+
+  mcpSessionCache.set(cacheKey, session);
+  return session;
+}
+
+/**
+ * Create a user session for Browserbase connections.
+ *
+ * A pasted API key and nothing else: Browserbase has no OAuth, the key does
+ * not expire, and the project id is optional upstream. So unlike HubSpot and
+ * Redmine there is no refresh plumbing here at all — if you find yourself
+ * adding a `maybeRefreshBrowserbaseToken`, check first that something actually
+ * expires.
+ */
+export function createBrowserbaseSession(
+  user: UserRecord,
+  connection: McpConnection,
+): UserSession {
+  const providerTokens = connection.providerTokens as {
+    access_token?: string;
+    projectId?: string;
+  } | undefined;
+  const accessToken = providerTokens?.access_token;
+  if (!accessToken) {
+    throw new Error(`Browserbase API key missing for connection ${connection.instanceId}. Please reconnect.`);
+  }
+
+  const cacheKey = `${user.apiKey}:${connection.instanceId}`;
+  const cached = cachedSessionFor(cacheKey, accessToken, s => s.browserbaseAccessToken);
+  if (cached) return cached;
+
+  const session: UserSession = {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: connection.mcpSlug,
+    browserbaseAccessToken: accessToken,
+    browserbaseProjectId: providerTokens?.projectId,
+    // Carried so getRules can re-read the connection's domain rules per call:
+    // SSE sessions are long-lived, so a session-cached copy would keep serving
+    // rules the user has already changed on the dashboard.
+    browserbaseInstanceId: connection.instanceId,
+    // Null placeholders for Google clients (Browserbase MCP won't use them)
     googleDocs: null as any,
     googleDrive: null as any,
     googleSheets: null as any,

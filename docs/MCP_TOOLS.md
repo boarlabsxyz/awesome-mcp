@@ -21,10 +21,11 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [PeopleForce v4](#peopleforce-v4) (44)
 - [HubSpot](#hubspot) (23)
 - [Redmine](#redmine) (46)
+- [Browserbase](#browserbase) (9)
 
 ## Shared (opt-in per server)
 
-Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 13 of 14 servers; not on PeopleForce v4).
+Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 14 of 15 servers; not on PeopleForce v4).
 
 | Tool | Description | REST |
 |---|---|---|
@@ -469,6 +470,22 @@ Source: `src/redmine/server.ts` — 46 tools.
 | `listCustomFields` | List the custom fields defined on this Redmine, with the `cf_<id>` filter key for each one that is filterable. Requires administrator rights. Call this before using the customFields filter on listIssues. | `GET /api/v1/redmine/custom-fields` |
 | `searchRedmine` | Full-text search across Redmine issues, wiki pages, news, documents and messages. Scope it with projectId, or narrow the object types with the boolean flags. | `GET /api/v1/redmine/search?q={query}` |
 
+## Browserbase
+
+Source: `src/browserbase/server.ts` — 9 tools.
+
+| Tool | Description | REST |
+|---|---|---|
+| `start` | Start a cloud browser session (or reattach to an existing one) and return its sessionId. Call this first. The returned sessionId must be passed to every following browser call — navigate, act, observe, extract and end — because each call reaches Browserbase independently and there is no remembered "current" session. The session bills until end is called or it hits its timeout, so end it when the task is done. | — |
+| `end` | Close a browser session so it stops billing. Pass the sessionId returned by start. If the browser-control call fails, this falls back to releasing the session through the Browserbase REST API and says which path closed it. | — |
+| `navigate` | Open a URL in the browser session. Pass the sessionId returned by start. If this connection has domain rules configured on the dashboard, they are enforced here — navigate is the only tool that can enforce them, since it is the only one that names a destination. | — |
+| `act` | Perform one action on the current page using plain language — click a button, fill a field, submit a form. Pass the sessionId returned by start. Note this can follow a link to any site: a configured domain allowlist applies to navigate only and does not constrain where an action may lead. | — |
+| `observe` | Find the actionable elements on the current page matching an instruction — use it to discover what can be clicked or filled before calling act. Pass the sessionId returned by start. | — |
+| `extract` | Pull data or text out of the current page. Give an instruction describing what you want (e.g. "the plan names and monthly prices") or omit it for the page text. Pass the sessionId returned by start. | — |
+| `listBrowserSessions` | List this account's Browserbase sessions and flag which are still RUNNING. Use it to find sessions left open by an earlier conversation — a running session bills until it is released or times out, and nothing else in this connector can see one whose id was lost. | — |
+| `getBrowserSession` | Look up one Browserbase session: its status, region, when it expires, and a dashboard link to its live view and replay. Use it to check whether a sessionId is still live before spending browser calls on it. | — |
+| `forceEndBrowserSession` | Force a Browserbase session to close by id, through the REST API. Works even when no browser-control session holds it, which is the state a stranded session is in. Anything in progress in that browser is lost. | — |
+
 ---
 
-**Grand total: 342 tools across 15 sections.**
+**Grand total: 351 tools across 16 sections.**

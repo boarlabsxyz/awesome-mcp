@@ -323,6 +323,7 @@ import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
 import { validatePeopleForceV4Token } from '../peopleforce-v4/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
 import { validateRedmineToken, buildRedmineInstanceName } from '../redmine/connectToken.js';
+import { validateBrowserbaseToken, buildBrowserbaseInstanceName, fetchBrowserbaseProject } from '../browserbase/connectToken.js';
 // Type-only: erased at compile time, so the REST handlers can still import the
 // clients dynamically and keep them out of the web server's startup graph.
 import type { ClickUpClient } from '../clickup/apiHelpers.js';
@@ -979,6 +980,34 @@ interface PasteConnectionOpts {
  * over the cognitive-complexity budget, and it is worth reading on its own
  * rather than buried three levels into a route.
  */
+/**
+ * What a paste-token re-auth should store: the freshly built record, plus the
+ * one key it cannot reproduce.
+ *
+ * This path is a near-straight replace, unlike the OAuth reconnect — the paste
+ * flow produces every field it stores (access_token, plus baseUrl for the
+ * self-hosted providers) and there are no refresh tokens here to preserve.
+ *
+ * `accessRules` is the exception, and it is not optional. Rules live inside
+ * providerTokens, no builder reproduces them, and dropping them would silently
+ * WIDEN access on reconnect — the one direction a reconnect must never move,
+ * which is exactly why the OAuth path lists accessRules in
+ * PRESERVED_ON_RECONNECT. That merge does not run here, so this path carries
+ * the key itself. Filled in only when the fresh record omits it, so a builder
+ * that deliberately sets rules still wins.
+ */
+function pasteReplacementTokens(
+  existingTokens: unknown,
+  freshTokens: Record<string, any>,
+): Record<string, any> {
+  const existingRules = (existingTokens as any)?.accessRules;
+  const replacement: Record<string, any> = { ...freshTokens };
+  if (existingRules !== undefined && replacement.accessRules === undefined) {
+    replacement.accessRules = existingRules;
+  }
+  return replacement;
+}
+
 async function persistPasteConnectionFor(
   ctx: { instanceId?: string; userId: number; mcpSlug: string; userApiKey: string; res: express.Response },
   opts: PasteConnectionOpts,
@@ -990,11 +1019,10 @@ async function persistPasteConnectionFor(
       res.status(404).json({ error: 'Instance not found or access denied.' });
       return;
     }
-    // A straight replace, not a merge: unlike the OAuth reconnect path there is
-    // nothing partial to preserve, because the paste flow produces every field
-    // it stores (access_token, plus baseUrl for the self-hosted providers). No
-    // refresh tokens and no access rules live here.
-    await updateMcpInstanceProviderTokens(existing.instanceId, opts.providerTokens as any);
+    await updateMcpInstanceProviderTokens(
+      existing.instanceId,
+      pasteReplacementTokens(existing.providerTokens, opts.providerTokens) as any,
+    );
 
     // Drop the cached session, or the replaced credential changes nothing that
     // matters: the session cache memoises by `${apiKey}:${instanceId}` in a
@@ -1135,6 +1163,44 @@ async function buildRedminePasteConnection(input: PasteConnectionInput): Promise
 }
 
 /**
+ * Validate a pasted Browserbase API key and shape the connection record.
+ *
+ * A builder rather than the two-line connectPasteToken helper for one reason:
+ * that helper stores only { access_token } and names the instance after the
+ * catalog entry, while the /v1/projects probe this key is validated against
+ * already returns the project — so naming the connection after the project the
+ * user sees in their own Browserbase dashboard costs nothing, and the project
+ * id is worth keeping for the usage read.
+ *
+ * The project lookup is deliberately best-effort and separate from validation:
+ * the key has already passed its probe by then, so failing the connect over a
+ * display name would reject a credential that works.
+ */
+async function buildBrowserbasePasteConnection(input: PasteConnectionInput): Promise<PasteConnectionBuildResult> {
+  const validate = await validateBrowserbaseToken({ token: input.token });
+  if (!validate.ok) return validate;
+  const project = await fetchBrowserbaseProject(input.token);
+  return {
+    ok: true,
+    connection: {
+      provider: 'browserbase',
+      serviceLogName: project.name ? `Browserbase (${project.name})` : 'Browserbase',
+      name: buildBrowserbaseInstanceName({
+        serviceName: input.serviceName,
+        providedInstanceName: input.instanceName,
+        projectName: project.name,
+      }),
+      // No baseUrl: Browserbase is SaaS with one API host. accessRules is
+      // deliberately absent rather than seeded empty — absent means
+      // unrestricted, and an empty-defaults object here would be a non-empty
+      // value that survives every reconnect merge and resets the user's rules.
+      providerTokens: { access_token: input.token, ...(project.id ? { projectId: project.id } : {}) },
+      providerEmail: null,
+    },
+  };
+}
+
+/**
  * Providers that validate their own credential and build their own connection
  * record. Everything else goes through the simpler connectPasteToken helper,
  * which stores only { access_token }.
@@ -1143,6 +1209,7 @@ const PASTE_CONNECTION_BUILDERS: Record<string, (input: PasteConnectionInput) =>
   'slack-bot': buildSlackBotPasteConnection,
   outline: buildOutlinePasteConnection,
   redmine: buildRedminePasteConnection,
+  browserbase: buildBrowserbasePasteConnection,
 };
 
 function registerSharedRoutes(app: express.Express): void {
@@ -2744,6 +2811,105 @@ function registerSharedRoutes(app: express.Express): void {
     }
   });
 
+  // ---- Browserbase domain rules ----
+  //
+  // A separate route pair rather than a provider branch inside the Slack
+  // access-rules handlers above. Those two share almost nothing with this:
+  // the GET builds a Slack client, runs org discovery and resolves blacklisted
+  // user names, and the POST validates Slack channel globs. Only the ownership
+  // check and the write are common, so branching them would interleave two
+  // unrelated rule models through one long handler for no reuse. One path, one
+  // rule shape.
+
+  /** Resolve an instance the caller owns, answering 404/401 itself if not. */
+  async function ownedConnection(
+    req: AuthenticatedRequest,
+    res: express.Response,
+    provider: string,
+    label: string,
+  ): Promise<{ user: any; connection: any } | null> {
+    const user = await resolveSessionUser((req as any).session);
+    if (!user?.id) { res.status(401).json({ error: 'Not authenticated' }); return null; }
+    const connection = await getMcpConnectionByInstanceId(req.params.instanceId as string);
+    if (!connection || connection.userId !== user.id || connection.provider !== provider) {
+      // Deliberately the same 404 for "no such instance" and "not yours": a
+      // distinct 403 would confirm that an instance id someone guessed exists.
+      res.status(404).json({ error: `${label} connection not found` });
+      return null;
+    }
+    return { user, connection };
+  }
+
+  app.get('/api/instances/:instanceId/domain-rules', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const owned = await ownedConnection(req, res, 'browserbase', 'Browserbase');
+      if (!owned) return;
+      const rules = (owned.connection.providerTokens as any)?.accessRules;
+      // Absent rules are reported as empty lists, and the UI says what empty
+      // means. They are NOT written back as empty defaults: an empty object
+      // stored here would be a non-empty value that survives every reconnect
+      // merge, which is how Slack ended up needing a hand-rolled reconnect path.
+      res.json({
+        currentRules: {
+          allowedDomains: rules?.allowedDomains || [],
+          blockedDomains: rules?.blockedDomains || [],
+        },
+      });
+    } catch (err) {
+      console.error('[domain-rules] error:', err);
+      res.status(500).json({ error: 'Failed to load domain rules' });
+    }
+  });
+
+  app.post('/api/instances/:instanceId/domain-rules', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
+    try {
+      const instanceId = req.params.instanceId as string;
+      const { accessRules } = req.body as { accessRules?: any };
+      if (!accessRules) {
+        res.status(400).json({ error: 'accessRules object is required' });
+        return;
+      }
+
+      const toList = (value: unknown): string[] =>
+        Array.isArray(value) ? value.map(v => String(v ?? '').trim()).filter(Boolean) : [];
+      const allowedDomains = toList(accessRules.allowedDomains);
+      const blockedDomains = toList(accessRules.blockedDomains);
+
+      // Validated with the connector's own validator, not a copy: a pattern the
+      // dashboard accepts but assertDomainAllowed cannot match would read as a
+      // saved rule that silently does nothing.
+      const { validateDomainPattern } = await import('../browserbase/accessRules.js');
+      for (const pattern of [...allowedDomains, ...blockedDomains]) {
+        const problem = validateDomainPattern(pattern);
+        if (problem) { res.status(400).json({ error: problem }); return; }
+      }
+
+      const owned = await ownedConnection(req, res, 'browserbase', 'Browserbase');
+      if (!owned) return;
+
+      const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+      // Spread, because updateMcpInstanceProviderTokens replaces the whole
+      // provider_tokens column — a bare { accessRules } would drop the API key.
+      const updatedTokens = {
+        ...(owned.connection.providerTokens as any),
+        accessRules: { allowedDomains, blockedDomains },
+      };
+      await updateMcpInstanceProviderTokens(instanceId, updatedTokens);
+
+      // Mandatory, not hygiene: getRules re-reads per call but the SESSION is
+      // memoised by `${apiKey}:${instanceId}` with no TTL, so a stale session
+      // would keep serving the old token-bearing object for the process's life.
+      const { clearMcpSessionCache } = await import('../userSession.js');
+      clearMcpSessionCache(owned.user.apiKey, instanceId);
+
+      console.error(`User ${owned.user.id} updated Browserbase domain rules for ${instanceId}: ${allowedDomains.length} allowed, ${blockedDomains.length} blocked`);
+      res.json({ success: true });
+    } catch (err) {
+      console.error('[domain-rules] error:', err);
+      res.status(500).json({ error: 'Failed to save domain rules' });
+    }
+  });
+
   // GET /api/instances/:instanceId/users/search - Search workspace users for blacklist
   const userListCache = new Map<string, { members: any[]; expiresAt: number }>();
 
@@ -3421,6 +3587,11 @@ function registerSharedRoutes(app: express.Express): void {
       'What issues are assigned to me and still open?',
       'Log 3 hours against issue #1482 for today',
       'Show the wiki page "Release Process" in the platform project',
+    ],
+    'browserbase': [
+      'Open the pricing page of https://example.com and give me the plans and prices as a table',
+      'Go to our vendor portal, open the Invoices section and tell me which invoices are unpaid',
+      'Close any browser sessions still running on my account',
     ],
   };
 

@@ -28,6 +28,7 @@ import { validateOutlineToken } from '../outline/connectToken.js';
 import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
 import { validateRedmineToken } from '../redmine/connectToken.js';
+import { validateBrowserbaseToken } from '../browserbase/connectToken.js';
 import { resolveRedmineAuthMode } from '../redmine/authMode.js';
 
 /**
@@ -294,6 +295,16 @@ export async function checkConnectionHealth(
         return fromValidateResult(await validateRedmineToken({
           token: accessToken, baseUrl: redmineBaseUrl, fetchImpl, authMode: redmineAuthMode,
         } as any), !!providerTokens.refresh_token);
+      }
+
+      case 'browserbase': {
+        if (!accessToken) return { state: 'reauth', reason: 'No Browserbase API key stored.' };
+        // canSelfHeal is hard-coded false, not read off refresh_token:
+        // Browserbase has no OAuth at all, so there is nothing that could ever
+        // renew this credential and a rejection is always conclusive.
+        return fromValidateResult(await validateBrowserbaseToken({
+          token: accessToken, fetchImpl,
+        } as any), false);
       }
 
       default:

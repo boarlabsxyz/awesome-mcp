@@ -93,6 +93,7 @@ import { outlineServer } from '../outline/server.js';
 import { peopleForceServer } from '../peopleforce/server.js';
 import { peopleForceV4Server } from '../peopleforce-v4/server.js';
 import { hubspotServer } from '../hubspot/server.js';
+import { browserbaseServer }   from '../browserbase/server.js';
 import { redmineServer } from '../redmine/server.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 
@@ -1369,6 +1370,7 @@ async function startServer() {
           "peopleforce-v4":  peopleForceV4Server,
           "hubspot":         hubspotServer,
           "redmine":         redmineServer,
+          "browserbase":     browserbaseServer,
         };
         const mcpToStart = MCP_SERVERS_BY_SLUG[MCP_SLUG] ?? server; // default: google-docs
 

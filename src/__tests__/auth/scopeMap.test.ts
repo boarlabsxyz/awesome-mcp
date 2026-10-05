@@ -91,6 +91,14 @@ describe('scopeMap', () => {
       assert.equal(getRequiredScope('/hubspot-sse'), 'mcp:hubspot');
     });
 
+    it('should return mcp:browserbase for /browserbase', () => {
+      assert.equal(getRequiredScope('/browserbase'), 'mcp:browserbase');
+    });
+
+    it('should return mcp:browserbase for /browserbase-sse', () => {
+      assert.equal(getRequiredScope('/browserbase-sse'), 'mcp:browserbase');
+    });
+
     it('should return null for unknown routes', () => {
       assert.equal(getRequiredScope('/health'), null);
       assert.equal(getRequiredScope('/api/config'), null);
@@ -104,8 +112,8 @@ describe('scopeMap', () => {
   });
 
   describe('ALL_SCOPES', () => {
-    it('should contain all 14 scopes', () => {
-      assert.equal(ALL_SCOPES.length, 14);
+    it('should contain all 15 scopes', () => {
+      assert.equal(ALL_SCOPES.length, 15);
       assert.ok(ALL_SCOPES.includes('mcp:docs'));
       assert.ok(ALL_SCOPES.includes('mcp:calendar'));
       assert.ok(ALL_SCOPES.includes('mcp:sheets'));
@@ -120,6 +128,7 @@ describe('scopeMap', () => {
       assert.ok(ALL_SCOPES.includes('mcp:peopleforce-v4'));
       assert.ok(ALL_SCOPES.includes('mcp:hubspot'));
       assert.ok(ALL_SCOPES.includes('mcp:redmine'));
+      assert.ok(ALL_SCOPES.includes('mcp:browserbase'));
     });
   });
 
@@ -139,6 +148,7 @@ describe('scopeMap', () => {
       assert.deepEqual(getScopesForSlug('peopleforce-v4'), ['mcp:peopleforce-v4']);
       assert.deepEqual(getScopesForSlug('hubspot'), ['mcp:hubspot']);
       assert.deepEqual(getScopesForSlug('redmine'), ['mcp:redmine']);
+      assert.deepEqual(getScopesForSlug('browserbase'), ['mcp:browserbase']);
     });
 
     it('should return all scopes for unknown slugs', () => {

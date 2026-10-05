@@ -173,6 +173,31 @@ describe('checkConnectionHealth — a refreshable connection is not a broken one
     });
     assert.equal(health.state, 'reauth');
   });
+
+  it('browserbase: a rejected API key prompts for reconnect', async () => {
+    const health = await checkConnectionHealth(withoutRefresh('browserbase'), NO_CREDS, {
+      fetchImpl: respond(401, {}),
+    });
+    assert.equal(health.state, 'reauth');
+  });
+
+  it('browserbase: a rejection is conclusive even with a refresh_token in the record', async () => {
+    // Browserbase has no OAuth, so a refresh_token could only be leftover
+    // junk. Reading canSelfHeal off it — as the other providers legitimately
+    // do — would downgrade a genuinely dead key to `unknown` and hide the
+    // Reconnect button the user needs.
+    const health = await checkConnectionHealth(withRefresh('browserbase'), NO_CREDS, {
+      fetchImpl: respond(401, {}),
+    });
+    assert.equal(health.state, 'reauth');
+  });
+
+  it('browserbase: a working API key is healthy', async () => {
+    const health = await checkConnectionHealth(withoutRefresh('browserbase'), NO_CREDS, {
+      fetchImpl: respond(200, []),
+    });
+    assert.equal(health.state, 'healthy');
+  });
 });
 
 describe('checkConnectionHealth — config problems are not credential problems', () => {

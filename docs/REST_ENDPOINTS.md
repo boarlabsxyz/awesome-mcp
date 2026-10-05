@@ -314,9 +314,21 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `createTimeEntry` | `POST /api/v1/redmine/time-entries` | live | Log time against a Redmine issue or project — _201 with the created entry. Provide issueId or projectId, not neither. Not idempotent - repeating the call logs the hours twice._ |
 | `updateWikiPage` | `POST /api/v1/redmine/projects/{projectId}/wiki/{title}` | live | Create or replace a Redmine wiki page — _Body limit 5mb - the clearest large-body case here, since text replaces the whole page. A title that does not exist yet is created. Pass version for optimistic locking so a concurrent edit is rejected rather than clobbered. Returns 200 with the page re-read._ |
 
+### Browserbase (`browserbase`)
+
+| MCP tool | REST endpoint | Status | Summary |
+|---|---|---|---|
+| `listBrowserSessions` | `GET /api/v1/browserbase/sessions` | planned | List Browserbase sessions and flag which are still running — _Optional query param: status, one of RUNNING, ERROR, TIMED_OUT, COMPLETED. Omit it to see everything, including sessions left running by an earlier conversation. Also takes ?format=text._ |
+| `getBrowserSession` | `GET /api/v1/browserbase/sessions/{sessionId}` | planned | Get one Browserbase session with its status and expiry — _Also takes ?format=text. A session that has already been reaped answers 404._ |
+| `start` | `POST /api/v1/browserbase/sessions/start` | planned | Start a cloud browser session (or reattach to one) and return its id — _Returns the sessionId every later call must pass. The session bills until it is released or hits the project timeout, so pair it with a release._ |
+| `navigate` | `POST /api/v1/browserbase/sessions/{sessionId}/navigate` | planned | Open a URL in a browser session — _Body: { url }. Enforces the domain rules configured on the connection - the only endpoint that can, since it is the only one naming a destination. Answers 403 when a rule denies the URL._ |
+| `observe` | `POST /api/v1/browserbase/sessions/{sessionId}/observe` | planned | Find actionable elements on the current page — _Body: { instruction }._ |
+| `extract` | `POST /api/v1/browserbase/sessions/{sessionId}/extract` | planned | Extract data or text from the current page — _Body: { instruction } - optional; omit it for the page text._ |
+| `forceEndBrowserSession` | `POST /api/v1/browserbase/sessions/{sessionId}/release` | planned | Force a Browserbase session to close so it stops billing — _DESTRUCTIVE - anything in progress in that browser is lost, and there is no undo. Exposed with explicit user sign-off: a curl has no confirmation affordance and the permanent dashboard API key is accepted here. It is also the only way to stop a session whose id outlived the conversation that made it, which is why withholding it would cost more than it saves._ |
+
 ## Status legend
 
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 224 endpoints.
+Catalog size: 231 endpoints.

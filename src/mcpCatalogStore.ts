@@ -715,6 +715,35 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
+  // Browserbase MCP (API-key provider — no OAuth, user pastes a key).
+  //
+  // The empty/absent OAuth URLs are load-bearing, not an omission: the
+  // dashboard decides whether to show the paste-token form by checking that
+  // oauthAuthorizationUrl is unset, so filling them in would route Connect to
+  // /connect/browserbase, which 400s for a paste-token provider.
+  //
+  // Note the key itself is NEVER read from env here. BROWSERBASE_API_KEY and
+  // BROWSERBASE_PROJECT_ID are already taken by the e2e cloud-browser
+  // transport in .github/workflows/e2e-smoke.yml, and a shared env key would
+  // serve one tenant's browser to another anyway — the credential is
+  // per-connection, in providerTokens.
+  const browserbaseMcpUrl = normalizeUrl(process.env.BROWSERBASE_MCP_URL, '/browserbase');
+
+  await createMcpCatalog({
+    slug: 'browserbase',
+    name: 'Browserbase MCP',
+    description: 'Drive a real cloud browser — open pages, click, fill forms and extract data from sites with no API',
+    iconUrl: 'https://www.browserbase.com/favicon.ico',
+    mcpUrl: browserbaseMcpUrl,
+    provider: 'browserbase',
+    scopes: [],
+    googleClientId: null,
+    googleClientSecret: null,
+    oauthScopes: [],
+    isLocal: !process.env.BROWSERBASE_MCP_URL,
+    isActive: true,
+  });
+
   await seedRedmineCatalog(normalizeUrl);
 
   console.error('Default MCP catalog entries seeded.');
