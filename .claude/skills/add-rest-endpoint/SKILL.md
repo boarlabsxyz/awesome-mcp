@@ -25,7 +25,7 @@ If neither is given, ask which service.
 ## Four jobs, tell them apart first
 
 1. **Promote `planned` → `live`** — the catalog entry already exists (all of outline, peopleforce, hubspot today). Skip step 2 except to flip `status`; do steps 3–8. **Check `src/restCatalog.ts` first — this is the most common case.**
-2. **Catalogue a route that already exists** — no catalog entry, but `webServer.ts` already serves the path. The ChatGPT Custom Actions compat routes are uncatalogued and invisible in every generated doc, and they hand-roll their validation. Do steps 1–8, but **keep the path and the response shape** (see step 1).
+2. **Catalogue a route that already exists** — no catalog entry, but `webServer.ts` already serves the path. The ChatGPT Custom Actions compat routes are uncatalogued and invisible in every generated doc, and they hand-roll their validation. Do steps 1–8, but **keep the path, the response shape, AND the body shape** (see step 1). That last one is the trap: an old route's body may be the *provider's* native field names while the MCP tool's parameters are a camelCase translation of them, in which case "validate with the tool's own schema" would reject every existing caller. Diff them before assuming they agree.
 3. **New read endpoint** — nothing exists. Do steps 1–8.
 4. **New write endpoint** — do the [prerequisites](#write-endpoints-post) once, then steps 1–8 with the write variants called out inline.
 
@@ -35,9 +35,17 @@ If neither is given, ask which service.
 
 Grep `src/<provider>/server.ts` for `name: '<mcpToolName>'`. Note three things:
 
-- **Its annotation.** `readOnlyHint: true` → GET. `readOnlyHint: false` → POST, and you're in the write path with its extra rules. `destructiveHint: true` → stop and read the destructive-ops section of `references/write-endpoints.md` before going further.
+- **Its annotation, then what it actually does.** `readOnlyHint: true` → GET, `readOnlyHint: false` → POST (the write path, with its extra rules), `destructiveHint: true` → stop and read the destructive-ops section of `references/write-endpoints.md` before going further. **But `readOnlyHint: true` is not by itself a licence to use GET**: if the call creates server-side work — queues a job, starts an export, sends something — it is neither safe nor idempotent, and GET is fair game for a proxy or retry middleware to repeat after a timeout. Outline's `exportCollection`/`exportAllCollections` are annotated read-only and each call queues another export; shipped as GETs, a single dropped connection would have queued a second whole-workspace export. POST them to an action path regardless of the annotation. Read the annotation as "does this mutate the user's records", not as "is this free to retry".
 - **The upstream client call in its `execute`.** The REST handler makes the same call and returns raw upstream JSON instead of a formatted string.
-- **Its Zod `parameters` schema.** For reads this tells you the query params. For writes this schema is **reused verbatim** to validate `req.body` — that's the mechanism that stops the REST and MCP surfaces from drifting.
+- **Its Zod `parameters` schema.** For reads this tells you the query params. For writes the tool's parameters are the source for validating `req.body` — that's the mechanism that stops the REST and MCP surfaces from drifting. Two caveats the ClickUp pass established:
+  - **Share the FIELDS, not the whole schema.** The two surfaces compose the same fields differently — the tool takes the resource id as a parameter, the route takes it from the path — and the REST side usually adds `.refine()` guards the tool only states in prose. So export a plain field *object* and spread it (`z.object({ taskId: …, ...taskUpdateFields })` in the tool, `z.object(taskUpdateFields).refine(…)` in the route) rather than trying to reuse one `z.object`.
+  - **It is only free on a NEW path.** On an already-served route, check what the published spec promises first:
+
+    ```bash
+    python3 -c "import json;d=json.load(open('public/openapi-<service>.json'));[print(m.upper(),p,list(o.get('requestBody',{}).get('content',{}).get('application/json',{}).get('schema',{}).get('properties',{}))) for p,ops in d['paths'].items() for m,o in ops.items() if m in ('post','patch','put')]"
+    ```
+
+    If the published body uses the provider's native names (`due_date`, `custom_item_id`, `comment_text`, `tid`) while the tool takes camelCase, the route has its own contract and reusing the tool's schema would 400 every generated client. Leave that path's body alone and put the camelCase version on a separate action path — one path, one body shape.
 
 **Check the tool is actually implemented.** `NOT_IMPLEMENTED` in `e2e/tools.ts` lists tools that exist and throw — `editTableCell`, `fixListFormatting`, `findElement` today. An endpoint for one of those advertises a 500, so exclude it and say so in the report rather than shipping it for completeness.
 
@@ -248,19 +256,27 @@ Hand-writing N handlers that differ only in schema, op, status code and response
 Write it as a table of route descriptors plus one generic handler:
 
 ```ts
-interface DocsWriteRoute {
+type Ops = typeof import('../<provider>/writeOps.js');
+type BodySchema = { safeParse(v: unknown): { success: boolean; data?: any; error?: any } };
+
+interface WriteRoute {
   path: string;                      // Express path; array order IS registration order
   status?: 200 | 201;                // 201 where a resource is created
   notFound: string;
   fallback: string;
-  load: () => Promise<{ schema: { safeParse(v: unknown): any }; run: (s: UserSession, args: any) => Promise<any> }>;
-  project?: (result: any, args: any) => unknown;   // defaults to tagging the result with the id
+  schema?: (m: Ops) => BodySchema;   // omit for a body-less route
+  run: (m: Ops, client: Client, args: any, p: Record<string, string>) => Promise<unknown>;
 }
 
-for (const route of DOCS_WRITE_ROUTES) {
-  app.post(route.path, requireApiKey, async (req: ApiAuthenticatedRequest, res) => { /* one handler */ });
+for (const route of WRITE_ROUTES) {
+  app.post(route.path, requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    const ops = await import('../<provider>/writeOps.js');   // once, not per row
+    /* one handler: safeParse 400, route.run(ops, …), status, error branch */
+  });
 }
 ```
+
+**Inject the ops module; do not give each row its own `load: async () => { const m = await import(…); … }`.** That wrapper is 4 lines of identical ceremony per route, and it is exactly what the duplication gate counts — 24 copies measured as 7.5% duplicated new lines in `webServer.ts`, which dropped to 4.1% (and 85 fewer lines) once the handler imported the module once and passed it in. Type safety is unchanged: `typeof import(...)` still makes a renamed export a compile error, and the per-row `as string` casts on path params disappear with it.
 
 Three things get better, not just the duplication number:
 
@@ -288,6 +304,17 @@ Static paths still have to come first — put them at the top of the array, sinc
 - **The duplication gate fails the PR** — N near-identical handlers. Expected past about four endpoints; use the table (see Batch mode) rather than writing them out and refactoring afterwards.
 - **An endpoint shipped for a tool that throws** — check `NOT_IMPLEMENTED` in `e2e/tools.ts` (step 1).
 - **The Sonar new-code coverage gate fails the PR** — expected on a write change, and not a reason to waive the gate. Cover the extracted op; see `references/write-endpoints.md`.
+- **The GitHub `sonarcloud` check says SUCCESS while the quality gate is ERROR.** The check only reports that the scan ran. Read the gate, and get the per-file breakdown before fixing anything:
+
+  ```bash
+  curl -s "https://sonarcloud.io/api/qualitygates/project_status?projectKey=<key>&pullRequest=<n>"
+  curl -s "https://sonarcloud.io/api/measures/component_tree?component=<key>&pullRequest=<n>&metricKeys=new_lines,new_duplicated_lines_density&qualifiers=FIL&ps=100"
+  ```
+
+  Confirm **which commit was analysed** (`api/project_pull_requests/list`) — a reading taken a minute after pushing is still the previous commit's, and chasing a stale number is its own time sink.
+- **The duplication gate can be mathematically unreachable, and the catalog is why.** `src/restCatalog.ts` measures ~97% duplicated new lines: 50 structurally identical one-line entries is precisely what copy-paste detection exists to flag. Do the arithmetic before grinding — at 1673 new lines a 3% threshold allows 50 duplicated lines, and the catalog alone was 75, so no handler refactor could pass. At that point the only honest options are a `sonar.cpd.exclusions` entry, a won't-fix, or an override; raise it as a decision rather than deforming a data table whose field order three build scripts parse with a regex. (Real handler duplication is still worth removing: injecting the ops module once instead of per table row took `webServer.ts` from 7.5% to 4.1% and removed 85 lines.)
+- **Tests that pass but never EXIT hang the whole suite, and it reads like anything but that.** With no local Redis, `oauthServer.ts`'s `getRedis()` leaves an `ioredis` client retrying, so `auth/exchangeAuthCode` and `auth/oauthProxy` print `ok` for every assertion and then hold the event loop open — `node --test` waits on them indefinitely. Two things disguise it: stdout is block-buffered when redirected, so a dead run sits at a plausible ~67 lines and looks like slow progress; and the giveaway is the parent at 0% CPU with **no child workers**. Before suspecting your change, reproduce on unmodified main (`git checkout --detach origin/main`) — if it reproduces there, it is the environment, not the diff. To get a verdict anyway, run each file separately with a hard timeout and treat a `not ok` line as the only failure signal.
+- **`data/*.json` grows without bound and widens the corruption race.** Every run appends to `data/mcp-connections.json` and nothing prunes it; at 1340 entries / 652 KB, ~120 concurrent test processes read-modify-writing it reliably interleave into `Unexpected non-whitespace character after JSON`, or hang. It is gitignored scratch — truncate to `[]` rather than debugging a handler.
 
 ## File layout
 
