@@ -183,7 +183,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["name"],
+                "required": [
+                  "name"
+                ],
                 "properties": {
                   "name": {
                     "type": "string",
@@ -316,7 +318,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["name"],
+                "required": [
+                  "name"
+                ],
                 "properties": {
                   "name": {
                     "type": "string",
@@ -449,7 +453,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["name"],
+                "required": [
+                  "name"
+                ],
                 "properties": {
                   "name": {
                     "type": "string",
@@ -831,7 +837,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["name"],
+                "required": [
+                  "name"
+                ],
                 "properties": {
                   "name": {
                     "type": "string",
@@ -1162,7 +1170,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["listId"],
+                "required": [
+                  "listId"
+                ],
                 "properties": {
                   "listId": {
                     "type": "string",
@@ -1383,27 +1393,210 @@
       "get": {
         "operationId": "filterTeamTasks",
         "summary": "Filter tasks across a workspace",
-        "description": "Thin wrapper over ClickUp's server-side Get Filtered Team Tasks endpoint (GET /api/v2/team/{team_id}/task). One paginated call replaces per-list enumeration for workspace-wide digests. Supports assignees, statuses, tags, scope narrowing (spaceIds/projectIds/listIds), and date ranges on date_created / date_updated / due_date. Does NOT support date_closed / date_done filters — for 'closed since T', query with dateUpdatedGt=T and partition on date_closed client-side.",
+        "description": "Thin wrapper over ClickUp's server-side Get Filtered Team Tasks endpoint (GET /api/v2/team/{team_id}/task). One paginated call replaces per-list enumeration for workspace-wide digests. Supports assignees, statuses, tags, scope narrowing (spaceIds/projectIds/listIds), and date ranges on date_created / date_updated / due_date. Does NOT support date_closed / date_done filters \u2014 for 'closed since T', query with dateUpdatedGt=T and partition on date_closed client-side.",
         "parameters": [
-          { "name": "workspaceId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "The workspace (team) ID" },
-          { "name": "assignees", "in": "query", "required": false, "schema": { "type": "array", "items": { "type": "string" } }, "explode": true, "description": "Filter to tasks assigned to any of these user IDs. Repeat the param for multiple values." },
-          { "name": "statuses", "in": "query", "required": false, "schema": { "type": "array", "items": { "type": "string" } }, "explode": true, "description": "Filter by status names. Repeat the param for multiple values." },
-          { "name": "tags", "in": "query", "required": false, "schema": { "type": "array", "items": { "type": "string" } }, "explode": true, "description": "Filter by tag names. Repeat the param for multiple values." },
-          { "name": "spaceIds", "in": "query", "required": false, "schema": { "type": "array", "items": { "type": "string" } }, "explode": true, "description": "Narrow to specific space IDs. Repeat the param for multiple values." },
-          { "name": "projectIds", "in": "query", "required": false, "schema": { "type": "array", "items": { "type": "string" } }, "explode": true, "description": "Narrow to specific folder (project) IDs. Repeat the param for multiple values." },
-          { "name": "listIds", "in": "query", "required": false, "schema": { "type": "array", "items": { "type": "string" } }, "explode": true, "description": "Narrow to specific list IDs. Repeat the param for multiple values." },
-          { "name": "dateCreatedGt", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Only tasks created at/after this time. ISO string or Unix ms." },
-          { "name": "dateCreatedLt", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Only tasks created at/before this time. ISO string or Unix ms." },
-          { "name": "dateUpdatedGt", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Only tasks updated at/after this time. ISO string or Unix ms. Use as a superset for 'closed since T' queries." },
-          { "name": "dateUpdatedLt", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Only tasks updated at/before this time. ISO string or Unix ms." },
-          { "name": "dueDateGt", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Only tasks with due_date at/after this time. ISO string or Unix ms." },
-          { "name": "dueDateLt", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Only tasks with due_date at/before this time. ISO string or Unix ms." },
-          { "name": "orderBy", "in": "query", "required": false, "schema": { "type": "string", "enum": ["id", "created", "updated", "due_date"] }, "description": "Sort field. No server-side close-date sort." },
-          { "name": "reverse", "in": "query", "required": false, "schema": { "type": "boolean" }, "description": "Reverse the sort order." },
-          { "name": "subtasks", "in": "query", "required": false, "schema": { "type": "boolean" }, "description": "Include subtasks in results." },
-          { "name": "includeClosed", "in": "query", "required": false, "schema": { "type": "boolean" }, "description": "Include closed/completed tasks." },
-          { "name": "page", "in": "query", "required": false, "schema": { "type": "integer", "default": 0 }, "description": "Page number (0-based). 100 tasks per page." },
-          { "name": "custom_fields", "in": "query", "required": false, "schema": { "type": "string" }, "description": "JSON-encoded custom field filters." }
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace (team) ID"
+          },
+          {
+            "name": "assignees",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true,
+            "description": "Filter to tasks assigned to any of these user IDs. Repeat the param for multiple values."
+          },
+          {
+            "name": "statuses",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true,
+            "description": "Filter by status names. Repeat the param for multiple values."
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true,
+            "description": "Filter by tag names. Repeat the param for multiple values."
+          },
+          {
+            "name": "spaceIds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true,
+            "description": "Narrow to specific space IDs. Repeat the param for multiple values."
+          },
+          {
+            "name": "projectIds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true,
+            "description": "Narrow to specific folder (project) IDs. Repeat the param for multiple values."
+          },
+          {
+            "name": "listIds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "explode": true,
+            "description": "Narrow to specific list IDs. Repeat the param for multiple values."
+          },
+          {
+            "name": "dateCreatedGt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only tasks created at/after this time. ISO string or Unix ms."
+          },
+          {
+            "name": "dateCreatedLt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only tasks created at/before this time. ISO string or Unix ms."
+          },
+          {
+            "name": "dateUpdatedGt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only tasks updated at/after this time. ISO string or Unix ms. Use as a superset for 'closed since T' queries."
+          },
+          {
+            "name": "dateUpdatedLt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only tasks updated at/before this time. ISO string or Unix ms."
+          },
+          {
+            "name": "dueDateGt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only tasks with due_date at/after this time. ISO string or Unix ms."
+          },
+          {
+            "name": "dueDateLt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only tasks with due_date at/before this time. ISO string or Unix ms."
+          },
+          {
+            "name": "orderBy",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "id",
+                "created",
+                "updated",
+                "due_date"
+              ]
+            },
+            "description": "Sort field. No server-side close-date sort."
+          },
+          {
+            "name": "reverse",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Reverse the sort order."
+          },
+          {
+            "name": "subtasks",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Include subtasks in results."
+          },
+          {
+            "name": "includeClosed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Include closed/completed tasks."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0
+            },
+            "description": "Page number (0-based). 100 tasks per page."
+          },
+          {
+            "name": "custom_fields",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON-encoded custom field filters."
+          }
         ],
         "responses": {
           "200": {
@@ -1413,15 +1606,47 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "tasks": { "type": "array", "items": { "$ref": "#/components/schemas/Task" } }
+                    "tasks": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Task"
+                      }
+                    }
                   }
                 }
               }
             }
           },
-          "400": { "description": "Invalid date parameter", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "500": { "description": "Server error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+          "400": {
+            "description": "Invalid date parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -1429,32 +1654,147 @@
       "get": {
         "operationId": "getTaskEventHistory",
         "summary": "Read task-event transitions from the webhook store",
-        "description": "Reads events populated by the ClickUp webhook receiver: status transitions, moves, assignee changes, task creations and deletions. Scoped to the caller's own subscription for the workspace. If no subscription exists, returns 200 with kind='no-subscription' + a warning — not 404 — so digests can gracefully fall back to filterTeamTasks with dateUpdatedGt.",
+        "description": "Reads events populated by the ClickUp webhook receiver: status transitions, moves, assignee changes, task creations and deletions. Scoped to the caller's own subscription for the workspace. If no subscription exists, returns 200 with kind='no-subscription' + a warning \u2014 not 404 \u2014 so digests can gracefully fall back to filterTeamTasks with dateUpdatedGt.",
         "parameters": [
-          { "name": "workspaceId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "The workspace (team) ID" },
-          { "name": "since", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Only return events at/after this time. ISO string or Unix ms." },
-          { "name": "until", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Only return events at/before this time. ISO string or Unix ms." },
-          { "name": "eventTypes", "in": "query", "required": false, "schema": { "type": "array", "items": { "type": "string", "enum": ["taskCreated", "taskStatusUpdated", "taskAssigneeUpdated", "taskMoved", "taskDeleted"] } }, "explode": true, "description": "Filter to specific event types. Repeat the param for multiple values." },
-          { "name": "toStatus", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Only return status-transition events whose destination status equals this label." },
-          { "name": "taskId", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Narrow to a single task." },
-          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 500, "maximum": 2000 }, "description": "Row cap. Narrow via since if you hit it." }
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace (team) ID"
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only return events at/after this time. ISO string or Unix ms."
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only return events at/before this time. ISO string or Unix ms."
+          },
+          {
+            "name": "eventTypes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "taskCreated",
+                  "taskStatusUpdated",
+                  "taskAssigneeUpdated",
+                  "taskMoved",
+                  "taskDeleted"
+                ]
+              }
+            },
+            "explode": true,
+            "description": "Filter to specific event types. Repeat the param for multiple values."
+          },
+          {
+            "name": "toStatus",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only return status-transition events whose destination status equals this label."
+          },
+          {
+            "name": "taskId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Narrow to a single task."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 500,
+              "maximum": 2000
+            },
+            "description": "Row cap. Narrow via since if you hit it."
+          }
         ],
         "responses": {
           "200": {
             "description": "Task events retrieved (kind='ok') or subscription missing (kind='no-subscription')",
-            "content": { "application/json": { "schema": {
-              "type": "object",
-              "properties": {
-                "kind": { "type": "string", "enum": ["ok", "no-subscription"] },
-                "events": { "type": "array", "items": { "type": "object" } },
-                "eventStoreStartedAt": { "type": "string" },
-                "warning": { "type": "string" }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "no-subscription"
+                      ]
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "eventStoreStartedAt": {
+                      "type": "string"
+                    },
+                    "warning": {
+                      "type": "string"
+                    }
+                  }
+                }
               }
-            } } }
+            }
           },
-          "400": { "description": "Invalid date parameter", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "500": { "description": "Server error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+          "400": {
+            "description": "Invalid date parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -1464,20 +1804,55 @@
         "summary": "List task-event webhook subscriptions owned by the caller",
         "description": "Surfaces subscription health so operators can spot a dying webhook (ClickUp stops delivering after 5 consecutive failures). shared_secret is never returned.",
         "parameters": [
-          { "name": "workspaceId", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Optional workspace ID to narrow to a single subscription." }
+          {
+            "name": "workspaceId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional workspace ID to narrow to a single subscription."
+          }
         ],
         "responses": {
           "200": {
             "description": "Subscription list",
-            "content": { "application/json": { "schema": {
-              "type": "object",
-              "properties": {
-                "subscriptions": { "type": "array", "items": { "type": "object" } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "subscriptions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
               }
-            } } }
+            }
           },
-          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "500": { "description": "Server error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -1487,26 +1862,81 @@
         "summary": "Task-event subscription diagnostic report",
         "description": "Cross-references the local subscription record against ClickUp's own view of the webhook and the event store. Detects endpoint-URL drift (BASE_URL changed between subscribe and now), orphaned ClickUp webhook (local record points at a webhook ClickUp deleted), event-bundle mismatch, ClickUp fail_count exceeding our stored fail_count (ingestion route silently 200-ing on thrown errors), disabled-webhook status, and the 'zero events with zero delivery failures' pattern that means deliveries either are not reaching the ingestion route or are being silently swallowed. Returns 200 even for broken states.",
         "parameters": [
-          { "name": "workspaceId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "The workspace (team) ID" }
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace (team) ID"
+          }
         ],
         "responses": {
           "200": {
             "description": "Diagnostic report",
-            "content": { "application/json": { "schema": {
-              "type": "object",
-              "properties": {
-                "kind": { "type": "string", "enum": ["ok", "no-local-subscription", "no-clickup-webhook"] },
-                "workspaceId": { "type": "string" },
-                "expectedEndpoint": { "type": "string" },
-                "local": { "type": "object", "nullable": true },
-                "clickup": { "type": "object", "nullable": true },
-                "eventStore": { "type": "object", "nullable": true },
-                "findings": { "type": "array", "items": { "type": "string" } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "no-local-subscription",
+                        "no-clickup-webhook"
+                      ]
+                    },
+                    "workspaceId": {
+                      "type": "string"
+                    },
+                    "expectedEndpoint": {
+                      "type": "string"
+                    },
+                    "local": {
+                      "type": "object",
+                      "nullable": true
+                    },
+                    "clickup": {
+                      "type": "object",
+                      "nullable": true
+                    },
+                    "eventStore": {
+                      "type": "object",
+                      "nullable": true
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
               }
-            } } }
+            }
           },
-          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "500": { "description": "Server error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -1588,7 +2018,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["comment_text"],
+                "required": [
+                  "comment_text"
+                ],
                 "properties": {
                   "comment_text": {
                     "type": "string",
@@ -1729,6 +2161,115 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "createClickUpDoc",
+        "summary": "Create a doc in a workspace",
+        "description": "ClickUp createDoc endpoint IGNORES content, so content is written to the doc first page in a SECOND call. Check contentWritten: the doc exists either way, so a failure there answers 201 with contentWritten false rather than an error that would invite a retry and make a second doc.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace (team) ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "Initial markdown, written to the first page in a follow-up call."
+                  },
+                  "parentId": {
+                    "type": "string",
+                    "description": "Space, Folder or List to place the doc in."
+                  },
+                  "parentType": {
+                    "type": "integer",
+                    "description": "4 = Space, 5 = Folder, 6 = List. Required when parentId is given. NOT the same parameter as the doc-search parentType."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Doc created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "doc": {
+                      "$ref": "#/components/schemas/Doc"
+                    },
+                    "contentWritten": {
+                      "type": "boolean",
+                      "nullable": true,
+                      "description": "true = content written to the first page. false = the doc was created but the content write failed; use the edit-page route. null = no content was supplied."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/clickup/workspaces/{workspaceId}/docs/search": {
@@ -1779,7 +2320,13 @@
             "required": false,
             "schema": {
               "type": "string",
-              "enum": ["SPACE", "FOLDER", "LIST", "EVERYTHING", "WORKSPACE"]
+              "enum": [
+                "SPACE",
+                "FOLDER",
+                "LIST",
+                "EVERYTHING",
+                "WORKSPACE"
+              ]
             },
             "description": "Restrict to docs in this container kind. EVERYTHING means no restriction."
           }
@@ -1933,7 +2480,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["tid"],
+                "required": [
+                  "tid"
+                ],
                 "properties": {
                   "tid": {
                     "type": "string",
@@ -2055,17 +2604,47 @@
         "requestBody": {
           "required": true,
           "content": {
-            "image/png": { "schema": { "type": "string", "format": "binary" } },
-            "image/jpeg": { "schema": { "type": "string", "format": "binary" } },
-            "image/gif": { "schema": { "type": "string", "format": "binary" } },
-            "image/bmp": { "schema": { "type": "string", "format": "binary" } },
-            "image/webp": { "schema": { "type": "string", "format": "binary" } },
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/gif": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/bmp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["imageUrl"],
+                "required": [
+                  "imageUrl"
+                ],
                 "properties": {
-                  "imageUrl": { "type": "string", "description": "Public http(s) URL of an image to fetch and re-host (jpg, png, gif, bmp, or webp)." }
+                  "imageUrl": {
+                    "type": "string",
+                    "description": "Public http(s) URL of an image to fetch and re-host (jpg, png, gif, bmp, or webp)."
+                  }
                 }
               }
             }
@@ -2079,21 +2658,1668 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "url": { "type": "string", "description": "Public URL to embed as image markdown." },
-                    "key": { "type": "string", "description": "Content-hash storage key (sha256.webp)." },
-                    "bytes": { "type": "integer", "description": "Stored (WebP) byte size." },
-                    "contentType": { "type": "string", "example": "image/webp" },
-                    "deduped": { "type": "boolean", "description": "True if identical bytes were already stored." }
+                    "url": {
+                      "type": "string",
+                      "description": "Public URL to embed as image markdown."
+                    },
+                    "key": {
+                      "type": "string",
+                      "description": "Content-hash storage key (sha256.webp)."
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "description": "Stored (WebP) byte size."
+                    },
+                    "contentType": {
+                      "type": "string",
+                      "example": "image/webp"
+                    },
+                    "deduped": {
+                      "type": "boolean",
+                      "description": "True if identical bytes were already stored."
+                    }
                   }
                 }
               }
             }
           },
-          "400": { "description": "Missing/invalid body, or the imageUrl could not be fetched", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "413": { "description": "Recompressed image exceeds the storage size cap", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "415": { "description": "Unsupported image format", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-          "500": { "description": "Server error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+          "400": {
+            "description": "Missing/invalid body, or the imageUrl could not be fetched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Recompressed image exceeds the storage size cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported image format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces/{workspaceId}/task-types": {
+      "get": {
+        "operationId": "listClickUpTaskTypes",
+        "summary": "List task types in a workspace",
+        "description": "Resolves a task type name like \"Bug\" to the numeric taskTypeId that task writes take. ClickUp returns ONLY the workspace custom types, so the two built-ins are reported separately in builtIn rather than merged in.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace (team) ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task types",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "workspaceId": {
+                      "type": "string"
+                    },
+                    "builtIn": {
+                      "type": "array",
+                      "description": "Always Task (0) and Milestone (1). ClickUp own endpoint omits these.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "custom": {
+                      "type": "array",
+                      "description": "Workspace-defined types, verbatim from ClickUp.",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/spaces/{spaceId}/tags": {
+      "get": {
+        "operationId": "listClickUpSpaceTags",
+        "summary": "List tags defined in a space",
+        "description": "Call this before tagging a task: ClickUp auto-creates an unknown tag, so a typo silently makes a new one.",
+        "parameters": [
+          {
+            "name": "spaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The space ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "spaceId": {
+                      "type": "string"
+                    },
+                    "tags": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "tag_fg": {
+                            "type": "string"
+                          },
+                          "tag_bg": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/tasks/{taskId}/fields/{fieldId}": {
+      "post": {
+        "operationId": "setCustomFieldValue",
+        "summary": "Set a custom field value on a task",
+        "description": "Sets the VALUE of an existing field. ClickUp has NO API to create a field or add a drop-down or label option, so the field and its options must already exist. Unlike the MCP tool this route forwards the value as-is: it does not resolve option names and does not revive a stringified array, so array-valued types (labels, users, relationships) must be sent as real JSON arrays or ClickUp answers FIELD_144 \"Value must be an array\".",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The task ID"
+          },
+          {
+            "name": "fieldId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The custom field ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "value"
+                ],
+                "properties": {
+                  "value": {
+                    "description": "text/email/phone = string, number = number, checkbox = boolean, date = unix ms, drop_down = the option UUID or its orderindex, labels/users/relationship = an ARRAY of IDs or ClickUp incremental {\"add\":[],\"rem\":[]} object.",
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "array",
+                        "items": {}
+                      },
+                      {
+                        "type": "object"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Value set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/tasks/{taskId}/update": {
+      "post": {
+        "operationId": "updateClickUpTask",
+        "summary": "Update a task, or re-parent it",
+        "description": "camelCase sibling of the legacy uncatalogued PATCH on /api/v1/clickup/tasks/{taskId}, which takes ClickUp-native keys instead. On the re-parent path the change is VERIFIED by a re-read, because ClickUp answers a parent change it silently ignores with HTTP 200 and emits no webhook for one: ALWAYS check reparentConfirmed.",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The task ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "minProperties": 1,
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Plain text. markdownContent wins if both are sent."
+                  },
+                  "markdownContent": {
+                    "type": "string",
+                    "description": "Markdown body; takes precedence over description."
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4,
+                    "nullable": true,
+                    "description": "1=Urgent, 2=High, 3=Normal, 4=Low, null=none."
+                  },
+                  "dueDate": {
+                    "type": "string",
+                    "description": "ISO string or Unix ms."
+                  },
+                  "startDate": {
+                    "type": "string",
+                    "description": "ISO string or Unix ms."
+                  },
+                  "addAssignees": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  },
+                  "removeAssignees": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  },
+                  "timeEstimate": {
+                    "type": "integer",
+                    "description": "Milliseconds."
+                  },
+                  "archived": {
+                    "type": "boolean"
+                  },
+                  "taskTypeId": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "0 = Task, 1 = Milestone, or a workspace type. Changing it changes which custom fields apply, and therefore which are returned at all."
+                  },
+                  "parentTaskId": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Re-parent under this task. ClickUp CANNOT clear a parent, so null is refused with an explanation rather than sent."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Task updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "task": {
+                      "$ref": "#/components/schemas/Task"
+                    },
+                    "reparentConfirmed": {
+                      "type": "boolean",
+                      "nullable": true,
+                      "description": "true = confirmed by a re-read. false = ClickUp accepted the call and silently ignored it, so do NOT treat the move as done. null = no re-parent requested, or the confirming read failed."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/tasks/{taskId}/delete": {
+      "post": {
+        "operationId": "deleteClickUpTask",
+        "summary": "Delete a task permanently",
+        "description": "DESTRUCTIVE and PERMANENT: ClickUp has no recycle bin for this. A legacy uncatalogued DELETE on /api/v1/clickup/tasks/{taskId} does the same thing.",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The task ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "taskId": {
+                      "type": "string"
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/lists/{listId}/update": {
+      "post": {
+        "operationId": "updateClickUpList",
+        "summary": "Update a list",
+        "description": "camelCase sibling of the legacy uncatalogued PATCH on /api/v1/clickup/lists/{listId}, which takes ClickUp-native keys instead.",
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The list ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "minProperties": 1,
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  },
+                  "dueDate": {
+                    "type": "string",
+                    "description": "ISO string."
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/List"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/lists/{listId}/delete": {
+      "post": {
+        "operationId": "deleteClickUpList",
+        "summary": "Delete a list permanently",
+        "description": "DESTRUCTIVE and PERMANENT, and it takes EVERY TASK in the list with it. A legacy uncatalogued DELETE on /api/v1/clickup/lists/{listId} does the same thing.",
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The list ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "listId": {
+                      "type": "string"
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/tasks/{taskId}/fields/{fieldId}/remove": {
+      "post": {
+        "operationId": "removeClickUpCustomFieldValue",
+        "summary": "Clear a custom field value on a task",
+        "description": "DESTRUCTIVE: clears the stored VALUE. The field itself and its drop-down or label options are untouched, and cannot be deleted through ClickUp API at all.",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The task ID"
+          },
+          {
+            "name": "fieldId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The custom field ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Value cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "taskId": {
+                      "type": "string"
+                    },
+                    "fieldId": {
+                      "type": "string"
+                    },
+                    "cleared": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/tasks/{taskId}/lists/{listId}": {
+      "post": {
+        "operationId": "addTaskToList",
+        "summary": "Share a task into an additional list",
+        "description": "Adds the task to a SECOND list while it stays in its current one. Use the move route to relocate it instead. Needs the \"Tasks in Multiple Lists\" ClickApp, and ClickUp answers a DISABLED ClickApp with 401 \u2014 the same status as a bad credential, so a 401 here does not mean your token is wrong. ClickUp answers 200 with an EMPTY body, so the task is re-read for evidence: confirmed is three-valued because a payload carrying no locations array (what a disabled ClickApp looks like) is not evidence of absence. Unlike the MCP tool this route runs no pre-flight.",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The task ID"
+          },
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The list ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Share attempted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "taskId": {
+                      "type": "string"
+                    },
+                    "listId": {
+                      "type": "string"
+                    },
+                    "confirmed": {
+                      "type": "boolean",
+                      "nullable": true,
+                      "description": "true = the re-read agrees. false = it disagrees. null = ClickUp sent no locations array, so the outcome is unverified, NOT failed."
+                    },
+                    "homeListId": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "ClickUp cannot remove a task from its home list."
+                    },
+                    "locations": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Additional list IDs, when ClickUp reported them."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/tasks/{taskId}/lists/{listId}/remove": {
+      "post": {
+        "operationId": "removeTaskFromList",
+        "summary": "Remove a task from an additional list",
+        "description": "DESTRUCTIVE, though the task itself is not deleted. ClickUp REFUSES to remove a task from its home list. Needs the \"Tasks in Multiple Lists\" ClickApp, and ClickUp answers a DISABLED ClickApp with 401 \u2014 the same status as a bad credential, so a 401 here does not mean your token is wrong. ClickUp answers 200 with an EMPTY body, so the task is re-read for evidence: confirmed is three-valued because a payload carrying no locations array (what a disabled ClickApp looks like) is not evidence of absence. Unlike the MCP tool this route runs no pre-flight.",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The task ID"
+          },
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The list ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removal attempted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "taskId": {
+                      "type": "string"
+                    },
+                    "listId": {
+                      "type": "string"
+                    },
+                    "confirmed": {
+                      "type": "boolean",
+                      "nullable": true,
+                      "description": "true = the re-read agrees. false = it disagrees. null = ClickUp sent no locations array, so the outcome is unverified, NOT failed."
+                    },
+                    "homeListId": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "ClickUp cannot remove a task from its home list."
+                    },
+                    "locations": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Additional list IDs, when ClickUp reported them."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/tasks/{taskId}/tags/{tagName}": {
+      "post": {
+        "operationId": "addTagToTask",
+        "summary": "Add a tag to a task",
+        "description": "ClickUp AUTO-CREATES the tag in the task space if it does not exist, so a typo silently makes a new tag \u2014 list the space tags first to reuse existing ones. ClickUp task update does not accept tags, so this is the only way to tag an existing task.",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The task ID"
+          },
+          {
+            "name": "tagName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The tag name"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tag added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "taskId": {
+                      "type": "string"
+                    },
+                    "tagName": {
+                      "type": "string"
+                    },
+                    "added": {
+                      "type": "boolean"
+                    },
+                    "autoCreatedIfMissing": {
+                      "type": "boolean",
+                      "description": "Always true: ClickUp created the tag if it did not exist, so this does not confirm the tag you meant already existed."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/tasks/{taskId}/tags/{tagName}/remove": {
+      "post": {
+        "operationId": "removeTagFromTask",
+        "summary": "Remove a tag from a task",
+        "description": "DESTRUCTIVE. Unassigns the tag from this task only; the tag stays defined in the space.",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The task ID"
+          },
+          {
+            "name": "tagName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The tag name"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tag removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "taskId": {
+                      "type": "string"
+                    },
+                    "tagName": {
+                      "type": "string"
+                    },
+                    "removed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages": {
+      "post": {
+        "operationId": "createClickUpDocPage",
+        "summary": "Create a page in a doc",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace (team) ID"
+          },
+          {
+            "name": "docId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The doc ID"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "Markdown."
+                  },
+                  "parentPageId": {
+                    "type": "string",
+                    "description": "Nest under this page."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Page created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages/{pageId}": {
+      "post": {
+        "operationId": "editClickUpDocPage",
+        "summary": "Edit a page in a doc",
+        "description": "editMode replace (the DEFAULT) overwrites the whole page body, so this is destructive to existing content even though the tool carries no destructive annotation. Use append or prepend to keep it.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace (team) ID"
+          },
+          {
+            "name": "docId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The doc ID"
+          },
+          {
+            "name": "pageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The page ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "minProperties": 1,
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "Markdown."
+                  },
+                  "editMode": {
+                    "type": "string",
+                    "enum": [
+                      "replace",
+                      "append",
+                      "prepend"
+                    ],
+                    "default": "replace"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Page updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageId": {
+                      "type": "string"
+                    },
+                    "editMode": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages/{pageId}/images": {
+      "post": {
+        "operationId": "insertImageIntoClickUpDocPage",
+        "summary": "Re-host an image and embed it in a doc page",
+        "description": "ClickUp has no image-upload API for Docs, so the image is re-hosted BY THIS SERVER and embedded as markdown. Provide EXACTLY ONE of imageUrl or imageBase64. imageUrl is fetched server-side through a per-redirect-hop SSRF guard. Requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL, and the resulting image URL is PUBLIC and unauthenticated. The request limit on this path is 5 MB for the base64 branch.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace (team) ID"
+          },
+          {
+            "name": "docId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The doc ID"
+          },
+          {
+            "name": "pageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The page ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "imageUrl": {
+                    "type": "string",
+                    "description": "Public http(s) URL (jpg, png, gif, bmp, webp; max 20 MB)."
+                  },
+                  "imageBase64": {
+                    "type": "string",
+                    "description": "Base64 bytes; a data: prefix is accepted. SMALL images only, hard limit ~1.5 MB decoded."
+                  },
+                  "fileName": {
+                    "type": "string",
+                    "description": "Used only for error messages. Magic bytes decide the format, not this."
+                  },
+                  "altText": {
+                    "type": "string",
+                    "default": ""
+                  },
+                  "editMode": {
+                    "type": "string",
+                    "enum": [
+                      "append",
+                      "prepend",
+                      "replace"
+                    ],
+                    "default": "append"
+                  },
+                  "skipRehost": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Embed imageUrl as-is without fetching it. Auto-enabled when the URL is already on this server image host."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Image embedded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageId": {
+                      "type": "string"
+                    },
+                    "editMode": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string",
+                      "description": "The hosted image URL. Public and unauthenticated."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No ClickUp connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Image hosting is not configured on this server (IMAGE_PUBLIC_BASE_URL / DATABASE_URL unset). Not a fault: a config value is missing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
         }
       }
     }

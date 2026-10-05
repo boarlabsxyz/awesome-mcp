@@ -262,8 +262,11 @@ export class OutlineClient {
   updateCollection(input: {
     id: string;
     name?: string;
-    description?: string;
-    color?: string;
+    // Nullable: Outline accepts null on both and applies it as a clear, so the
+    // client must be able to carry one through rather than widening it to
+    // undefined (which would be dropped and read as "leave it alone").
+    description?: string | null;
+    color?: string | null;
   }): Promise<OutlineCollection | undefined> {
     return this.post('/api/collections.update', input).then(r => r?.data);
   }

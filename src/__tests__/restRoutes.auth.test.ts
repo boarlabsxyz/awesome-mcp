@@ -128,6 +128,28 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/redmine/time-entry-activities',
   '/api/v1/redmine/custom-fields',
   '/api/v1/redmine/search?q=login',
+  // ClickUp reads
+  '/api/v1/clickup/workspaces/ws-123/task-types',
+  '/api/v1/clickup/spaces/space-123/tags',
+  // Outline reads. The five STATIC document paths are listed first on purpose:
+  // they are registered before /documents/:documentId, and if that ordering ever
+  // regresses they stop being their own routes — which this array would not
+  // catch on its own (both still answer 401), so keep them adjacent to the
+  // parameterized one as a reminder that the order is load-bearing.
+  '/api/v1/outline/documents/search?q=policy',
+  '/api/v1/outline/documents/recent',
+  '/api/v1/outline/documents/archived',
+  '/api/v1/outline/documents/trash',
+  '/api/v1/outline/documents/by-title?q=Handbook',
+  '/api/v1/outline/documents/doc-123',
+  '/api/v1/outline/documents/doc-123/export',
+  '/api/v1/outline/documents/doc-123/backlinks',
+  '/api/v1/outline/documents/doc-123/comments',
+  '/api/v1/outline/documents/doc-123/attachments',
+  '/api/v1/outline/collections',
+  '/api/v1/outline/collections/col-123/structure',
+  '/api/v1/outline/comments/cmt-123',
+  '/api/v1/outline/attachments/att-123/url',
 ];
 
 // POST endpoints — same auth gate, exercised with the right verb. Bodies are
@@ -185,6 +207,48 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/calendars/primary/events',
   '/api/v1/calendars/primary/events/evt-123',
   '/api/v1/calendars/primary/events/evt-123/cancel',
+  // ClickUp writes that were already SERVED but uncatalogued (ChatGPT Custom
+  // Actions compat) and are now in the catalog. Listed here because nothing else
+  // asserted their auth gate, and they mutate ClickUp.
+  '/api/v1/clickup/spaces/ws-123',
+  '/api/v1/clickup/spaces/space-123/folders',
+  '/api/v1/clickup/folders/folder-123/lists',
+  '/api/v1/clickup/lists/list-123/tasks',
+  '/api/v1/clickup/tasks/task-123/move',
+  '/api/v1/clickup/tasks/task-123/comments',
+  '/api/v1/clickup/tasks/task-123/fields/field-123',
+  '/api/v1/clickup/workspaces/ws-123/time/start',
+  '/api/v1/clickup/workspaces/ws-123/time/stop',
+  '/api/v1/images',
+  // ClickUp writes on the new camelCase action paths.
+  '/api/v1/clickup/tasks/task-123/update',
+  '/api/v1/clickup/tasks/task-123/delete',
+  '/api/v1/clickup/lists/list-123/update',
+  '/api/v1/clickup/lists/list-123/delete',
+  '/api/v1/clickup/tasks/task-123/fields/field-123/remove',
+  '/api/v1/clickup/tasks/task-123/lists/list-123',
+  '/api/v1/clickup/tasks/task-123/lists/list-123/remove',
+  '/api/v1/clickup/tasks/task-123/tags/urgent',
+  '/api/v1/clickup/tasks/task-123/tags/urgent/remove',
+  '/api/v1/clickup/workspaces/ws-123/docs',
+  '/api/v1/clickup/workspaces/ws-123/docs/doc-123/pages',
+  '/api/v1/clickup/workspaces/ws-123/docs/doc-123/pages/page-123',
+  '/api/v1/clickup/workspaces/ws-123/docs/doc-123/pages/page-123/images',
+  // Outline writes. '/documents', '/documents/{id}', '/collections' and
+  // '/collections/{id}' are in BOTH arrays — the GET reads, the POST writes.
+  '/api/v1/outline/documents',
+  '/api/v1/outline/documents/doc-123',
+  '/api/v1/outline/documents/doc-123/move',
+  '/api/v1/outline/documents/doc-123/archive',
+  '/api/v1/outline/documents/doc-123/unarchive',
+  '/api/v1/outline/documents/doc-123/restore',
+  '/api/v1/outline/documents/doc-123/comments',
+  '/api/v1/outline/collections',
+  '/api/v1/outline/collections/col-123',
+  // The two export starters are POSTs, not GETs: each call queues another
+  // server-side export job, and a GET invites a proxy to repeat it.
+  '/api/v1/outline/collections/col-123/export',
+  '/api/v1/outline/exports',
 ];
 
 describe('REST data-plane: auth gate', () => {

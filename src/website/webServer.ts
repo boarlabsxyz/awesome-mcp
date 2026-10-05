@@ -325,6 +325,8 @@ import { validateHubSpotToken } from '../hubspot/connectToken.js';
 import { validateRedmineToken, buildRedmineInstanceName } from '../redmine/connectToken.js';
 // Type-only: erased at compile time, so the REST handlers can still import the
 // clients dynamically and keep them out of the web server's startup graph.
+import type { ClickUpClient } from '../clickup/apiHelpers.js';
+import type { OutlineClient } from '../outline/apiHelpers.js';
 import type { HubSpotClient } from '../hubspot/apiHelpers.js';
 import type { RedmineClient } from '../redmine/apiHelpers.js';
 import { checkConnectionHealth, type ConnectionHealth } from './connectionHealth.js';
@@ -1657,6 +1659,14 @@ function registerSharedRoutes(app: express.Express): void {
     // global 100kb would 413 the use case. Covers /write, /append, /batchUpdate,
     // /ranges/clear and POST /api/v1/sheets (createSpreadsheet.initialData).
     '/api/v1/sheets',
+    // An Outline document body is markdown of arbitrary length, and createDocument
+    // / updateDocument exist on this plane precisely so a whole page can be
+    // pushed in one request. Covers the collection and comment writes too.
+    '/api/v1/outline',
+    // ClickUp Doc page content (createPage / editPage) and the base64 image
+    // branch of the page-image route. The task and list writes under
+    // /api/v1/clickup carry markdown_content bodies for the same reason.
+    '/api/v1/clickup',
   ];
   for (const prefix of REST_LARGE_BODY_PREFIXES) {
     app.use(prefix, express.json({ limit: REST_LARGE_BODY_LIMIT }));
@@ -3687,6 +3697,7 @@ function registerRestApiRoutes(app: express.Express): void {
   const requirePeopleForceApiKey = createServiceAuth('peopleforce', 'peopleforce');
   const requireHubSpotApiKey = createServiceAuth('hubspot', 'hubspot');
   const requireRedmineApiKey = createServiceAuth('redmine', 'redmine');
+  const requireOutlineApiKey = createServiceAuth('outline', 'outline');
 
   // JSON body parser already added above for auth routes
 
@@ -7013,6 +7024,673 @@ function registerRestApiRoutes(app: express.Express): void {
       sendUpstreamError(res, err, { notFound: 'Workspace not found', fallback: 'Failed to list workspace members' });
     }
   });
+
+  // GET /api/v1/clickup/workspaces/:workspaceId/task-types - List task types
+  //
+  // ClickUp's /custom_item endpoint returns ONLY the workspace's custom types --
+  // the two built-ins are absent -- so answering with that payload as-is reads as
+  // "this workspace has no Task type". They are reported in a separate key rather
+  // than merged, so a caller can still tell which came from ClickUp.
+  app.get('/api/v1/clickup/workspaces/:workspaceId/task-types', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.getCustomItems(req.params.workspaceId as string);
+      const custom = Array.isArray(result?.custom_items) ? result.custom_items : [];
+      res.json({
+        workspaceId: req.params.workspaceId,
+        builtIn: [
+          { id: 0, name: 'Task', description: 'The default type; pass 0 to reset a task to a plain Task.' },
+          { id: 1, name: 'Milestone', description: 'Built in.' },
+        ],
+        custom,
+      });
+    } catch (err) {
+      // See the ClickUp write table below: the upstream status is Symbol-tagged,
+      // so it has to be copied onto .code or sendUpstreamError answers 500.
+      const { clickUpErrorStatus } = await import('../clickup/apiHelpers.js');
+      const upstream = clickUpErrorStatus(err);
+      if (typeof upstream === 'number') (err as any).code = upstream;
+      sendUpstreamError(res, err, { notFound: 'Workspace not found', fallback: 'Failed to list task types' });
+    }
+  });
+
+  // GET /api/v1/clickup/spaces/:spaceId/tags - List tags defined in a space
+  app.get('/api/v1/clickup/spaces/:spaceId/tags', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+      const result = await client.getSpaceTags(req.params.spaceId as string);
+      res.json({ spaceId: req.params.spaceId, tags: result?.tags || [] });
+    } catch (err) {
+      // See the ClickUp write table below: the upstream status is Symbol-tagged,
+      // so it has to be copied onto .code or sendUpstreamError answers 500.
+      const { clickUpErrorStatus } = await import('../clickup/apiHelpers.js');
+      const upstream = clickUpErrorStatus(err);
+      if (typeof upstream === 'number') (err as any).code = upstream;
+      sendUpstreamError(res, err, { notFound: 'Space not found', fallback: 'Failed to list space tags' });
+    }
+  });
+
+  // =========================================================================
+  // === ClickUp writes (camelCase action paths) ===
+  // =========================================================================
+  //
+  // Registered from a table rather than written out, for three reasons beyond
+  // brevity: the cross-cutting rules (the safeParse 400, the UserError-versus-
+  // upstream-status branch, the status code) live in ONE place where a later fix
+  // cannot fail to reach a copy; one handler the tests reach beats thirteen they
+  // do not; and thirteen near-identical handler bodies trip the duplicated-lines
+  // quality gate.
+  //
+  // These are ACTION paths (/tasks/{id}/update, not a POST verb on /tasks/{id})
+  // because the older ChatGPT-compat routes above already own the bare resource
+  // paths with a ClickUp-native snake_case body. One path, one body shape.
+  /** Narrow shape every table below validates a body against. */
+  type BodySchema = { safeParse(v: unknown): { success: boolean; data?: any; error?: any } };
+  /** Params as Express hands them over, after the path-over-body merge. */
+  type RouteParams = Record<string, string>;
+
+  // The ops modules are imported ONCE by the generic handler and injected into
+  // each row, rather than every row carrying its own `await import`. Dynamic so
+  // they (and the image store one reaches) stay out of the web server's startup
+  // import graph; Node caches after the first request.
+  type ClickUpOps = typeof import('../clickup/restWrites.js');
+
+  interface ClickUpWriteRoute {
+    /** Express path. Array order IS registration order. */
+    path: string;
+    /** 201 where a resource is created; 200 otherwise. */
+    status?: 200 | 201;
+    notFound: string;
+    fallback: string;
+    /** Body schema, picked out of the ops module. Omit for a body-less route. */
+    schema?: (m: ClickUpOps) => BodySchema;
+    run: (m: ClickUpOps, client: ClickUpClient, args: any, p: RouteParams) => Promise<unknown>;
+  }
+
+  const CLICKUP_WRITE_ROUTES: ReadonlyArray<ClickUpWriteRoute> = [
+    {
+      path: '/api/v1/clickup/tasks/:taskId/update',
+      notFound: 'Task not found',
+      fallback: 'Failed to update task',
+      schema: (m) => m.updateTaskRestSchema,
+      run: (m, client, args, p) => m.performUpdateTask(client, p.taskId, args),
+    },
+    {
+      path: '/api/v1/clickup/tasks/:taskId/delete',
+      notFound: 'Task not found',
+      fallback: 'Failed to delete task',
+      run: async (_m, client, _args, p) => {
+        await client.deleteTask(p.taskId);
+        return { taskId: p.taskId, deleted: true };
+      },
+    },
+    {
+      path: '/api/v1/clickup/lists/:listId/update',
+      notFound: 'List not found',
+      fallback: 'Failed to update list',
+      schema: (m) => m.updateListRestSchema,
+      run: (m, client, args, p) => m.performUpdateList(client, p.listId, args),
+    },
+    {
+      path: '/api/v1/clickup/lists/:listId/delete',
+      notFound: 'List not found',
+      fallback: 'Failed to delete list',
+      run: async (_m, client, _args, p) => {
+        await client.deleteList(p.listId);
+        return { listId: p.listId, deleted: true };
+      },
+    },
+    {
+      path: '/api/v1/clickup/tasks/:taskId/fields/:fieldId/remove',
+      notFound: 'Task or custom field not found',
+      fallback: 'Failed to clear custom field value',
+      run: async (_m, client, _args, p) => {
+        await client.removeCustomFieldValue(p.taskId, p.fieldId);
+        return { taskId: p.taskId, fieldId: p.fieldId, cleared: true };
+      },
+    },
+    {
+      path: '/api/v1/clickup/tasks/:taskId/lists/:listId/remove',
+      notFound: 'Task or list not found',
+      fallback: 'Failed to remove task from list',
+      run: (m, client, _args, p) => m.performTaskListMembership(client, 'remove', p.taskId, p.listId),
+    },
+    {
+      path: '/api/v1/clickup/tasks/:taskId/lists/:listId',
+      notFound: 'Task or list not found',
+      fallback: 'Failed to add task to list',
+      run: (m, client, _args, p) => m.performTaskListMembership(client, 'add', p.taskId, p.listId),
+    },
+    {
+      path: '/api/v1/clickup/tasks/:taskId/tags/:tagName/remove',
+      notFound: 'Task or tag not found',
+      fallback: 'Failed to remove tag from task',
+      run: async (_m, client, _args, p) => {
+        await client.removeTagFromTask(p.taskId, p.tagName);
+        return { taskId: p.taskId, tagName: p.tagName, removed: true };
+      },
+    },
+    {
+      path: '/api/v1/clickup/tasks/:taskId/tags/:tagName',
+      notFound: 'Task not found',
+      fallback: 'Failed to add tag to task',
+      run: async (_m, client, _args, p) => {
+        await client.addTagToTask(p.taskId, p.tagName);
+        // ClickUp auto-creates an unknown tag in the task's space, so a typo
+        // succeeds and makes a new tag. Said here as well as in the docs because a
+        // bare {added:true} reads as "the tag you meant".
+        return { taskId: p.taskId, tagName: p.tagName, added: true, autoCreatedIfMissing: true };
+      },
+    },
+    {
+      path: '/api/v1/clickup/workspaces/:workspaceId/docs',
+      status: 201,
+      notFound: 'Workspace not found',
+      fallback: 'Failed to create doc',
+      schema: (m) => m.createDocRestSchema,
+      run: (m, client, args, p) => m.performCreateDoc(client, p.workspaceId, args),
+    },
+    {
+      path: '/api/v1/clickup/workspaces/:workspaceId/docs/:docId/pages/:pageId/images',
+      notFound: 'Doc or page not found',
+      fallback: 'Failed to add image to page',
+      schema: (m) => m.insertImageRestSchema,
+      run: (m, client, args, p) =>
+        m.performInsertImageIntoPage(client, p.workspaceId, p.docId, p.pageId, args),
+    },
+    {
+      path: '/api/v1/clickup/workspaces/:workspaceId/docs/:docId/pages/:pageId',
+      notFound: 'Doc or page not found',
+      fallback: 'Failed to edit page',
+      schema: (m) => m.editPageRestSchema,
+      run: (m, client, args, p) => m.performEditPage(client, p.workspaceId, p.docId, p.pageId, args),
+    },
+    {
+      path: '/api/v1/clickup/workspaces/:workspaceId/docs/:docId/pages',
+      status: 201,
+      notFound: 'Doc not found',
+      fallback: 'Failed to create page',
+      schema: (m) => m.createPageRestSchema,
+      run: (m, client, args, p) => m.performCreatePage(client, p.workspaceId, p.docId, args),
+    },
+  ];
+
+  for (const route of CLICKUP_WRITE_ROUTES) {
+    app.post(route.path, requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+        const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
+        const ops = await import('../clickup/restWrites.js');
+
+        let args: unknown = {};
+        const schema = route.schema?.(ops);
+        if (schema) {
+          const parsed = schema.safeParse(req.body ?? {});
+          if (!parsed.success) {
+            res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+            return;
+          }
+          args = parsed.data;
+        }
+
+        const result = await route.run(ops, client, args, req.params as RouteParams);
+        res.status(route.status ?? 200).json(result);
+      } catch (err: any) {
+        // ClickUpClient raises a UserError for BOTH kinds of failure, and tags the
+        // upstream status under a Symbol that sendUpstreamError cannot read (it
+        // looks at .code, .response.status, .status). Without this translation
+        // every ClickUp 404 and 403 would be reported as 400 "fix your request"
+        // or as a flat 500 — a status the client cannot route on.
+        const { clickUpErrorStatus } = await import('../clickup/apiHelpers.js');
+        const upstream = clickUpErrorStatus(err);
+        if (typeof upstream === 'number') (err as any).code = upstream;
+
+        // A feature this deployment has not configured (no IMAGE_PUBLIC_BASE_URL)
+        // is not a fault: 500 would tell the caller to report a bug when the fix
+        // is a config value. sendUpstreamError only knows 404 and 403, so this is
+        // answered here.
+        if (err?.name === 'ServiceNotConfiguredError') {
+          res.status(503).json({ error: err.message });
+          return;
+        }
+
+        // What is left with no numeric status is input the caller can fix: a null
+        // parentTaskId, two image sources, a schema refinement.
+        if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        console.error(`ClickUp write failed (${route.path}):`, err);
+        sendUpstreamError(res, err, { notFound: route.notFound, fallback: route.fallback });
+      }
+    });
+  }
+
+  // =========================================================================
+  // === Outline ===
+  // =========================================================================
+
+  /**
+   * Resolve a refreshed Outline client, or answer 403 and return null.
+   *
+   * Two silent failures make this mandatory rather than stylistic. createServiceAuth
+   * falls back to a plain Google session when the account has no Outline
+   * connection, so auth would pass and the bearer would go out undefined. And
+   * Outline's OAuth access tokens expire while the dashboard still reports the
+   * connection as healthy — Outline ROTATES the refresh token on every use, so
+   * maybeRefreshOutlineToken is single-flight per connection precisely to stop two
+   * concurrent REST calls racing to spend the same one, which kills the connection
+   * on the call after next. It mutates the session in place, so getOutlineClient is
+   * called after it, never before.
+   */
+  async function outlineRestClient(
+    req: ApiAuthenticatedRequest,
+    res: Response,
+  ): Promise<OutlineClient | null> {
+    if (!req.userSession?.outlineAccessToken) {
+      res.status(403).json({ error: 'Outline connection required for REST. Connect via the dashboard.' });
+      return null;
+    }
+    const { maybeRefreshOutlineToken, getOutlineClient } = await import('../outline/apiHelpers.js');
+    await maybeRefreshOutlineToken(req.userSession, REST_PROVIDER_LOG);
+    return getOutlineClient(req.userSession);
+  }
+
+  /**
+   * Shared catch for every Outline route.
+   *
+   * Deliberately NOT the MCP tools' mapOutlineError: that helper flattens
+   * Outline's 404 and 403 into a UserError carrying no status, which this plane
+   * would then have to report as 500 (or, worse, as 400 "fix your request") for a
+   * document that simply does not exist. The raw client error carries `.status`,
+   * which sendUpstreamError reads, so the upstream status survives.
+   */
+  function sendOutlineError(res: Response, err: unknown, notFound: string, fallback: string): void {
+    if ((err as any)?.name === 'UpstreamEmptyError') {
+      res.status(502).json({ error: (err as any).message });
+      return;
+    }
+    if ((err as any)?.name === 'UserError' && typeof (err as any)?.code !== 'number') {
+      res.status(400).json({ error: (err as any).message });
+      return;
+    }
+    console.error(`Outline REST call failed (${fallback}):`, err);
+    sendUpstreamError(res, err, { notFound, fallback });
+  }
+
+  /**
+   * A caller-fixable failure: no numeric status, so sendOutlineError answers 400.
+   * Named `UserError` because that is how this file classifies them everywhere
+   * else — webServer imports no part of FastMCP, and FastMCPError sets
+   * `name = new.target.name`, so matching on the name is reliable without it.
+   */
+  function usrError(message: string): Error {
+    const err = new Error(message);
+    err.name = 'UserError';
+    return err;
+  }
+
+  /**
+   * Outline answered, but the record is not there. Carries a numeric status so it
+   * survives as a 404 instead of being reported as "fix your request".
+   */
+  function notFoundError(message: string): Error {
+    const err = new Error(message);
+    (err as any).status = 404;
+    return err;
+  }
+
+  /** Statuses Outline's search accepts; anything else is dropped rather than forwarded. */
+  const OUTLINE_STATUSES = ['draft', 'archived', 'published'] as const;
+  type OutlineStatus = (typeof OUTLINE_STATUSES)[number];
+  function outlineStatusFilter(req: ApiAuthenticatedRequest): OutlineStatus[] | undefined {
+    const raw = qarr(req.query.statusFilter) ?? [];
+    const kept = raw.filter((v): v is OutlineStatus => (OUTLINE_STATUSES as ReadonlyArray<string>).includes(v));
+    return kept.length ? kept : undefined;
+  }
+
+  // --- Reads ---
+  //
+  // Table-driven for the same reasons as the ClickUp writes above: one handler
+  // carries the auth, refresh, error-mapping and content-type rules, so they
+  // cannot drift across sixteen copies. Array order IS registration order, and
+  // every STATIC path must therefore come before /documents/:documentId — else
+  // Express matches "search", "recent", "archived", "trash" and "by-title" as
+  // document IDs and the four of them 404 against Outline.
+  interface OutlineReadRoute {
+    path: string;
+    notFound: string;
+    fallback: string;
+    /** Answer markdown instead of JSON (the document export is a bare body). */
+    asMarkdown?: boolean;
+    run: (client: OutlineClient, req: ApiAuthenticatedRequest) => Promise<unknown>;
+  }
+
+  const OUTLINE_READ_ROUTES: ReadonlyArray<OutlineReadRoute> = [
+    {
+      path: '/api/v1/outline/documents/search',
+      notFound: 'Document not found',
+      fallback: 'Failed to search documents',
+      run: async (client, req) => {
+        const query = qstr(req.query.q);
+        if (!query) throw usrError('q query parameter is required');
+        return client.searchDocuments({
+          query,
+          collectionId: qstr(req.query.collectionId) || undefined,
+          limit: qint(req.query.limit, 25, { min: 1, max: 100 }),
+          offset: qint(req.query.offset, 0, { min: 0 }),
+          statusFilter: outlineStatusFilter(req),
+        });
+      },
+    },
+    {
+      path: '/api/v1/outline/documents/recent',
+      notFound: 'Document not found',
+      fallback: 'Failed to list recently updated documents',
+      run: async (client, req) => {
+        const windows = ['day', 'week', 'month', 'year'] as const;
+        const raw = qstr(req.query.dateFilter, 'week');
+        const dateFilter = (windows as ReadonlyArray<string>).includes(raw)
+          ? (raw as (typeof windows)[number])
+          : 'week';
+        const { data, pagination } = await client.searchDocuments({
+          query: '',
+          collectionId: qstr(req.query.collectionId) || undefined,
+          limit: qint(req.query.limit, 25, { min: 1, max: 100 }),
+          offset: qint(req.query.offset, 0, { min: 0 }),
+          statusFilter: outlineStatusFilter(req),
+          sort: 'updatedAt',
+          direction: 'DESC',
+          dateFilter,
+        });
+        // Unwrap the search envelope: these are documents, and a caller asking
+        // for "recent documents" should not have to reach through .document.
+        return { dateFilter, documents: data.map((r) => r.document ?? null), pagination };
+      },
+    },
+    {
+      path: '/api/v1/outline/documents/archived',
+      notFound: 'Document not found',
+      fallback: 'Failed to list archived documents',
+      run: async (client) => ({ documents: await client.listArchivedDocuments() }),
+    },
+    {
+      path: '/api/v1/outline/documents/trash',
+      notFound: 'Document not found',
+      fallback: 'Failed to list trash',
+      run: async (client) => ({ documents: await client.listTrash() }),
+    },
+    {
+      path: '/api/v1/outline/documents/by-title',
+      notFound: 'Document not found',
+      fallback: 'Failed to look up document by title',
+      run: async (client, req) => {
+        const query = qstr(req.query.q);
+        if (!query) throw usrError('q query parameter is required');
+        const { data: results } = await client.searchDocuments({
+          query,
+          collectionId: qstr(req.query.collectionId) || undefined,
+        });
+        const needle = query.toLowerCase();
+        const exact = results.find((r) => (r.document?.title ?? '').toLowerCase() === needle);
+        const pick = exact ?? results[0];
+        // exactMatch is the load-bearing field: without it a best-partial-match
+        // guess is indistinguishable from the document the caller asked for.
+        return {
+          query,
+          found: Boolean(pick?.document),
+          exactMatch: Boolean(exact),
+          documentId: pick?.document?.id ?? null,
+          title: pick?.document?.title ?? null,
+          candidates: results.length,
+        };
+      },
+    },
+    {
+      path: '/api/v1/outline/documents/:documentId/export',
+      notFound: 'Document not found',
+      fallback: 'Failed to export document',
+      asMarkdown: true,
+      run: (client, req) => client.exportDocument(req.params.documentId as string),
+    },
+    {
+      path: '/api/v1/outline/documents/:documentId/backlinks',
+      notFound: 'Document not found',
+      fallback: 'Failed to fetch backlinks',
+      run: async (client, req) => ({
+        documents: await client.listDocuments({ backlinkDocumentId: req.params.documentId as string }),
+      }),
+    },
+    {
+      path: '/api/v1/outline/documents/:documentId/comments',
+      notFound: 'Document not found',
+      fallback: 'Failed to list comments',
+      run: (client, req) => client.listDocumentComments({
+        documentId: req.params.documentId as string,
+        includeAnchorText: qflag(req.query.includeAnchorText),
+        limit: qint(req.query.limit, 25, { min: 1, max: 100 }),
+        offset: qint(req.query.offset, 0, { min: 0 }),
+      }),
+    },
+    {
+      path: '/api/v1/outline/documents/:documentId/attachments',
+      notFound: 'Document not found',
+      fallback: 'Failed to list attachments',
+      run: async (client, req) => {
+        const { parseAttachmentIds } = await import('../outline/apiHelpers.js');
+        const doc = await client.getDocument(req.params.documentId as string);
+        if (!doc) throw notFoundError('Document not found.');
+        // Outline has no attachments-by-document endpoint, so this is a scan of
+        // the document markdown. Reported as such: an attachment referenced any
+        // other way is invisible here, and an empty list is not proof of none.
+        return {
+          documentId: doc.id,
+          title: doc.title ?? null,
+          source: 'parsed from document markdown (/api/attachments.redirect links)',
+          attachments: parseAttachmentIds(doc.text ?? ''),
+        };
+      },
+    },
+    {
+      path: '/api/v1/outline/documents/:documentId',
+      notFound: 'Document not found',
+      fallback: 'Failed to read document',
+      run: async (client, req) => {
+        const doc = await client.getDocument(req.params.documentId as string);
+        if (!doc) throw notFoundError('Document not found.');
+        return doc;
+      },
+    },
+    {
+      path: '/api/v1/outline/collections/:collectionId/structure',
+      notFound: 'Collection not found',
+      fallback: 'Failed to fetch collection structure',
+      run: async (client, req) => ({
+        collectionId: req.params.collectionId,
+        documents: await client.getCollectionDocuments(req.params.collectionId as string),
+      }),
+    },
+    {
+      path: '/api/v1/outline/collections',
+      notFound: 'Collection not found',
+      fallback: 'Failed to list collections',
+      run: async (client, req) => ({
+        collections: await client.listCollections({
+          limit: qint(req.query.limit, 100, { min: 1, max: 100 }),
+          offset: qint(req.query.offset, 0, { min: 0 }),
+        }),
+      }),
+    },
+    {
+      path: '/api/v1/outline/comments/:commentId',
+      notFound: 'Comment not found',
+      fallback: 'Failed to fetch comment',
+      run: async (client, req) => {
+        const c = await client.getComment(
+          req.params.commentId as string,
+          qflag(req.query.includeAnchorText),
+        );
+        if (!c) throw notFoundError('Comment not found.');
+        return c;
+      },
+    },
+    {
+      path: '/api/v1/outline/attachments/:attachmentId/url',
+      notFound: 'Attachment not found',
+      fallback: 'Failed to resolve attachment URL',
+      run: async (client, req) => {
+        const url = await client.getAttachmentRedirectUrl(req.params.attachmentId as string);
+        if (!url) throw notFoundError('Attachment not found, or Outline returned no download URL.');
+        // Pre-signed and time-limited: whoever holds it can fetch the file, so it
+        // is a credential, not an identifier.
+        return { attachmentId: req.params.attachmentId, url, note: 'Pre-signed and time-limited. Treat it as a credential.' };
+      },
+    },
+  ];
+
+  for (const route of OUTLINE_READ_ROUTES) {
+    app.get(route.path, requireOutlineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        // Inside the try on purpose: resolving the client imports a module and may
+        // refresh a rotating OAuth token, and anything thrown out there would reach
+        // Express's default handler as an HTML error page — undiagnosable for a
+        // client that was told this API speaks JSON.
+        const client = await outlineRestClient(req, res);
+        if (!client) return;
+        const result = await route.run(client, req);
+        if (route.asMarkdown) {
+          res.type('text/markdown; charset=utf-8').send(String(result ?? ''));
+          return;
+        }
+        res.json(result);
+      } catch (err) {
+        sendOutlineError(res, err, route.notFound, route.fallback);
+      }
+    });
+  }
+
+  // --- Writes ---
+  type OutlineOps = typeof import('../outline/restOps.js');
+
+  interface OutlineWriteRoute {
+    path: string;
+    status?: 200 | 201;
+    notFound: string;
+    fallback: string;
+    /** Body schema, picked out of the ops module. Omit for a body-less route. */
+    schema?: (m: OutlineOps) => BodySchema;
+    run: (m: OutlineOps, client: OutlineClient, args: any, p: RouteParams) => Promise<unknown>;
+  }
+
+  const OUTLINE_WRITE_ROUTES: ReadonlyArray<OutlineWriteRoute> = [
+    {
+      path: '/api/v1/outline/documents',
+      status: 201,
+      notFound: 'Collection not found',
+      fallback: 'Failed to create document',
+      schema: (m) => m.createDocumentRestSchema,
+      run: (m, c, a) => m.performCreateDocument(c, a),
+    },
+    {
+      path: '/api/v1/outline/documents/:documentId/move',
+      notFound: 'Document not found',
+      fallback: 'Failed to move document',
+      schema: (m) => m.moveDocumentRestSchema,
+      run: (m, c, a, p) => m.performMoveDocument(c, p.documentId, a),
+    },
+    {
+      path: '/api/v1/outline/documents/:documentId/archive',
+      notFound: 'Document not found',
+      fallback: 'Failed to archive document',
+      run: (m, c, _a, p) => m.performDocumentLifecycle(c, 'archive', p.documentId),
+    },
+    {
+      path: '/api/v1/outline/documents/:documentId/unarchive',
+      notFound: 'Document not found',
+      fallback: 'Failed to unarchive document',
+      run: (m, c, _a, p) => m.performDocumentLifecycle(c, 'unarchive', p.documentId),
+    },
+    {
+      path: '/api/v1/outline/documents/:documentId/restore',
+      notFound: 'Document not found',
+      fallback: 'Failed to restore document',
+      run: (m, c, _a, p) => m.performDocumentLifecycle(c, 'restore', p.documentId),
+    },
+    {
+      path: '/api/v1/outline/documents/:documentId/comments',
+      status: 201,
+      notFound: 'Document not found',
+      fallback: 'Failed to add comment',
+      schema: (m) => m.addCommentRestSchema,
+      run: (m, c, a, p) => m.performAddComment(c, p.documentId, a),
+    },
+    {
+      path: '/api/v1/outline/documents/:documentId',
+      notFound: 'Document not found',
+      fallback: 'Failed to update document',
+      schema: (m) => m.updateDocumentRestSchema,
+      run: (m, c, a, p) => m.performUpdateDocument(c, p.documentId, a),
+    },
+    {
+      // Static, so it precedes nothing ambiguous — but kept adjacent to the
+      // per-collection export so the pair reads as one feature.
+      path: '/api/v1/outline/exports',
+      notFound: 'Workspace not found',
+      fallback: 'Failed to start workspace export',
+      schema: (m) => m.exportRestSchema,
+      run: (m, c, a) => m.performExport(c, undefined, a),
+    },
+    {
+      path: '/api/v1/outline/collections/:collectionId/export',
+      notFound: 'Collection not found',
+      fallback: 'Failed to start collection export',
+      schema: (m) => m.exportRestSchema,
+      run: (m, c, a, p) => m.performExport(c, p.collectionId, a),
+    },
+    {
+      path: '/api/v1/outline/collections',
+      status: 201,
+      notFound: 'Collection not found',
+      fallback: 'Failed to create collection',
+      schema: (m) => m.createCollectionRestSchema,
+      run: (m, c, a) => m.performCreateCollection(c, a),
+    },
+    {
+      path: '/api/v1/outline/collections/:collectionId',
+      notFound: 'Collection not found',
+      fallback: 'Failed to update collection',
+      schema: (m) => m.updateCollectionRestSchema,
+      run: (m, c, a, p) => m.performUpdateCollection(c, p.collectionId, a),
+    },
+  ];
+
+  for (const route of OUTLINE_WRITE_ROUTES) {
+    app.post(route.path, requireOutlineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        // See the read loop above: client resolution belongs inside the try so a
+        // failed token refresh answers JSON rather than Express's HTML page.
+        const client = await outlineRestClient(req, res);
+        if (!client) return;
+        const ops = await import('../outline/restOps.js');
+        let args: unknown = {};
+        const schema = route.schema?.(ops);
+        if (schema) {
+          const parsed = schema.safeParse(req.body ?? {});
+          if (!parsed.success) {
+            res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+            return;
+          }
+          args = parsed.data;
+        }
+        const result = await route.run(ops, client, args, req.params as RouteParams);
+        res.status(route.status ?? 200).json(result);
+      } catch (err) {
+        sendOutlineError(res, err, route.notFound, route.fallback);
+      }
+    });
+  }
 
 
   // =========================================================================

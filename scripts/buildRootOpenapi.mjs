@@ -36,6 +36,7 @@ const SERVICE_PREFIX = {
   'openapi-peopleforce.json': 'PeopleForce',
   'openapi-hubspot.json': 'HubSpot',
   'openapi-redmine.json': 'Redmine',
+  'openapi-outline.json': 'Outline',
 };
 
 const SHARED_SCHEMAS = new Set(['Error']);

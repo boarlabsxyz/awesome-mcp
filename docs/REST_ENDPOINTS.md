@@ -144,6 +144,31 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `getPage` | `GET /api/v1/clickup/docs/{docId}/pages/{pageId}?workspaceId={workspaceId}` | live | Get a page within a ClickUp doc — _Required query param: workspaceId._ |
 | `listWorkspaceMembers` | `GET /api/v1/clickup/workspaces/{workspaceId}/members` | live | List members of a workspace — _No dedicated ClickUp endpoint; derived from getWorkspaces team.members[]._ |
 | `getTimeEntries` | `GET /api/v1/clickup/workspaces/{workspaceId}/time` | live | List time entries |
+| `listTaskTypes` | `GET /api/v1/clickup/workspaces/{workspaceId}/task-types` | live | List task types (custom item types) in a workspace — _ClickUp returns only the CUSTOM types; the two built-ins (0 = Task, 1 = Milestone) are prepended here, so builtIn and custom are reported separately._ |
+| `listSpaceTags` | `GET /api/v1/clickup/spaces/{spaceId}/tags` | live | List tags defined in a space |
+| `createSpace` | `POST /api/v1/clickup/spaces/{spaceId}` | live | Create a space in a workspace — _Pre-existing ChatGPT-compat route. WARNING the path parameter is named spaceId but ClickUp requires the WORKSPACE (team) ID here -- the name is kept because the published spec uses it. Native body: name, multiple_assignees, features._ |
+| `createFolder` | `POST /api/v1/clickup/spaces/{spaceId}/folders` | live | Create a folder in a space — _Pre-existing ChatGPT-compat route. Native body forwarded verbatim: name._ |
+| `createList` | `POST /api/v1/clickup/folders/{folderId}/lists` | live | Create a list in a folder — _Pre-existing ChatGPT-compat route. Native body forwarded verbatim: name, content, markdown_content, due_date, priority, assignee, status. For a FOLDERLESS list use the MCP createList tool with spaceId -- there is no REST route for it._ |
+| `createTask` | `POST /api/v1/clickup/lists/{listId}/tasks` | live | Create a task in a list — _Pre-existing ChatGPT-compat route. Native body forwarded verbatim: name, description, markdown_content, assignees, status, priority, due_date, start_date, tags, time_estimate, parent, custom_item_id._ |
+| `moveTask` | `POST /api/v1/clickup/tasks/{taskId}/move` | live | Move a task to a different list — _Pre-existing ChatGPT-compat route. Body: listId. Changes the task LIST only, never its parent task._ |
+| `addTaskComment` | `POST /api/v1/clickup/tasks/{taskId}/comments` | live | Add a comment to a task — _Pre-existing ChatGPT-compat route. Native body forwarded verbatim: comment_text, assignee, notify_all._ |
+| `setCustomFieldValue` | `POST /api/v1/clickup/tasks/{taskId}/fields/{fieldId}` | live | Set a custom field value on a task — _Pre-existing route, not in the published spec. Body: value, forwarded as-is. Unlike the MCP tool it does NOT resolve option names or revive a stringified array, so send array-valued types (labels, users, relationships) as real JSON arrays or ClickUp answers FIELD_144._ |
+| `startTimeEntry` | `POST /api/v1/clickup/workspaces/{workspaceId}/time/start` | live | Start a time entry — _Pre-existing ChatGPT-compat route. Native body forwarded verbatim: tid is the task ID, plus description and billable._ |
+| `stopTimeEntry` | `POST /api/v1/clickup/workspaces/{workspaceId}/time/stop` | live | Stop the running time entry — _Pre-existing ChatGPT-compat route. No body._ |
+| `uploadClickUpDocImage` | `POST /api/v1/images` | live | Re-host an image and return a public URL to embed in a ClickUp Doc — _Pre-existing ChatGPT-compat route, shared with any service that needs a hosted image. Two body shapes: raw image bytes, or JSON with imageUrl. The URL is fetched BY THIS SERVER with a per-redirect-hop SSRF guard. Requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL. The served URL is public and unauthenticated._ |
+| `updateTask` | `POST /api/v1/clickup/tasks/{taskId}/update` | live | Update a task, or re-parent it — _camelCase body (markdownContent, dueDate, addAssignees, taskTypeId, parentTaskId). On the re-parent path the change is VERIFIED by a re-read: reparentConfirmed is true, false (ClickUp accepted the call and silently ignored it -- do not treat the move as done), or null (unverified). ClickUp cannot clear a parent, so parentTaskId null is refused. An uncatalogued legacy PATCH on /api/v1/clickup/tasks/{taskId} takes native keys instead and applies none of these guards._ |
+| `deleteTask` | `POST /api/v1/clickup/tasks/{taskId}/delete` | live | Delete a task permanently — _DESTRUCTIVE and permanent -- ClickUp has no recycle bin for this. Exposed with explicit user sign-off. A curl has no confirmation affordance and the permanent dashboard API key is accepted here. An uncatalogued legacy DELETE on /api/v1/clickup/tasks/{taskId} has served the same operation all along._ |
+| `updateList` | `POST /api/v1/clickup/lists/{listId}/update` | live | Update a list — _camelCase body (name, content, dueDate, priority); at least one field required. An uncatalogued legacy PATCH on /api/v1/clickup/lists/{listId} takes native keys instead._ |
+| `deleteList` | `POST /api/v1/clickup/lists/{listId}/delete` | live | Delete a list permanently — _DESTRUCTIVE and permanent, and it takes every task in the list with it. Exposed with explicit user sign-off. An uncatalogued legacy DELETE on /api/v1/clickup/lists/{listId} has served the same operation all along._ |
+| `removeCustomFieldValue` | `POST /api/v1/clickup/tasks/{taskId}/fields/{fieldId}/remove` | live | Clear a custom field value on a task — _DESTRUCTIVE: clears the stored VALUE, exposed with explicit user sign-off. The field itself and its drop-down or label options are untouched and cannot be deleted through ClickUp API at all. An uncatalogued legacy DELETE on the same path without /remove has served this all along._ |
+| `addTaskToList` | `POST /api/v1/clickup/tasks/{taskId}/lists/{listId}` | live | Share a task into an additional list — _Needs the Tasks in Multiple Lists ClickApp; ClickUp answers a disabled ClickApp with 401, the same status as a bad credential. ClickUp answers 200 with an EMPTY body, so the task is re-read: confirmed is true, false, or null when ClickUp sent no locations array (its absence is not evidence of absence). Unlike the MCP tool this route runs no pre-flight, so it cannot tell a disabled ClickApp from a bad ID._ |
+| `removeTaskFromList` | `POST /api/v1/clickup/tasks/{taskId}/lists/{listId}/remove` | live | Remove a task from an additional list — _DESTRUCTIVE, exposed with explicit user sign-off, though the task itself is not deleted. ClickUp refuses to remove a task from its HOME list. Same empty-body re-read and three-valued confirmed as the add direction._ |
+| `addTagToTask` | `POST /api/v1/clickup/tasks/{taskId}/tags/{tagName}` | live | Add a tag to a task — _ClickUp AUTO-CREATES the tag in the task space if it does not exist, so a typo silently makes a new tag -- call the space tags endpoint first to reuse existing ones. ClickUp updateTask does not accept tags; this is the only way to tag an existing task._ |
+| `removeTagFromTask` | `POST /api/v1/clickup/tasks/{taskId}/tags/{tagName}/remove` | live | Remove a tag from a task — _DESTRUCTIVE, exposed with explicit user sign-off. Unassigns the tag from this task only; the tag stays defined in the space._ |
+| `createDoc` | `POST /api/v1/clickup/workspaces/{workspaceId}/docs` | live | Create a doc in a workspace — _ClickUp createDoc endpoint IGNORES content, so content is written to the doc first page in a second call. contentWritten reports that second step: the doc exists either way, so a failure there is 201 with contentWritten false rather than an error that would invite a retry and make a second doc._ |
+| `createPage` | `POST /api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages` | live | Create a page in a doc — _Body: name, content (markdown), parentPageId._ |
+| `editPage` | `POST /api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages/{pageId}` | live | Edit a page in a doc — _editMode replace (default), append, or prepend. replace overwrites the whole page body, so it is destructive to existing content even though the tool carries no destructive annotation._ |
+| `insertImageIntoPage` | `POST /api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages/{pageId}/images` | live | Re-host an image and embed it in a doc page — _Exactly one of imageUrl or imageBase64. imageUrl is fetched BY THIS SERVER, so it goes through the per-redirect-hop SSRF guard; there is deliberately no filesystem-path parameter. Requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL; a deployment without them answers 503, not 500, because an unconfigured feature is not a fault. The hosted image URL is public and unauthenticated. Body limit raised to 5 MB for imageBase64._ |
 
 ### Slack (`slack`)
 
@@ -158,19 +183,31 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 
 | MCP tool | REST endpoint | Status | Summary |
 |---|---|---|---|
-| `getDocument` | `GET /api/v1/outline/documents/{documentId}` | planned | Read an Outline document |
-| `exportDocument` | `GET /api/v1/outline/documents/{documentId}/export` | planned | Export an Outline document as plain markdown |
-| `searchDocuments` | `GET /api/v1/outline/documents/search?q={query}` | planned | Search Outline documents |
-| `listRecentlyUpdatedDocuments` | `GET /api/v1/outline/documents/recent` | planned | List recently updated Outline documents |
-| `getDocumentBacklinks` | `GET /api/v1/outline/documents/{documentId}/backlinks` | planned | List documents that link to a given Outline document |
-| `listArchivedDocuments` | `GET /api/v1/outline/documents/archived` | planned | List archived Outline documents |
-| `listTrash` | `GET /api/v1/outline/documents/trash` | planned | List Outline documents in the trash |
-| `listCollections` | `GET /api/v1/outline/collections` | planned | List Outline collections |
-| `getCollectionStructure` | `GET /api/v1/outline/collections/{collectionId}/structure` | planned | Get the hierarchical document tree for an Outline collection |
-| `listDocumentComments` | `GET /api/v1/outline/documents/{documentId}/comments` | planned | List comments on an Outline document |
-| `getComment` | `GET /api/v1/outline/comments/{commentId}` | planned | Get a single Outline comment |
-| `listDocumentAttachments` | `GET /api/v1/outline/documents/{documentId}/attachments` | planned | List attachments referenced in an Outline document |
-| `getAttachmentUrl` | `GET /api/v1/outline/attachments/{attachmentId}/url` | planned | Resolve an Outline attachment ID to a signed download URL |
+| `searchDocuments` | `GET /api/v1/outline/documents/search?q={query}` | live | Search Outline documents — _Required query param: q. Optional collectionId, limit (max 100), offset, statusFilter (repeatable: draft, archived, published). Defaults to published only._ |
+| `listRecentlyUpdatedDocuments` | `GET /api/v1/outline/documents/recent` | live | List recently updated Outline documents — _dateFilter is a coarse window: day, week (default), month, or year._ |
+| `listArchivedDocuments` | `GET /api/v1/outline/documents/archived` | live | List archived Outline documents |
+| `listTrash` | `GET /api/v1/outline/documents/trash` | live | List Outline documents in the trash |
+| `getDocumentIdFromTitle` | `GET /api/v1/outline/documents/by-title?q={query}` | live | Resolve an Outline document title to its ID — _Required query param: q. Prefers an exact title match and falls back to the best partial one, so exactMatch reports which you got -- a partial match is a guess, not an answer._ |
+| `getDocument` | `GET /api/v1/outline/documents/{documentId}` | live | Read an Outline document |
+| `exportDocument` | `GET /api/v1/outline/documents/{documentId}/export` | live | Export an Outline document as plain markdown — _Answers text/markdown, not JSON -- the markdown body is the whole response._ |
+| `getDocumentBacklinks` | `GET /api/v1/outline/documents/{documentId}/backlinks` | live | List documents that link to a given Outline document |
+| `listDocumentComments` | `GET /api/v1/outline/documents/{documentId}/comments` | live | List comments on an Outline document — _Optional includeAnchorText returns the document text each comment refers to._ |
+| `listDocumentAttachments` | `GET /api/v1/outline/documents/{documentId}/attachments` | live | List attachments referenced in an Outline document — _Outline has no attachments-by-document endpoint, so this parses the document markdown for /api/attachments.redirect links. An attachment linked any other way is not found._ |
+| `getComment` | `GET /api/v1/outline/comments/{commentId}` | live | Get a single Outline comment |
+| `getAttachmentUrl` | `GET /api/v1/outline/attachments/{attachmentId}/url` | live | Resolve an Outline attachment ID to a signed download URL — _Follows the redirect to a pre-signed storage URL. That URL is time-limited and grants whoever holds it access to the file, so treat it as a credential._ |
+| `listCollections` | `GET /api/v1/outline/collections` | live | List Outline collections |
+| `getCollectionStructure` | `GET /api/v1/outline/collections/{collectionId}/structure` | live | Get the hierarchical document tree for an Outline collection |
+| `exportCollection` | `POST /api/v1/outline/collections/{collectionId}/export` | live | Start an async export of an Outline collection — _POST even though the MCP tool is annotated read-only: this QUEUES a server-side job and each call queues another. A GET would be retried by proxies and retry middleware after a timeout, queueing a second export nobody asked for. Returns a fileOperation id plus state, not the export itself -- poll Outline for completion._ |
+| `exportAllCollections` | `POST /api/v1/outline/exports` | live | Start an async export of the whole Outline workspace — _POST for the same reason as the per-collection export, and it matters more here: a retried GET would queue a second WHOLE-WORKSPACE export. Returns a fileOperation id and state, not the export itself._ |
+| `createDocument` | `POST /api/v1/outline/documents` | live | Create an Outline document — _Answers 201. Body: title, collectionId, text (markdown), parentDocumentId, publish (default true), template, icon. Body limit raised to 5 MB -- a document body is the large payload this plane exists for._ |
+| `updateDocument` | `POST /api/v1/outline/documents/{documentId}` | live | Update an Outline document — _REPLACES title and text unless append is true, so an update that omits nothing still overwrites the body. append is ignored unless text is supplied. An empty-string icon clears the icon; omitting it leaves it alone._ |
+| `moveDocument` | `POST /api/v1/outline/documents/{documentId}/move` | live | Move an Outline document to another collection or parent — _At least one of collectionId or parentDocumentId is required._ |
+| `archiveDocument` | `POST /api/v1/outline/documents/{documentId}/archive` | live | Archive an Outline document — _Reversible via the unarchive route. Removes the document from its collection but keeps it searchable._ |
+| `unarchiveDocument` | `POST /api/v1/outline/documents/{documentId}/unarchive` | live | Unarchive an Outline document — _Shares Outline /api/documents.restore with the restore route: there is NO documents.unarchive endpoint, and calling one would 404. The two paths are kept separate because the intent differs, not the call._ |
+| `restoreDocument` | `POST /api/v1/outline/documents/{documentId}/restore` | live | Restore an Outline document from the trash |
+| `addComment` | `POST /api/v1/outline/documents/{documentId}/comments` | live | Add a comment to an Outline document, or reply to one — _Answers 201. Pass parentCommentId to reply to an existing comment._ |
+| `createCollection` | `POST /api/v1/outline/collections` | live | Create an Outline collection — _Answers 201. Body: name, description, color as a hex like #RRGGBB._ |
+| `updateCollection` | `POST /api/v1/outline/collections/{collectionId}` | live | Update an Outline collection — _At least one of name, description, or color is required._ |
 
 ### PeopleForce (`peopleforce`)
 
@@ -282,4 +319,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 187 endpoints.
+Catalog size: 224 endpoints.

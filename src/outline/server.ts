@@ -19,12 +19,31 @@ import {
   parseAttachmentIds,
   withOutlineClient,
 } from './apiHelpers.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
+// The write-parameter fields are defined ONCE in ./restOps.js and composed by both
+// surfaces: the tools below add the id as a parameter, the REST routes take it
+// from the path. Copying them would let the two drift on what is valid.
+import {
+  addCommentFields,
+  createCollectionFields,
+  createDocumentFields,
+  moveDocumentFields,
+  updateCollectionFields,
+  updateDocumentFields,
+} from './restOps.js';
 
 export const outlineServer = new FastMCP<UserSession>({
   name: 'Outline Wiki MCP',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'outline'),
 });
+
+// Outline now has a live REST data plane, so an MCP client must be able to mint a
+// short-lived bearer for it and discover what it exposes. Without these two the
+// only usable credential is the permanent dashboard API key.
+registerMintRestBearerForCurl(outlineServer);
+registerListRestEndpoints(outlineServer);
 
 // === Documents: reading ===
 
@@ -193,15 +212,7 @@ outlineServer.addTool({
   name: 'createDocument',
   annotations: { readOnlyHint: false },
   description: 'Creates a new Outline document in a collection. Optionally publishes immediately, sets an icon, or nests under a parent.',
-  parameters: z.object({
-    title: z.string().describe('Document title.'),
-    collectionId: z.string().describe('The collection ID to create the document in.'),
-    text: z.string().optional().default('').describe('Markdown content (optional).'),
-    parentDocumentId: z.string().optional().describe('Parent document ID for nesting.'),
-    publish: z.boolean().optional().default(true).describe('Publish immediately (default true) or save as draft.'),
-    template: z.boolean().optional().describe('If true, create as a template.'),
-    icon: z.string().optional().describe('Optional emoji icon (e.g. "📋").'),
-  }),
+  parameters: z.object(createDocumentFields),
   execute: (args, { log, session }) =>
     withOutlineClient('Failed to create document', session, log, async (client) => {
       log.info(`Creating Outline document "${args.title}" in collection ${args.collectionId}`);
@@ -225,11 +236,7 @@ outlineServer.addTool({
   description: 'Updates an Outline document. Replaces title/content unless append=true.',
   parameters: z.object({
     documentId: z.string().describe('The document ID to update.'),
-    title: z.string().optional().describe('New title (leave empty to keep).'),
-    text: z.string().optional().describe('New content (leave empty to keep).'),
-    append: z.boolean().optional().default(false).describe('If true, append text instead of replacing.'),
-    template: z.boolean().optional().describe('If set, convert to/from a template.'),
-    icon: z.string().optional().describe('Emoji icon; empty string clears it.'),
+    ...updateDocumentFields,
   }),
   execute: (args, { log, session }) =>
     withOutlineClient('Failed to update document', session, log, async (client) => {
@@ -253,8 +260,7 @@ outlineServer.addTool({
   description: 'Moves an Outline document to a different collection and/or under a different parent. Must specify at least one destination.',
   parameters: z.object({
     documentId: z.string().describe('The document ID to move.'),
-    collectionId: z.string().optional().describe('Target collection ID.'),
-    parentDocumentId: z.string().optional().describe('New parent document ID (for nesting).'),
+    ...moveDocumentFields,
   }),
   execute: (args, { log, session }) => {
     if (!args.collectionId && !args.parentDocumentId) {
@@ -382,15 +388,7 @@ outlineServer.addTool({
   name: 'createCollection',
   annotations: { readOnlyHint: false },
   description: 'Creates a new Outline collection.',
-  parameters: z.object({
-    name: z.string().describe('Collection name.'),
-    description: z.string().optional().default('').describe('Optional description.'),
-    color: z
-      .string()
-      .regex(/^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/, 'Color must be a hex like #RRGGBB or #RGB.')
-      .optional()
-      .describe('Optional hex color, e.g. #FF0000.'),
-  }),
+  parameters: z.object(createCollectionFields),
   execute: (args, { log, session }) =>
     withOutlineClient('Failed to create collection', session, log, async (client) => {
       log.info(`Creating Outline collection "${args.name}"`);
@@ -410,13 +408,7 @@ outlineServer.addTool({
   description: 'Updates an Outline collection\'s name, description, or color. Provide at least one field.',
   parameters: z.object({
     collectionId: z.string().describe('The collection ID.'),
-    name: z.string().optional().describe('New name.'),
-    description: z.string().optional().describe('New description.'),
-    color: z
-      .string()
-      .regex(/^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/, 'Color must be a hex like #RRGGBB or #RGB.')
-      .optional()
-      .describe('New hex color, e.g. #FF0000.'),
+    ...updateCollectionFields,
   }),
   execute: (args, { log, session }) => {
     if (args.name === undefined && args.description === undefined && args.color === undefined) {
@@ -533,8 +525,7 @@ outlineServer.addTool({
   description: 'Adds a comment on an Outline document, or replies to an existing comment.',
   parameters: z.object({
     documentId: z.string().describe('The document to comment on.'),
-    text: z.string().describe('Comment text (supports markdown).'),
-    parentCommentId: z.string().optional().describe('Parent comment ID for replies.'),
+    ...addCommentFields,
   }),
   execute: (args, { log, session }) =>
     withOutlineClient('Failed to add comment', session, log, async (client) => {
