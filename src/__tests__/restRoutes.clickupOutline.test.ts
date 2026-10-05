@@ -175,6 +175,38 @@ describe('REST data plane: ClickUp and Outline handler bodies', () => {
       assert.equal(calls.length, 0);
     });
 
+    it('refuses a digit string that overflows to Infinity or past Date range', async () => {
+      reset();
+      // parseTimestampInput returns Number(x) for ANY digit string: a long enough
+      // one is Infinity, which is NOT NaN and serialises as null — the same silent
+      // date-clear, reached through a different door. A finite but out-of-range
+      // value is nonsense as a date and must not reach ClickUp either.
+      for (const dueDate of ['9'.repeat(400), '99999999999999999999', '8640000000000001']) {
+        const res = await request(app).post('/api/v1/clickup/tasks/task-1/update').set(auth()).send({ dueDate });
+        assert.equal(res.status, 400, `expected 400 for a ${dueDate.length}-digit value`);
+        assert.match(res.body.error, /not a valid date/i);
+      }
+      assert.equal(calls.length, 0, 'nothing may reach ClickUp');
+    });
+
+    it('does not echo a huge date payload back in the error', async () => {
+      reset();
+      const res = await request(app).post('/api/v1/clickup/tasks/task-1/update').set(auth())
+        .send({ dueDate: '9'.repeat(5000) });
+      assert.equal(res.status, 400);
+      // The message truncates: echoing 5000 characters back would flood logs and,
+      // on the MCP path, the caller's context.
+      assert.ok(res.body.error.length < 400, `error was ${res.body.error.length} chars`);
+    });
+
+    it('still accepts the boundary value itself', async () => {
+      reset();
+      when('/task/task-1', { json: { id: 'task-1' } });
+      await request(app).post('/api/v1/clickup/tasks/task-1/update').set(auth())
+        .send({ dueDate: '8640000000000000' }).expect(200);
+      assert.equal((callsTo('/task/task-1')[0].body as any).due_date, 8640000000000000);
+    });
+
     it('refuses an unparseable list dueDate too', async () => {
       reset();
       const res = await request(app).post('/api/v1/clickup/lists/list-1/update').set(auth())
