@@ -87,6 +87,9 @@ export type UpdateTaskRestArgs = z.infer<typeof updateTaskRestSchema>;
 /** ECMAScript's maximum time value — the widest a JS Date can represent. */
 const MAX_TIME_VALUE = 8_640_000_000_000_000;
 
+/** How much of a rejected value is quoted back; the rest is elided. */
+const MAX_ECHOED_INPUT = 64;
+
 /**
  * Convert a caller-supplied date to the Unix-ms ClickUp wants, REFUSING anything
  * that does not parse.
@@ -110,8 +113,12 @@ export function toClickUpTimestamp(field: string, raw: string): number {
   // range for JSON but nonsense as a date, so it is refused too rather than
   // handed to ClickUp.
   if (!Number.isFinite(ts) || Math.abs(ts) > MAX_TIME_VALUE) {
+    // Echo the value back truncated. The input can legitimately be thousands of
+    // characters (that is how it overflowed), and quoting it whole would flood the
+    // logs and, on the MCP path, the caller's context.
+    const shown = raw.length > MAX_ECHOED_INPUT ? `${raw.slice(0, MAX_ECHOED_INPUT)}…` : raw;
     throw new UserError(
-      `${field} is not a valid date: ${JSON.stringify(raw.length > 64 ? `${raw.slice(0, 64)}…` : raw)}. `
+      `${field} is not a valid date: ${JSON.stringify(shown)}. `
       + `Pass an ISO 8601 string (2026-03-01T00:00:00Z) or a Unix timestamp in milliseconds `
       + `(1700000000000), within ±${MAX_TIME_VALUE} ms of the epoch.`,
     );
