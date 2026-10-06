@@ -1091,6 +1091,34 @@
     </div>
   </div>
 
+  <div id="domainRulesModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="domainRulesModalTitle">
+    <div class="modal" style="max-width: 550px;">
+      <div class="modal-header">
+        <h3 id="domainRulesModalTitle">Domain Rules</h3>
+        <button class="btn-close" type="button" onclick="closeDomainRules()" aria-label="Close dialog">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div style="margin-bottom: 10px;">
+        <button type="button" class="rules-help-toggle" onclick="document.getElementById('domainRulesHelp').classList.toggle('hidden')" aria-expanded="false" aria-controls="domainRulesHelp">&#9432; How domain rules work</button>
+        <div id="domainRulesHelp" class="rules-help-body hidden">
+          <ul>
+            <li><strong style="color: #6ee7b7;">Allowed</strong> &mdash; while this list is non-empty, the browser may only open these sites. Leave it empty to allow any site.</li>
+            <li><strong style="color: #f87171;">Blocked</strong> &mdash; these sites are never opened, even if also allowed.</li>
+            <li>Enter <strong>hostnames</strong>, not URLs. A hostname covers its subdomains: <code>example.com</code> matches <code>app.example.com</code> but not <code>notexample.com</code>.</li>
+            <li><strong>These rules apply to <code>navigate</code> only.</strong> It is the one tool that names a destination, so an <code>act</code> call can still follow a link off-list. Treat this as a guardrail that keeps an agent on task, not as a security boundary.</li>
+          </ul>
+        </div>
+      </div>
+      <div id="domainRulesContent" class="access-rules-content">
+        <p>Loading&hellip;</p>
+      </div>
+      <div style="margin-top: 12px;">
+        <button class="btn-connect-google" type="button" id="saveDomainRulesBtn" onclick="saveDomainRules()">Save Rules</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Login Overlay (shown when not authenticated) -->
   <div id="loginOverlay" class="login-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="loginOverlayTitle">
     <div class="login-card">
@@ -1146,7 +1174,7 @@
     }
 
     function getTopmostOpenModal() {
-      const candidates = ['accessRulesModal', 'addToolModal', 'loginOverlay'];
+      const candidates = ['accessRulesModal', 'domainRulesModal', 'addToolModal', 'loginOverlay'];
       for (const id of candidates) {
         const el = document.getElementById(id);
         if (el && !el.classList.contains('hidden')) return el;
@@ -1160,6 +1188,7 @@
       if (!topmost) return;
       if (topmost.id === 'addToolModal') closeAddToolModal();
       else if (topmost.id === 'accessRulesModal') closeAccessRules();
+      else if (topmost.id === 'domainRulesModal') closeDomainRules();
       // loginOverlay is not dismissible — sign-in required
     });
 
@@ -1183,6 +1212,7 @@
     }
     attachFocusTrap('addToolModal');
     attachFocusTrap('accessRulesModal');
+    attachFocusTrap('domainRulesModal');
     attachFocusTrap('loginOverlay');
 
     function announce(message) {
@@ -1501,6 +1531,7 @@
               ? `<button class="${repairClass}" type="button" data-action="reenter-token" title="Paste a fresh API key or token for this connection. Replaces the credential in place, so the MCP URL you already configured keeps working.">Re-enter token</button>`
               : ''}
             ${instance.provider === 'slack' ? `<button class="btn-rename" type="button" data-action="access-rules">Access Rules</button>` : ''}
+            ${instance.provider === 'browserbase' ? `<button class="btn-rename" type="button" data-action="domain-rules" title="Limit which sites this browser may navigate to. A guardrail, not a security boundary \u2014 see the note in the dialog.">Domain Rules</button>` : ''}
             <button class="btn-delete" type="button" data-action="delete">Delete</button>
           </div>
         </div>
@@ -1535,7 +1566,7 @@
       const pasteCapable =
         provider === 'slack-bot' || provider === 'outline' ||
         provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot' ||
-        provider === 'redmine';
+        provider === 'redmine' || provider === 'browserbase';
       return pasteCapable && !mcp.oauthAuthorizationUrl;
     }
 
@@ -1614,7 +1645,8 @@
       // back to the URL + API key paste form.
       const isTokenProvider =
         (provider === 'slack-bot' || provider === 'outline' || provider === 'peopleforce'
-          || provider === 'peopleforce-v4' || provider === 'hubspot' || provider === 'redmine')
+          || provider === 'peopleforce-v4' || provider === 'hubspot' || provider === 'redmine'
+          || provider === 'browserbase')
         && !selectedMcpType.oauthAuthorizationUrl;
 
       // For OAuth providers, skip naming step — name is auto-generated on the backend
@@ -1723,6 +1755,22 @@
         nameSection.style.display = 'none';
         nameInput.value = '';
         tokenInput.focus();
+      } else if (provider === 'browserbase') {
+        tokenLabel.textContent = 'API Key';
+        tokenInput.placeholder = 'bb_live_\u2026';
+        tokenHint.innerHTML =
+          'In <span translate="no">Browserbase</span>: <strong>Dashboard \u2192 Settings \u2192 API Key</strong> ' +
+          '(<a href="https://www.browserbase.com/settings" target="_blank" rel="noopener">browserbase.com/settings</a>), ' +
+          'then copy the key and paste it here. No project id is needed \u2014 it is inferred from the key. ' +
+          'Note a browser session <strong>bills until it is closed</strong> or hits your project\u2019s default timeout, so set ' +
+          '<strong>Settings \u2192 Session timeout</strong> to a value you are comfortable with.';
+        // SaaS: one API host, so no URL field (unlike Outline and Redmine).
+        urlSection.style.display = 'none';
+        // No user-entered name — the backend names it after the Browserbase
+        // project, which is what the user sees in their own dashboard.
+        nameSection.style.display = 'none';
+        nameInput.value = '';
+        tokenInput.focus();
       } else {
         tokenLabel.textContent = 'Bot Token';
         tokenInput.placeholder = 'xoxb-…';
@@ -1768,7 +1816,7 @@
       // we can display.
       const isOutline = provider === 'outline';
       const isRedmine = provider === 'redmine';
-      const autoName = isOutline || isRedmine || provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot';
+      const autoName = isOutline || isRedmine || provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot' || provider === 'browserbase';
       const name = autoName ? '' : document.getElementById('instanceNameInput').value.trim();
       if (!autoName && !name) { alert('Please enter a name for this instance'); return; }
       const token = document.getElementById('tokenInput').value.trim();
@@ -1779,6 +1827,7 @@
                   : provider === 'peopleforce-v4' ? 'Please enter your PeopleForce service account API key'
                   : provider === 'hubspot' ? 'Please enter your HubSpot access token'
                   : provider === 'redmine' ? 'Please enter your Redmine API access key'
+                  : provider === 'browserbase' ? 'Please enter your Browserbase API key'
                   : 'Please enter a bot token';
         alert(msg);
         return;
@@ -2098,6 +2147,151 @@
       `).join('');
     }
 
+    // ---- Browserbase domain rules ----
+    //
+    // Separate from the Slack access-rules functions above for the same reason
+    // the routes are separate: the two share no field, no validation and no
+    // renderer. Two small self-contained flows beat one branching on provider.
+    let domainRulesInstanceId = null;
+    let domainRulesState = { allowedDomains: [], blockedDomains: [] };
+
+    async function openDomainRules(instanceId) {
+      domainRulesInstanceId = instanceId;
+      const modal = document.getElementById('domainRulesModal');
+      const helpToggle = modal.querySelector('.rules-help-toggle');
+      if (helpToggle) helpToggle.setAttribute('aria-expanded', 'false');
+      document.getElementById('domainRulesHelp').classList.add('hidden');
+      openModal(modal);
+      document.getElementById('domainRulesContent').innerHTML = '<p>Loading&hellip;</p>';
+
+      try {
+        const response = await fetch(`/api/instances/${instanceId}/domain-rules`, { credentials: 'include' });
+        if (!response.ok) throw new Error('Failed to load');
+        const data = await response.json();
+        domainRulesState = {
+          allowedDomains: (data.currentRules && data.currentRules.allowedDomains) || [],
+          blockedDomains: (data.currentRules && data.currentRules.blockedDomains) || [],
+        };
+        renderDomainRulesForm();
+      } catch (err) {
+        document.getElementById('domainRulesContent').innerHTML =
+          `<p style="color: #dc3545;" role="alert">Error: ${escapeHtml(err.message)}</p>`;
+      }
+    }
+
+    function domainListSection(kind, label, color, placeholder) {
+      return `
+        <div class="rules-section">
+          <label style="display:block; font-weight:600; color:${color}; margin-bottom:6px;">${label}</label>
+          <div style="display:flex; gap:6px;">
+            <input type="text" id="${kind}DomainInput" placeholder="${placeholder}" style="flex:1;"
+                   onkeydown="if(event.key==='Enter'){event.preventDefault();addDomain('${kind}');}" />
+            <button type="button" class="btn-rename" onclick="addDomain('${kind}')">Add</button>
+          </div>
+          <div id="${kind}DomainChips" style="margin-top:8px;"></div>
+        </div>`;
+    }
+
+    function renderDomainRulesForm() {
+      document.getElementById('domainRulesContent').innerHTML =
+        domainListSection('allowed', 'Allowed domains', '#6ee7b7', 'example.com') +
+        domainListSection('blocked', 'Blocked domains', '#f87171', 'ads.example.com');
+      renderDomainChips('allowed');
+      renderDomainChips('blocked');
+    }
+
+    function domainListFor(kind) {
+      return kind === 'allowed' ? domainRulesState.allowedDomains : domainRulesState.blockedDomains;
+    }
+
+    function renderDomainChips(kind) {
+      const list = domainListFor(kind);
+      const container = document.getElementById(`${kind}DomainChips`);
+      if (!container) return;
+      if (!list.length) {
+        container.innerHTML = kind === 'allowed'
+          ? '<span style="opacity:0.7; font-size:0.9em;">Empty &mdash; any site may be opened.</span>'
+          : '<span style="opacity:0.7; font-size:0.9em;">Empty &mdash; nothing is blocked.</span>';
+        return;
+      }
+      // Reuses the existing .chip / .chip-remove styles rather than inventing
+      // a class, so these read identically to the Slack rules chips.
+      container.innerHTML = list.map((domain, index) => `
+        <span class="chip">
+          ${escapeHtml(domain)}
+          <button type="button" class="chip-remove" data-action="remove-domain" data-kind="${kind}" data-index="${index}" aria-label="Remove ${escapeAttr(domain)}">
+            <span aria-hidden="true">&times;</span>
+          </button>
+        </span>
+      `).join('');
+    }
+
+    function addDomain(kind) {
+      const input = document.getElementById(`${kind}DomainInput`);
+      let value = input.value.trim().toLowerCase();
+      if (!value) return;
+      // Accept a pasted URL and keep the host: a user copying from the address
+      // bar is the common case, and the server rejects anything with a path, so
+      // silently saving "https://example.com/pricing" would be a dead rule.
+      if (value.includes('://')) {
+        try { value = new URL(value).hostname; } catch { /* leave it and let the server explain */ }
+      }
+      const list = domainListFor(kind);
+      if (!list.includes(value)) list.push(value);
+      input.value = '';
+      renderDomainChips(kind);
+    }
+
+    function removeDomain(kind, index) {
+      domainListFor(kind).splice(index, 1);
+      renderDomainChips(kind);
+    }
+
+    // Bound once on the container rather than inside the render, same as
+    // handleAccessRulesClick — re-rendering would otherwise stack listeners.
+    function handleDomainRulesClick(e) {
+      const btn = e.target.closest('button[data-action="remove-domain"]');
+      if (!btn) return;
+      removeDomain(btn.dataset.kind, parseInt(btn.dataset.index, 10));
+    }
+
+    function closeDomainRules() {
+      closeModal(document.getElementById('domainRulesModal'));
+      domainRulesInstanceId = null;
+    }
+
+    async function saveDomainRules() {
+      if (!domainRulesInstanceId) {
+        alert('Error: no instance selected. Please close and reopen Domain Rules.');
+        return;
+      }
+      const btn = document.getElementById('saveDomainRulesBtn');
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      try {
+        // Posts domainRulesState, NOT a re-read of the DOM: rebuilding a list
+        // from rendered chips drops anything that failed to render, which is
+        // the bug saveAccessRules had to be fixed for.
+        const response = await fetch(`/api/instances/${domainRulesInstanceId}/domain-rules`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ accessRules: domainRulesState }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'Failed to save domain rules');
+        closeDomainRules();
+        await loadUserData();
+        renderInstances();
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    }
+
     function closeAccessRules() {
       closeModal(document.getElementById('accessRulesModal'));
       rulesInstanceId = null;
@@ -2367,6 +2561,7 @@
         closeAddToolModal();
       }
     });
+    document.getElementById('domainRulesModal').addEventListener('click', handleDomainRulesClick);
     document.getElementById('accessRulesModal').addEventListener('click', function(e) {
       if (e.target === this) {
         closeAccessRules();
@@ -2388,6 +2583,7 @@
         case 'reenter-token': reenterToken(id); break;
         case 'copy':         copyUrl(id, btn); break;
         case 'access-rules': openAccessRules(id); break;
+        case 'domain-rules': openDomainRules(id); break;
         case 'delete':       deleteInstance(id, row.dataset.instanceName); break;
       }
     });

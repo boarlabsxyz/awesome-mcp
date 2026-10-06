@@ -18,6 +18,7 @@
 import { UserError } from 'fastmcp';
 import { UserSession } from '../userSession.js';
 import { stripTrailingSlashes } from '../util/url.js';
+import { jsonApiRequest } from '../util/jsonApiRequest.js';
 import { resolveRedmineAuthMode, type RedmineAuthMode } from './authMode.js';
 import { redmineOauthUrls, refreshRedmineToken } from './oauthCallback.js';
 
@@ -273,7 +274,16 @@ export class RedmineClient {
       : { 'X-Redmine-API-Key': this.token };
   }
 
-  async request<T>(
+  /**
+   * One REST call.
+   *
+   * The redirect guard, the deadline, the `.status`/`.body` tagging and the
+   * empty-body handling live in jsonApiRequest — see its header for why each
+   * matters. Only Redmine's own concerns stay here: the query-string builder
+   * and the dual-mode auth header, which an OAuth connection and an API-key
+   * connection must not share.
+   */
+  request<T>(
     method: string,
     path: string,
     body?: unknown,
@@ -282,47 +292,15 @@ export class RedmineClient {
     const url = new URL(`${this.baseUrl}${path}`);
     appendQueryParams(url, query);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    let res: Response;
-    try {
-      res = await fetch(url.toString(), {
-        method,
-        headers: {
-          ...this.authHeaders(),
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-        // Node's fetch strips `Authorization` across an origin change but
-        // keeps custom headers, so a redirect off the configured instance
-        // would hand X-Redmine-API-Key to the Location host. Refuse instead
-        // of following — the same stance validatePasteToken takes at connect
-        // time, which is also why a redirecting base URL never gets stored.
-        redirect: 'error',
-      });
-    } catch (err: any) {
-      if (err?.name === 'AbortError') {
-        throw new Error(`Redmine API ${method} ${path} timed out after ${REQUEST_TIMEOUT_MS}ms`);
-      }
-      throw err;
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      const error: any = new Error(`Redmine API ${method} ${path} failed: ${res.status} ${text}`);
-      error.status = res.status;
-      error.body = text;
-      throw error;
-    }
-
-    if (res.status === 204) return undefined as unknown as T;
-    const contentType = res.headers.get('content-type') || '';
-    if (!contentType.includes('application/json')) return undefined as unknown as T;
-    return (await res.json()) as T;
+    return jsonApiRequest<T>({
+      url: url.toString(),
+      method,
+      headers: this.authHeaders(),
+      body,
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      serviceLabel: 'Redmine API',
+      target: `${method} ${path}`,
+    }) as Promise<T>;
   }
 
   /** GET a collection and split it into items + pagination envelope. */

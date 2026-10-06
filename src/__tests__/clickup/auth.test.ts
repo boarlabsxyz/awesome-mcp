@@ -43,6 +43,7 @@ function makeDeps(overrides: Partial<AuthDeps> = {}): AuthDeps {
     createPeopleForceV4Session: mock.fn(() => ({} as any)),
     createHubSpotSession: mock.fn(() => ({} as any)),
     createRedmineSession: mock.fn(() => ({} as any)),
+    createBrowserbaseSession: mock.fn(() => ({} as any)),
     ...overrides,
   };
 }

@@ -24,7 +24,8 @@ export type RestService =
   | 'outline'
   | 'peopleforce'
   | 'hubspot'
-  | 'redmine';
+  | 'redmine'
+  | 'browserbase';
 
 /**
  * Which `src/<dir>/server.ts` implements each service's MCP tools.
@@ -50,6 +51,7 @@ export const SERVICE_SERVER_PATH: Record<RestService, string> = {
   peopleforce: 'src/peopleforce/server.ts',
   hubspot: 'src/hubspot/server.ts',
   redmine: 'src/redmine/server.ts',
+  browserbase: 'src/browserbase/server.ts',
 };
 
 export interface RestEndpoint {
@@ -371,6 +373,38 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'redmine', method: 'POST', path: '/api/v1/redmine/issues/{issueId}', summary: 'Update a Redmine issue or append a comment', mcpToolName: 'updateIssue', openapiOperationId: 'updateRedmineIssue', status: 'live', notes: 'POST rather than PUT because the catalog scope is GET and POST; Redmine itself takes a PUT here. Body limit 5mb. notes appends a comment, description REPLACES the body. Returns 200 with the issue re-read, since Redmine answers the write with 204 and no body.' },
   { service: 'redmine', method: 'POST', path: '/api/v1/redmine/time-entries', summary: 'Log time against a Redmine issue or project', mcpToolName: 'createTimeEntry', openapiOperationId: 'createRedmineTimeEntry', status: 'live', notes: '201 with the created entry. Provide issueId or projectId, not neither. Not idempotent - repeating the call logs the hours twice.' },
   { service: 'redmine', method: 'POST', path: '/api/v1/redmine/projects/{projectId}/wiki/{title}', summary: 'Create or replace a Redmine wiki page', mcpToolName: 'updateWikiPage', openapiOperationId: 'updateRedmineWikiPage', status: 'live', notes: 'Body limit 5mb - the clearest large-body case here, since text replaces the whole page. A title that does not exist yet is created. Pass version for optimistic locking so a concurrent edit is rejected rather than clobbered. Returns 200 with the page re-read.' },
+
+  // Browserbase. Every entry is `planned` on purpose: the routes are wired in a
+  // follow-up pull request, and `planned` keeps them out of public/openapi.json
+  // and out of the REST column of docs/MCP_TOOLS.md so the docs never advertise
+  // a route that would 404. Do not flip these to `live` without the handlers.
+  //
+  // The reads are the cost-control half: a browser session bills
+  // until it is released, and over curl is exactly where a cron job wants to
+  // sweep for stragglers.
+  //
+  // Two formatting rules for `notes` anywhere in this file, both learned here:
+  // no apostrophes (buildRestEndpointsDoc.mjs regex-parses this source, and an
+  // escaped quote silently drops the WHOLE entry from the generated docs rather
+  // than erroring), and no `|` (it is a markdown table cell, so a pipe splits
+  // the row into extra columns).
+  { service: 'browserbase', method: 'GET', path: '/api/v1/browserbase/sessions', summary: 'List Browserbase sessions and flag which are still running', mcpToolName: 'listBrowserSessions', openapiOperationId: 'listBrowserSessions', status: 'planned', notes: 'Optional query param: status, one of RUNNING, ERROR, TIMED_OUT, COMPLETED. Omit it to see everything, including sessions left running by an earlier conversation. Also takes ?format=text.' },
+  { service: 'browserbase', method: 'GET', path: '/api/v1/browserbase/sessions/{sessionId}', summary: 'Get one Browserbase session with its status and expiry', mcpToolName: 'getBrowserSession', openapiOperationId: 'getBrowserbaseSession', status: 'planned', notes: 'Also takes ?format=text. A session that has already been reaped answers 404.' },
+
+  // Browserbase writes. These earn a sibling on the shell-pipeline limb of the
+  // gate, not the large-body one: driving N URLs from a file is the use case.
+  //
+  // `act` is deliberately NOT here. It submits forms and clicks buttons on
+  // third-party systems, this plane accepts the PERMANENT dashboard API key,
+  // and a curl has no confirmation affordance - that is a new category of blast
+  // radius rather than a wider version of an existing one. It stays MCP-only.
+  // `end` has no sibling either, because forceEndBrowserSession reaches the same
+  // operation by id and works in more states.
+  { service: 'browserbase', method: 'POST', path: '/api/v1/browserbase/sessions/start', summary: 'Start a cloud browser session (or reattach to one) and return its id', mcpToolName: 'start', openapiOperationId: 'startBrowserSession', status: 'planned', notes: 'Returns the sessionId every later call must pass. The session bills until it is released or hits the project timeout, so pair it with a release.' },
+  { service: 'browserbase', method: 'POST', path: '/api/v1/browserbase/sessions/{sessionId}/navigate', summary: 'Open a URL in a browser session', mcpToolName: 'navigate', openapiOperationId: 'navigateBrowser', status: 'planned', notes: 'Body: { url }. Enforces the domain rules configured on the connection - the only endpoint that can, since it is the only one naming a destination. Answers 403 when a rule denies the URL.' },
+  { service: 'browserbase', method: 'POST', path: '/api/v1/browserbase/sessions/{sessionId}/observe', summary: 'Find actionable elements on the current page', mcpToolName: 'observe', openapiOperationId: 'observeBrowserPage', status: 'planned', notes: 'Body: { instruction }.' },
+  { service: 'browserbase', method: 'POST', path: '/api/v1/browserbase/sessions/{sessionId}/extract', summary: 'Extract data or text from the current page', mcpToolName: 'extract', openapiOperationId: 'extractFromBrowserPage', status: 'planned', notes: 'Body: { instruction } - optional; omit it for the page text.' },
+  { service: 'browserbase', method: 'POST', path: '/api/v1/browserbase/sessions/{sessionId}/release', summary: 'Force a Browserbase session to close so it stops billing', mcpToolName: 'forceEndBrowserSession', openapiOperationId: 'releaseBrowserSession', status: 'planned', notes: 'DESTRUCTIVE - anything in progress in that browser is lost, and there is no undo. Exposed with explicit user sign-off: a curl has no confirmation affordance and the permanent dashboard API key is accepted here. It is also the only way to stop a session whose id outlived the conversation that made it, which is why withholding it would cost more than it saves.' },
 ];
 
 export function endpointsForTool(mcpToolName: string): RestEndpoint[] {

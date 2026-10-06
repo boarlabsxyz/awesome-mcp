@@ -42,6 +42,7 @@ const SERVICES = [
   ['src/peopleforce-v4/server.ts',        'PeopleForce v4',        null],
   ['src/hubspot/server.ts',               'HubSpot',               'hubspot'],
   ['src/redmine/server.ts',               'Redmine',               'redmine'],
+  ['src/browserbase/server.ts',           'Browserbase',           'browserbase'],
 ];
 
 // ---------------------------------------------------------------------------
