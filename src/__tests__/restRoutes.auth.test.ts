@@ -150,6 +150,8 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/outline/collections/col-123/structure',
   '/api/v1/outline/comments/cmt-123',
   '/api/v1/outline/attachments/att-123/url',
+  '/api/v1/browserbase/sessions',
+  '/api/v1/browserbase/sessions/sess-123',
 ];
 
 // POST endpoints — same auth gate, exercised with the right verb. Bodies are
@@ -249,6 +251,13 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   // server-side export job, and a GET invites a proxy to repeat it.
   '/api/v1/outline/collections/col-123/export',
   '/api/v1/outline/exports',
+  // Browserbase. `act` is deliberately absent from the REST plane, so there is
+  // deliberately no path for it to gate.
+  '/api/v1/browserbase/sessions/start',
+  '/api/v1/browserbase/sessions/sess-123/navigate',
+  '/api/v1/browserbase/sessions/sess-123/observe',
+  '/api/v1/browserbase/sessions/sess-123/extract',
+  '/api/v1/browserbase/sessions/sess-123/release',
 ];
 
 describe('REST data-plane: auth gate', () => {
