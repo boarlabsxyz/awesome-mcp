@@ -4,12 +4,14 @@ import { UserError } from 'fastmcp';
 
 import {
   formatSession,
+  opAct,
   formatSessionList,
   opEnd,
   opExtract,
   opGetBrowserSession,
   opListBrowserSessions,
   opNavigate,
+  opObserve,
   opStart,
 } from '../../browserbase/ops.js';
 import { BrowserbaseAccessDenied } from '../../browserbase/accessRules.js';
@@ -206,6 +208,64 @@ describe('formatSessionList', () => {
   it('reports the list through the op', async () => {
     const client = stubClient({ listSessions: async () => [{ id: 'a', status: 'RUNNING' }] });
     assert.match(await opListBrowserSessions(client, {}), /1 still RUNNING/);
+  });
+});
+
+describe('formatSession field coverage', () => {
+  it('renders every optional field when present', () => {
+    const text = formatSession({
+      id: 's1', status: 'RUNNING', region: 'us-west-2', createdAt: 'C', startedAt: 'S',
+      expiresAt: 'E', endedAt: 'X', keepAlive: true, contextId: 'ctx-1', projectId: 'p1',
+    });
+    for (const expected of [
+      /Session: s1/, /Status: RUNNING/, /Region: us-west-2/, /Created: C/, /Started: S/,
+      /Expires: E/, /Ended: X/, /Keep-alive: on/, /Context: ctx-1/, /Project: p1/,
+      /browserbase\.com\/sessions\/s1/,
+    ]) assert.match(text, expected);
+  });
+
+  it('omits every field the payload does not carry', () => {
+    // A bare id is a legitimate payload; printing "Status: undefined" would be
+    // worse than saying nothing.
+    const text = formatSession({ id: 's1' });
+    assert.match(text, /Session: s1/);
+    for (const absent of [/Status:/, /Region:/, /Created:/, /Started:/, /Expires:/, /Ended:/, /Keep-alive:/, /Context:/, /Project:/]) {
+      assert.ok(!absent.test(text), `${absent} should be absent`);
+    }
+    // The dashboard link is unconditional — it is the only route to a replay.
+    assert.match(text, /Dashboard/);
+  });
+
+  it('hides expiry on a row that is not running', () => {
+    const text = formatSessionList([{ id: 'a', status: 'COMPLETED', expiresAt: 'T9' }]);
+    assert.ok(!/expires T9/.test(text));
+  });
+
+  it('labels a row whose status the payload omits', () => {
+    assert.match(formatSessionList([{ id: 'a' }]), /status unknown/);
+  });
+});
+
+describe('empty upstream text gets a plain statement, not a blank response', () => {
+  it('act and observe say what happened when the page returns nothing', async () => {
+    const act = stubProxy({ act: '' });
+    assert.match(await opAct(act.proxy, { action: 'x', sessionId: 's' }), /Action performed/);
+
+    const observe = stubProxy({ observe: '' });
+    assert.match(await opObserve(observe.proxy, { instruction: 'x', sessionId: 's' }), /Nothing matching that instruction/);
+  });
+
+  it('navigate still confirms the destination with no upstream text', async () => {
+    const { proxy } = stubProxy({ navigate: '' });
+    const text = await opNavigate(proxy, { url: 'https://example.com/', sessionId: 's' });
+    assert.match(text, /Navigated to https:\/\/example\.com\//);
+  });
+
+  it('omits the session reminder when no id was passed', async () => {
+    // Nothing to remind the caller of, and inventing one would be wrong.
+    const { proxy } = stubProxy({ act: 'done' });
+    const text = await opAct(proxy, { action: 'x' });
+    assert.ok(!/pass sessionId/.test(text));
   });
 });
 

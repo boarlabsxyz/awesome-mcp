@@ -162,7 +162,7 @@ export function assertDomainAllowed(rules: BrowserbaseAccessRules | undefined, r
   const blockHit = blocked.find(p => hostMatchesPattern(p, host));
   if (blockHit) {
     throw new BrowserbaseAccessDenied(
-      `${host} is on this connection's blocked-domains list (matched "${blockHit}"). Edit Access Rules on the dashboard to change it.`,
+      `${host} is on this connection's blocked-domains list (matched "${blockHit}"). Edit Domain Rules on the dashboard to change it.`,
       { reason: 'blocklist-hit', patterns: blocked, hostname: host },
     );
   }
@@ -170,7 +170,7 @@ export function assertDomainAllowed(rules: BrowserbaseAccessRules | undefined, r
   if (allowed.length > 0 && !allowed.some(p => hostMatchesPattern(p, host))) {
     throw new BrowserbaseAccessDenied(
       `${host} is not on this connection's allowed-domains list (${allowed.join(', ')}). ` +
-        `Add it under Access Rules on the dashboard, or clear the list to allow any site.`,
+        `Add it under Domain Rules on the dashboard, or clear the list to allow any site.`,
       { reason: 'allowlist-miss', patterns: allowed, hostname: host },
     );
   }

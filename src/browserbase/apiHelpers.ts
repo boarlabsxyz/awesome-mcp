@@ -20,6 +20,7 @@
 import { UserError } from 'fastmcp';
 
 import { UserSession } from '../userSession.js';
+import { jsonApiRequest } from '../util/jsonApiRequest.js';
 
 const DEFAULT_BASE_URL = 'https://api.browserbase.com/v1';
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -77,57 +78,30 @@ export class BrowserbaseClient {
   constructor(
     private readonly apiKey: string,
     public readonly baseUrl: string = DEFAULT_BASE_URL,
+    /** Injected in tests. */
+    private readonly fetchImpl?: typeof fetch,
   ) {}
 
-  async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const url = `${this.baseUrl}${path}`;
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        method,
-        headers: {
-          'x-bb-api-key': this.apiKey,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-        // Node's fetch strips `Authorization` across an origin change but keeps
-        // custom headers, so following a redirect would hand x-bb-api-key to
-        // whatever host the Location names. There is no legitimate redirect on
-        // this API, so treat one as an error. Same stance as RedmineClient.
-        redirect: 'error',
-      });
-    } catch (err: any) {
-      if (err?.name === 'AbortError') {
-        throw new Error(`Browserbase API ${method} ${path} timed out after ${REQUEST_TIMEOUT_MS}ms`);
-      }
-      throw err;
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      const error: any = new Error(`Browserbase API ${method} ${path} failed: ${res.status} ${text}`);
-      // `.status`, deliberately — NOT a Symbol. sendUpstreamError reads
-      // `err.code ?? err.response?.status ?? err.status`, and ClickUpClient's
-      // symbol-tagged status is invisible to all three, which is why every
-      // ClickUp REST read still answers 500 for a 404 and the newer ClickUp
-      // routes need a copy-onto-.code step in their catch. Setting it here
-      // means the REST handlers get real statuses with nothing to remember.
-      error.status = res.status;
-      error.body = text;
-      throw error;
-    }
-
-    if (res.status === 204) return undefined as unknown as T;
-    const contentType = res.headers.get('content-type') || '';
-    if (!contentType.includes('application/json')) return undefined as unknown as T;
-    return (await res.json()) as T;
+  /**
+   * One REST call.
+   *
+   * The redirect guard, the deadline, the `.status` tagging and the
+   * empty-body handling all live in jsonApiRequest — see its header for why
+   * each matters. The upstream status landing on `.status` is the detail worth
+   * knowing here: it is what lets the REST handlers answer a real 404 with no
+   * translation step, unlike ClickUp's symbol-tagged status.
+   */
+  request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    return jsonApiRequest<T>({
+      url: `${this.baseUrl}${path}`,
+      method,
+      headers: { 'x-bb-api-key': this.apiKey },
+      body,
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      serviceLabel: 'Browserbase API',
+      target: `${method} ${path}`,
+      fetchImpl: this.fetchImpl,
+    }) as Promise<T>;
   }
 
   /**

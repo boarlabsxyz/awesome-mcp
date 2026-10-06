@@ -78,9 +78,12 @@ describe('assertDomainAllowed', () => {
     assert.equal(err.reason, 'allowlist-miss');
     assert.deepEqual(err.patterns, ['example.com']);
     assert.equal(err.hostname, 'other.test');
-    // The message has to say what to edit, not just that it was refused.
+    // The message has to say what to edit, not just that it was refused — and
+    // it must name the control as the dashboard actually labels it. "Access
+    // Rules" is Slack's button; this provider's is "Domain Rules", so the wrong
+    // label sends the user hunting for something that is not there.
     assert.match(err.message, /example\.com/);
-    assert.match(err.message, /Access Rules|allowed-domains/i);
+    assert.match(err.message, /Domain Rules/);
   });
 
   it('lets the blocklist outrank the allowlist', () => {
@@ -88,6 +91,7 @@ describe('assertDomainAllowed', () => {
     assert.ok(assertDomainAllowed(rules, 'https://app.example.com'));
     const err = denialFrom(() => assertDomainAllowed(rules, 'https://secret.example.com/x'));
     assert.equal(err.reason, 'blocklist-hit');
+    assert.match(err.message, /Domain Rules/);
   });
 
   it('refuses a non-http scheme even with no rules at all', () => {
