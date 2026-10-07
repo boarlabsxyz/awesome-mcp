@@ -15,7 +15,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Slides](#google-slides) (6)
 - [ClickUp](#clickup) (48)
 - [Slack (bot)](#slack-bot-) (8)
-- [Slack (user)](#slack-user-) (16)
+- [Slack (user)](#slack-user-) (17)
 - [Outline](#outline) (27)
 - [PeopleForce](#peopleforce) (45)
 - [PeopleForce v4](#peopleforce-v4) (44)
@@ -229,7 +229,7 @@ Source: `src/slack/server.ts` — 8 tools.
 
 ## Slack (user)
 
-Source: `src/slack-user/server.ts` — 16 tools.
+Source: `src/slack-user/server.ts` — 17 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -241,6 +241,7 @@ Source: `src/slack-user/server.ts` — 16 tools.
 | `searchFiles` | Search files shared in Slack by name or content. Returns each file with its ID and the channels it is shared in — pass one of those channel IDs to downloadFile to fetch the content. Access rules are enforced: a file is shown only if at least one channel it is shared in is one you are allowed to read, and a file Slack reports no channel for is withheld (the response says how many, separately from rules denials). | — |
 | `postMessage` | Post a message to a Slack channel. | — |
 | `replyInThread` | Reply to a thread in a Slack channel. | — |
+| `editMessage` | Edit one of your own Slack messages, replacing its text. Get the ts from readChannelHistory or readThreadReplies. | — |
 | `listUsers` | List workspace members. Use this to find a user by name and get their user ID for opening a DM. | — |
 | `openDm` | Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage. | — |
 | `subscribeToChannelEvents` | Record interest in a Slack channel's events so they accrue in a durable store you can query later with getChannelEventHistory, instead of re-reading the channel and tracking your own watermark. IDEMPOTENT: re-calling for the same channel returns the existing subscription. Events are "message" (new messages and thread replies in public channels, private channels, DMs, and group DMs; join/leave noise is excluded) and "reaction_added". Slack delivers each of those channel types through a SEPARATE app-level toggle (message.channels / message.groups / message.im / message.mpim), so a workspace with only message.channels enabled records nothing for a DM — this tool names the one your channel needs. Optionally set matchPattern to record only messages whose text contains it (case-insensitive substring). History accrues from this moment forward — for anything earlier use readChannelHistory. Requires the operator to have configured the Slack app's Event Subscriptions Request URL and SLACK_SIGNING_SECRET; run debugChannelEventSubscription if events do not arrive. Access rules are enforced. | — |
@@ -488,4 +489,4 @@ Source: `src/browserbase/server.ts` — 9 tools.
 
 ---
 
-**Grand total: 351 tools across 16 sections.**
+**Grand total: 352 tools across 16 sections.**
