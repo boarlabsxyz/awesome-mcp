@@ -727,7 +727,24 @@ export async function seedDefaultCatalogs(): Promise<void> {
   // transport in .github/workflows/e2e-smoke.yml, and a shared env key would
   // serve one tenant's browser to another anyway — the credential is
   // per-connection, in providerTokens.
+  //
+  // Hidden by default, the same way peopleforce-v4 is: both catalog backends
+  // filter on is_active, so an inactive row drops out of /api/v1/catalogs and
+  // therefore out of the dashboard's Add Tool list and the public integrations
+  // page. Set BROWSERBASE_ENABLED=true to bring it back — the seed upserts on
+  // every boot, so that is a restart, not a deploy, and the comparison is strict
+  // so BROWSERBASE_ENABLED=yes leaves it hidden.
+  //
+  // Still SEEDED rather than skipped, for the reason the v4 row is: dropping it
+  // would orphan any existing connection. Note what hiding costs such a
+  // connection, because it is not nothing — getMcpCatalog filters on is_active
+  // too, so the entry reads as MISSING to the dashboard: renderInstanceRow
+  // degrades to the raw slug and a fallback icon, and getMcpUrl returns '', so
+  // Copy URL silently yields an empty string. The connection itself keeps
+  // working (mcp:browserbase stays in scopeMap either way) — it is the dashboard
+  // affordances that degrade.
   const browserbaseMcpUrl = normalizeUrl(process.env.BROWSERBASE_MCP_URL, '/browserbase');
+  const browserbaseEnabled = process.env.BROWSERBASE_ENABLED === 'true';
 
   await createMcpCatalog({
     slug: 'browserbase',
@@ -741,7 +758,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
     googleClientSecret: null,
     oauthScopes: [],
     isLocal: !process.env.BROWSERBASE_MCP_URL,
-    isActive: true,
+    isActive: browserbaseEnabled,
   });
 
   await seedRedmineCatalog(normalizeUrl);
