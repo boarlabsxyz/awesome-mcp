@@ -233,3 +233,112 @@ describe('checkConnectionHealth — config problems are not credential problems'
     assert.equal(health.state, 'healthy');
   });
 });
+
+// A Slack token is frozen at the scopes it was minted with, so every scope
+// added to the catalog (files:read, search:read, reactions:read) leaves already
+// connected grants working for every OLDER tool. The probe therefore reports
+// 'healthy' while downloadFile and searchMessages fail one at a time telling
+// the user to reconnect, and nothing on the dashboard row said to. These cover
+// the annotation that closes that gap — and, as importantly, every case where
+// we must NOT claim a scope is missing.
+describe('checkConnectionHealth — scope drift on a working credential', () => {
+  const CATALOG_SCOPES = ['channels:history', 'users:read', 'files:read', 'search:read'];
+  const WITH_SCOPES = { clientId: null, clientSecret: null, expectedScopes: CATALOG_SCOPES };
+
+  /** Slack answers every Web API call with the granted scopes in a header. */
+  const slackRespond = (body: unknown, headers: Record<string, string> = {}) =>
+    (async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: (n: string) => headers[n.toLowerCase()] ?? null },
+      json: async () => body,
+    })) as any;
+
+  it('flags the scopes a pre-addition grant is missing, without calling it broken', async () => {
+    const health = await checkConnectionHealth(conn('slack'), WITH_SCOPES, {
+      fetchImpl: slackRespond({ ok: true }, { 'x-oauth-scopes': 'channels:history,users:read' }),
+    });
+    // The whole point: still healthy. The credential works.
+    assert.equal(health.state, 'healthy');
+    assert.deepEqual(health.missingScopes, ['files:read', 'search:read']);
+  });
+
+  it('reports no gap when the grant already holds every catalog scope', async () => {
+    const health = await checkConnectionHealth(conn('slack'), WITH_SCOPES, {
+      fetchImpl: slackRespond({ ok: true }, {
+        'x-oauth-scopes': 'channels:history,users:read,files:read,search:read,chat:write',
+      }),
+    });
+    assert.equal(health.state, 'healthy');
+    assert.equal(health.missingScopes, undefined);
+  });
+
+  it('makes no claim when Slack sends no scope header', async () => {
+    // An absent header must never render as "every scope is missing" — that
+    // would put an Outdated badge on every healthy row.
+    const health = await checkConnectionHealth(conn('slack'), WITH_SCOPES, {
+      fetchImpl: slackRespond({ ok: true }),
+    });
+    assert.equal(health.state, 'healthy');
+    assert.equal(health.missingScopes, undefined);
+  });
+
+  it('falls back to the scope list stored at connect time', async () => {
+    // Covers a probe that reached Slack but got no header, and keeps working
+    // for connections made after the callback started recording the grant.
+    const health = await checkConnectionHealth(
+      conn('slack', { scope: 'channels:history,users:read' }), WITH_SCOPES,
+      { fetchImpl: slackRespond({ ok: true }) },
+    );
+    assert.deepEqual(health.missingScopes, ['files:read', 'search:read']);
+  });
+
+  it('prefers the live header over the stored list', async () => {
+    // The stored list is what the grant was minted with; the header is what it
+    // holds now. After a reconnect the header is the truthful one.
+    const health = await checkConnectionHealth(
+      conn('slack', { scope: 'channels:history' }), WITH_SCOPES,
+      { fetchImpl: slackRespond({ ok: true }, { 'x-oauth-scopes': CATALOG_SCOPES.join(',') }) },
+    );
+    assert.equal(health.missingScopes, undefined);
+  });
+
+  it('stays quiet about scopes when the credential itself was rejected', async () => {
+    // 'reauth' is the louder, conclusive problem and reconnecting fixes both.
+    const health = await checkConnectionHealth(
+      conn('slack', { scope: 'channels:history' }), WITH_SCOPES,
+      { fetchImpl: slackRespond({ ok: false, error: 'token_revoked' }) },
+    );
+    assert.equal(health.state, 'reauth');
+    assert.equal(health.missingScopes, undefined);
+  });
+
+  it('still flags the gap when Slack answers a non-fatal error', async () => {
+    // ratelimited is 'unknown', not a credential verdict — but the header it
+    // came with still describes the grant.
+    const health = await checkConnectionHealth(conn('slack'), WITH_SCOPES, {
+      fetchImpl: slackRespond({ ok: false, error: 'ratelimited' }, { 'x-oauth-scopes': 'channels:history' }),
+    });
+    assert.equal(health.state, 'unknown');
+    assert.deepEqual(health.missingScopes, ['users:read', 'files:read', 'search:read']);
+  });
+
+  it('makes no claim when the catalog asks for no scopes', async () => {
+    // slack-bot is paste-token: its catalog entry carries no oauthScopes, so
+    // there is nothing to be outdated against.
+    const health = await checkConnectionHealth(conn('slack-bot'), NO_CREDS, {
+      fetchImpl: slackRespond({ ok: true }, { 'x-oauth-scopes': 'channels:history' }),
+    });
+    assert.equal(health.state, 'healthy');
+    assert.equal(health.missingScopes, undefined);
+  });
+
+  it('tolerates a probe stub with no headers at all', async () => {
+    // Every other test in this file returns a bare { ok, status, json }; a
+    // direct res.headers.get() would turn those into transport failures.
+    const health = await checkConnectionHealth(conn('slack'), WITH_SCOPES, {
+      fetchImpl: respond(200, { ok: true }),
+    });
+    assert.equal(health.state, 'healthy');
+  });
+});

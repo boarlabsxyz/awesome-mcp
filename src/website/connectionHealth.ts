@@ -43,6 +43,24 @@ export interface ConnectionHealth {
   state: ConnectionHealthState;
   /** Short, user-facing when state is 'reauth'; diagnostic otherwise. */
   reason?: string;
+  /**
+   * Scopes the catalog now asks for that the stored grant does NOT hold.
+   *
+   * Deliberately NOT folded into `state`. A grant that predates a catalog scope
+   * addition is not a rejected credential — it works perfectly for every tool
+   * that existed when it was minted, which is exactly why the probe reports
+   * 'healthy' while `downloadFile` and `searchMessages` fail one by one. The
+   * two conditions need different words in the UI ("reconnect, this is dead"
+   * vs "reconnect, this is narrower than the tools now need"), so they travel
+   * as separate fields and the dashboard highlights on either.
+   *
+   * Absent means "no claim": either the catalog asks for nothing, or we could
+   * not learn what the credential holds. Never an assertion that nothing is
+   * missing.
+   */
+  missingScopes?: string[];
+  /** What the credential actually holds, when the provider told us. Diagnostic. */
+  grantedScopes?: string[];
 }
 
 const PROBE_TIMEOUT_MS = 8_000;
@@ -152,12 +170,84 @@ function fromValidateResult(
   return { state: 'unknown', reason: result.userMessage || `Provider unreachable (status ${status}).` };
 }
 
+/**
+ * Read a response header without assuming a real Response object.
+ *
+ * The probes are driven by an injected fetch in tests, whose stubs return bare
+ * `{ ok, status, json }` literals. A direct `res.headers.get(...)` would throw
+ * there, turning every existing probe test into a transport failure.
+ */
+function readHeader(res: unknown, name: string): string | null {
+  try {
+    const headers = (res as { headers?: { get?: (n: string) => string | null } }).headers;
+    return headers?.get?.(name) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Split a provider's scope list into scopes.
+ *
+ * Slack uses comma separation in both places this reads from — the
+ * `x-oauth-scopes` response header and `authed_user.scope` in the
+ * oauth.v2.access body — while OAuth 2.0 generally uses spaces, so both are
+ * accepted rather than betting on one.
+ *
+ * Returns null for "no information", which is NOT the same as the empty array:
+ * an empty array would claim the credential holds no scopes at all, and a
+ * missing header must never be rendered as "every scope is missing".
+ */
+function parseScopeList(raw: unknown): string[] | null {
+  if (typeof raw !== 'string') return Array.isArray(raw) ? raw.map(String) : null;
+  const parts = raw.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+  return parts.length ? parts : null;
+}
+
+/**
+ * Flag a credential that works but is narrower than the catalog now asks for.
+ *
+ * This is the gap the dashboard could not see. Slack freezes a token at the
+ * scopes it was minted with, so adding `files:read`/`search:read` to the
+ * catalog leaves every existing grant working for every older tool — the probe
+ * says 'healthy' — while the new tools fail one at a time with "reconnect from
+ * the dashboard", and nothing on the row said to.
+ *
+ * `state` is never changed here, only annotated: see the note on
+ * `missingScopes`.
+ */
+function withScopeDrift(
+  health: ConnectionHealth,
+  expectedScopes: string[] | null | undefined,
+  storedScopeRecord: unknown,
+): ConnectionHealth {
+  // A rejected credential is already the louder problem, and "reconnect because
+  // it is dead" and "reconnect because it is narrow" would compete for the same
+  // row. Reconnecting fixes both, so say the conclusive thing.
+  if (health.state === 'reauth') return health;
+
+  const expected = (expectedScopes || []).map(s => String(s).trim()).filter(Boolean);
+  if (!expected.length) return health;
+
+  // The live header is preferred because it describes the credential as it is
+  // RIGHT NOW; the stored record is a fallback for connections made before the
+  // callback started keeping it, and for a probe that could not reach Slack.
+  const granted = health.grantedScopes ?? parseScopeList(storedScopeRecord);
+  if (!granted) return health;
+
+  const held = new Set(granted);
+  const missing = expected.filter(scope => !held.has(scope));
+  return missing.length
+    ? { ...health, grantedScopes: granted, missingScopes: missing }
+    : { ...health, grantedScopes: granted };
+}
+
 /** Slack (bot and user) and ClickUp both answer a single authenticated GET/POST. */
 async function probeBearerEndpoint(
   url: string,
   token: string,
   fetchImpl: typeof fetch,
-  opts: { method?: string; slackStyle?: boolean } = {},
+  opts: { method?: string; slackStyle?: boolean; scopeHeader?: string } = {},
 ): Promise<ConnectionHealth> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
@@ -173,18 +263,25 @@ async function probeBearerEndpoint(
     if (!res.ok) {
       return { state: 'unknown', reason: `Provider returned HTTP ${res.status}.` };
     }
+    // What the credential actually holds, per the provider, on a call we were
+    // already making. Slack reports it on every Web API response, so the
+    // existing auth.test probe answers the scope question for free — no second
+    // request, and it works for connections that predate any of this.
+    const grantedScopes = opts.scopeHeader
+      ? parseScopeList(readHeader(res, opts.scopeHeader)) ?? undefined
+      : undefined;
     if (opts.slackStyle) {
       // Slack answers 200 with ok:false for auth problems, so the status code
       // alone would call a revoked token healthy.
       const data = await res.json() as { ok?: boolean; error?: string };
-      if (data?.ok) return { state: 'healthy' };
+      if (data?.ok) return { state: 'healthy', grantedScopes };
       const error = String(data?.error || 'unknown');
       const fatal = ['invalid_auth', 'token_revoked', 'token_expired', 'account_inactive', 'not_authed'];
       return fatal.includes(error)
         ? { state: 'reauth', reason: `Slack reports the token is no longer usable (${error}).` }
-        : { state: 'unknown', reason: `Slack returned ${error}.` };
+        : { state: 'unknown', reason: `Slack returned ${error}.`, grantedScopes };
     }
-    return { state: 'healthy' };
+    return { state: 'healthy', grantedScopes };
   } catch (err: any) {
     // Abort, DNS, TLS — we genuinely do not know.
     return { state: 'unknown', reason: err?.name === 'AbortError' ? 'Probe timed out.' : String(err?.message || err) };
@@ -199,7 +296,16 @@ async function probeBearerEndpoint(
  */
 export async function checkConnectionHealth(
   connection: McpConnection,
-  credentials: { clientId?: string | null; clientSecret?: string | null },
+  /**
+   * What the deployment's catalog knows about this MCP. `expectedScopes` is the
+   * catalog's current `oauthScopes`; a stored grant narrower than that is
+   * reported via `missingScopes` rather than as a bad credential.
+   */
+  credentials: {
+    clientId?: string | null;
+    clientSecret?: string | null;
+    expectedScopes?: string[] | null;
+  },
   deps: HealthDeps = {},
 ): Promise<ConnectionHealth> {
   const fetchImpl = deps.fetchImpl || fetch;
@@ -226,9 +332,15 @@ export async function checkConnectionHealth(
       case 'slack':
       case 'slack-bot': {
         if (!accessToken) return { state: 'reauth', reason: 'No Slack token stored.' };
-        return await probeBearerEndpoint('https://slack.com/api/auth.test', accessToken, fetchImpl, {
-          method: 'POST', slackStyle: true,
-        });
+        // Slack is the provider this matters most for: its tokens never expire,
+        // so expiry can never be the signal, and scopes have been added to the
+        // catalog three times (files:read, search:read, reactions:read) while
+        // every already-connected grant kept probing healthy.
+        const slackHealth = await probeBearerEndpoint(
+          'https://slack.com/api/auth.test', accessToken, fetchImpl,
+          { method: 'POST', slackStyle: true, scopeHeader: 'x-oauth-scopes' },
+        );
+        return withScopeDrift(slackHealth, credentials.expectedScopes, providerTokens.scope);
       }
 
       case 'clickup': {

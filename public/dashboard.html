@@ -1308,6 +1308,30 @@
       return '';
     }
 
+    /**
+     * The "Outdated permissions" badge.
+     *
+     * The gap this closes: a Slack token is frozen at the scopes it was minted
+     * with, so adding files:read / search:read / reactions:read to the catalog
+     * leaves every existing connection working for every older tool while the
+     * new ones fail one at a time telling the user to reconnect — and the row
+     * looked perfectly healthy. The Reconnect button was already here; what
+     * was missing was anything saying to press it.
+     *
+     * Names the missing scopes rather than saying "outdated": the user can
+     * then check the Slack app actually offers them, instead of re-consenting
+     * repeatedly against a consent screen that cannot grant them.
+     */
+    function getScopeGapHtml(instance) {
+      const missing = scopeGapFor(instance);
+      if (!missing.length) return '';
+      const title = 'This connection was authorized before some permissions the tools now need: '
+        + missing.join(', ')
+        + '. Reconnect to re-consent \u2014 your settings and access rules are preserved.';
+      return '<span class="token-status warning" title="' + escapeAttr(title) + '">'
+        + 'Outdated permissions</span>';
+    }
+
     // Is re-running OAuth consent *possible* for this connection?
     //
     // Deliberately separate from needsReconnect(), which asks whether the
@@ -1348,9 +1372,23 @@
     // the button until something is provably broken makes the repair
     // unreachable exactly when the breakage is undetectable from stored state.
     const connectionHealth = new Map();
+    // Scopes the catalog now asks for that a connection's stored grant does not
+    // hold, by instanceId. Deliberately a SECOND map rather than a richer
+    // verdict: it answers a different question from connectionHealth. The
+    // credential works — it is just narrower than the tools now need, which is
+    // why every probe reported 'healthy' while downloadFile and searchMessages
+    // failed one by one and the row said nothing.
+    const connectionScopeGaps = new Map();
     // Bumped per sweep so a slow probe from a superseded sweep cannot overwrite
     // a newer verdict.
     let healthSweepGeneration = 0;
+
+    // Absent and empty both mean "nothing to report": a connection we have not
+    // probed, or one the provider would not tell us about, must not render as
+    // outdated.
+    function scopeGapFor(instance) {
+      return connectionScopeGaps.get(instance.instanceId) || [];
+    }
 
     // Absent or 'unknown' both mean "no evidence of a problem": an unreachable
     // provider is not proof the user must reconnect, and a row that shouts on
@@ -1379,7 +1417,9 @@
     // the live probe rejected the credential, or the stored Google token is
     // expired/refresh-less, which is conclusive without a probe.
     function reauthNeedsAttention(instance) {
-      return healthSaysReauth(instance) || needsReconnect(instance);
+      return healthSaysReauth(instance)
+        || needsReconnect(instance)
+        || scopeGapFor(instance).length > 0;
     }
 
     /**
@@ -1441,9 +1481,17 @@
           // otherwise the affordance is identical either way and a 'reauth'
           // verdict would never repaint the row it applies to.
           const mcp = catalogs.find(c => c.slug === instance.mcpSlug);
-          const rendered = (i) => `${reauthAffordance(i, mcp)}:${reauthNeedsAttention(i)}`;
+          // The scope gap is part of what the row draws, so it has to be part
+          // of the comparison — otherwise a verdict that only changed the
+          // badge would never repaint the row the badge belongs to.
+          const rendered = (i) =>
+            `${reauthAffordance(i, mcp)}:${reauthNeedsAttention(i)}:${scopeGapFor(i).join(',')}`;
           const before = rendered(instance);
           connectionHealth.set(instance.instanceId, data.state);
+          connectionScopeGaps.set(
+            instance.instanceId,
+            Array.isArray(data.missingScopes) ? data.missingScopes : [],
+          );
           if (before !== rendered(instance)) renderInstances();
         } catch {
           // Network trouble on our side is not the user's problem.
@@ -1505,6 +1553,7 @@
       const affordance = reauthAffordance(instance, mcp);
       const repairClass = reauthNeedsAttention(instance) ? 'btn-reconnect attention' : 'btn-reconnect';
       const tokenHtml = getTokenStatusHtml(instance);
+      const scopeHtml = getScopeGapHtml(instance);
       const eid = escapeAttr(instance.instanceId);
       const ename = escapeAttr(instance.instanceName);
       const eslug = escapeAttr(instance.mcpSlug);
@@ -1519,6 +1568,7 @@
               <div class="instance-name">
                 <span id="name-${eid}">${escapeHtml(instance.instanceName)}</span>${instance.mcpSlug === 'clickup' ? CLICKUP_IMAGE_HELP : ''}
                 ${tokenHtml}
+                ${scopeHtml}
               </div>
             </div>
           </div>

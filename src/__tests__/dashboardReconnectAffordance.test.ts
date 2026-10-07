@@ -38,10 +38,16 @@ function fnSource(signature: string): string {
   return match[0];
 }
 
-/** Rebuild a closure over the page's connectionHealth Map. */
-function build<T>(verdicts: Record<string, string>, signatures: string[], returns: string): T {
+/** Rebuild a closure over the page's connectionHealth and scope-gap Maps. */
+function build<T>(
+  verdicts: Record<string, string>,
+  signatures: string[],
+  returns: string,
+  gaps: Record<string, string[]> = {},
+): T {
   return new Function(`
     const connectionHealth = new Map(Object.entries(${JSON.stringify(verdicts)}));
+    const connectionScopeGaps = new Map(Object.entries(${JSON.stringify(gaps)}));
     ${signatures.map(fnSource).join('\n')}
     return ${returns};
   `)() as T;
@@ -138,11 +144,14 @@ describe('dashboard needsReauthNow()', () => {
 // The probe's only remaining job: emphasis. It must never be the difference
 // between a button and no button.
 describe('dashboard reauthNeedsAttention()', () => {
-  const attention = (verdicts: Record<string, string>) => build<(i: any) => boolean>(
-    verdicts,
-    ['healthSaysReauth(instance)', 'needsReconnect(instance)', 'reauthNeedsAttention(instance)'],
-    'reauthNeedsAttention',
-  );
+  const attention = (verdicts: Record<string, string>, gaps: Record<string, string[]> = {}) =>
+    build<(i: any) => boolean>(
+      verdicts,
+      ['healthSaysReauth(instance)', 'scopeGapFor(instance)', 'needsReconnect(instance)',
+       'reauthNeedsAttention(instance)'],
+      'reauthNeedsAttention',
+      gaps,
+    );
 
   const gmail = { instanceId: 'i1', mcpSlug: 'google-gmail', provider: 'google' };
 
@@ -176,6 +185,58 @@ describe('dashboard reauthNeedsAttention()', () => {
     const check = attention({ i1: 'reauth' });
     assert.equal(check({ ...gmail, tokenStatus: { hasRefreshToken: true, isExpired: false } }), true);
     assert.equal(check(other), false);
+  });
+
+  // The reported bug: a Slack grant minted before files:read/search:read were
+  // added to the catalog probes 'healthy' forever, because its token never
+  // expires and the credential is genuinely fine. Nothing else on the row can
+  // notice, so the gap must be enough on its own.
+  it('highlights a healthy connection whose grant predates a catalog scope', () => {
+    const slack = { instanceId: 'i1', provider: 'slack', mcpSlug: 'slack' };
+    assert.equal(attention({ i1: 'healthy' })(slack), false);
+    assert.equal(attention({ i1: 'healthy' }, { i1: ['files:read', 'search:read'] })(slack), true);
+  });
+
+  it('scopes the gap to its own instance', () => {
+    const check = attention({}, { i1: ['files:read'] });
+    assert.equal(check({ instanceId: 'i1', provider: 'slack' }), true);
+    assert.equal(check({ instanceId: 'i2', provider: 'slack' }), false);
+  });
+
+  it('treats an empty gap list as nothing to report', () => {
+    // A probed-and-fine connection, and one the provider would not tell us
+    // about, both land here. Neither may light the button.
+    assert.equal(attention({ i1: 'healthy' }, { i1: [] })({ instanceId: 'i1', provider: 'slack' }), false);
+  });
+});
+
+// The badge is the half the user actually sees; the button was already there.
+describe('dashboard getScopeGapHtml()', () => {
+  const badge = (gaps: Record<string, string[]>) => build<(i: any) => string>(
+    {},
+    ['scopeGapFor(instance)', 'escapeAttr(text)', 'getScopeGapHtml(instance)'],
+    'getScopeGapHtml',
+    gaps,
+  );
+
+  it('renders nothing when there is no gap', () => {
+    assert.equal(badge({})({ instanceId: 'i1' }), '');
+    assert.equal(badge({ i1: [] })({ instanceId: 'i1' }), '');
+  });
+
+  it('names the missing scopes, so the user can check the app offers them', () => {
+    // Re-consenting against a Slack app that was never configured with the
+    // scope cannot grant it, which is a second dead end if the badge only
+    // says "outdated".
+    const html = badge({ i1: ['files:read', 'search:read'] })({ instanceId: 'i1' });
+    assert.match(html, /Outdated permissions/);
+    assert.match(html, /files:read, search:read/);
+  });
+
+  it('escapes the scope list into the title attribute', () => {
+    const html = badge({ i1: ['a"b'] })({ instanceId: 'i1' });
+    assert.ok(!html.includes('a"b'), 'raw quote must not break out of the attribute');
+    assert.match(html, /a&quot;b/);
   });
 });
 
