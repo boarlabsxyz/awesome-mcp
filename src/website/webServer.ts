@@ -330,6 +330,7 @@ import type { ClickUpClient } from '../clickup/apiHelpers.js';
 import type { OutlineClient } from '../outline/apiHelpers.js';
 import type { HubSpotClient } from '../hubspot/apiHelpers.js';
 import type { RedmineClient } from '../redmine/apiHelpers.js';
+import type { BrowserbaseClient } from '../browserbase/apiHelpers.js';
 import { checkConnectionHealth, type ConnectionHealth } from './connectionHealth.js';
 import { discoverConnectedOrgs, type OrgDiscoveryResult } from '../slack-user/orgDiscovery.js';
 import { buildSimpleInstanceName, type ValidateResult } from '../util/pasteTokenValidation.js';
@@ -3836,6 +3837,13 @@ function registerRestApiRoutes(app: express.Express): void {
             // credential, so this branch is not optional.
             const { createRedmineSession } = await import('../userSession.js');
             req.userSession = createRedmineSession(user, connection);
+          } else if (connection.provider === 'browserbase') {
+            // Not optional for the same reason the PeopleForce branch is not:
+            // without it the connection falls through to the Google path below
+            // and yields a session with no browserbaseAccessToken, so auth
+            // PASSES and every handler throws at call time.
+            const { createBrowserbaseSession } = await import('../userSession.js');
+            req.userSession = createBrowserbaseSession(user, connection);
           } else {
             const mcp = await getMcpCatalog(connection.mcpSlug);
             const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
@@ -3868,6 +3876,7 @@ function registerRestApiRoutes(app: express.Express): void {
   const requirePeopleForceApiKey = createServiceAuth('peopleforce', 'peopleforce');
   const requireHubSpotApiKey = createServiceAuth('hubspot', 'hubspot');
   const requireRedmineApiKey = createServiceAuth('redmine', 'redmine');
+  const requireBrowserbaseApiKey = createServiceAuth('browserbase', 'browserbase');
   const requireOutlineApiKey = createServiceAuth('outline', 'outline');
 
   // JSON body parser already added above for auth routes
@@ -7863,6 +7872,197 @@ function registerRestApiRoutes(app: express.Express): void {
     });
   }
 
+
+  // =========================================================================
+  // === Browserbase ===
+  // =========================================================================
+  //
+  // Table-driven for the same reasons as the ClickUp and Outline blocks above:
+  // the auth, the safeParse 400, the status branch and the error mapping live
+  // once, so a later fix cannot fail to reach a copy.
+  //
+  // Two things are specific to this service. The REST routes drive the hosted
+  // Browserbase MCP server, so they need the API KEY rather than a client for
+  // the reads — both come off the same session field. And `sessionId` is always
+  // a PATH parameter here, never a body field: the schemas deliberately omit it
+  // so a URL and a body can never disagree about which browser to drive.
+
+  type BrowserbaseOps = typeof import('../browserbase/restOps.js');
+
+  /**
+   * Resolve the Browserbase credential, or answer 403 and return null.
+   *
+   * createServiceAuth falls back to a plain Google session when the account has
+   * no Browserbase connection, so auth passes and the key would go out
+   * undefined. There is no refresh step to order around, unlike HubSpot and
+   * Outline: a Browserbase API key does not expire.
+   */
+  function browserbaseRestKey(req: ApiAuthenticatedRequest, res: Response): string | null {
+    const key = req.userSession?.browserbaseAccessToken;
+    if (!key) {
+      res.status(403).json({ error: 'No Browserbase connection found for this account. Connect Browserbase on the dashboard first.' });
+      return null;
+    }
+    return key;
+  }
+
+  /** The connection's domain rules, or undefined (= unrestricted). */
+  async function browserbaseRestRules(req: ApiAuthenticatedRequest): Promise<any | undefined> {
+    const instanceId = req.userSession?.browserbaseInstanceId;
+    if (!instanceId) return undefined;
+    try {
+      const connection = await getMcpConnectionByInstanceId(instanceId);
+      return (connection?.providerTokens as any)?.accessRules ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  interface BrowserbaseRoute {
+    /** Express path. Array order IS registration order. */
+    path: string;
+    method: 'get' | 'post';
+    /** 201 where a resource is created; 200 otherwise. */
+    status?: 200 | 201;
+    notFound: string;
+    fallback: string;
+    /** Body schema, picked out of the schema module. Omit for a body-less route. */
+    schema?: (m: typeof import('../browserbase/schemas.js')) => { safeParse(v: unknown): any };
+    run: (
+      ctx: {
+        ops: BrowserbaseOps;
+        client: BrowserbaseClient;
+        proxy: (name: any, args: Record<string, unknown>) => Promise<string>;
+        req: ApiAuthenticatedRequest;
+      },
+      args: any,
+      p: RouteParams,
+    ) => Promise<unknown>;
+    /** Text rendering for ?format=text. Reads omit it to stay JSON-only. */
+    format?: (m: typeof import('../browserbase/ops.js'), result: any) => string;
+  }
+
+  const BROWSERBASE_ROUTES: ReadonlyArray<BrowserbaseRoute> = [
+    // Static paths before the :sessionId ones, since array order is
+    // registration order and Express would otherwise match "start" as an id.
+    {
+      path: '/api/v1/browserbase/sessions/start',
+      method: 'post',
+      status: 201,
+      notFound: 'Session not found',
+      fallback: 'Failed to start a browser session',
+      schema: (m) => m.startRestSchema,
+      run: ({ ops, client, proxy }, a) => ops.performStartSession(proxy, client, a.sessionId),
+    },
+    {
+      path: '/api/v1/browserbase/sessions',
+      method: 'get',
+      notFound: 'Sessions not found',
+      fallback: 'Failed to list browser sessions',
+      run: ({ ops, client, req }) => ops.performListSessions(client, (req.query.status as string) || undefined),
+      format: (m, r) => m.formatSessionList(r.sessions),
+    },
+    {
+      path: '/api/v1/browserbase/sessions/:sessionId',
+      method: 'get',
+      notFound: 'Session not found',
+      fallback: 'Failed to fetch browser session',
+      run: ({ ops, client }, _a, p) => ops.performGetSession(client, p.sessionId),
+      format: (m, r) => m.formatSession(r),
+    },
+    {
+      path: '/api/v1/browserbase/sessions/:sessionId/navigate',
+      method: 'post',
+      notFound: 'Session not found',
+      fallback: 'Failed to navigate',
+      schema: (m) => m.navigateRestSchema,
+      run: async ({ ops, proxy, req }, a, p) =>
+        ops.performNavigate(proxy, p.sessionId, a, await browserbaseRestRules(req)),
+    },
+    {
+      path: '/api/v1/browserbase/sessions/:sessionId/observe',
+      method: 'post',
+      notFound: 'Session not found',
+      fallback: 'Failed to observe the page',
+      schema: (m) => m.observeRestSchema,
+      run: ({ ops, proxy }, a, p) => ops.performObserve(proxy, p.sessionId, a),
+    },
+    {
+      path: '/api/v1/browserbase/sessions/:sessionId/extract',
+      method: 'post',
+      notFound: 'Session not found',
+      fallback: 'Failed to extract from the page',
+      schema: (m) => m.extractRestSchema,
+      run: ({ ops, proxy }, a, p) => ops.performExtract(proxy, p.sessionId, a),
+    },
+    {
+      path: '/api/v1/browserbase/sessions/:sessionId/release',
+      method: 'post',
+      notFound: 'Session not found',
+      fallback: 'Failed to release browser session',
+      run: ({ ops, client }, _a, p) => ops.performReleaseSession(client, p.sessionId),
+    },
+  ];
+
+  for (const route of BROWSERBASE_ROUTES) {
+    app[route.method](route.path, requireBrowserbaseApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        // Inside the try on purpose: resolving the client imports modules, and
+        // anything thrown out there would reach Express's default handler as an
+        // HTML error page — undiagnosable for a client told this API is JSON.
+        const key = browserbaseRestKey(req, res);
+        if (!key) return;
+        const { BrowserbaseClient: Client } = await import('../browserbase/apiHelpers.js');
+        const ops = await import('../browserbase/restOps.js');
+        const { hostedProxyFor } = await import('../browserbase/ops.js');
+        const client = new Client(key);
+
+        let args: unknown = {};
+        if (route.schema) {
+          const schemas = await import('../browserbase/schemas.js');
+          const parsed = route.schema(schemas).safeParse(req.body ?? {});
+          if (!parsed.success) {
+            res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+            return;
+          }
+          args = parsed.data;
+        }
+
+        const result = await route.run(
+          { ops, client, proxy: hostedProxyFor(key), req },
+          args,
+          req.params as RouteParams,
+        );
+
+        if (route.format && negotiateFormat(req) === 'text') {
+          const formatters = await import('../browserbase/ops.js');
+          res.type('text/plain; charset=utf-8').send(route.format(formatters, result));
+          return;
+        }
+        res.status(route.status ?? 200).json(result);
+      } catch (err: any) {
+        // A domain-rule denial is the caller's URL being out of bounds, not an
+        // upstream fault — 403, so a client can tell it from a 502 and knows a
+        // retry will not help.
+        if (err?.name === 'BrowserbaseAccessDenied') {
+          res.status(403).json({ error: err.message });
+          return;
+        }
+        // UserError with no numeric status is input the caller can fix. This is
+        // also where the proxy's "no active session" explanation lands, which is
+        // the single most likely failure on this plane.
+        if (err?.name === 'UserError' && typeof err?.status !== 'number') {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        console.error(`Browserbase request failed (${route.path}):`, err);
+        // No status translation needed: BrowserbaseClient sets `.status` on the
+        // error, which sendUpstreamError reads directly. ClickUp's symbol-tagged
+        // status is what forces a copy-onto-.code step over there.
+        sendUpstreamError(res, err, { notFound: route.notFound, fallback: route.fallback });
+      }
+    });
+  }
 
   // =========================================================================
   // === HubSpot ===

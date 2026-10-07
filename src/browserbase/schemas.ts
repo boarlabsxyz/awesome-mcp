@@ -79,6 +79,21 @@ export const actSchema = z.object({ ...actFields, sessionId: sessionIdField });
 export const observeSchema = z.object({ ...observeFields, sessionId: sessionIdField });
 export const extractSchema = z.object({ ...extractFields, sessionId: sessionIdField });
 
+// REST variants: same fields, no sessionId — the route reads it from the path,
+// so accepting one in the body would let a URL and a body disagree about which
+// browser to drive.
+export const navigateRestSchema = z.object(navigateFields);
+export const observeRestSchema = z.object(observeFields);
+export const extractRestSchema = z.object(extractFields);
+
+/** `start` takes an optional sessionId to reattach to, and nothing else. */
+export const startRestSchema = z.object({
+  sessionId: z
+    .string()
+    .optional()
+    .describe('Optional existing Browserbase session id to reattach to instead of creating a new browser.'),
+});
+
 /** Lifecycle states Browserbase reports for a session. */
 export const SESSION_STATUS_VALUES = ['RUNNING', 'ERROR', 'TIMED_OUT', 'COMPLETED'] as const;
 
