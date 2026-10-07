@@ -2064,6 +2064,12 @@ function registerSharedRoutes(app: express.Express): void {
         const slackUserToken = tokenData.authed_user.access_token;
         const providerTokens = {
           access_token: slackUserToken,
+          // The scopes this grant was actually minted with. Kept so the
+          // dashboard can flag a connection that predates a catalog scope
+          // addition even when Slack is unreachable — the live x-oauth-scopes
+          // header off the health probe is preferred, this is the fallback.
+          // Overwritten on every reconnect, because that mints a new grant.
+          scope: String(tokenData.authed_user.scope || ''),
           accessRules: {
             allowedOrgs: [tokenData.team?.id].filter(Boolean) as string[],
             blacklistUsers: [] as string[],
@@ -3215,7 +3221,13 @@ function registerSharedRoutes(app: express.Express): void {
         }
       }
 
-      const health = await checkConnectionHealth(connection, { clientId, clientSecret });
+      // oauthScopes is what the catalog asks for TODAY; the stored grant may
+      // predate an addition to it. Passing it is what lets the probe answer
+      // "this credential works but is narrower than the tools now need",
+      // which no stored field can reveal.
+      const health = await checkConnectionHealth(connection, {
+        clientId, clientSecret, expectedScopes: mcp?.oauthScopes || null,
+      });
       await writeConnectionHealthCache(instanceId, health);
       res.json({ ...health, cached: false });
     } catch (err: any) {
