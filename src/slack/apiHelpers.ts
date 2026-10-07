@@ -403,6 +403,19 @@ export class SlackClient {
     });
   }
 
+  /**
+   * Edit an existing message in place. Authorized by `chat:write`, the same
+   * scope as posting — but *whose* messages can be edited depends on the token:
+   * a user token edits that user's own messages, a bot token only the bot's.
+   * Slack enforces that itself and answers `cant_update_message`; see
+   * `handleEditMessage` for the mapping of that and the other refusals.
+   */
+  async chatUpdate(channel: string, ts: string, text: string): Promise<{
+    ts: string; channel: string; text?: string;
+  }> {
+    return this.request('chat.update', { channel, ts, text });
+  }
+
   // === Users ===
 
   async usersInfo(userId: string): Promise<{

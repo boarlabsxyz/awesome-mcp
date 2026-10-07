@@ -1,7 +1,7 @@
 // Inventory of the tools these checks can target, and what each one is allowed
 // to do.
 //
-// DOCS ONLY for now. The repo registers 227 tools across 12 servers; this file
+// DOCS ONLY for now. The repo registers 228 tools across 12 servers; this file
 // covers the 30 on the google-docs server as the proving ground. The `kind`
 // column is NOT hand-maintained guesswork -- it is read off each addTool's
 // `annotations` in src/google-docs/server.ts (readOnlyHint / destructiveHint),

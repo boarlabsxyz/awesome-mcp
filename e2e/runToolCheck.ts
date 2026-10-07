@@ -12,7 +12,7 @@
 //                  second, with no browser.
 //
 // So the needle tier keeps runSmokeTest for a handful of representative tools per
-// service, and the volume and zero tiers -- the per-tool sweep, 227 tools and
+// service, and the volume and zero tiers -- the per-tool sweep, 228 tools and
 // climbing -- run here.
 
 import {

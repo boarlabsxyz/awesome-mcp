@@ -535,3 +535,64 @@ export async function handleReplyInThread(
   const result = await client.chatPostMessage(channelId, text, threadTs);
   return `Reply posted to thread ${threadTs} in ${result.channel} (ts: ${result.ts})`;
 }
+
+/**
+ * Edit a message in place.
+ *
+ * `chat.update` replaces the text outright and the API gives no way to read the
+ * previous version back, so the old text is gone as far as this server is
+ * concerned (Slack still shows humans an "edited" marker). That is why the
+ * confirmation echoes what the message now says: it is the only record the
+ * caller gets, and an edit that silently targeted the wrong `ts` would
+ * otherwise look identical to a successful one.
+ *
+ * Slack refuses an edit with a bare error code that reads as a bug if passed
+ * through — `cant_update_message` in particular is the ordinary "you did not
+ * write this message" case, not a malfunction. Each is mapped to what the
+ * caller can actually do about it.
+ */
+export async function handleEditMessage(
+  client: SlackClient, channelId: string, ts: string, text: string,
+): Promise<string> {
+  assertWritesEnabled();
+
+  let result: { ts: string; channel: string; text?: string };
+  try {
+    result = await client.chatUpdate(channelId, ts, text);
+  } catch (err: any) {
+    const slackError = String(err?.message || '');
+
+    if (slackError.includes('cant_update_message')) {
+      throw new UserError(
+        `Slack will not let this connection edit message ${ts}. A message can only be edited by ` +
+        'whoever wrote it, so this is expected unless you are the author — check that the ts belongs ' +
+        'to one of your own messages rather than a colleague\'s or an app\'s.',
+      );
+    }
+    if (slackError.includes('edit_window_closed')) {
+      throw new UserError(
+        `Message ${ts} is older than the edit window this workspace allows. A workspace admin sets ` +
+        'that limit and it cannot be bypassed through the API — the message has to be deleted and ' +
+        'reposted instead.',
+      );
+    }
+    if (slackError.includes('message_not_found')) {
+      throw new UserError(
+        `No message with ts ${ts} in channel ${channelId}. Timestamps are per-channel, so passing a ` +
+        'ts from one channel while naming another fails this way — re-read the channel to get the ts.',
+      );
+    }
+    if (slackError.includes('msg_too_long')) {
+      throw new UserError('The replacement text is longer than Slack allows for one message (about 40,000 characters).');
+    }
+    if (slackError.includes('missing_scope')) {
+      throw new UserError(
+        'Slack rejected chat.update for lack of the "chat:write" scope. Reconnect Slack from the ' +
+        'dashboard to re-consent.',
+      );
+    }
+    throw err;
+  }
+
+  return `Message ${result.ts} in ${result.channel} edited. It now reads:\n\n${result.text ?? text}`;
+}

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import sharp from 'sharp';
-import { resolveUsers, getWorkspaceUrl, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleSearchMessages, handleSearchFiles } from '../../slack/helpers.js';
+import { resolveUsers, getWorkspaceUrl, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, handleSearchMessages, handleSearchFiles } from '../../slack/helpers.js';
 import { __setImageBlobPoolForTests } from '../../images/imageBlobStore.js';
 
 function mockSlackClient(overrides: Record<string, any> = {}): any {
@@ -30,6 +30,7 @@ function mockSlackClient(overrides: Record<string, any> = {}): any {
       ts: '9999.0000',
       channel,
     }),
+    chatUpdate: async (channel: string, ts: string, text: string) => ({ ts, channel, text }),
     ...overrides,
   };
 }
@@ -220,6 +221,107 @@ describe('handleReplyInThread', () => {
       if (origEnv === undefined) delete process.env.SLACK_WRITES_ENABLED;
       else process.env.SLACK_WRITES_ENABLED = origEnv;
     }
+  });
+});
+
+describe('handleEditMessage', () => {
+  function withWrites<T>(fn: () => Promise<T>): Promise<T> {
+    const origEnv = process.env.SLACK_WRITES_ENABLED;
+    process.env.SLACK_WRITES_ENABLED = 'true';
+    return fn().finally(() => {
+      if (origEnv === undefined) delete process.env.SLACK_WRITES_ENABLED;
+      else process.env.SLACK_WRITES_ENABLED = origEnv;
+    });
+  }
+
+  /** A client whose chat.update rejects the way SlackClient.request does. */
+  function failingClient(slackError: string): any {
+    return mockSlackClient({
+      chatUpdate: async () => {
+        throw new Error(`Slack API error (chat.update): ${slackError}`);
+      },
+    });
+  }
+
+  it('echoes the new text back, because the old text is unrecoverable', async () => {
+    await withWrites(async () => {
+      const result = await handleEditMessage(mockSlackClient(), 'C123', '1609459200.000100', 'corrected text');
+      assert.ok(result.includes('1609459200.000100'), 'should name the ts it edited');
+      assert.ok(result.includes('C123'));
+      // The confirmation is the caller's only record of what the message now
+      // says -- an edit against the wrong ts would otherwise look identical.
+      assert.ok(result.includes('corrected text'));
+    });
+  });
+
+  it('is gated on the shared write switch like every other Slack write', async () => {
+    const origEnv = process.env.SLACK_WRITES_ENABLED;
+    delete process.env.SLACK_WRITES_ENABLED;
+    try {
+      await assert.rejects(
+        () => handleEditMessage(mockSlackClient(), 'C123', '1.0', 'x'),
+        { message: /disabled/ },
+      );
+    } finally {
+      if (origEnv === undefined) delete process.env.SLACK_WRITES_ENABLED;
+      else process.env.SLACK_WRITES_ENABLED = origEnv;
+    }
+  });
+
+  it('explains cant_update_message as authorship, not as a malfunction', async () => {
+    await withWrites(async () => {
+      await assert.rejects(
+        () => handleEditMessage(failingClient('cant_update_message'), 'C123', '1.0', 'x'),
+        (err: any) => {
+          assert.match(err.message, /only be edited by/i, 'should say who may edit');
+          assert.doesNotMatch(err.message, /cant_update_message/, 'raw Slack code should not leak');
+          return true;
+        },
+      );
+    });
+  });
+
+  it('says the edit window is an admin limit rather than suggesting a retry', async () => {
+    await withWrites(async () => {
+      await assert.rejects(
+        () => handleEditMessage(failingClient('edit_window_closed'), 'C123', '1.0', 'x'),
+        (err: any) => {
+          assert.match(err.message, /edit window/i);
+          assert.match(err.message, /deleted and reposted/i, 'should name the only real workaround');
+          return true;
+        },
+      );
+    });
+  });
+
+  it('points message_not_found at per-channel timestamps', async () => {
+    await withWrites(async () => {
+      await assert.rejects(
+        () => handleEditMessage(failingClient('message_not_found'), 'C123', '1.0', 'x'),
+        (err: any) => {
+          assert.match(err.message, /per-channel/i, 'the usual cause is a ts from another channel');
+          return true;
+        },
+      );
+    });
+  });
+
+  it('rewrites missing_scope into the dashboard reconnect instruction', async () => {
+    await withWrites(async () => {
+      await assert.rejects(
+        () => handleEditMessage(failingClient('missing_scope'), 'C123', '1.0', 'x'),
+        { message: /reconnect slack from the dashboard/i },
+      );
+    });
+  });
+
+  it('rethrows an unrecognised Slack error untouched rather than guessing', async () => {
+    await withWrites(async () => {
+      await assert.rejects(
+        () => handleEditMessage(failingClient('ratelimited'), 'C123', '1.0', 'x'),
+        { message: /ratelimited/ },
+      );
+    });
   });
 });
 
