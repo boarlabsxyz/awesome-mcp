@@ -26,6 +26,14 @@ import {
   proxyHostedTool,
 } from './mcpProxyClient.js';
 import {
+  extractNavigationFacts,
+  safeErrorText,
+  renderPayload,
+  sanitize,
+  sanitizeNote,
+  unwrapEnvelope,
+} from './responseSafety.js';
+import {
   actSchema,
   endSchema,
   extractSchema,
@@ -48,6 +56,31 @@ export function hostedProxyFor(apiKey: string): HostedProxy {
   return (name, args) => proxyHostedTool(apiKey, name, args);
 }
 
+/**
+ * Call a proxied tool, bounding whatever its failure says.
+ *
+ * `proxyHostedTool` already sanitizes, so for the real proxy this is
+ * belt-and-braces — but deliberately so. Sanitizing at one choke point means
+ * any future call site that builds its own proxy silently loses it, and the
+ * failure mode is an unbounded upstream payload reaching the transcript. A live
+ * run produced a ~214 KB error from one `extract`, so the cost of missing this
+ * is a response no client can hold. Idempotent: re-sanitizing capped text is a
+ * no-op.
+ */
+async function callProxy(
+  proxy: HostedProxy,
+  name: BrowserbaseHostedTool,
+  args: Record<string, unknown>,
+): Promise<string> {
+  try {
+    return await proxy(name, args);
+  } catch (err: any) {
+    const safe = safeErrorText(err?.message ?? String(err));
+    if (err instanceof UserError && err.message === safe) throw err;
+    throw new UserError(safe);
+  }
+}
+
 // ==================== Formatting ====================
 
 /**
@@ -60,6 +93,23 @@ export function hostedProxyFor(apiKey: string): HostedProxy {
 function sessionReminder(sessionId: string | undefined): string {
   if (!sessionId) return '';
   return `\n\nSession: ${sessionId} — pass sessionId: "${sessionId}" to every following browser call, and run end when finished so it stops billing.`;
+}
+
+/**
+ * Turn whatever a proxied tool answered with into text that is safe and
+ * consistent: the `{success,data}` envelope unwrapped, degenerate runs
+ * collapsed, credentials and internal addresses redacted, and the whole thing
+ * capped.
+ *
+ * Every proxied tool goes through this. The three findings it answers all came
+ * from returning upstream text verbatim, so there is deliberately no path that
+ * skips it.
+ */
+function renderProxied(text: string, fallback: string): string {
+  const rendered = renderPayload(unwrapEnvelope(text));
+  if (!rendered.trim()) return fallback;
+  const safe = sanitize(rendered);
+  return `${safe.text}${sanitizeNote(safe)}`;
 }
 
 export function formatSession(session: BrowserbaseSession): string {
@@ -124,7 +174,7 @@ export async function opStart(
   args: z.infer<typeof startSchema>,
   rules?: BrowserbaseAccessRules,
 ): Promise<string> {
-  const text = await proxy('start', args.sessionId ? { sessionId: args.sessionId } : {});
+  const text = await callProxy(proxy, 'start', args.sessionId ? { sessionId: args.sessionId } : {});
   const sessionId = parseSessionId(text) ?? args.sessionId;
 
   if (!sessionId) {
@@ -132,7 +182,10 @@ export async function opStart(
     // the next call, and a browser may now be running that nobody can address.
     throw new UserError(
       `Browserbase started a session but did not return an id this tool could read, so later calls have nothing to target. ` +
-        `Run listBrowserSessions to find and close it. Raw response: ${text}`,
+        // Sanitized: this was the one exit that still echoed an upstream
+        // payload verbatim, and `start`'s response is exactly the one that
+        // carries the connect URL and its signing key.
+        `Run listBrowserSessions to find and close it. Raw response: ${safeErrorText(text)}`,
     );
   }
 
@@ -170,9 +223,15 @@ export async function opEnd(
 ): Promise<string> {
   const { sessionId } = args;
   try {
-    const text = await proxy('end', sessionId ? { sessionId } : {});
+    const text = await callProxy(proxy, 'end', sessionId ? { sessionId } : {});
     const suffix = sessionId ? ` (${sessionId})` : '';
-    return `Browser session closed${suffix}. It is no longer billing.${text ? `\n\n${text}` : ''}`;
+    // The upstream payload is dropped, not sanitized-and-echoed. `end` had no
+    // sanitizing path at all, so it was returning the raw text — but the right
+    // answer here is not to return it: a close either happened or it did not,
+    // and the payload is a CDP fragment that tells the caller nothing. Echoing
+    // a redacted version would just be noise with a redaction note attached.
+    void text;
+    return `Browser session closed${suffix}. It is no longer billing.`;
   } catch (proxyErr: any) {
     if (!sessionId) {
       throw new UserError(
@@ -209,44 +268,55 @@ export async function opNavigate(
   rules?: BrowserbaseAccessRules,
 ): Promise<string> {
   const url = assertDomainAllowed(rules, args.url);
-  const text = await proxy('navigate', {
+  const text = await callProxy(proxy, 'navigate', {
     url: url.toString(),
     ...(args.sessionId ? { sessionId: args.sessionId } : {}),
   });
-  return `Navigated to ${url.toString()}.${text ? `\n\n${text}` : ''}${sessionReminder(args.sessionId)}`;
+
+  // The upstream payload is NOT echoed. `navigate` answers with a serialized
+  // Page/CDP object — ~15 KB carrying the internal connect websocket URL, its
+  // signingKey JWT several times over, internal cluster hostnames and a
+  // flow-logger session id — so this projects the two facts worth reporting
+  // and drops the rest. An allowlist rather than redaction on purpose: the
+  // payload's shape is Browserbase's to change, and redaction can only remove
+  // secrets that are already known about.
+  const facts = extractNavigationFacts(unwrapEnvelope(text));
+  const status = facts.status !== undefined ? ` (HTTP ${facts.status})` : '';
+  const title = facts.title ? `\nTitle: ${facts.title}` : '';
+  return `Navigated to ${url.toString()}${status}.${title}${sessionReminder(args.sessionId)}`;
 }
 
 export async function opAct(
   proxy: HostedProxy,
   args: z.infer<typeof actSchema>,
 ): Promise<string> {
-  const text = await proxy('act', {
+  const text = await callProxy(proxy, 'act', {
     action: args.action,
     ...(args.sessionId ? { sessionId: args.sessionId } : {}),
   });
-  return `${text || 'Action performed.'}${sessionReminder(args.sessionId)}`;
+  return `${renderProxied(text, 'Action performed.')}${sessionReminder(args.sessionId)}`;
 }
 
 export async function opObserve(
   proxy: HostedProxy,
   args: z.infer<typeof observeSchema>,
 ): Promise<string> {
-  const text = await proxy('observe', {
+  const text = await callProxy(proxy, 'observe', {
     instruction: args.instruction,
     ...(args.sessionId ? { sessionId: args.sessionId } : {}),
   });
-  return `${text || 'Nothing matching that instruction was found on the page.'}${sessionReminder(args.sessionId)}`;
+  return `${renderProxied(text, 'Nothing matching that instruction was found on the page.')}${sessionReminder(args.sessionId)}`;
 }
 
 export async function opExtract(
   proxy: HostedProxy,
   args: z.infer<typeof extractSchema>,
 ): Promise<string> {
-  const text = await proxy('extract', {
+  const text = await callProxy(proxy, 'extract', {
     ...(args.instruction ? { instruction: args.instruction } : {}),
     ...(args.sessionId ? { sessionId: args.sessionId } : {}),
   });
-  return `${text || 'Nothing was extracted from the page.'}${sessionReminder(args.sessionId)}`;
+  return `${renderProxied(text, 'Nothing was extracted from the page.')}${sessionReminder(args.sessionId)}`;
 }
 
 // ==================== The three REST session tools ====================

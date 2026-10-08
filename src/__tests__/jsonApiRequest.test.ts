@@ -130,6 +130,74 @@ describe('jsonApiRequest', () => {
     assert.deepEqual(await jsonApiRequest<{ items: number[] }>({ ...base, fetchImpl }), { items: [1, 2] });
   });
 
+  it('keeps the deadline armed while the error body is read', async () => {
+    // fetch resolves as soon as the HEADERS arrive, so a timer cleared at that
+    // point leaves a stalled body stream with no limit — the caller would then
+    // outlive its own deadline. An abort during the body read is the deadline
+    // firing and must surface as the timeout, not be swallowed into ''.
+    const { fetchImpl } = stub(() => ({
+      ok: false, status: 500, statusText: 'Err',
+      headers: { get: () => 'application/json' },
+      text: async () => {
+        const err: any = new Error('aborted mid-body');
+        err.name = 'AbortError';
+        throw err;
+      },
+    }));
+    await assert.rejects(
+      () => jsonApiRequest({ ...base, fetchImpl }),
+      /Example API GET \/things timed out after 5000ms/,
+    );
+  });
+
+  it('keeps the deadline armed while a success body is parsed', async () => {
+    const { fetchImpl } = stub(() => ({
+      ok: true, status: 200, statusText: 'OK',
+      headers: { get: () => 'application/json' },
+      json: async () => {
+        const err: any = new Error('aborted mid-body');
+        err.name = 'AbortError';
+        throw err;
+      },
+    }));
+    await assert.rejects(() => jsonApiRequest({ ...base, fetchImpl }), /timed out after 5000ms/);
+  });
+
+  it('rethrows a non-abort JSON parse failure as itself', async () => {
+    const { fetchImpl } = stub(() => ({
+      ok: true, status: 200, statusText: 'OK',
+      headers: { get: () => 'application/json' },
+      json: async () => { throw new Error('invalid json'); },
+    }));
+    await assert.rejects(() => jsonApiRequest({ ...base, fetchImpl }), /^Error: invalid json$/);
+  });
+
+  it('caps the upstream text in the message but keeps the body whole', async () => {
+    // The message is logged and, for several providers, shown to the user — so
+    // a 500 answered with a megabyte of HTML must not land in both places.
+    const huge = 'x'.repeat(5000);
+    const { fetchImpl } = stub(() => response(huge, { status: 500, contentType: 'text/plain' }));
+    await assert.rejects(() => jsonApiRequest({ ...base, fetchImpl }), (err: any) => {
+      assert.ok(err.message.length < 700, `message was ${err.message.length} chars`);
+      assert.match(err.message, /…\(truncated, 5000 chars\)/);
+      // Callers that parse the body (Redmine's 422 mapper) still need all of it.
+      assert.equal(err.body.length, 5000);
+      return true;
+    });
+  });
+
+  it('keeps .body off enumeration so logging the error cannot dump it', async () => {
+    const { fetchImpl } = stub(() => response('secret-ish upstream payload', { status: 500, contentType: 'text/plain' }));
+    await assert.rejects(() => jsonApiRequest({ ...base, fetchImpl }), (err: any) => {
+      // Direct access still works...
+      assert.equal(err.body, 'secret-ish upstream payload');
+      // ...but console.error(err) / JSON.stringify do not reach it.
+      assert.ok(!Object.keys(err).includes('body'));
+      assert.ok(!JSON.stringify(err).includes('secret-ish'));
+      return true;
+    });
+  });
+
   it('clears its timer on both the success and the failure path', async () => {
     // A leaked timer keeps the event loop alive; the test runner exiting
     // cleanly is the observable part.

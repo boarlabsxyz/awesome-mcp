@@ -112,6 +112,35 @@ describe('RedmineClient.request', () => {
     );
   });
 
+  test('the 422 message renders the validation errors, capped with a count', async () => {
+    // A bulk write against a mis-mapped tracker can be rejected with a very
+    // long error list, and joining all of it puts the whole thing into a
+    // message that is both logged and shown to the user.
+    const { mapRedmineError } = await import('../../redmine/apiHelpers.js');
+    const many = Array.from({ length: 25 }, (_, i) => `Field ${i + 1} is invalid`);
+    assert.throws(
+      () => mapRedmineError('Failed to create issue', { status: 422, body: JSON.stringify({ errors: many }) }, { info() {}, error() {} }, {}, BASE),
+      (err: any) => {
+        assert.match(err.message, /Field 1 is invalid/);
+        assert.match(err.message, /\(and 15 more\)/);
+        assert.ok(!/Field 25 is invalid/.test(err.message));
+        return true;
+      },
+    );
+  });
+
+  test('the 422 message renders a short list in full, with no count', async () => {
+    const { mapRedmineError } = await import('../../redmine/apiHelpers.js');
+    assert.throws(
+      () => mapRedmineError('Failed', { status: 422, body: '{"errors":["Subject cannot be blank"]}' }, { info() {}, error() {} }, {}, BASE),
+      (err: any) => {
+        assert.match(err.message, /Subject cannot be blank/);
+        assert.ok(!/and \d+ more/.test(err.message));
+        return true;
+      },
+    );
+  });
+
   test('a timeout surfaces as an explicit timeout error', async () => {
     const client = new RedmineClient('KEY', BASE);
     globalThis.fetch = (async () => {

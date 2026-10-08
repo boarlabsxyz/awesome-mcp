@@ -37,6 +37,8 @@
 
 import { UserError } from 'fastmcp';
 
+import { safeErrorText } from './responseSafety.js';
+
 const HOSTED_MCP_URL = 'https://mcp.browserbase.com/mcp';
 const CLIENT_INFO = { name: 'awesome-mcp-browserbase-proxy', version: '1.0.0' };
 const PREFERRED_PROTOCOL = '2025-06-18';
@@ -121,7 +123,14 @@ export function textOfResult(result: any): string {
  * the fix is a contract the caller has to follow rather than something to
  * retry.
  */
-export function explainHostedError(tool: string, message: string): string {
+export function explainHostedError(tool: string, rawMessage: string): string {
+  // Sanitized before anything else looks at it. A live run hit an upstream
+  // extraction failure (AI_NoObjectGeneratedError) whose message echoed ~214 K
+  // characters of the model's own degenerate output — on its own more than a
+  // 25 K-token client could hold, so the error that most needed reading became
+  // the one that could not be read. This also keeps a credential out of an
+  // error path, since redaction has to cover every exit, not just the happy one.
+  const message = safeErrorText(rawMessage);
   if (/no active session/i.test(message)) {
     return (
       `Browserbase has no active browser session for this call. Each tool call reaches Browserbase independently, ` +

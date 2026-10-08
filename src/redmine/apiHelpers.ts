@@ -1036,6 +1036,9 @@ export function getRedmineClient(session?: UserSession): RedmineClient {
 }
 
 /** Pull Redmine's `{"errors":[...]}` validation list out of an error body. */
+/** How many of Redmine's validation errors a 422 message renders. */
+const REDMINE_VALIDATION_ERRORS_SHOWN = 10;
+
 function redmineValidationErrors(body: unknown): string[] {
   if (typeof body !== 'string' || !body.trim()) return [];
   try {
@@ -1140,9 +1143,16 @@ export function mapRedmineError(
   }
   if (status === 422) {
     const errors = redmineValidationErrors(error?.body);
+    // Capped: a bulk write against a mis-mapped tracker can be rejected with a
+    // very long error list, and joining all of it puts the whole thing in a
+    // message that is both logged and shown. The first few name the problem;
+    // the count tells the reader there is more.
+    const shown = errors.slice(0, REDMINE_VALIDATION_ERRORS_SHOWN);
+    const rest = errors.length - shown.length;
+    const detail = rest > 0 ? `${shown.join('; ')} (and ${rest} more)` : shown.join('; ');
     throw new UserError(
       errors.length
-        ? `${prefix}: Redmine rejected the values — ${errors.join('; ')}`
+        ? `${prefix}: Redmine rejected the values — ${detail}`
         : `${prefix}: Redmine rejected the values (422). Check required fields for this tracker or project.`,
     );
   }

@@ -91,7 +91,56 @@ describe('performNavigate', () => {
     const { proxy, calls } = stubProxy({ navigate: 'loaded' });
     const result = await performNavigate(proxy, 'sess-1', { url: 'https://example.com/p' });
     assert.deepEqual(calls[0].args, { url: 'https://example.com/p', sessionId: 'sess-1' });
-    assert.deepEqual(result, { sessionId: 'sess-1', result: 'loaded' });
+    // The URL is echoed from what was REQUESTED, not read out of the payload.
+    assert.equal(result.sessionId, 'sess-1');
+    assert.equal(result.url, 'https://example.com/p');
+  });
+
+  it('returns only url, status and title — never the CDP payload', async () => {
+    // This endpoint was handing the whole serialized Page object to any API-key
+    // holder, including the internal connect URL and its signingKey JWT.
+    const KEY = `eyJ${'A1b2C3d4E5f6G7h8'.repeat(4)}.${'Zz9Yy8Xx7'.repeat(3)}.${'Qq1Ww2Ee3'.repeat(3)}`;
+    const { proxy } = stubProxy({
+      navigate: JSON.stringify({
+        success: true,
+        data: {
+          connectUrl: `ws://go-connect.connect.svc.cluster.local:8080/?signingKey=${KEY}`,
+          signingKey: KEY,
+          flowLoggerSessionId: 'flow-abc-123',
+          page: { title: 'Example Domain', response: { status: 200 } },
+          padding: 'x'.repeat(15_000),
+        },
+      }),
+    });
+    const result = await performNavigate(proxy, 'sess-1', { url: 'https://example.com/' });
+
+    assert.deepEqual(result, {
+      sessionId: 'sess-1', url: 'https://example.com/', status: 200, title: 'Example Domain',
+    });
+    const serialised = JSON.stringify(result);
+    for (const secret of [KEY, 'eyJ', 'signingKey', 'cluster.local', 'flow-abc-123', 'connectUrl']) {
+      assert.ok(!serialised.includes(secret), `${secret} leaked`);
+    }
+    assert.ok(serialised.length < 250, `response was ${serialised.length} chars`);
+  });
+
+  it('bounds and redacts observe and extract payloads', async () => {
+    // Their payload IS the point, so it cannot be allowlisted — redaction and
+    // the size cap are the backstop.
+    const KEY = `eyJ${'A1b2C3d4E5f6G7h8'.repeat(4)}.${'Zz9Yy8Xx7'.repeat(3)}.${'Qq1Ww2Ee3'.repeat(3)}`;
+    const observed = await performObserve(
+      stubProxy({ observe: JSON.stringify({ success: true, data: `token: ${KEY}` }) }).proxy,
+      'sess-1', { instruction: 'find it' },
+    );
+    assert.ok(!observed.result.includes(KEY));
+    // The envelope is unwrapped, so it is not JSON-inside-JSON any more.
+    assert.ok(!observed.result.includes('"success"'));
+
+    const flooded = await performExtract(
+      stubProxy({ extract: '\n'.repeat(214_000) }).proxy,
+      'sess-1', {},
+    );
+    assert.ok(flooded.result.length < 5_000, `result was ${flooded.result.length} chars`);
   });
 });
 
