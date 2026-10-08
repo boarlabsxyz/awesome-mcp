@@ -29,6 +29,23 @@
 // a bigger change than it looks, because ClickUpClient tags its status on a
 // Symbol and ~24 of its REST routes currently depend on that quirk.
 
+/**
+ * How much upstream error text reaches the message.
+ *
+ * The body goes into `Error.message`, which gets logged and, for several
+ * providers, rendered back to the user — so an upstream that answers a 500
+ * with a megabyte of HTML would otherwise put all of it in both places. This
+ * caps size only; it redacts nothing within what is kept, and the full body is
+ * still on the error's non-enumerable `.body` for callers that parse it.
+ */
+const MAX_ERROR_TEXT = 500;
+
+function truncate(text: string): string {
+  return text.length > MAX_ERROR_TEXT
+    ? `${text.slice(0, MAX_ERROR_TEXT)}…(truncated, ${text.length} chars)`
+    : text;
+}
+
 export interface JsonApiRequestConfig {
   /** Fully-built absolute URL, query string included. */
   url: string;
@@ -58,34 +75,57 @@ export async function jsonApiRequest<T>(config: JsonApiRequestConfig): Promise<T
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  let res: Response;
+  const timedOut = () => new Error(`${serviceLabel} ${target} timed out after ${timeoutMs}ms`);
+
+  // The whole call, including body consumption, sits inside one try/finally so
+  // the deadline stays armed until the body has been read. `fetch` resolves as
+  // soon as the response HEADERS arrive, so clearing the timer at that point
+  // would leave a stalled body stream to hang with no limit at all — the route
+  // would then outlive its own configured deadline.
   try {
-    res = await doFetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...headers },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
-      redirect: 'error',
-    });
-  } catch (err: any) {
-    if (err?.name === 'AbortError') {
-      throw new Error(`${serviceLabel} ${target} timed out after ${timeoutMs}ms`);
+    let res: Response;
+    try {
+      res = await doFetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...headers },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+        redirect: 'error',
+      });
+    } catch (err: any) {
+      if (err?.name === 'AbortError') throw timedOut();
+      throw err;
     }
-    throw err;
+
+    if (!res.ok) {
+      // An unreadable error body is not worth failing over — but an ABORTED one
+      // is the deadline firing, and must not be swallowed into an empty string
+      // and reported as a plain upstream error.
+      let text = '';
+      try {
+        text = await res.text();
+      } catch (err: any) {
+        if (err?.name === 'AbortError') throw timedOut();
+      }
+      const error: any = new Error(`${serviceLabel} ${target} failed: ${res.status} ${truncate(text)}`);
+      error.status = res.status;
+      // Non-enumerable: callers that need the raw body still read `err.body`,
+      // but `console.error(err)` and JSON.stringify no longer dump an entire
+      // upstream payload into the logs. The message carries a capped excerpt.
+      Object.defineProperty(error, 'body', { value: text, enumerable: false, writable: true, configurable: true });
+      throw error;
+    }
+
+    if (res.status === 204) return undefined;
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) return undefined;
+    try {
+      return (await res.json()) as T;
+    } catch (err: any) {
+      if (err?.name === 'AbortError') throw timedOut();
+      throw err;
+    }
   } finally {
     clearTimeout(timeout);
   }
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    const error: any = new Error(`${serviceLabel} ${target} failed: ${res.status} ${text}`);
-    error.status = res.status;
-    error.body = text;
-    throw error;
-  }
-
-  if (res.status === 204) return undefined;
-  const contentType = res.headers.get('content-type') || '';
-  if (!contentType.includes('application/json')) return undefined;
-  return (await res.json()) as T;
 }
