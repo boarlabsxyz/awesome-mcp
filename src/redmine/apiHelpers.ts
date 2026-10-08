@@ -18,7 +18,7 @@
 import { UserError } from 'fastmcp';
 import { UserSession } from '../userSession.js';
 import { stripTrailingSlashes } from '../util/url.js';
-import { jsonApiRequest } from '../util/jsonApiRequest.js';
+import { jsonApiRequest, RedirectRefusedError, type RedirectRefusal } from '../util/jsonApiRequest.js';
 import { resolveRedmineAuthMode, type RedmineAuthMode } from './authMode.js';
 import { redmineOauthUrls, refreshRedmineToken } from './oauthCallback.js';
 
@@ -252,6 +252,23 @@ export function mergeCustomFieldFilters(
 // ==================== Client ====================
 
 /**
+ * Paths that are Redmine telling you to sign in, not telling you a resource
+ * moved.
+ *
+ * Following one would answer 200 with an HTML login form, which has no JSON
+ * content type and so resolves to `undefined` — a sign-in page reported as an
+ * empty result, the worst of the available outcomes. Matched on the PATH only,
+ * because Redmine's bounce is `/login?back_url=<the original URL>`: that query
+ * string is the one place the original request (and, after the query-param
+ * fallback, the key itself) reappears, so it is redacted and reported, never
+ * pattern-matched. The alternatives cover the sign-in routes themes and SSO
+ * plugins substitute for Redmine's own.
+ */
+export function isRedmineLoginPath(pathname: string): boolean {
+  return /(^|\/)(login|account\/login|signin|sign_in)(\/|$)/i.test(pathname);
+}
+
+/**
  * Thin client over the Redmine REST API. One instance per tool call — it holds
  * only a token and a base URL, so construction is free.
  */
@@ -277,13 +294,52 @@ export class RedmineClient {
   /**
    * One REST call.
    *
-   * The redirect guard, the deadline, the `.status`/`.body` tagging and the
+   * The redirect handling, the deadline, the `.status`/`.body` tagging and the
    * empty-body handling live in jsonApiRequest — see its header for why each
-   * matters. Only Redmine's own concerns stay here: the query-string builder
-   * and the dual-mode auth header, which an OAuth connection and an API-key
-   * connection must not share.
+   * matters. Only Redmine's own concerns stay here: the query-string builder,
+   * the dual-mode auth header (which an OAuth connection and an API-key
+   * connection must not share), and the login-bounce fallback below.
+   *
+   * Redirects: up to three SAME-ORIGIN hops are followed. A self-hosted
+   * Redmine can sit behind a proxy that rewrites one route — observed on
+   * `/time_entries.json`, where every other endpoint answered directly — and
+   * refusing at the first hop made that endpoint permanently unusable with a
+   * message that named neither the status nor the target. Cross-origin is
+   * still never followed and the credential never leaves this instance.
    */
-  request<T>(
+  private send<T>(
+    method: string,
+    url: string,
+    body: unknown,
+    headers: Record<string, string>,
+  ): Promise<T> {
+    return jsonApiRequest<T>({
+      url,
+      method,
+      headers,
+      body,
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      serviceLabel: 'Redmine API',
+      target: `${method} ${this.pathOf(url)}`,
+      followSameOriginRedirects: 3,
+      isLoginPath: isRedmineLoginPath,
+      // The login bounce puts the whole original URL in `back_url`, so once the
+      // query-param fallback below has run, the Location itself carries the key.
+      secrets: [this.token],
+    }) as Promise<T>;
+  }
+
+  /** Path + query of an absolute URL, for error text that should not repeat the host. */
+  private pathOf(url: string): string {
+    try {
+      const parsed = new URL(url);
+      return `${parsed.pathname}${parsed.search}`;
+    } catch {
+      return url;
+    }
+  }
+
+  async request<T>(
     method: string,
     path: string,
     body?: unknown,
@@ -292,15 +348,88 @@ export class RedmineClient {
     const url = new URL(`${this.baseUrl}${path}`);
     appendQueryParams(url, query);
 
-    return jsonApiRequest<T>({
-      url: url.toString(),
-      method,
-      headers: this.authHeaders(),
-      body,
-      timeoutMs: REQUEST_TIMEOUT_MS,
-      serviceLabel: 'Redmine API',
-      target: `${method} ${path}`,
-    }) as Promise<T>;
+    try {
+      return await this.send<T>(method, url.toString(), body, this.authHeaders());
+    } catch (err: any) {
+      const retried = await this.retryPastLoginBounce<T>(method, url, body, err);
+      if (retried.handled) return retried.value as T;
+      throw retried.error;
+    }
+  }
+
+  /**
+   * One retry past a same-host sign-in bounce, trying the two other ways
+   * Redmine accepts an API key.
+   *
+   * Redmine reads a personal key from `X-Redmine-API-Key`, from a `key` query
+   * parameter, and as the HTTP Basic username (`key:x`) — all three
+   * documented, all three equivalent. A reverse proxy that strips unknown
+   * `X-*` headers on one route therefore breaks only the first, and the symptom
+   * is a bounce to `/login` on a host and credential that work everywhere else.
+   * Trying the other two turns that into a working call rather than a report.
+   *
+   * Four deliberate limits:
+   *  - Same origin only. A cross-origin bounce is an SSO proxy and gets none of
+   *    these; the key would be handed to a host it was never issued for.
+   *  - GET only. A write replayed three ways could log the same hours up to
+   *    three times, and no diagnostic is worth that.
+   *  - API-key mode only. `?key=` and Basic are key presentations; an OAuth
+   *    bearer has no equivalent, so there is nothing to fall back to.
+   *  - The key goes in a query string on the second attempt, which a proxy or
+   *    Redmine access log may record. That is a real cost, accepted only
+   *    because the header form has already failed on this exact route.
+   */
+  private async retryPastLoginBounce<T>(
+    method: string,
+    url: URL,
+    body: unknown,
+    error: any,
+  ): Promise<{ handled: boolean; value?: T; error?: any }> {
+    const redirect: RedirectRefusal | undefined = error?.redirect;
+    const eligible =
+      error instanceof RedirectRefusedError &&
+      redirect?.sameOrigin &&
+      redirect.loginBounce &&
+      this.authMode === 'apiKey' &&
+      method.toUpperCase() === 'GET';
+    if (!eligible) return { handled: false, error };
+
+    const withKeyParam = new URL(url.toString());
+    withKeyParam.searchParams.set('key', this.token);
+    const basic = Buffer.from(`${this.token}:x`).toString('base64');
+
+    // Each attempt ADDS a presentation rather than swapping one in. If a proxy
+    // is stripping the header, the extra form is the one that survives; if it is
+    // not, keeping the header means the retry is never weaker than the call that
+    // just failed. All three carry the same token, so there is nothing to
+    // conflict.
+    const attempts: ReadonlyArray<{ label: string; url: string; headers: Record<string, string> }> = [
+      { label: 'key query parameter', url: withKeyParam.toString(), headers: this.authHeaders() },
+      {
+        label: 'HTTP Basic',
+        url: url.toString(),
+        headers: { ...this.authHeaders(), Authorization: `Basic ${basic}` },
+      },
+    ];
+
+    const failures: string[] = [];
+    for (const attempt of attempts) {
+      try {
+        return { handled: true, value: await this.send<T>(method, attempt.url, body, attempt.headers) };
+      } catch (retryErr: any) {
+        // A non-redirect failure is Redmine answering for real (403, 404, 422).
+        // That is a better error than the bounce, so stop and report it rather
+        // than burning the next attempt on a question already answered.
+        if (!(retryErr instanceof RedirectRefusedError)) return { handled: false, error: retryErr };
+        failures.push(attempt.label);
+      }
+    }
+
+    const note =
+      ` Retried with the ${failures.join(' and then ')} — Redmine bounced those to the sign-in page too, ` +
+      'so this is not the auth header being stripped. The route itself is most likely disabled, overridden ' +
+      'by a plugin, or behind a proxy rule that requires a session cookie.';
+    return { handled: false, error: new RedirectRefusedError(`${error.message}${note}`, redirect!) };
   }
 
   /** GET a collection and split it into items + pagination envelope. */
@@ -384,6 +513,25 @@ export class RedmineClient {
   // ---- Time entries ----
   listTimeEntries(query: RedmineQueryParams): Promise<RedmineList<RedmineTimeEntry>> {
     return this.list<RedmineTimeEntry>('/time_entries.json', 'time_entries', query);
+  }
+  /**
+   * The same data from a DIFFERENT path, which is the entire point of it.
+   *
+   * `listTimeEntries({ project_id })` still requests `/time_entries.json` and
+   * scopes with a query parameter, so it is the same route — useless as a
+   * fallback for an instance where that one path is what is broken. This
+   * requests `/projects/{id}/time_entries.json`, which a proxy rule or plugin
+   * override on `/time_entries` does not touch.
+   */
+  listProjectTimeEntries(
+    projectId: number | string,
+    query: RedmineQueryParams,
+  ): Promise<RedmineList<RedmineTimeEntry>> {
+    return this.list<RedmineTimeEntry>(
+      `/projects/${encodeURIComponent(String(projectId))}/time_entries.json`,
+      'time_entries',
+      query,
+    );
   }
   getTimeEntry(id: number | string): Promise<{ time_entry?: RedmineTimeEntry }> {
     return this.request('GET', `/time_entries/${encodeURIComponent(String(id))}.json`);
@@ -839,7 +987,39 @@ export function formatUser(user: RedmineUser, requested?: string[]): string {
   return parts.join('\n').trimEnd();
 }
 
-export function formatTimeEntryList(items: RedmineTimeEntry[], page?: RedminePage): string {
+/**
+ * How a complete scan is described, when one was run.
+ *
+ * Present only for `allPages`. Without it the hours line has to say "on this
+ * page", because that is all one response can honestly support.
+ */
+export interface TimeEntryScanContext {
+  scanned: {
+    /** Redmine's own `total_count`, when it reported one. */
+    total?: number;
+    /** The scan stopped at the ceiling, so the total below is a floor. */
+    truncated: boolean;
+    ceiling: number;
+  };
+  /**
+   * Set when the workspace-wide route failed and the entries were collected
+   * project by project instead. Reported because that scan covers only the
+   * projects visible on the first page of the project list, so its total is a
+   * floor for a second, different reason.
+   */
+  perProject?: {
+    scanned: number;
+    total?: number;
+    failed: string[];
+    reason: string;
+  };
+}
+
+export function formatTimeEntryList(
+  items: RedmineTimeEntry[],
+  page?: RedminePage,
+  scan?: TimeEntryScanContext,
+): string {
   const total = items.reduce((sum, entry) => sum + (typeof entry.hours === 'number' ? entry.hours : 0), 0);
   const body = renderList('Time entries', 'time entries', items, page, (entry, i) => {
     const parts = [`## ${i + 1}. ${entry.hours ?? 0}h on ${entry.spent_on ?? '(no date)'}`];
@@ -851,10 +1031,52 @@ export function formatTimeEntryList(items: RedmineTimeEntry[], page?: RedminePag
     pushKV(parts, 'Comments', entry.comments);
     return parts;
   });
-  if (items.length === 0) return body;
-  // The sum covers THIS PAGE only; renderPageLine above says how much of the
-  // set that is, so the two lines together never imply a total they didn't add.
-  return `${body}\n\nHours on this page: ${Math.round(total * 100) / 100}`;
+
+  const notes = scanNotes(items.length, scan);
+  if (items.length === 0) return notes.length ? `${body}\n\n${notes.join('\n')}` : body;
+
+  const hoursLabel = scan
+    ? scan.scanned.truncated || scan.perProject
+      ? `Hours across the ${items.length} entries scanned (a FLOOR, not a total — see the note below)`
+      : `Hours across all ${items.length} entries`
+    : 'Hours on this page';
+  const rounded = Math.round(total * 100) / 100;
+  // Without a scan the sum covers THIS PAGE only; renderPageLine above says how
+  // much of the set that is, so the two lines together never imply a total they
+  // didn't add. With one, the label says what was actually summed.
+  const tail = notes.length ? `\n\n${notes.join('\n')}` : '';
+  return `${body}\n\n${hoursLabel}: ${rounded}${tail}`;
+}
+
+/** The lines that stop a bounded scan from reading as a complete one. */
+function scanNotes(returned: number, scan?: TimeEntryScanContext): string[] {
+  if (!scan) {
+    return returned > 0
+      ? ['Note: that sum is this page only. Set allPages=true to total the whole result set.']
+      : [];
+  }
+  const notes: string[] = [];
+  if (scan.scanned.truncated) {
+    notes.push(
+      `⚠ The scan stopped at the ${scan.scanned.ceiling}-entry ceiling${typeof scan.scanned.total === 'number' ? ` (Redmine reported ${scan.scanned.total} matching entries in total)` : ''}. ` +
+      'Narrow the window with from/to, projectId or userId and run it again — any per-person total from this response is incomplete.',
+    );
+  }
+  if (scan.perProject) {
+    const { scanned, total, failed, reason } = scan.perProject;
+    notes.push(
+      `⚠ The workspace-wide time-entry list did not work on this instance, so this was collected project by ` +
+      `project instead: ${scanned} project(s) scanned${typeof total === 'number' && total > scanned ? ` of ${total} in the workspace — the rest were NOT scanned` : ''}. ` +
+      `Reason the global list failed: ${reason}`,
+    );
+    if (failed.length) {
+      notes.push(
+        `⚠ ${failed.length} project(s) could not be read and contribute 0 to the total above: ${failed.slice(0, 10).join(', ')}` +
+        `${failed.length > 10 ? `, …and ${failed.length - 10} more` : ''}.`,
+      );
+    }
+  }
+  return notes;
 }
 
 export function formatTimeEntry(entry: RedmineTimeEntry): string {
@@ -1077,11 +1299,83 @@ export interface RedmineErrorHints {
 }
 
 /**
+ * Was the "different origin" only a scheme change on the same hostname?
+ *
+ * `baseUrlHint` is prose on some call paths ("the Redmine instance"), so an
+ * unparseable hint simply means we cannot tell and fall through to the generic
+ * cross-host wording — never to a claim we cannot support.
+ */
+function sameHostDifferentScheme(baseUrlHint: string, r: RedirectRefusal): boolean {
+  let base: URL;
+  let targetHost: string;
+  try {
+    base = new URL(baseUrlHint);
+    // `host` keeps the port, which is part of the origin; compare hostnames
+    // only, so https-on-443 against http-on-80 is still recognised as one host.
+    targetHost = new URL(`${base.protocol}//${r.host}`).hostname;
+  } catch {
+    return false;
+  }
+  return targetHost === base.hostname;
+}
+
+/**
+ * A refused redirect, rendered with the target named.
+ *
+ * This used to fall through `describeTransportFailure` below as a bare
+ * "fetch failed" and produce one paragraph of guesses for all four causes —
+ * which is why `/time_entries.json` on one instance was unusable for as long
+ * as it was: the message could not distinguish a proxy rewrite from an SSO hop
+ * from a login bounce from a wrong base URL, so there was nothing to act on.
+ * The three branches here are the three different fixes.
+ */
+function describeRefusedRedirect(prefix: string, baseUrlHint: string, error: any): string | null {
+  if (!(error instanceof RedirectRefusedError)) return null;
+  const r = error.redirect;
+  if (!r.sameOrigin) {
+    // `sameOrigin` is false when the SCHEME changes as well as when the host
+    // does, so an http base URL answered with a 301 to https on the same host
+    // lands here — and the message below would name that host as a "DIFFERENT
+    // host" and blame an SSO proxy. Both are wrong, and the fix (reconnect with
+    // the https URL) is nothing like the fix for a real cross-host hop. The old
+    // one-paragraph message at least mentioned "http to https"; losing that
+    // would have been a regression.
+    if (r.host && sameHostDifferentScheme(baseUrlHint, r)) {
+      return (
+        `${prefix}: ${baseUrlHint} answered HTTP ${r.status} and redirected to the SAME host over a ` +
+        `different scheme (${r.resolved ?? r.host}). The API key was NOT sent, because a scheme change is an ` +
+        'origin change. Reconnect with the URL Redmine actually serves — almost always the https:// one.'
+      );
+    }
+    return (
+      `${prefix}: ${baseUrlHint} answered HTTP ${r.status} and redirected to a DIFFERENT host ` +
+      `(${r.host ?? 'unparseable Location'}). The API key was NOT sent there — it is only valid for the ` +
+      'instance you connected. An SSO or access proxy (Cloudflare Access, oauth2-proxy) in front of Redmine ' +
+      'looks exactly like this, and it needs its own credential; this MCP cannot authenticate to it.'
+    );
+  }
+  if (r.loginBounce) {
+    return (
+      `${prefix}: ${baseUrlHint} answered HTTP ${r.status} and bounced this request to ${r.path} on the same ` +
+      'host, while the host, base URL and credential are otherwise fine. So the credential was rejected on ' +
+      `this one route. ${error.message.includes('Retried with') ? 'All three ways Redmine accepts an API key were tried. ' : ''}` +
+      'Check whether a plugin overrides this route, whether a proxy rule on this path requires a session ' +
+      'cookie, and whether the module is enabled for the project.'
+    );
+  }
+  return (
+    `${prefix}: ${baseUrlHint} answered HTTP ${r.status} and kept redirecting to ${r.path} on the same host ` +
+    `after ${r.hopsFollowed} hop(s). Same-origin redirects are followed, so this is a redirect loop rather ` +
+    'than a relocation — most likely a proxy rewrite rule pointing at itself.'
+  );
+}
+
+/**
  * A thrown fetch (as opposed to a rejected response) carries no status, and
  * undici reports every one of them as the bare string "fetch failed". That is
- * undiagnosable, so unwrap the cause and name the two cases that actually
- * happen: a refused redirect (we set redirect:'error', so the credential is
- * never followed off the instance) and an unreachable host.
+ * undiagnosable, so unwrap the cause and name the case that actually happens:
+ * an unreachable host. Redirects no longer arrive here — they are a typed
+ * error with a target, handled above.
  */
 function describeTransportFailure(prefix: string, baseUrlHint: string, error: any): string | null {
   if (error?.status !== undefined) return null;
@@ -1089,14 +1383,6 @@ function describeTransportFailure(prefix: string, baseUrlHint: string, error: an
   const cause = String(error?.cause?.message ?? error?.cause?.code ?? '');
   if (!/fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|certificate|redirect|socket/i.test(`${message} ${cause}`)) {
     return null;
-  }
-  if (/redirect/i.test(`${message} ${cause}`)) {
-    return (
-      `${prefix}: the request was redirected away from ${baseUrlHint} and was refused rather than followed, ` +
-      'so the API key was not sent to the redirect target. This usually means the instance URL is not the ' +
-      'final one (http to https, a trailing path, or a proxy rewrite) — connect again with the URL Redmine ' +
-      'actually serves, or the exact endpoint may be disabled and redirecting to a login page.'
-    );
   }
   return (
     `${prefix}: could not reach ${baseUrlHint} (${cause || message}). The Redmine host, its TLS certificate, ` +
@@ -1113,6 +1399,13 @@ export function mapRedmineError(
 ): never {
   log.error(`${prefix}: ${error?.message ?? error}${error?.cause ? ` (cause: ${error.cause?.message ?? error.cause})` : ''}`);
   const status = error?.status;
+
+  // Before the status branches below: a RedirectRefusedError carries .status
+  // 502 so the REST plane answers sensibly, and 502 is not a case any of them
+  // handle — it would otherwise fall through to the generic tail and lose the
+  // target that is the entire point of the error.
+  const redirected = describeRefusedRedirect(prefix, baseUrlHint, error);
+  if (redirected) throw new UserError(redirected);
 
   const transport = describeTransportFailure(prefix, baseUrlHint, error);
   if (transport) throw new UserError(transport);

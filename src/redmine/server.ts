@@ -338,7 +338,7 @@ redmineServer.addTool({
 redmineServer.addTool({
   name: 'listTimeEntries',
   annotations: { readOnlyHint: true },
-  description: 'List Redmine time entries, filterable by project, issue, user and date range. The hours total shown covers the returned page only — check the reported total before treating it as a full sum.',
+  description: 'List Redmine time entries (spent time), filterable by project, issue, user, activity and date range. Set allPages=true whenever you are SUMMING hours — Redmine caps a page at 100 entries, so a per-person or per-project total from one page is silently short, and only that mode reports a total for the whole set. Billable vs non-billable is modelled as the time-tracking activity on most instances (names prefixed "B:" / "NB:"), so listTimeEntryActivities then activityId is how you split them. If this fails with a redirect, read the reported target: a different host means an SSO or access proxy this server cannot authenticate to, while the sign-in page on the same host means this one route is blocked even though the credential is fine.',
   parameters: listTimeEntriesSchema,
   execute: (args, { log, session }) =>
     withRedmineClient('Failed to list time entries', session, log, client => opListTimeEntries(client, args, log), { permission: 'view_time_entries' }),

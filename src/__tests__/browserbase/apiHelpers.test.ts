@@ -39,14 +39,41 @@ function stub(impl: (url: string, init: any) => any) {
 }
 
 describe('BrowserbaseClient.request', () => {
-  it('sends the key as x-bb-api-key and refuses redirects', async () => {
+  it('sends the key as x-bb-api-key and never delegates redirects to fetch', async () => {
     const { fetchImpl, calls } = stub(() => response([]));
     await new BrowserbaseClient('bb_secret', undefined, fetchImpl).listProjects();
     assert.equal(calls[0].init.headers['x-bb-api-key'], 'bb_secret');
     // Node's fetch keeps custom headers across a redirect, so following one
-    // would hand the key to whatever host the Location names.
-    assert.equal(calls[0].init.redirect, 'error');
+    // would hand the key to whatever host the Location names. 'manual' rather
+    // than 'error' so the Location is readable before the call is refused —
+    // this client opts into NO hops, so a 3xx is still always refused, it just
+    // now says where it was being sent.
+    assert.equal(calls[0].init.redirect, 'manual');
     assert.equal(calls[0].url, 'https://api.browserbase.com/v1/projects');
+  });
+
+  it('refuses a 3xx and names the target rather than reporting a transport failure', async () => {
+    // This client passes no followSameOriginRedirects, so every hop is refused
+    // — including a same-origin one. What changed is only that the error says
+    // which case it was instead of surfacing as a bare "fetch failed".
+    const { fetchImpl, calls } = stub(() => ({
+      ok: false,
+      status: 302,
+      statusText: 'Found',
+      headers: { get: (n: string) => (n.toLowerCase() === 'location' ? 'https://evil.test/keys' : null) },
+      json: async () => ({}),
+      text: async () => '',
+    }));
+    await assert.rejects(
+      () => new BrowserbaseClient('bb_secret', undefined, fetchImpl).listProjects(),
+      (err: any) => {
+        assert.equal(err.redirect.host, 'evil.test');
+        assert.equal(err.redirect.sameOrigin, false);
+        assert.equal(err.status, 502);
+        return true;
+      },
+    );
+    assert.equal(calls.length, 1, 'the key was never sent to the other host');
   });
 
   it('tags the upstream status on .status, which is what sendUpstreamError reads', async () => {
