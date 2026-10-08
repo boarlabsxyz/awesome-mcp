@@ -168,6 +168,79 @@ describe('opNavigate', () => {
   });
 });
 
+describe('upstream payloads never reach the caller verbatim', () => {
+  // Written against what a live run actually returned. navigate answered with a
+  // serialized Page/CDP object carrying the internal connect websocket URL and
+  // its signingKey JWT repeated several times.
+  const KEY = `eyJ${'A1b2C3d4E5f6G7h8'.repeat(4)}.${'Zz9Yy8Xx7'.repeat(3)}.${'Qq1Ww2Ee3'.repeat(3)}`;
+  const LEAKY_NAVIGATE = JSON.stringify({
+    success: true,
+    data: {
+      sessionId: 'sess-1',
+      connectUrl: `ws://go-connect.connect.svc.cluster.local:8080/?signingKey=${KEY}`,
+      signingKey: KEY,
+      flowLoggerSessionId: 'flow-abc-123',
+      page: { title: 'Example Domain', response: { status: 200 }, client: { signingKey: KEY } },
+      padding: 'x'.repeat(15_000),
+    },
+  });
+
+  it('navigate reports only the url, status and title', async () => {
+    const { proxy } = stubProxy({ navigate: LEAKY_NAVIGATE });
+    const text = await opNavigate(proxy, { url: 'https://example.com/', sessionId: 'sess-1' });
+
+    assert.match(text, /Navigated to https:\/\/example\.com\/ \(HTTP 200\)/);
+    assert.match(text, /Title: Example Domain/);
+
+    // The security assertion: none of it reaches the caller.
+    assert.ok(!text.includes(KEY), 'the signing key leaked');
+    assert.ok(!text.includes('eyJ'), 'a token prefix leaked');
+    assert.ok(!text.includes('signingKey'), 'the key parameter name leaked');
+    assert.ok(!text.includes('cluster.local'), 'an internal hostname leaked');
+    assert.ok(!text.includes('flow-abc-123'), 'the flow-logger session id leaked');
+    assert.ok(!text.includes('connectUrl'), 'the connect URL leaked');
+    // ~15 KB in, a couple of lines out.
+    assert.ok(text.length < 400, `response was ${text.length} chars`);
+  });
+
+  it('extract does not echo a 214 KB degenerate upstream failure', async () => {
+    // The live case: the extraction model emitted thousands of newlines until
+    // its JSON was cut off, and the upstream error echoed the whole thing —
+    // enough to overflow a 25 K-token client by itself.
+    const flood = new Error(`AI_NoObjectGeneratedError: ${'\n'.repeat(214_000)}`);
+    const { proxy } = stubProxy({ extract: flood });
+    await assert.rejects(
+      () => opExtract(proxy, { instruction: 'Current page URL and main heading', sessionId: 's' }),
+      (err: any) => {
+        assert.ok(err.message.length < 1_500, `error was ${err.message.length} chars`);
+        // The part that says which failure it was has to survive.
+        assert.match(err.message, /AI_NoObjectGeneratedError/);
+        return true;
+      },
+    );
+  });
+
+  it('unwraps the success envelope so every tool reads the same way', async () => {
+    // act/observe/extract used to hand back the raw {"success":true,"data":{…}}
+    // wrapper while start/end/getBrowserSession returned formatted text.
+    const { proxy } = stubProxy({
+      observe: JSON.stringify({ success: true, data: { elements: ['#login', '#password'] } }),
+    });
+    const text = await opObserve(proxy, { instruction: 'find the form', sessionId: 's' });
+    assert.ok(!text.includes('"success"'), 'the envelope leaked into the response');
+    assert.match(text, /#login/);
+  });
+
+  it('redacts a credential that appears in extracted page content', async () => {
+    // extract's payload is the point, so it cannot be allowlisted like
+    // navigate — redaction is the backstop for exactly this case.
+    const { proxy } = stubProxy({ extract: `token on the page: ${KEY}` });
+    const text = await opExtract(proxy, { sessionId: 's' });
+    assert.ok(!text.includes(KEY));
+    assert.match(text, /credentials and internal addresses were removed/);
+  });
+});
+
 describe('opExtract', () => {
   it('omits the instruction key entirely when none was given', async () => {
     // Sending `instruction: undefined` upstream is not the same as omitting it.

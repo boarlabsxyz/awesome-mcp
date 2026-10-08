@@ -22,6 +22,12 @@ import {
   sessionDashboardUrl,
 } from './apiHelpers.js';
 import { BrowserbaseAccessRules, assertDomainAllowed } from './accessRules.js';
+import {
+  extractNavigationFacts,
+  renderPayload,
+  sanitize,
+  unwrapEnvelope,
+} from './responseSafety.js';
 import { parseSessionId } from './mcpProxyClient.js';
 import type { HostedProxy } from './ops.js';
 
@@ -112,6 +118,26 @@ export interface PageActionResult {
   result: string;
 }
 
+export interface NavigationResult {
+  sessionId: string;
+  /** The URL that was requested — authoritative, and not read from the payload. */
+  url: string;
+  status?: number;
+  title?: string;
+}
+
+/**
+ * Unwrap the `{success,data}` envelope, collapse degenerate runs, redact
+ * credentials and cap the size.
+ *
+ * Shared with the MCP ops through responseSafety so the two surfaces cannot
+ * disagree about what is safe to return — the REST plane leaked exactly the
+ * same payload as the tool did.
+ */
+function safePayload(text: string): string {
+  return sanitize(renderPayload(unwrapEnvelope(text))).text;
+}
+
 /**
  * Navigate. Domain rules are enforced here and only here, for the same reason
  * as on the MCP side: it is the one operation that names a destination.
@@ -121,10 +147,18 @@ export async function performNavigate(
   sessionId: string,
   args: { url: string },
   rules?: BrowserbaseAccessRules,
-): Promise<PageActionResult> {
+): Promise<NavigationResult> {
   const url = assertDomainAllowed(rules, args.url);
-  const result = await proxy('navigate', { url: url.toString(), sessionId });
-  return { sessionId, result };
+  const text = await proxy('navigate', { url: url.toString(), sessionId });
+
+  // The upstream payload is NOT returned. `navigate` answers with a serialized
+  // Page/CDP object carrying the internal connect websocket URL, its signingKey
+  // JWT several times over, internal cluster hostnames and a flow-logger
+  // session id — and this endpoint was handing all of it to any API-key holder.
+  // Projected to an allowlist rather than redacted, for the same reason as the
+  // MCP tool: the payload's shape is Browserbase's to change.
+  const facts = extractNavigationFacts(unwrapEnvelope(text));
+  return { sessionId, url: url.toString(), status: facts.status, title: facts.title };
 }
 
 export async function performObserve(
@@ -132,7 +166,8 @@ export async function performObserve(
   sessionId: string,
   args: { instruction: string },
 ): Promise<PageActionResult> {
-  return { sessionId, result: await proxy('observe', { instruction: args.instruction, sessionId }) };
+  const text = await proxy('observe', { instruction: args.instruction, sessionId });
+  return { sessionId, result: safePayload(text) };
 }
 
 export async function performExtract(
@@ -140,9 +175,9 @@ export async function performExtract(
   sessionId: string,
   args: { instruction?: string },
 ): Promise<PageActionResult> {
-  const result = await proxy('extract', {
+  const text = await proxy('extract', {
     ...(args.instruction ? { instruction: args.instruction } : {}),
     sessionId,
   });
-  return { sessionId, result };
+  return { sessionId, result: safePayload(text) };
 }

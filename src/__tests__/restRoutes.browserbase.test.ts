@@ -184,6 +184,39 @@ describe('REST data plane: Browserbase handlers', () => {
     assert.equal(toolCall!.body.params.arguments.sessionId, 'sess-1');
   });
 
+  it('navigate answers with url/status/title, never the CDP payload', async () => {
+    // The endpoint used to return the whole serialized Page object — internal
+    // connect URL, signingKey JWT, cluster hostnames — to any API-key holder.
+    const KEY = `eyJ${'A1b2C3d4E5f6G7h8'.repeat(4)}.${'Zz9Yy8Xx7'.repeat(3)}.${'Qq1Ww2Ee3'.repeat(3)}`;
+    mockUpstreams({
+      toolText: JSON.stringify({
+        success: true,
+        data: {
+          connectUrl: `ws://go-connect.connect.svc.cluster.local:8080/?signingKey=${KEY}`,
+          signingKey: KEY,
+          page: { title: 'Example Domain', response: { status: 200 } },
+          padding: 'x'.repeat(15_000),
+        },
+      }),
+    });
+    const res = await post('/api/v1/browserbase/sessions/sess-1/navigate', { url: 'https://example.com/' });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body, {
+      sessionId: 'sess-1', url: 'https://example.com/', status: 200, title: 'Example Domain',
+    });
+    const body = JSON.stringify(res.body);
+    for (const secret of [KEY, 'eyJ', 'signingKey', 'cluster.local', 'connectUrl']) {
+      assert.ok(!body.includes(secret), `${secret} leaked over REST`);
+    }
+  });
+
+  it('bounds a flooded extract instead of returning 214 KB', async () => {
+    mockUpstreams({ toolText: '\n'.repeat(214_000) });
+    const res = await post('/api/v1/browserbase/sessions/sess-1/extract', { instruction: 'the heading' });
+    assert.equal(res.status, 200);
+    assert.ok(res.body.result.length < 5_000, `result was ${res.body.result.length} chars`);
+  });
+
   it('400s on an invalid body, naming the issues', async () => {
     mockUpstreams({ toolText: 'loaded' });
     const res = await post('/api/v1/browserbase/sessions/sess-1/navigate', {});
