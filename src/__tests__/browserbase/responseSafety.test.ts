@@ -131,6 +131,28 @@ describe('sanitize', () => {
   });
 });
 
+describe('sanitize ordering', () => {
+  it('redacts a secret that a collapse would otherwise split below the pattern', () => {
+    // The near-miss: collapsing first turns `eyJ` + 81 identical base64url
+    // characters into `eyJAAA…[81 repeated …]`, whose remaining fragment is
+    // under the token pattern's 20-character minimum — so the redactor stops
+    // matching and part of the key survives. Redacting first removes the class.
+    const degenerate = `eyJ${'A'.repeat(81)}`;
+    const result = sanitize(`connectUrl token: ${degenerate}`);
+    assert.ok(!result.text.includes('eyJ'), `token prefix survived: ${result.text}`);
+    assert.ok(result.redacted.includes('token'));
+  });
+
+  it('still collapses before capping, so the cap keeps real content', () => {
+    // The other direction: if the cap ran before the collapse it would spend
+    // its whole budget on newlines and discard what followed.
+    const result = sanitize(`${'\n'.repeat(200_000)}the real content`);
+    assert.match(result.text, /the real content/);
+    assert.equal(result.collapsed, true);
+    assert.equal(result.truncated, false);
+  });
+});
+
 describe('safeErrorText', () => {
   it('caps the 214 KB upstream error that overflowed a client', () => {
     // AI_NoObjectGeneratedError echoed the model's whole degenerate output.
@@ -210,6 +232,17 @@ describe('extractNavigationFacts', () => {
     let deep: any = { title: 'too deep to matter' };
     for (let i = 0; i < 500; i += 1) deep = { nested: deep };
     assert.doesNotThrow(() => extractNavigationFacts(deep));
+  });
+
+  it('redacts a secret carried INSIDE the allowed title field', () => {
+    // The allowlist stops an unknown FIELD; it says nothing about what an
+    // allowed field contains. A page whose <title> holds a token, or an
+    // upstream that puts one there, would otherwise pass straight through.
+    const facts = extractNavigationFacts({ status: 200, title: `Login — ${KEY}` });
+    assert.equal(facts.status, 200);
+    assert.ok(!(facts.title ?? '').includes(KEY), `title leaked: ${facts.title}`);
+    assert.ok(!(facts.title ?? '').includes('eyJ'));
+    assert.match(facts.title ?? '', /Login/);
   });
 
   it('never surfaces a secret, whatever the key is called', () => {

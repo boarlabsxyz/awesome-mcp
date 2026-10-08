@@ -203,6 +203,47 @@ describe('upstream payloads never reach the caller verbatim', () => {
     assert.ok(text.length < 400, `response was ${text.length} chars`);
   });
 
+  it('start does not echo the raw response when it cannot read an id', async () => {
+    // This was the one remaining exit that forwarded an upstream payload
+    // verbatim — and `start`'s response is exactly the one carrying the connect
+    // URL and its signing key.
+    //
+    // Deliberately carries no session-id-shaped value anywhere (not even a
+    // field NAMED like one), so parseSessionId genuinely fails and the error
+    // branch is the one under test.
+    const leakyWithNoId = JSON.stringify({
+      success: true,
+      data: {
+        connectUrl: `ws://go-connect.connect.svc.cluster.local:8080/?signingKey=${KEY}`,
+        signingKey: KEY,
+        padding: 'x'.repeat(15_000),
+      },
+    });
+    const { proxy } = stubProxy({ start: leakyWithNoId });
+    await assert.rejects(() => opStart(proxy, stubClient(), {}), (err: any) => {
+      assert.match(err.message, /did not return an id/);
+      assert.ok(!err.message.includes(KEY), 'the signing key leaked through the start error');
+      assert.ok(!err.message.includes('eyJ'));
+      assert.ok(!err.message.includes('cluster.local'));
+      assert.ok(err.message.length < 2_000, `error was ${err.message.length} chars`);
+      return true;
+    });
+  });
+
+  it('end reports the close and drops the upstream payload entirely', async () => {
+    // `end` had no sanitizing path, so it returned the raw text. Dropping it
+    // beats redacting it: a close either happened or it did not, and the
+    // payload is a CDP fragment that tells the caller nothing.
+    const { proxy } = stubProxy({ end: LEAKY_NAVIGATE });
+    const text = await opEnd(proxy, stubClient(), { sessionId: 'sess-1' });
+    assert.match(text, /closed \(sess-1\)/);
+    assert.match(text, /no longer billing/);
+    for (const trace of [KEY, 'eyJ', 'signingKey', 'cluster.local', 'connectUrl', 'redacted']) {
+      assert.ok(!text.includes(trace), `${trace} appeared in the end response`);
+    }
+    assert.ok(text.length < 120, `response was ${text.length} chars`);
+  });
+
   it('extract does not echo a 214 KB degenerate upstream failure', async () => {
     // The live case: the extraction model emitted thousands of newlines until
     // its JSON was cut off, and the upstream error echoed the whole thing —

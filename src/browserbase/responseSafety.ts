@@ -116,11 +116,22 @@ function cap(input: string, max: number): { text: string; truncated: boolean } {
 
 /** Collapse, redact and cap, in that order. */
 export function sanitize(input: string, max = MAX_PAYLOAD_CHARS): SanitizeResult {
-  // Collapse first: a degenerate run can be most of the input, and collapsing
-  // it is what lets the cap keep real content instead of a wall of newlines.
-  const runs = collapseRuns(input ?? '');
-  const secrets = redactSecrets(runs.text);
-  const capped = cap(secrets.text, max);
+  // Order is load-bearing in both directions, and the middle step is the
+  // subtle one.
+  //
+  // REDACT FIRST. Collapsing can only shorten text, but shortening a secret is
+  // enough to defeat the redactor: `eyJ` followed by 81 identical base64url
+  // characters collapses to `eyJAAA…[81 repeated …]`, whose remaining fragment
+  // is below the token pattern's 20-character minimum — so the redactor stops
+  // matching and part of the key survives. Redacting while the secret is still
+  // intact removes that whole class of near-miss.
+  //
+  // THEN COLLAPSE, THEN CAP. A degenerate run can be most of the input, so
+  // collapsing before the cap is what lets the cap keep real content instead of
+  // spending its whole budget on a wall of newlines.
+  const secrets = redactSecrets(input ?? '');
+  const runs = collapseRuns(secrets.text);
+  const capped = cap(runs.text, max);
   return {
     text: capped.text,
     redacted: secrets.redacted,
@@ -204,7 +215,8 @@ const TITLE_KEYS = ['title', 'pagetitle', 'documenttitle'];
  * and that is more trustworthy than anything echoed back.
  *
  * Searches breadth-first to a bounded depth so a deeply nested object cannot
- * turn this into a long walk.
+ * turn this into a long walk. The values it does return are redacted, because
+ * an allowlist of FIELD NAMES says nothing about what those fields contain.
  */
 export function extractNavigationFacts(data: unknown): NavigationFacts {
   const facts: NavigationFacts = {};
@@ -224,7 +236,12 @@ export function extractNavigationFacts(data: unknown): NavigationFacts {
         if (Number.isInteger(numeric) && numeric >= 100 && numeric <= 599) facts.status = numeric;
       }
       if (facts.title === undefined && TITLE_KEYS.includes(key) && typeof child === 'string' && child.trim()) {
-        facts.title = child.trim().slice(0, 300);
+        // Redacted, not just length-capped. The allowlist stops an UNKNOWN
+        // field reaching the caller, but a field on the list can still carry a
+        // secret in its value — a page whose <title> holds a token, or an
+        // upstream that puts one there. Both navigate paths read this, so the
+        // protection belongs here rather than in each of them.
+        facts.title = redactSecrets(child.trim().slice(0, 300)).text;
       }
       if (child && typeof child === 'object') queue.push({ value: child, depth: depth + 1 });
     }

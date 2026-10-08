@@ -182,7 +182,10 @@ export async function opStart(
     // the next call, and a browser may now be running that nobody can address.
     throw new UserError(
       `Browserbase started a session but did not return an id this tool could read, so later calls have nothing to target. ` +
-        `Run listBrowserSessions to find and close it. Raw response: ${text}`,
+        // Sanitized: this was the one exit that still echoed an upstream
+        // payload verbatim, and `start`'s response is exactly the one that
+        // carries the connect URL and its signing key.
+        `Run listBrowserSessions to find and close it. Raw response: ${safeErrorText(text)}`,
     );
   }
 
@@ -222,7 +225,13 @@ export async function opEnd(
   try {
     const text = await callProxy(proxy, 'end', sessionId ? { sessionId } : {});
     const suffix = sessionId ? ` (${sessionId})` : '';
-    return `Browser session closed${suffix}. It is no longer billing.${text ? `\n\n${text}` : ''}`;
+    // The upstream payload is dropped, not sanitized-and-echoed. `end` had no
+    // sanitizing path at all, so it was returning the raw text — but the right
+    // answer here is not to return it: a close either happened or it did not,
+    // and the payload is a CDP fragment that tells the caller nothing. Echoing
+    // a redacted version would just be noise with a redaction note attached.
+    void text;
+    return `Browser session closed${suffix}. It is no longer billing.`;
   } catch (proxyErr: any) {
     if (!sessionId) {
       throw new UserError(
