@@ -12,6 +12,12 @@
 // The previous implementation looked in exactly one place — `shared_team_ids`
 // on the first 10 externally-shared channels — and missed orgs reachable only
 // through channel 11+, through a DM, or through Slack's other team-ID fields.
+//
+// A later gap: the workspace-wide channel sweep is paged, so a workspace with
+// more channels than the page budget covers exhausted it on internal channels
+// and never reached the shared ones. The member-scoped sweep (1b) exists so
+// that the channels the user is actually in are always swept, whatever the
+// size of the workspace around them.
 import {
   channelSharedTeamIds,
   channelTeamIds,
@@ -49,7 +55,8 @@ export interface OrgDiscoveryResult {
  * a 429 once — so these bound how long opening the modal can take. Hitting one
  * sets `truncated` and adds a note; it never silently shortens the list.
  */
-export const LIST_MAX_PAGES = 25;          // 25 × 200 channels
+export const LIST_MAX_PAGES = 25;          // 25 × 1000 channels, workspace-wide
+export const MEMBER_LIST_MAX_PAGES = 15;   // 15 × 200 of the user's own channels
 export const DM_LIST_MAX_PAGES = 15;       // 15 × 200 DMs
 export const USER_LIST_MAX_PAGES = 10;     // 10 × 1000 users
 export const CHANNEL_INFO_MAX = 100;       // was 10 — the original bug
@@ -69,9 +76,14 @@ export interface OrgDiscoveryClient {
     }>;
     response_metadata?: { next_cursor?: string };
   }>;
+  // Carries the same shared flags as conversationsListAll: sweep 1b asks this
+  // method for public/private channels too, and has to tell a shared channel
+  // from an internal one to decide whether a conversations.info is worth it.
   conversationsList(cursor?: string, types?: string): Promise<{
     channels: Array<SlackChannelTeamFields & {
       id: string; is_im?: boolean; is_mpim?: boolean; user?: string;
+      is_shared?: boolean; is_ext_shared?: boolean;
+      is_org_shared?: boolean; is_pending_ext_shared?: boolean;
     }>;
     response_metadata?: { next_cursor?: string };
   }>;
@@ -160,6 +172,43 @@ export async function discoverConnectedOrgs(
     } while (cursor);
   } catch (err) {
     cap(acc, `Could not list channels (${errText(err)}); orgs reachable only through channels may be missing.`);
+  }
+
+  // --- 1b. Channels the user is actually a member of ------------------------
+  // The sweep above walks the *whole workspace*, so in a big one it can spend
+  // its entire page budget on internal channels and stop before reaching the
+  // externally-shared ones — which is precisely how an org the user shares a
+  // private channel with ended up with no checkbox.
+  //
+  // users.conversations is member-scoped, so this set is bounded by how many
+  // channels the human is in rather than by workspace size, and it is where a
+  // *private* shared channel necessarily lives (membership is the only way to
+  // see one). Running it makes the common case independent of the cap above.
+  // Overlap with the pass above is free: `add` is idempotent per (id, source).
+  try {
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const result = await client.conversationsList(cursor, 'public_channel,private_channel');
+      for (const ch of result.channels) {
+        // Classify by the row's own flags, not by the `types` we asked for:
+        // a DM counted here as a 'channel' would misreport how the org was
+        // found, and the DM pass below is what collects counterpart user IDs.
+        if (ch.is_im || ch.is_mpim) continue;
+        for (const tid of channelTeamIds(ch, { includePending: true })) add(acc, tid, 'channel');
+        if (isSharedChannel(ch) && channelSharedTeamIds(ch, { includePending: true }).length === 0) {
+          needsInfo.push(ch.id);
+        }
+      }
+      cursor = result.response_metadata?.next_cursor || undefined;
+      pages++;
+      if (cursor && pages >= MEMBER_LIST_MAX_PAGES) {
+        cap(acc, `Stopped after ${MEMBER_LIST_MAX_PAGES} pages of your own channels; orgs reachable only through channels beyond that are not listed.`);
+        break;
+      }
+    } while (cursor);
+  } catch (err) {
+    cap(acc, `Could not list your channels (${errText(err)}); orgs reachable only through a channel you are a member of may be missing.`);
   }
 
   // --- 2. DMs and group DMs ------------------------------------------------

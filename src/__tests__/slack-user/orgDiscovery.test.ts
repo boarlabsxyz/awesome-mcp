@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { discoverConnectedOrgs, CHANNEL_INFO_MAX } from '../../slack-user/orgDiscovery.js';
+import { discoverConnectedOrgs, CHANNEL_INFO_MAX, LIST_MAX_PAGES } from '../../slack-user/orgDiscovery.js';
 
 /**
  * Build a stub client. Every sweep defaults to empty, so each test only
@@ -245,5 +245,83 @@ describe('discoverConnectedOrgs — result shape', () => {
     assert.deepEqual(ids(result), ['T_PARTNER']);
     assert.equal(result.truncated, true);
     assert.ok(result.notes.some(n => n.includes('missing_scope')), result.notes.join(' | '));
+  });
+});
+
+describe('discoverConnectedOrgs — big workspaces', () => {
+  /**
+   * The reported failure: a workspace with more channels than the
+   * workspace-wide sweep's page budget. It spends every page on internal
+   * channels, reports "Stopped after N pages of channels", and the partner org
+   * of a private channel the user is plainly a member of gets no checkbox — so
+   * it can never be allowed and its channel stays invisible.
+   *
+   * conversations.list is ordered by Slack, not by usefulness, so "page past
+   * it" is not a fix anyone can rely on. The member-scoped sweep is, because
+   * its size tracks the user rather than the workspace.
+   */
+  function hugeWorkspaceClient(overrides: Record<string, any> = {}): any {
+    return mockClient({
+      // Always another page, never a shared channel: the budget is exhausted.
+      conversationsListAll: async () => ({
+        channels: [{ id: 'C_INTERNAL' }],
+        response_metadata: { next_cursor: 'more' },
+      }),
+      ...overrides,
+    });
+  }
+
+  it('finds the partner org of a private channel the workspace sweep never reaches', async () => {
+    const result = await discoverConnectedOrgs(hugeWorkspaceClient({
+      conversationsList: async (_cursor?: string, types?: string) =>
+        types === 'public_channel,private_channel'
+          ? { channels: [{ id: 'C_PRIVATE', is_ext_shared: true, connected_team_ids: ['T_PARTNER'] }] }
+          : { channels: [] },
+    }), { currentOrgId: 'T_HOME' });
+
+    const partner = result.orgs.find(o => o.id === 'T_PARTNER');
+    assert.ok(partner, `T_PARTNER should be tickable; got ${JSON.stringify(result.orgs)}`);
+    assert.deepEqual(partner.sources, ['channel']);
+  });
+
+  it('still reports the workspace sweep as truncated, because it genuinely is', async () => {
+    // The member sweep covers the common case; it does not make the cap
+    // disappear. A public shared channel the user has not joined can still sit
+    // beyond the budget, so the warning has to stay honest.
+    const result = await discoverConnectedOrgs(hugeWorkspaceClient(), { currentOrgId: 'T_HOME' });
+    assert.equal(result.truncated, true);
+    assert.ok(
+      result.notes.some(n => n.includes(`${LIST_MAX_PAGES} pages of channels`)),
+      result.notes.join(' | '),
+    );
+  });
+
+  it('does not count a DM as a channel when the member sweep returns one', async () => {
+    // users.conversations is asked for public/private only, but classification
+    // is by the row's own flags so an im can never be mislabelled 'channel'.
+    const result = await discoverConnectedOrgs(mockClient({
+      conversationsList: async () => ({
+        channels: [{ id: 'D1', is_im: true, user: 'U_EXT', connected_team_ids: ['T_PARTNER'] }],
+      }),
+    }), { currentOrgId: 'T_HOME' });
+
+    const partner = result.orgs.find(o => o.id === 'T_PARTNER');
+    assert.ok(partner);
+    assert.deepEqual(partner.sources, ['dm'], 'a DM must report as dm, not channel');
+  });
+
+  it('reports a member-sweep failure separately from a workspace-sweep failure', async () => {
+    const result = await discoverConnectedOrgs(mockClient({
+      conversationsList: async (_cursor?: string, types?: string) => {
+        if (types === 'public_channel,private_channel') throw new Error('missing_scope');
+        return { channels: [] };
+      },
+    }), { currentOrgId: 'T_HOME' });
+
+    assert.equal(result.truncated, true);
+    assert.ok(
+      result.notes.some(n => n.includes('your channels') && n.includes('missing_scope')),
+      result.notes.join(' | '),
+    );
   });
 });

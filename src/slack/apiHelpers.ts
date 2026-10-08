@@ -347,7 +347,12 @@ export class SlackClient {
     return this.request('conversations.list', {
       types: types || 'public_channel,private_channel',
       exclude_archived: true,
-      limit: 200,
+      // 1000 is Slack's documented maximum for this method. At 200 a workspace
+      // with >5k channels exhausted org discovery's page budget before reaching
+      // its externally-shared channels, so an org the user was plainly in went
+      // untickable. Slack may return fewer than asked; the cursor loop already
+      // handles short pages.
+      limit: 1000,
       ...(cursor ? { cursor } : {}),
     });
   }
