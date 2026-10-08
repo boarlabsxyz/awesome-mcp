@@ -270,6 +270,45 @@ describe('mapRedmineError', () => {
     }
   });
 
+  test('an http to https upgrade is not reported as a different host', () => {
+    // `sameOrigin` is false for a scheme change as well as a host change, so an
+    // http base URL answered with a 301 to https lands in the cross-host branch
+    // — which would name the SAME host as "a DIFFERENT host" and blame an SSO
+    // proxy. The fix (reconnect over https) is nothing like the fix for a real
+    // cross-host hop, and the message this replaced did cover this case.
+    const err = new RedirectRefusedError('redirected', {
+      status: 301, location: 'https://redmine.example.com/time_entries.json',
+      resolved: 'https://redmine.example.com/time_entries.json', host: 'redmine.example.com',
+      path: '/time_entries.json', sameOrigin: false, loginBounce: false, hopsFollowed: 0,
+    });
+    try {
+      mapRedmineError('Failed to list time entries', err, silentLog, {}, 'http://redmine.example.com');
+      assert.fail('should have thrown');
+    } catch (thrown: any) {
+      assert.match(thrown.message, /SAME host over a different scheme/);
+      assert.match(thrown.message, /https:\/\//);
+      assert.doesNotMatch(thrown.message, /DIFFERENT host/);
+      assert.doesNotMatch(thrown.message, /SSO or access proxy/);
+    }
+  });
+
+  test('a prose base-URL hint falls back to the generic cross-host wording', () => {
+    // Several call paths pass "the Redmine instance" rather than a URL. An
+    // unparseable hint means we cannot tell, so it must not produce a claim we
+    // cannot support either way.
+    const err = new RedirectRefusedError('redirected', {
+      status: 302, location: 'https://sso.example.net/authorize',
+      resolved: 'https://sso.example.net/authorize', host: 'sso.example.net',
+      path: '/authorize', sameOrigin: false, loginBounce: false, hopsFollowed: 0,
+    });
+    try {
+      mapRedmineError('Failed to list time entries', err, silentLog, {});
+      assert.fail('should have thrown');
+    } catch (thrown: any) {
+      assert.match(thrown.message, /DIFFERENT host \(sso\.example\.net\)/);
+    }
+  });
+
   test('a same-host login bounce is reported as a route problem, not a bad credential', () => {
     const err = new RedirectRefusedError('bounced', {
       status: 302, location: '/login?back_url=%2Ftime_entries.json',

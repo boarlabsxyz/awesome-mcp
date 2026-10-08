@@ -14,6 +14,7 @@ import { z } from 'zod';
 
 import {
   RedmineClient,
+  RedmineList,
   RedmineQueryParams,
   RedmineToolLog,
   formatCategoryList,
@@ -392,14 +393,19 @@ async function scanAllTimeEntries(
   client: RedmineClient,
   args: z.infer<typeof listTimeEntriesSchema>,
   log: RedmineToolLog,
+  /**
+   * How one page is fetched. Defaults to the workspace-wide route; the
+   * per-project fallback passes the project-scoped one, which is a genuinely
+   * DIFFERENT path rather than the same path with a `project_id` parameter.
+   */
+  fetchPage: (query: RedmineQueryParams) => Promise<RedmineList<RedmineTimeEntry>> =
+    (query) => client.listTimeEntries(query),
 ): Promise<{ items: RedmineTimeEntry[]; total?: number; truncated: boolean }> {
   const items: RedmineTimeEntry[] = [];
   let offset = 0;
   let total: number | undefined;
   for (;;) {
-    const page = await client.listTimeEntries(
-      timeEntryListQuery({ ...args, offset, limit: REDMINE_MAX_LIMIT }),
-    );
+    const page = await fetchPage(timeEntryListQuery({ ...args, offset, limit: REDMINE_MAX_LIMIT }));
     items.push(...page.items);
     total = page.page.total_count ?? total;
     offset += REDMINE_MAX_LIMIT;
@@ -441,10 +447,22 @@ async function scanTimeEntriesPerProject(
   truncated: boolean;
 }> {
   const projects = await client.listProjects({ offset: 0, limit: REDMINE_MAX_LIMIT });
-  const items: RedmineTimeEntry[] = [];
+  // Deduplicated by entry id, which is not a belt-and-braces measure: Redmine
+  // scopes a project query to the project AND its subprojects when
+  // `display_subprojects_issues` is on (the default), so a child project's
+  // entries come back under the parent as well as under the child. Summing the
+  // raw concatenation would report hours HIGHER than reality, which is worse
+  // than the documented floor — a floor is conservative, an over-count is just
+  // wrong. Skipping child projects instead would be wrong in the other
+  // direction on an instance where that setting is off, and the setting is not
+  // readable through the API; deduplication is correct either way.
+  const byId = new Map<string, RedmineTimeEntry>();
+  const unidentified: RedmineTimeEntry[] = [];
   const failed: string[] = [];
   let scanned = 0;
   let truncated = false;
+  const collected = () => byId.size + unidentified.length;
+
   for (const project of projects.items) {
     const id = project.identifier ?? (project.id !== undefined ? String(project.id) : '');
     if (!id) continue;
@@ -452,14 +470,26 @@ async function scanTimeEntriesPerProject(
     // would let 100 projects accumulate 100x it — 50 requests each, which is a
     // tool call that never returns rather than one that returns a bounded
     // answer.
-    if (items.length >= TIME_ENTRY_SCAN_MAX) {
+    if (collected() >= TIME_ENTRY_SCAN_MAX) {
       log.info(`Per-project time-entry scan stopped at the ${TIME_ENTRY_SCAN_MAX}-entry ceiling`);
       truncated = true;
       break;
     }
     try {
-      const scoped = await scanAllTimeEntries(client, { ...args, projectId: id }, log);
-      items.push(...scoped.items);
+      const scoped = await scanAllTimeEntries(
+        client,
+        args,
+        log,
+        // The project-scoped PATH, not `project_id` on the broken one. Passing
+        // the project through the query would re-request the exact route that
+        // just failed, once per project, each one also paying the login-bounce
+        // retries — ~300 requests to produce an empty result.
+        (query) => client.listProjectTimeEntries(id, { ...query, project_id: undefined }),
+      );
+      for (const entry of scoped.items) {
+        if (entry.id === undefined) unidentified.push(entry);
+        else byId.set(String(entry.id), entry);
+      }
       if (scoped.truncated) truncated = true;
       scanned += 1;
     } catch {
@@ -469,7 +499,13 @@ async function scanTimeEntriesPerProject(
       failed.push(project.name ?? id);
     }
   }
-  return { items, projectsScanned: scanned, projectsTotal: projects.page.total_count, failed, truncated };
+  return {
+    items: [...byId.values(), ...unidentified],
+    projectsScanned: scanned,
+    projectsTotal: projects.page.total_count,
+    failed,
+    truncated,
+  };
 }
 
 /**
@@ -504,6 +540,10 @@ export async function scanTimeEntries(
     } catch {
       throw err; // the fallback failed too — report the original, which names the real problem
     }
+    // Nothing answered. Reporting that as an empty result with a note would
+    // read as "this workspace logged no hours", and would bury the redirect
+    // (or whatever it was) that is the actual thing to fix.
+    if (perProject.projectsScanned === 0) throw err;
     return {
       items: perProject.items,
       scan: {

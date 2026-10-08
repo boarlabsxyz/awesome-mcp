@@ -514,6 +514,25 @@ export class RedmineClient {
   listTimeEntries(query: RedmineQueryParams): Promise<RedmineList<RedmineTimeEntry>> {
     return this.list<RedmineTimeEntry>('/time_entries.json', 'time_entries', query);
   }
+  /**
+   * The same data from a DIFFERENT path, which is the entire point of it.
+   *
+   * `listTimeEntries({ project_id })` still requests `/time_entries.json` and
+   * scopes with a query parameter, so it is the same route — useless as a
+   * fallback for an instance where that one path is what is broken. This
+   * requests `/projects/{id}/time_entries.json`, which a proxy rule or plugin
+   * override on `/time_entries` does not touch.
+   */
+  listProjectTimeEntries(
+    projectId: number | string,
+    query: RedmineQueryParams,
+  ): Promise<RedmineList<RedmineTimeEntry>> {
+    return this.list<RedmineTimeEntry>(
+      `/projects/${encodeURIComponent(String(projectId))}/time_entries.json`,
+      'time_entries',
+      query,
+    );
+  }
   getTimeEntry(id: number | string): Promise<{ time_entry?: RedmineTimeEntry }> {
     return this.request('GET', `/time_entries/${encodeURIComponent(String(id))}.json`);
   }
@@ -1280,6 +1299,27 @@ export interface RedmineErrorHints {
 }
 
 /**
+ * Was the "different origin" only a scheme change on the same hostname?
+ *
+ * `baseUrlHint` is prose on some call paths ("the Redmine instance"), so an
+ * unparseable hint simply means we cannot tell and fall through to the generic
+ * cross-host wording — never to a claim we cannot support.
+ */
+function sameHostDifferentScheme(baseUrlHint: string, r: RedirectRefusal): boolean {
+  let base: URL;
+  let targetHost: string;
+  try {
+    base = new URL(baseUrlHint);
+    // `host` keeps the port, which is part of the origin; compare hostnames
+    // only, so https-on-443 against http-on-80 is still recognised as one host.
+    targetHost = new URL(`${base.protocol}//${r.host}`).hostname;
+  } catch {
+    return false;
+  }
+  return targetHost === base.hostname;
+}
+
+/**
  * A refused redirect, rendered with the target named.
  *
  * This used to fall through `describeTransportFailure` below as a bare
@@ -1293,6 +1333,20 @@ function describeRefusedRedirect(prefix: string, baseUrlHint: string, error: any
   if (!(error instanceof RedirectRefusedError)) return null;
   const r = error.redirect;
   if (!r.sameOrigin) {
+    // `sameOrigin` is false when the SCHEME changes as well as when the host
+    // does, so an http base URL answered with a 301 to https on the same host
+    // lands here — and the message below would name that host as a "DIFFERENT
+    // host" and blame an SSO proxy. Both are wrong, and the fix (reconnect with
+    // the https URL) is nothing like the fix for a real cross-host hop. The old
+    // one-paragraph message at least mentioned "http to https"; losing that
+    // would have been a regression.
+    if (r.host && sameHostDifferentScheme(baseUrlHint, r)) {
+      return (
+        `${prefix}: ${baseUrlHint} answered HTTP ${r.status} and redirected to the SAME host over a ` +
+        `different scheme (${r.resolved ?? r.host}). The API key was NOT sent, because a scheme change is an ` +
+        'origin change. Reconnect with the URL Redmine actually serves — almost always the https:// one.'
+      );
+    }
     return (
       `${prefix}: ${baseUrlHint} answered HTTP ${r.status} and redirected to a DIFFERENT host ` +
       `(${r.host ?? 'unparseable Location'}). The API key was NOT sent there — it is only valid for the ` +

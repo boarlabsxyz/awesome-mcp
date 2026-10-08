@@ -180,7 +180,7 @@ function describeRedirect(
   hopsFollowed: number,
   config: JsonApiRequestConfig,
   redact: (text: string) => string,
-): RedirectRefusal {
+): RedirectRefusal & { followUrl: string | null } {
   const rawLocation = res.headers.get('location') ?? '';
   const resolved = rawLocation ? safeUrl(rawLocation, requestUrl) : null;
   // Compared against the ORIGINAL request, not the previous hop: comparing
@@ -191,11 +191,15 @@ function describeRedirect(
   );
   const path = resolved ? `${resolved.pathname}${resolved.search}` : null;
   return {
+    followUrl: resolved ? resolved.toString() : null,
     status: res.status,
     location: redact(rawLocation),
-    // Kept unredacted: it is what a follow would actually request, and it never
-    // leaves this module unless it is also the same-origin path below.
-    resolved: resolved ? resolved.toString() : null,
+    // Redacted, because this record is NOT module-local: it is reachable as
+    // `RedirectRefusedError.redirect` from every caller, so anything that logs
+    // or serialises the error prints whatever a `back_url` echoed back. The raw
+    // URL a follow needs is `followUrl` above, which is stripped off before the
+    // error is built.
+    resolved: resolved ? redact(resolved.toString()) : null,
     host: resolved ? resolved.host : null,
     path: path ? redact(path) : null,
     sameOrigin,
@@ -256,9 +260,17 @@ function redactWith(secrets: readonly string[] | undefined, text: string): strin
  * that was not followed, and a named message on timeout.
  */
 export async function jsonApiRequest<T>(config: JsonApiRequestConfig): Promise<T | undefined> {
-  const { method, headers, body, timeoutMs, serviceLabel, target } = config;
+  const { method, headers, body, timeoutMs, serviceLabel } = config;
   const doFetch = config.fetchImpl ?? fetch;
   const redact = (text: string) => redactWith(config.secrets, text);
+  // `target` prefixes EVERY message this function can throw — the redirect, the
+  // timeout and the non-2xx — and callers build it from the request path. Redmine's
+  // login-bounce fallback retries with the key as a query parameter, so that path
+  // carries the credential, and a 403 or a timeout on that attempt would put it in
+  // the message, the server log and (via mapRedmineError) the text shown to the
+  // model. Redacting the body and the Location while leaving this alone would have
+  // defeated the whole point of `secrets`.
+  const target = redact(config.target);
 
   const origin = safeUrl(config.url);
   const idempotent = method.toUpperCase() === 'GET' || method.toUpperCase() === 'HEAD';
@@ -308,15 +320,20 @@ export async function jsonApiRequest<T>(config: JsonApiRequestConfig): Promise<T
       try { await res.body?.cancel(); } catch { /* nothing to drain */ }
 
       const refusal = describeRedirect(res, url, origin, hopsFollowed, config, redact);
+      const { followUrl, ...refusalRecord } = refusal;
       const followable =
-        hopsFollowed < hopBudget && refusal.sameOrigin && !refusal.loginBounce && refusal.resolved;
+        hopsFollowed < hopBudget && refusal.sameOrigin && !refusal.loginBounce && followUrl;
       if (!followable) {
         throw new RedirectRefusedError(
-          redirectMessage(serviceLabel, target, refusal, hopBudget, idempotent),
-          refusal,
+          redirectMessage(serviceLabel, target, refusalRecord, hopBudget, idempotent),
+          refusalRecord,
         );
       }
-      url = refusal.resolved as string;
+      // The RAW url, never the redacted `resolved` on the record — redacting it
+      // there is what keeps a credential out of the error, and following a
+      // string with "[redacted]" spliced into it would request a path that
+      // does not exist.
+      url = followUrl;
       hopsFollowed += 1;
     }
 

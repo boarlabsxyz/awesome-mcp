@@ -306,28 +306,39 @@ describe('time entry ops', () => {
     assert.match(out, /Hours across all 1 entries: 4/);
   });
 
-  test('allPages falls back to a per-project scan when the global route is broken', async () => {
+  test('allPages falls back to the project-scoped ROUTE, not project_id on the broken one', async () => {
     // The reported bug: /time_entries.json alone was bounced to a sign-in page
-    // by a proxy rule while every other endpoint answered fine. The per-project
-    // route is a DIFFERENT route carrying the same data, so it is a way out
-    // rather than a retry of the same failure.
+    // by a proxy rule while every other endpoint answered fine. So the fallback
+    // is only worth anything if it requests a genuinely different PATH —
+    // `listTimeEntries({ project_id })` still hits /time_entries.json and would
+    // re-run the same failure once per project, each one also paying the
+    // login-bounce retries. This stub therefore refuses to serve the fallback
+    // through listTimeEntries at all: if the implementation regresses to the
+    // query-parameter form, every project fails and the assertions below do too.
     const bounce = new RedirectRefusedError('bounced to /login', {
       status: 302, location: '/login', resolved: 'https://r.example.com/login',
       host: 'r.example.com', path: '/login', sameOrigin: true, loginBounce: true, hopsFollowed: 0,
     });
     const perProject: Record<string, unknown[]> = { alpha: [{ id: 1, hours: 3 }], beta: [{ id: 2, hours: 1.5 }] };
+    const projectCalls: string[] = [];
     const client = {
       listProjects: async () => ({
         items: [{ id: 1, identifier: 'alpha', name: 'Alpha' }, { id: 2, identifier: 'beta', name: 'Beta' }],
         page: { total_count: 2, offset: 0, limit: 100 },
       }),
-      listTimeEntries: async (query: Record<string, unknown>) => {
-        if (!query.project_id) throw bounce;
-        return { items: perProject[String(query.project_id)] ?? [], page: { total_count: 1, offset: 0, limit: 100 } };
+      // The workspace-wide route is broken for EVERY query, project_id included.
+      listTimeEntries: async () => { throw bounce; },
+      listProjectTimeEntries: async (id: string, query: Record<string, unknown>) => {
+        projectCalls.push(id);
+        // The project must not also ride along as a query filter — that is the
+        // parameter the broken route used.
+        assert.equal(query.project_id, undefined);
+        return { items: perProject[id] ?? [], page: { total_count: 1, offset: 0, limit: 100 } };
       },
     } as unknown as RedmineClient;
 
     const out = await ops.opListTimeEntries(client, { allPages: true, offset: 0, limit: 25 } as any, log);
+    assert.deepEqual(projectCalls, ['alpha', 'beta']);
     assert.match(out, /4.5/);
     // The total is a floor (one page of projects), so it must never be labelled
     // as a total — and the reason the global list failed has to carry through,
@@ -336,6 +347,49 @@ describe('time entry ops', () => {
     assert.match(out, /project by project/);
     assert.match(out, /2 project\(s\) scanned/);
     assert.match(out, /bounced to \/login/);
+  });
+
+  test('an entry visible under both a parent and its subproject is counted once', async () => {
+    // Redmine scopes a project query to the project AND its subprojects when
+    // display_subprojects_issues is on (the default), so the same entry comes
+    // back under both. Summing the concatenation would report MORE hours than
+    // exist — worse than the documented floor, because a floor is conservative
+    // and an over-count is simply wrong.
+    const bounce = new RedirectRefusedError('bounced', {
+      status: 302, location: '/login', resolved: 'https://r.example.com/login',
+      host: 'r.example.com', path: '/login', sameOrigin: true, loginBounce: true, hopsFollowed: 0,
+    });
+    const shared = { id: 77, hours: 5 };
+    const client = {
+      listProjects: async () => ({
+        items: [{ id: 1, identifier: 'parent', name: 'Parent' }, { id: 2, identifier: 'child', name: 'Child' }],
+        page: { total_count: 2 },
+      }),
+      listTimeEntries: async () => { throw bounce; },
+      // Both answer with the same entry, which is what Redmine really does.
+      listProjectTimeEntries: async () => ({ items: [shared], page: { total_count: 1 } }),
+    } as unknown as RedmineClient;
+    const out = await ops.opListTimeEntries(client, { allPages: true, offset: 0, limit: 25 } as any, log);
+    assert.match(out, /scanned[^:]*: 5$/m);
+    assert.doesNotMatch(out, /: 10$/m);
+  });
+
+  test('a fallback where no project answers rethrows the original failure', async () => {
+    // An empty result plus a note would read as "this workspace logged no
+    // hours" and would bury the redirect that is the actual thing to fix.
+    const bounce = new RedirectRefusedError('bounced to /login', {
+      status: 302, location: '/login', resolved: 'https://r.example.com/login',
+      host: 'r.example.com', path: '/login', sameOrigin: true, loginBounce: true, hopsFollowed: 0,
+    });
+    const client = {
+      listProjects: async () => ({ items: [{ id: 1, identifier: 'alpha', name: 'Alpha' }], page: { total_count: 1 } }),
+      listTimeEntries: async () => { throw bounce; },
+      listProjectTimeEntries: async () => { throw bounce; },
+    } as unknown as RedmineClient;
+    await assert.rejects(
+      () => ops.opListTimeEntries(client, { allPages: true, offset: 0, limit: 25 } as any, log),
+      /bounced to \/login/,
+    );
   });
 
   test('a 403 on the global list is reported, not worked around per project', async () => {
@@ -366,9 +420,9 @@ describe('time entry ops', () => {
         items: [{ id: 1, identifier: 'alpha', name: 'Alpha' }, { id: 2, identifier: 'locked', name: 'Locked' }],
         page: { total_count: 2 },
       }),
-      listTimeEntries: async (query: Record<string, unknown>) => {
-        if (!query.project_id) throw bounce;
-        if (query.project_id === 'locked') { const e: any = new Error('nope'); e.status = 403; throw e; }
+      listTimeEntries: async () => { throw bounce; },
+      listProjectTimeEntries: async (id: string) => {
+        if (id === 'locked') { const e: any = new Error('nope'); e.status = 403; throw e; }
         return { items: [{ id: 1, hours: 2 }], page: { total_count: 1 } };
       },
     } as unknown as RedmineClient;

@@ -229,6 +229,41 @@ describe('jsonApiRequest', () => {
       );
     });
 
+    it('redacts the credential out of .redirect.resolved too', async () => {
+      // `resolved` is reachable as RedirectRefusedError.redirect.resolved from
+      // every caller, so a caller logging or serialising the error would print
+      // whatever a back_url echoed back. Redacting only `location` and `path`
+      // left this one open.
+      const key = 'super-secret-api-key-value';
+      const { fetchImpl } = stub(() => redirect(`/login?back_url=%2Fthings%3Fkey%3D${encodeURIComponent(key)}`));
+      await assert.rejects(
+        () => jsonApiRequest({ ...base, secrets: [key], fetchImpl }),
+        (err: any) => {
+          assert.ok(!JSON.stringify(err.redirect).includes(key), 'credential leaked via .redirect');
+          assert.ok(!err.redirect.resolved.includes(key));
+          return true;
+        },
+      );
+    });
+
+    it('follows the RAW url, not the redacted one', async () => {
+      // Redacting `resolved` on the record is what keeps the credential out of
+      // the error; the follow has to use the unredacted URL or it would request
+      // a path with "[redacted]" spliced into it.
+      const key = 'super-secret-api-key-value';
+      const { fetchImpl, calls } = stub((url) =>
+        url.includes('/v1/things') ? redirect(`/v2/things?token=${key}`) : response({ ok: true }),
+      );
+      const out = await jsonApiRequest<any>({
+        ...base,
+        secrets: [key],
+        followSameOriginRedirects: 1,
+        fetchImpl,
+      });
+      assert.deepEqual(out, { ok: true });
+      assert.equal(calls[1].url, `https://api.example.test/v2/things?token=${key}`);
+    });
+
     it('shares one deadline across followed hops', async () => {
       // A fresh timer per hop would let three hops take 3x the configured
       // timeout, so a call could quietly outlive its own deadline.
@@ -274,6 +309,41 @@ describe('jsonApiRequest', () => {
   it('rethrows a non-abort transport failure unchanged', async () => {
     const { fetchImpl } = stub(() => { throw new Error('fetch failed'); });
     await assert.rejects(() => jsonApiRequest({ ...base, fetchImpl }), /^Error: fetch failed$/);
+  });
+
+  it('redacts the credential out of `target`, which prefixes every message', async () => {
+    // `target` is built by callers from the request path, and Redmine's
+    // login-bounce fallback retries with the key as a query parameter — so that
+    // path carries the credential, and a 403 or a timeout on that attempt put it
+    // in the message, the log, and the text shown to the model. Redacting the
+    // body and the Location while leaving this alone defeated the point of
+    // `secrets`.
+    const key = 'super-secret-api-key-value';
+    const target = `GET /time_entries.json?key=${key}`;
+
+    const rejected = stub(() => response('Forbidden', { status: 403, contentType: 'text/plain' }));
+    await assert.rejects(
+      () => jsonApiRequest({ ...base, target, secrets: [key], fetchImpl: rejected.fetchImpl }),
+      (err: any) => {
+        assert.ok(!err.message.includes(key), `credential leaked: ${err.message}`);
+        assert.match(err.message, /\[redacted\]/);
+        return true;
+      },
+    );
+
+    // Same for the timeout message, which is built from `target` as well.
+    const timing = stub(() => {
+      const err: any = new Error('aborted');
+      err.name = 'AbortError';
+      throw err;
+    });
+    await assert.rejects(
+      () => jsonApiRequest({ ...base, target, secrets: [key], fetchImpl: timing.fetchImpl }),
+      (err: any) => {
+        assert.ok(!err.message.includes(key), `credential leaked on timeout: ${err.message}`);
+        return true;
+      },
+    );
   });
 
   it('puts the upstream status on .status, where sendUpstreamError can read it', async () => {
