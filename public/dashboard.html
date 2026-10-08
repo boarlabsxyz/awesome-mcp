@@ -946,6 +946,7 @@
         <nav class="header-nav" aria-label="Primary">
           <a href="/integrations" class="nav-link">Integrations</a>
           <a href="/updates" class="nav-link">Updates</a>
+          <a href="/admin/org" class="nav-link hidden" id="orgAdminLink">Organisation</a>
         </nav>
         <span class="nav-separator" aria-hidden="true"></span>
         <span class="user-info">
@@ -1247,6 +1248,25 @@
         return await response.json();
       } catch (err) {
         throw err;
+      }
+    }
+
+    // Reveal the Organisation link only for an org admin.
+    //
+    // Best-effort and never blocking: most accounts belong to no org, and the
+    // link is a convenience — a failed lookup leaves it hidden rather than
+    // failing the dashboard load. The route enforces the role itself, so this is
+    // presentation only.
+    async function refreshOrgAdminLink() {
+      try {
+        const res = await fetch('/api/org/me', { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.role === 'admin') {
+          document.getElementById('orgAdminLink').classList.remove('hidden');
+        }
+      } catch (err) {
+        // Deliberately silent — see above.
       }
     }
 
@@ -2565,6 +2585,9 @@
         // block on third parties. Rows render with no Reconnect button and one
         // appears only where a provider actually rejected the credential.
         void refreshConnectionHealth();
+
+        // Same posture: after the rows, never blocking them.
+        void refreshOrgAdminLink();
 
         // Show success/error message based on redirect params
         if (connectedInstance) {
