@@ -12,8 +12,8 @@
 //                  second, with no browser.
 //
 // So the needle tier keeps runSmokeTest for a handful of representative tools per
-// service, and the volume and zero tiers -- the per-tool sweep, 227 tools and
-// climbing -- run here.
+// service, and the volume and zero tiers -- the per-tool sweep, 352 tools and
+// climbing (docs/MCP_TOOLS.md has the live count) -- run here.
 
 import {
   endpointFor,

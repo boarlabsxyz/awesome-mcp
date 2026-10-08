@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { SlackClient } from '../slack/apiHelpers.js';
-import { resolveUsers, getTeamId, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleSearchMessages, handleSearchFiles, type ChannelFilter } from '../slack/helpers.js';
+import { resolveUsers, getTeamId, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, handleSearchMessages, handleSearchFiles, type ChannelFilter } from '../slack/helpers.js';
 import {
   CAPTURED_SLACK_EVENTS,
   parseTimestampInput,
@@ -624,6 +624,25 @@ slackUserServer.addTool({
     const client = getSlackUserClient(session);
     await enforceAccess(client, session!, args.channelId);
     return handleReplyInThread(client, args.channelId, args.threadTs, args.text);
+  },
+});
+
+slackUserServer.addTool({
+  name: 'editMessage',
+  annotations: { readOnlyHint: false },
+  description: 'Edit one of your own Slack messages, replacing its text. Get the ts from readChannelHistory or readThreadReplies.',
+  parameters: z.object({
+    channelId: z.string().describe('The Slack channel ID containing the message.'),
+    ts: z.string().describe('Timestamp of the message to edit, from readChannelHistory or readThreadReplies. Timestamps are per-channel.'),
+    text: z.string().describe('The new message text, replacing the old text entirely (supports Slack markdown/mrkdwn).'),
+  }),
+  execute: async (args, { log, session }) => {
+    const client = getSlackUserClient(session);
+    // Access rules gate editing exactly as they gate posting: without this, a
+    // channel denied for reads and writes would still be editable.
+    await enforceAccess(client, session!, args.channelId);
+    log.info(`Editing message ${args.ts} in ${args.channelId}`);
+    return handleEditMessage(client, args.channelId, args.ts, args.text);
   },
 });
 
