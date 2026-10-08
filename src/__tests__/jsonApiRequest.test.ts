@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { jsonApiRequest } from '../util/jsonApiRequest.js';
+import { jsonApiRequest, RedirectRefusedError } from '../util/jsonApiRequest.js';
 
 function response(body: unknown, { status = 200, contentType = 'application/json' } = {}): any {
   return {
@@ -15,6 +15,20 @@ function response(body: unknown, { status = 200, contentType = 'application/json
     headers: { get: (n: string) => (n.toLowerCase() === 'content-type' ? contentType : null) },
     json: async () => body,
     text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
+  };
+}
+
+/** A 3xx with a Location, which `response` cannot express (it has no headers). */
+function redirect(location: string | null, status = 302): any {
+  return {
+    ok: false,
+    status,
+    statusText: 'Found',
+    headers: {
+      get: (n: string) => (n.toLowerCase() === 'location' ? location : null),
+    },
+    json: async () => ({}),
+    text: async () => '',
   };
 }
 
@@ -51,13 +65,188 @@ describe('jsonApiRequest', () => {
     assert.equal(calls[0].init.headers.Accept, 'application/vnd.custom');
   });
 
-  it('refuses to follow a redirect', async () => {
+  it('never lets fetch follow a redirect itself', async () => {
     // Node's fetch strips Authorization across an origin change but KEEPS
-    // custom headers, so following one would hand an API-key header to
-    // whatever host the Location names.
+    // custom headers, so letting IT follow one would hand an API-key header to
+    // whatever host the Location names. 'manual' rather than 'error' so the
+    // Location can be read before the call is refused — 'error' produced a bare
+    // "fetch failed" naming neither the status nor the target.
     const { fetchImpl, calls } = stub(() => response({}));
     await jsonApiRequest({ ...base, fetchImpl });
-    assert.equal(calls[0].init.redirect, 'error');
+    assert.equal(calls[0].init.redirect, 'manual');
+  });
+
+  describe('redirects', () => {
+    it('refuses by default and names the status and target', async () => {
+      const { fetchImpl, calls } = stub(() => redirect('/time_entries.json?page=2'));
+      await assert.rejects(
+        () => jsonApiRequest({ ...base, fetchImpl }),
+        (err: any) => {
+          assert.ok(err instanceof RedirectRefusedError);
+          assert.match(err.message, /HTTP 302/);
+          assert.match(err.message, /\/time_entries\.json\?page=2/);
+          return true;
+        },
+      );
+      assert.equal(calls.length, 1, 'refusing must not spend a second request');
+    });
+
+    it('answers .status 502, not the 3xx', async () => {
+      // sendUpstreamError passes .status straight to res.status(). A 302 there
+      // would make our own REST client try to FOLLOW a Location we deliberately
+      // did not follow — and never sent it.
+      const { fetchImpl } = stub(() => redirect('/elsewhere'));
+      await assert.rejects(
+        () => jsonApiRequest({ ...base, fetchImpl }),
+        (err: any) => {
+          assert.equal(err.status, 502);
+          assert.equal(err.redirect.status, 302);
+          return true;
+        },
+      );
+    });
+
+    it('follows a same-origin hop when the caller opts in', async () => {
+      const { fetchImpl, calls } = stub((url) =>
+        url.endsWith('/v1/things') ? redirect('/v2/things') : response({ ok: true }),
+      );
+      const out = await jsonApiRequest<any>({ ...base, followSameOriginRedirects: 3, fetchImpl });
+      assert.deepEqual(out, { ok: true });
+      assert.equal(calls[1].url, 'https://api.example.test/v2/things');
+      // The credential rides along on a same-origin hop — that is the point of
+      // following it at all.
+      assert.equal(calls[1].init.headers['x-api-key'], 'secret');
+    });
+
+    it('never follows a cross-origin hop, however many are allowed', async () => {
+      // The one case that is a credential leak rather than an inconvenience.
+      const { fetchImpl, calls } = stub(() => redirect('https://sso.elsewhere.test/login'));
+      await assert.rejects(
+        () => jsonApiRequest({ ...base, followSameOriginRedirects: 3, fetchImpl }),
+        (err: any) => {
+          assert.equal(err.redirect.sameOrigin, false);
+          assert.equal(err.redirect.host, 'sso.elsewhere.test');
+          assert.match(err.message, /DIFFERENT origin \(sso\.elsewhere\.test\)/);
+          return true;
+        },
+      );
+      assert.equal(calls.length, 1);
+    });
+
+    it('compares each hop against the ORIGINAL origin, not the previous one', async () => {
+      // Hop-to-hop comparison would let a chain walk off-origin one
+      // same-origin-looking step at a time.
+      const { fetchImpl, calls } = stub((url) =>
+        url.includes('/v1/things') ? redirect('/step2') : redirect('https://evil.test/take-the-key'),
+      );
+      await assert.rejects(
+        () => jsonApiRequest({ ...base, followSameOriginRedirects: 3, fetchImpl }),
+        (err: any) => {
+          assert.equal(err.redirect.host, 'evil.test');
+          return true;
+        },
+      );
+      assert.equal(calls.length, 2, 'stopped at the off-origin hop');
+    });
+
+    it('refuses a non-idempotent method even when following is allowed', async () => {
+      // A 301/302 on a POST is replayable as a GET by the spec and as the same
+      // POST by 307/308; neither is worth risking a duplicate write over.
+      const { fetchImpl, calls } = stub(() => redirect('/moved'));
+      await assert.rejects(
+        () => jsonApiRequest({ ...base, method: 'POST', body: { a: 1 }, followSameOriginRedirects: 3, fetchImpl }),
+        /not idempotent/,
+      );
+      assert.equal(calls.length, 1);
+    });
+
+    it('does not follow a login bounce, and says it was one', async () => {
+      // Following it would answer 200 with an HTML form, which has no JSON
+      // content type and so resolves to undefined — a sign-in page reported as
+      // an empty result.
+      const { fetchImpl, calls } = stub(() => redirect('/login?back_url=%2Fv1%2Fthings'));
+      await assert.rejects(
+        () => jsonApiRequest({
+          ...base,
+          followSameOriginRedirects: 3,
+          isLoginPath: (p) => p === '/login',
+          fetchImpl,
+        }),
+        (err: any) => {
+          assert.equal(err.redirect.loginBounce, true);
+          assert.match(err.message, /sign-in page/);
+          return true;
+        },
+      );
+      assert.equal(calls.length, 1);
+    });
+
+    it('stops a redirect loop at the hop budget', async () => {
+      const { fetchImpl, calls } = stub(() => redirect('/loop'));
+      await assert.rejects(
+        () => jsonApiRequest({ ...base, followSameOriginRedirects: 2, fetchImpl }),
+        /redirect loop/,
+      );
+      assert.equal(calls.length, 3, 'original plus two followed hops');
+    });
+
+    it('caps the hop budget however many the caller asks for', async () => {
+      const { fetchImpl, calls } = stub(() => redirect('/loop'));
+      await assert.rejects(() => jsonApiRequest({ ...base, followSameOriginRedirects: 99, fetchImpl }), /redirect loop/);
+      assert.equal(calls.length, 4, 'original plus the 3-hop ceiling');
+    });
+
+    it('reports a missing Location rather than throwing on it', async () => {
+      const { fetchImpl } = stub(() => redirect(null));
+      await assert.rejects(
+        () => jsonApiRequest({ ...base, followSameOriginRedirects: 3, fetchImpl }),
+        /Location header was missing or unparseable/,
+      );
+    });
+
+    it('treats 304 as a response, not a relocation', async () => {
+      // 304 is a cache answer and carries no Location; classifying it as a
+      // redirect would turn a conditional GET into an error.
+      const { fetchImpl } = stub(() => response('', { status: 304, contentType: 'text/plain' }));
+      await assert.rejects(() => jsonApiRequest({ ...base, fetchImpl }), /failed: 304/);
+    });
+
+    it('redacts the credential out of a Location that echoes it back', async () => {
+      // Redmine's bounce puts the whole original URL in back_url, so once a
+      // caller has retried with the key as a query parameter the Location
+      // itself carries it — into the error text, the server log and the model
+      // transcript.
+      const key = 'super-secret-api-key-value';
+      const { fetchImpl } = stub(() => redirect(`/login?back_url=%2Fthings%3Fkey%3D${encodeURIComponent(key)}`));
+      await assert.rejects(
+        () => jsonApiRequest({ ...base, secrets: [key], fetchImpl }),
+        (err: any) => {
+          assert.ok(!err.message.includes(key), 'credential leaked into the message');
+          assert.ok(!err.redirect.path.includes(key), 'credential leaked into .redirect');
+          assert.match(err.redirect.path, /\[redacted\]/);
+          return true;
+        },
+      );
+    });
+
+    it('shares one deadline across followed hops', async () => {
+      // A fresh timer per hop would let three hops take 3x the configured
+      // timeout, so a call could quietly outlive its own deadline.
+      let hops = 0;
+      const { fetchImpl } = stub(() => {
+        hops += 1;
+        if (hops > 1) {
+          const err: any = new Error('The operation was aborted');
+          err.name = 'AbortError';
+          throw err;
+        }
+        return redirect('/next');
+      });
+      await assert.rejects(
+        () => jsonApiRequest({ ...base, followSameOriginRedirects: 3, fetchImpl }),
+        /Example API GET \/things timed out after 5000ms/,
+      );
+    });
   });
 
   it('serialises a body only when one is given', async () => {

@@ -8,6 +8,8 @@
 // the behaviour.
 
 import { UserError } from 'fastmcp';
+
+import { RedirectRefusedError } from '../util/jsonApiRequest.js';
 import { z } from 'zod';
 
 import {
@@ -26,6 +28,9 @@ import {
   formatSearchResults,
   formatTimeEntry,
   formatTimeEntryList,
+  REDMINE_MAX_LIMIT,
+  type RedmineTimeEntry,
+  type TimeEntryScanContext,
   formatUser,
   formatUserList,
   formatVersion,
@@ -352,6 +357,7 @@ export function timeEntryListQuery(args: z.infer<typeof listTimeEntriesSchema>):
     project_id: args.projectId,
     issue_id: args.issueId,
     user_id: args.userId,
+    activity_id: args.activityId,
     spent_on: args.spentOn,
     from: args.from,
     to: args.to,
@@ -360,11 +366,183 @@ export function timeEntryListQuery(args: z.infer<typeof listTimeEntriesSchema>):
   };
 }
 
+/**
+ * Ceiling on an `allPages` scan.
+ *
+ * At the 100-per-page cap that is 50 requests, which is already a lot to spend
+ * on one tool call. A set larger than this is a reporting job rather than a
+ * question, and the answer says the scan was bounded rather than presenting a
+ * floor as a total — the same rule searchDocs follows.
+ */
+const TIME_ENTRY_SCAN_MAX = 5_000;
+
+/**
+ * Page to the end of a time-entry query.
+ *
+ * Exists because the hours total is the thing callers actually want and a
+ * single page cannot produce it: Redmine caps `limit` at 100, so "hours per
+ * person for the last nine months" computed from one response is wrong by
+ * however much did not fit, with nothing in the output to say so.
+ *
+ * Returns the entries plus whether the ceiling cut the scan short — the
+ * formatter needs to know, because a bounded total that claims to be complete
+ * is worse than an obviously partial one.
+ */
+async function scanAllTimeEntries(
+  client: RedmineClient,
+  args: z.infer<typeof listTimeEntriesSchema>,
+  log: RedmineToolLog,
+): Promise<{ items: RedmineTimeEntry[]; total?: number; truncated: boolean }> {
+  const items: RedmineTimeEntry[] = [];
+  let offset = 0;
+  let total: number | undefined;
+  for (;;) {
+    const page = await client.listTimeEntries(
+      timeEntryListQuery({ ...args, offset, limit: REDMINE_MAX_LIMIT }),
+    );
+    items.push(...page.items);
+    total = page.page.total_count ?? total;
+    offset += REDMINE_MAX_LIMIT;
+    // Stop on a short page as well as on the reported total: a plugin that
+    // omits total_count would otherwise loop to the 5000 ceiling, spending 50
+    // requests to re-read nothing.
+    if (page.items.length === 0 || page.items.length < REDMINE_MAX_LIMIT) break;
+    if (typeof total === 'number' && items.length >= total) break;
+    if (items.length >= TIME_ENTRY_SCAN_MAX) {
+      log.info(`Time-entry scan stopped at the ${TIME_ENTRY_SCAN_MAX}-entry ceiling`);
+      return { items, total, truncated: true };
+    }
+  }
+  return { items, total, truncated: false };
+}
+
+/**
+ * Sum the same query one project at a time.
+ *
+ * `/time_entries.json` is a single route and can be broken on its own — one
+ * instance served every other endpoint fine while a proxy rule bounced that
+ * one to the sign-in page. The per-project route `/projects/{id}/time_entries.json`
+ * is a different route with the same data, so it is a real way out rather than
+ * a retry of the same failure.
+ *
+ * Only attempted when no project was named (naming one already uses a
+ * project-scoped query) and only after the global list has failed, because it
+ * costs one request per project plus the project list itself.
+ */
+async function scanTimeEntriesPerProject(
+  client: RedmineClient,
+  args: z.infer<typeof listTimeEntriesSchema>,
+  log: RedmineToolLog,
+): Promise<{
+  items: RedmineTimeEntry[];
+  projectsScanned: number;
+  projectsTotal?: number;
+  failed: string[];
+  truncated: boolean;
+}> {
+  const projects = await client.listProjects({ offset: 0, limit: REDMINE_MAX_LIMIT });
+  const items: RedmineTimeEntry[] = [];
+  const failed: string[] = [];
+  let scanned = 0;
+  let truncated = false;
+  for (const project of projects.items) {
+    const id = project.identifier ?? (project.id !== undefined ? String(project.id) : '');
+    if (!id) continue;
+    // The ceiling is on the TOTAL, not per project. Applying it per project
+    // would let 100 projects accumulate 100x it — 50 requests each, which is a
+    // tool call that never returns rather than one that returns a bounded
+    // answer.
+    if (items.length >= TIME_ENTRY_SCAN_MAX) {
+      log.info(`Per-project time-entry scan stopped at the ${TIME_ENTRY_SCAN_MAX}-entry ceiling`);
+      truncated = true;
+      break;
+    }
+    try {
+      const scoped = await scanAllTimeEntries(client, { ...args, projectId: id }, log);
+      items.push(...scoped.items);
+      if (scoped.truncated) truncated = true;
+      scanned += 1;
+    } catch {
+      // One project failing (archived, module disabled, no permission) must not
+      // lose the projects that answered — but it does mean the total is a floor,
+      // which is why the names are collected rather than swallowed.
+      failed.push(project.name ?? id);
+    }
+  }
+  return { items, projectsScanned: scanned, projectsTotal: projects.page.total_count, failed, truncated };
+}
+
+/**
+ * The whole-set time-entry read, shared by the MCP tool and the REST route.
+ *
+ * Exported rather than kept inside the op because both surfaces need the
+ * entries AND the scan context: the REST route returns the context as data so
+ * a curl client can tell a total from a floor, and the tool renders it. A
+ * second copy on either side would be the drift the ops split exists to stop.
+ */
+export async function scanTimeEntries(
+  client: RedmineClient,
+  args: z.infer<typeof listTimeEntriesSchema>,
+  log: RedmineToolLog,
+): Promise<{ items: RedmineTimeEntry[]; scan: TimeEntryScanContext }> {
+  try {
+    const scan = await scanAllTimeEntries(client, args, log);
+    return {
+      items: scan.items,
+      scan: { scanned: { total: scan.total, truncated: scan.truncated, ceiling: TIME_ENTRY_SCAN_MAX } },
+    };
+  } catch (err: any) {
+    // Only the global route is worth working around, and only when the failure
+    // was the route rather than the answer: a 403 is Redmine saying this account
+    // may not read time entries, and scanning 100 projects to be told that 100
+    // more times is just a slower way to the same message.
+    if (args.projectId || !isRouteLevelFailure(err)) throw err;
+    log.info('Global /time_entries.json failed; falling back to a per-project scan');
+    let perProject: Awaited<ReturnType<typeof scanTimeEntriesPerProject>>;
+    try {
+      perProject = await scanTimeEntriesPerProject(client, args, log);
+    } catch {
+      throw err; // the fallback failed too — report the original, which names the real problem
+    }
+    return {
+      items: perProject.items,
+      scan: {
+        scanned: { truncated: perProject.truncated, ceiling: TIME_ENTRY_SCAN_MAX },
+        perProject: {
+          scanned: perProject.projectsScanned,
+          total: perProject.projectsTotal,
+          failed: perProject.failed,
+          reason: err?.message ?? 'the workspace-wide time-entry list failed',
+        },
+      },
+    };
+  }
+}
+
 /** Body of the `listTimeEntries` tool. */
 export async function opListTimeEntries(client: RedmineClient, args: z.infer<typeof listTimeEntriesSchema>, log: RedmineToolLog): Promise<string> {
-  log.info(`Listing Redmine time entries (project=${args.projectId ?? 'all'}, user=${args.userId ?? 'all'}, offset=${args.offset})`);
-  const res = await client.listTimeEntries(timeEntryListQuery(args));
-  return formatTimeEntryList(res.items, res.page);
+  log.info(`Listing Redmine time entries (project=${args.projectId ?? 'all'}, user=${args.userId ?? 'all'}, activity=${args.activityId ?? 'all'}, offset=${args.offset}, allPages=${args.allPages})`);
+
+  if (!args.allPages) {
+    const res = await client.listTimeEntries(timeEntryListQuery(args));
+    return formatTimeEntryList(res.items, res.page);
+  }
+  const scanned = await scanTimeEntries(client, args, log);
+  return formatTimeEntryList(scanned.items, undefined, scanned.scan);
+}
+
+/**
+ * Is this failure about the ROUTE, or about the answer?
+ *
+ * A refused redirect, a 404 and a 5xx all mean the global list never ran. A
+ * 401/403/422 is Redmine having evaluated the request and declined it, and the
+ * per-project route would decline it identically.
+ */
+function isRouteLevelFailure(err: any): boolean {
+  if (err instanceof RedirectRefusedError) return true;
+  const status = typeof err?.status === 'number' ? err.status : undefined;
+  if (status === undefined) return false;
+  return status === 404 || status === 405 || status === 501 || status === 502 || status === 503;
 }
 
 /** Body of the `getTimeEntry` tool. */

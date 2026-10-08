@@ -20,6 +20,7 @@ import {
   mergeCustomFieldFilters,
   renderPageLine,
 } from '../redmine/apiHelpers.js';
+import { RedirectRefusedError } from '../util/jsonApiRequest.js';
 import type { UserSession } from '../userSession.js';
 
 const silentLog = { info: () => {}, error: () => {} };
@@ -245,17 +246,61 @@ describe('mapRedmineError', () => {
 
   // undici reports every thrown fetch as the bare string "fetch failed", which
   // is undiagnosable on its own — these two are the cases that actually happen.
-  test('a refused redirect explains itself and says the key was not sent', () => {
-    const err = Object.assign(new TypeError('fetch failed'), {
-      cause: new Error('unexpected redirect'),
+  // A refused redirect used to arrive here as a bare "fetch failed" and got one
+  // paragraph of guesses covering all four causes, which is why /time_entries.json
+  // on one instance stayed broken: a proxy rewrite, an SSO hop, a login bounce
+  // and a loop have four different fixes, and the message named none of them.
+  // It is now a typed error carrying the target, and each case gets its own text.
+
+  test('a cross-host redirect names the host and says the key was not sent', () => {
+    const err = new RedirectRefusedError('redirected', {
+      status: 302, location: 'https://sso.example.net/authorize',
+      resolved: 'https://sso.example.net/authorize', host: 'sso.example.net',
+      path: '/authorize', sameOrigin: false, loginBounce: false, hopsFollowed: 0,
     });
     try {
       mapRedmineError('Failed to list time entries', err, silentLog, {}, 'https://redmine.example.com');
       assert.fail('should have thrown');
     } catch (thrown: any) {
-      assert.match(thrown.message, /redirected away from https:\/\/redmine\.example\.com/);
-      assert.match(thrown.message, /API key was not sent/);
-      assert.doesNotMatch(thrown.message, /^Failed to list time entries: fetch failed$/);
+      assert.match(thrown.message, /DIFFERENT host \(sso\.example\.net\)/);
+      assert.match(thrown.message, /API key was NOT sent there/);
+      // The actionable half: an access proxy needs its own credential, so
+      // "reconnect" is the wrong advice and must not appear.
+      assert.match(thrown.message, /SSO or access proxy/);
+    }
+  });
+
+  test('a same-host login bounce is reported as a route problem, not a bad credential', () => {
+    const err = new RedirectRefusedError('bounced', {
+      status: 302, location: '/login?back_url=%2Ftime_entries.json',
+      resolved: 'https://redmine.example.com/login', host: 'redmine.example.com',
+      path: '/login?back_url=%2Ftime_entries.json', sameOrigin: true, loginBounce: true, hopsFollowed: 0,
+    });
+    try {
+      mapRedmineError('Failed to list time entries', err, silentLog, {}, 'https://redmine.example.com');
+      assert.fail('should have thrown');
+    } catch (thrown: any) {
+      assert.match(thrown.message, /\/login/);
+      assert.match(thrown.message, /otherwise fine/);
+      assert.match(thrown.message, /plugin overrides this route/);
+      // Sending someone to re-issue a working credential is the failure this
+      // wording exists to avoid.
+      assert.doesNotMatch(thrown.message, /Reconnect from the dashboard/);
+    }
+  });
+
+  test('a same-host loop is reported as a loop, with the hop count', () => {
+    const err = new RedirectRefusedError('looping', {
+      status: 302, location: '/time_entries.json',
+      resolved: 'https://redmine.example.com/time_entries.json', host: 'redmine.example.com',
+      path: '/time_entries.json', sameOrigin: true, loginBounce: false, hopsFollowed: 3,
+    });
+    try {
+      mapRedmineError('Failed to list time entries', err, silentLog, {}, 'https://redmine.example.com');
+      assert.fail('should have thrown');
+    } catch (thrown: any) {
+      assert.match(thrown.message, /redirect loop/);
+      assert.match(thrown.message, /after 3 hop\(s\)/);
     }
   });
 
