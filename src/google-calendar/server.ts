@@ -77,7 +77,7 @@ calendarServer.addTool({
 calendarServer.addTool({
   name: 'listEvents',
   annotations: { readOnlyHint: true },
-  description: 'Lists events from a calendar within a specified date range.',
+  description: 'Lists events from a calendar within a specified date range. Each event with guests also reports YOUR OWN invitation response ("My response"), including needsAction when you have not answered — so invitations needing a reply can be found from one call instead of a getEvent per event. Answer them with updateEvent myResponseStatus.',
   parameters: z.object({
     calendarId: z.string().optional().default('primary')
       .describe('The calendar ID. Use "primary" for the user\'s primary calendar.'),
@@ -135,6 +135,12 @@ calendarServer.addTool({
         }
         if (event.attendees && event.attendees.length > 0) {
           result += `   Attendees: ${event.attendees.map(a => a.email).join(', ')}\n`;
+          // The caller's OWN answer, on the list rows — not only in getEvent.
+          // Without it, finding which invitations still need replying to meant a
+          // getEvent per event, and the one field that decides that was the one
+          // field a list could not show.
+          const mine = describeSelfResponse(event);
+          if (mine) result += `   My response: ${mine}\n`;
         }
         result += formatConferenceCompact(event);
         result += `   Status: ${event.status}\n\n`;
@@ -153,7 +159,7 @@ calendarServer.addTool({
 calendarServer.addTool({
   name: 'getEvent',
   annotations: { readOnlyHint: true },
-  description: 'Gets detailed information about a specific calendar event.',
+  description: 'Gets detailed information about a specific calendar event, including every attendee\'s response and which attendee is you. Use updateEvent with myResponseStatus to answer the invitation.',
   parameters: z.object({
     calendarId: z.string().optional().default('primary')
       .describe('The calendar ID. Use "primary" for the user\'s primary calendar.'),
@@ -195,8 +201,18 @@ calendarServer.addTool({
       if (event.attendees && event.attendees.length > 0) {
         result += `\n**Attendees:**\n`;
         event.attendees.forEach(attendee => {
-          result += `  - ${attendee.email} (${attendee.responseStatus || 'unknown'})\n`;
+          // Mark the caller's own row. The list already carried every response
+          // status but never said which one was yours, so answering an
+          // invitation meant guessing by email — wrong whenever the account is
+          // invited through an alias or a group.
+          const you = attendee.self === true ? ' — you' : '';
+          result += `  - ${attendee.email} (${attendee.responseStatus || 'unknown'})${you}\n`;
         });
+        const mine = describeSelfResponse(event);
+        if (mine) {
+          result += `\n**Your response:** ${mine}\n`;
+          result += '  Change it with updateEvent myResponseStatus (accepted / tentative / declined).\n';
+        }
       }
       if (event.recurrence) {
         result += `\n**Recurrence:** ${event.recurrence.join(', ')}\n`;
@@ -257,8 +273,18 @@ export const updateEventSchema = z.object({
   timeZone: z.string().optional().describe('Time zone for the start/end times.'),
   addGoogleMeet: z.boolean().optional().default(false)
     .describe('If true, generate a Google Meet video conference for this event. Ignored if the event already has a conference. The Meet link is returned in the response.'),
+  // RSVP. Only three of Google's four responseStatus values are offered:
+  // `needsAction` is the absence of an answer, not an answer, and writing it
+  // back would be a way to un-answer an invitation nobody has asked for.
+  myResponseStatus: z.enum(['accepted', 'tentative', 'declined']).optional()
+    .describe(
+      'Answer an invitation: set YOUR OWN attendee response on this event. Only your own entry is touched — '
+      + 'other attendees\' responses are preserved. Fails if you are not an attendee (an organizer is often not '
+      + 'one, and nothing is added to the guest list on your behalf). With the default sendUpdates "none" the '
+      + 'organizer is NOT emailed about your answer, so pass sendUpdates "all" if they should be told.',
+    ),
   sendUpdates: z.enum(['all', 'externalOnly', 'none']).optional().default('none')
-    .describe('Whether to send email notifications to attendees. Default "none" — attendees are NOT notified unless you pass "all" or "externalOnly".'),
+    .describe('Whether to send email notifications to attendees. Default "none" — attendees are NOT notified unless you pass "all" or "externalOnly". For an RSVP (myResponseStatus) this is what decides whether the organizer learns your answer.'),
 });
 
 // Destructive (destructiveHint on the tool), and the REST sibling is a POST to
@@ -311,6 +337,60 @@ export async function performCreateEvent(
 }
 
 /**
+ * The authenticated user's own entry in an event's guest list, if they have one.
+ *
+ * Google marks it with `self: true` — that flag, not an email comparison, is the
+ * only reliable test: the connected account may be reached through an alias or a
+ * group, in which case the attendee email does not match the account's primary
+ * address and a comparison would silently find nobody. Reading the response off
+ * the wrong entry would report a colleague's answer as the user's own.
+ *
+ * Returns undefined when the user is not an attendee. That is a real and common
+ * state, not an error here: an organizer frequently does not appear in
+ * `attendees` at all, and an event on one's own calendar with no guests has no
+ * attendee list whatsoever.
+ */
+export function findSelfAttendee(
+  event: calendar_v3.Schema$Event,
+): calendar_v3.Schema$EventAttendee | undefined {
+  return (event.attendees || []).find((a) => a.self === true);
+}
+
+/**
+ * How the caller's own invitation currently stands, for rendering.
+ *
+ * `needsAction` is reported as the explicit "no answer yet" it is, because that
+ * is precisely the state a planner is looking for when it hunts for invitations
+ * to answer — leaving it blank would hide the actionable rows.
+ */
+export function describeSelfResponse(event: calendar_v3.Schema$Event): string | null {
+  const self = findSelfAttendee(event);
+  if (!self) return null;
+  const status = self.responseStatus || 'needsAction';
+  return status === 'needsAction' ? 'needsAction (not answered yet)' : status;
+}
+
+/**
+ * Whether an update asks for anything beyond answering the invitation.
+ *
+ * `addGoogleMeet` and `sendUpdates` both carry Zod defaults, so they are always
+ * present and cannot be tested for presence: only a *truthy* Meet request is an
+ * edit, and `sendUpdates` is delivery, not content. `timeZone` counts as an edit
+ * even though it does nothing without a start or end, so that the branch taken
+ * is predictable from the arguments rather than from which combination happens
+ * to be a no-op.
+ */
+function hasNonRsvpEdits(args: UpdateEventArgs): boolean {
+  return args.summary !== undefined
+    || args.description !== undefined
+    || args.location !== undefined
+    || args.startDateTime !== undefined
+    || args.endDateTime !== undefined
+    || args.timeZone !== undefined
+    || Boolean(args.addGoogleMeet);
+}
+
+/**
  * Read-modify-write an event, preserving every field the caller did not name.
  *
  * `events.update` REPLACES the resource, so any field absent from the body is
@@ -333,6 +413,25 @@ export async function performCreateEvent(
  * overwritten between the read and the write. Adding `If-Match` would turn that
  * into a 412 the MCP tools and the two REST routes would all have to surface, so
  * it is a deliberate follow-up rather than a silent behaviour change here.
+ *
+ * An RSVP (`myResponseStatus`) rides the same read-modify-write, which is what
+ * makes it safe: Google has no endpoint for "set my response", so answering an
+ * invitation means writing the guest list back — and a body carrying a partial
+ * `attendees` array REPLACES the whole list, uninviting everyone absent from it.
+ * The caller's own entry is replaced inside the array the read returned, so
+ * every other guest and their answers survive untouched.
+ *
+ * An RSVP *on its own* is sent as an `events.patch` carrying only that array,
+ * NOT as the full-resource update. The reason is whose event it is: the common
+ * case for answering an invitation is a meeting somebody else organised, where
+ * this account is merely an attendee and `guestsCanModify` is false — and a
+ * full-resource write there hands Google back `summary`, `start`, `recurrence`
+ * and the rest of the organiser's fields, which it may refuse. That refusal
+ * would be a 403 reported as "make sure you have write access", i.e. the
+ * feature failing opaquely in precisely its main use case. A patch touching
+ * only the guest list asks for nothing an attendee is not entitled to change.
+ * A call that *also* edits other fields keeps the full update: such a caller is
+ * editing the event regardless, so it needs the merge semantics.
  */
 export async function performUpdateEvent(
   calendar: calendar_v3.Calendar,
@@ -360,6 +459,40 @@ export async function performUpdateEvent(
       ? { dateTime: args.endDateTime, timeZone: args.timeZone ?? existingEvent.end?.timeZone ?? undefined }
       : existingEvent.end,
   };
+
+  // RSVP. Refused rather than guessed at when the user is not on the guest list:
+  // adding themselves would be inviting themselves to someone else's meeting,
+  // which is a different act from answering an invitation, and Google would
+  // accept it silently.
+  if (args.myResponseStatus) {
+    const self = findSelfAttendee(existingEvent);
+    if (!self) {
+      throw new UserError(
+        `Cannot set your response on event ${args.eventId}: this account is not in its guest list, so there is no `
+        + 'invitation to answer. Google marks the caller\'s own entry with `self: true` and this event has none — '
+        + 'which is normal when you are the organizer, or when the event has no guests at all. Nothing was changed, '
+        + 'and you were deliberately not added as an attendee (that would be inviting yourself, not replying).',
+      );
+    }
+    // Rebuilt by identity, not by index: the array is the one Google just
+    // returned, so mapping it preserves every other guest's response exactly.
+    const answered = (existingEvent.attendees || []).map((a) =>
+      a.self === true ? { ...a, responseStatus: args.myResponseStatus } : a,
+    );
+    eventResource.attendees = answered;
+
+    // RSVP only: patch just the guest list. See the note above on why the
+    // full-resource update is the wrong shape for someone else's meeting.
+    if (!hasNonRsvpEdits(args)) {
+      const patched = await calendar.events.patch({
+        calendarId: args.calendarId,
+        eventId: args.eventId,
+        requestBody: { attendees: answered },
+        sendUpdates: args.sendUpdates,
+      });
+      return { event: patched.data, wantsNewMeet: false };
+    }
+  }
 
   const wantsNewMeet = Boolean(args.addGoogleMeet) && !hasExistingConference(existingEvent);
   if (wantsNewMeet) {
@@ -408,7 +541,15 @@ export function projectEvent(event: calendar_v3.Schema$Event): Record<string, un
     attendees: (event.attendees || []).map((a) => ({
       email: a.email,
       responseStatus: a.responseStatus || 'needsAction',
+      // Which entry is the caller's own. Without this a REST client cannot tell
+      // its own row from a namesake's, and matching on email is wrong when the
+      // account is invited through an alias or a group.
+      self: a.self === true,
     })),
+    // Hoisted so the caller's own answer is readable without scanning the list;
+    // null when this account is not a guest. `myResponseStatus` on the update
+    // route is what changes it.
+    myResponseStatus: findSelfAttendee(event)?.responseStatus || null,
   };
 }
 
@@ -443,7 +584,7 @@ calendarServer.addTool({
 calendarServer.addTool({
   name: 'updateEvent',
   annotations: { readOnlyHint: false },
-  description: 'Updates an existing calendar event.',
+  description: 'Updates an existing calendar event. Only the fields you pass are changed; everything else on the event is preserved. Also ANSWERS AN INVITATION: pass myResponseStatus ("accepted", "tentative" or "declined") to set your own attendee response without touching anyone else\'s. Note that with the default sendUpdates "none" the organizer is not emailed about your answer — pass sendUpdates "all" if they should be.',
   parameters: updateEventSchema,
   execute: async (args, { log, session }) => {
     const calendar = getCalendarClient(session);
@@ -459,6 +600,20 @@ calendarServer.addTool({
         `**Link:** ${event.htmlLink}`;
       result += formatConferenceDetail(event);
       result += formatMeetPendingHint(wantsNewMeet, event);
+      // RSVP confirmation, read back off the event Google returned rather than
+      // echoing what was asked. events.update answers with the stored resource,
+      // so this is the authoritative value — and a response Google declined to
+      // record would otherwise read as a successful reply.
+      if (args.myResponseStatus) {
+        const stored = findSelfAttendee(event)?.responseStatus;
+        result += stored === args.myResponseStatus
+          ? `\n\n**Your response:** ${stored} — confirmed by Google.`
+          : `\n\n⚠ Your response was NOT recorded as requested: asked for `
+            + `"${args.myResponseStatus}", Google reports ${JSON.stringify(stored ?? null)}.`;
+        if (args.sendUpdates === 'none') {
+          result += `\n  The organizer was not emailed (sendUpdates "none"); pass sendUpdates "all" to notify them.`;
+        }
+      }
       return result;
     } catch (error: any) {
       log.error(`Error updating event: ${error.message || error}`);

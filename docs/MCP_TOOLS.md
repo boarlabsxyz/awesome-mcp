@@ -95,10 +95,10 @@ Source: `src/google-calendar/server.ts` — 6 tools.
 | Tool | Description | REST |
 |---|---|---|
 | `listCalendars` | Lists all calendars accessible to the user. | `GET /api/v1/calendars` |
-| `listEvents` | Lists events from a calendar within a specified date range. | `GET /api/v1/calendars/{calendarId}/events` |
-| `getEvent` | Gets detailed information about a specific calendar event. | `GET /api/v1/calendars/{calendarId}/events/{eventId}` |
+| `listEvents` | Lists events from a calendar within a specified date range. Each event with guests also reports YOUR OWN invitation response ("My response"), including needsAction when you have not answered — so invitations needing a reply can be found from one call instead of a getEvent per event. Answer them with updateEvent myResponseStatus. | `GET /api/v1/calendars/{calendarId}/events` |
+| `getEvent` | Gets detailed information about a specific calendar event, including every attendee's response and which attendee is you. Use updateEvent with myResponseStatus to answer the invitation. | `GET /api/v1/calendars/{calendarId}/events/{eventId}` |
 | `createEvent` | Creates a new calendar event. | `POST /api/v1/calendars/{calendarId}/events` |
-| `updateEvent` | Updates an existing calendar event. | `POST /api/v1/calendars/{calendarId}/events/{eventId}` |
+| `updateEvent` | Updates an existing calendar event. Only the fields you pass are changed; everything else on the event is preserved. Also ANSWERS AN INVITATION: pass myResponseStatus ("accepted", "tentative" or "declined") to set your own attendee response without touching anyone else's. Note that with the default sendUpdates "none" the organizer is not emailed about your answer — pass sendUpdates "all" if they should be. | `POST /api/v1/calendars/{calendarId}/events/{eventId}` |
 | `deleteEvent` | Deletes a calendar event. | `POST /api/v1/calendars/{calendarId}/events/{eventId}/cancel` |
 
 ## Google Drive

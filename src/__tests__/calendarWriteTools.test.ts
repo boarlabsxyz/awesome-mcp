@@ -29,6 +29,8 @@ const {
   performCreateEvent,
   performUpdateEvent,
   projectEvent,
+  findSelfAttendee,
+  describeSelfResponse,
 } = calendarModule as any;
 
 const noopLog = { info: () => {}, error: () => {}, warn: () => {} };
@@ -70,10 +72,65 @@ function mkCalendar(overrides: any = {}): any {
         },
       })),
       update: mock.fn(async (params: any) => ({ data: { id: 'evt-1', ...params.requestBody } })),
+      patch: mock.fn(async (params: any) => ({ data: { id: 'evt-1', ...params.requestBody } })),
       delete: mock.fn(async () => ({})),
       ...(overrides.events || {}),
     },
   };
+}
+
+/**
+ * An event the caller is actually invited to: their own row is marked
+ * `self: true` and carries a DIFFERENT email from the others, which is what
+ * makes an email-matching implementation fail these tests.
+ */
+function mkInvitedCalendar(selfStatus = 'needsAction', storedAfterUpdate?: string) {
+  const attendees = [
+    { email: 'organizer@example.com', responseStatus: 'accepted' },
+    { email: 'me-alias@example.com', responseStatus: selfStatus, self: true },
+    { email: 'other@example.com', responseStatus: 'declined' },
+  ];
+  return mkCalendar({
+    events: {
+      get: mock.fn(async () => ({
+        data: {
+          id: 'evt-1',
+          summary: 'Invited',
+          start: { dateTime: '2026-01-15T10:00:00Z' },
+          end: { dateTime: '2026-01-15T11:00:00Z' },
+          attendees,
+          recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+        },
+      })),
+      update: mock.fn(async (params: any) => ({
+        data: {
+          id: 'evt-1',
+          ...params.requestBody,
+          // Lets a test simulate Google storing something other than what was
+          // asked for, which must not be reported as a successful reply.
+          ...(storedAfterUpdate
+            ? {
+              attendees: (params.requestBody.attendees || []).map((a: any) =>
+                a.self ? { ...a, responseStatus: storedAfterUpdate } : a),
+            }
+            : {}),
+        },
+      })),
+      patch: mock.fn(async (params: any) => ({
+        data: {
+          id: 'evt-1',
+          summary: 'Invited',
+          ...params.requestBody,
+          ...(storedAfterUpdate
+            ? {
+              attendees: (params.requestBody.attendees || []).map((a: any) =>
+                a.self ? { ...a, responseStatus: storedAfterUpdate } : a),
+            }
+            : {}),
+        },
+      })),
+    },
+  });
 }
 
 const callTool = (name: string, args: any, session: any) =>
@@ -286,7 +343,11 @@ describe('calendar event write ops', () => {
 
     it('defaults a missing attendee responseStatus to needsAction', () => {
       const out: any = projectEvent({ id: 'e1', attendees: [{ email: 'a@b.com' }] });
-      assert.deepEqual(out.attendees, [{ email: 'a@b.com', responseStatus: 'needsAction' }]);
+      // `self` is additive: this projection is the published contract of the
+      // ChatGPT-compat event routes, so keys may be ADDED (clients ignore what
+      // they do not read) but never renamed or removed. An attendee Google does
+      // not mark is not the caller, so the default is false rather than absent.
+      assert.deepEqual(out.attendees, [{ email: 'a@b.com', responseStatus: 'needsAction', self: false }]);
     });
   });
 });
@@ -346,5 +407,134 @@ describe('calendar write tools', () => {
         `${name} should refuse an unconnected session`,
       );
     }
+  });
+});
+
+describe('answering an invitation (myResponseStatus)', () => {
+  it('sets only the caller own response and leaves every other guest untouched', async () => {
+    const calendar = mkInvitedCalendar('needsAction');
+    await performUpdateEvent(calendar, updateEventSchema.parse({
+      eventId: 'evt-1', myResponseStatus: 'accepted',
+    }));
+    const sent = calendar.events.patch.mock.calls[0].arguments[0].requestBody;
+    // Google has no "set my response" endpoint, so answering means writing the
+    // whole guest list back — and a partial attendees array UNINVITES everyone
+    // absent from it. This is the assertion that pins that.
+    assert.equal(sent.attendees.length, 3);
+    assert.deepEqual(
+      sent.attendees.map((a: any) => [a.email, a.responseStatus]),
+      [
+        ['organizer@example.com', 'accepted'],
+        ['me-alias@example.com', 'accepted'],
+        ['other@example.com', 'declined'],
+      ],
+    );
+    // An RSVP-only call patches ONLY the guest list: handing an organiser's
+    // fields back on someone else's meeting is what risks a 403 when
+    // guestsCanModify is false, so their absence here is the point.
+    assert.deepEqual(Object.keys(sent), ['attendees']);
+    assert.equal(calendar.events.update.mock.calls.length, 0, 'an RSVP must not send a full-resource update');
+  });
+
+  it('identifies the caller by self, not by matching an email', async () => {
+    // The self row's address differs from every other attendee's and from any
+    // plausible account address: an implementation comparing emails would find
+    // nobody here and silently change nothing.
+    const calendar = mkInvitedCalendar('needsAction');
+    await performUpdateEvent(calendar, updateEventSchema.parse({
+      eventId: 'evt-1', myResponseStatus: 'declined',
+    }));
+    const sent = calendar.events.patch.mock.calls[0].arguments[0].requestBody;
+    const self = sent.attendees.find((a: any) => a.self === true);
+    assert.equal(self.responseStatus, 'declined');
+    assert.equal(self.email, 'me-alias@example.com');
+  });
+
+  for (const status of ['accepted', 'tentative', 'declined'] as const) {
+    it(`writes ${status} through`, async () => {
+      const calendar = mkInvitedCalendar('needsAction');
+      await performUpdateEvent(calendar, updateEventSchema.parse({ eventId: 'evt-1', myResponseStatus: status }));
+      const sent = calendar.events.patch.mock.calls[0].arguments[0].requestBody;
+      assert.equal(sent.attendees.find((a: any) => a.self).responseStatus, status);
+    });
+  }
+
+  it('refuses when the caller is not a guest, and adds nobody', async () => {
+    // mkCalendar's event has one attendee and no self row — the organizer case.
+    const calendar = mkCalendar();
+    await assert.rejects(
+      () => performUpdateEvent(calendar, updateEventSchema.parse({
+        eventId: 'evt-1', myResponseStatus: 'accepted',
+      })),
+      (err: any) => /not in its guest list/.test(err.message),
+    );
+    // Inviting yourself is a different act from replying, so nothing is written.
+    assert.equal(calendar.events.update.mock.calls.length, 0);
+    assert.equal(calendar.events.patch.mock.calls.length, 0);
+  });
+
+  it('uses the full merge when the RSVP rides along with another edit', async () => {
+    const calendar = mkInvitedCalendar('needsAction');
+    await performUpdateEvent(calendar, updateEventSchema.parse({
+      eventId: 'evt-1', myResponseStatus: 'accepted', summary: 'Renamed',
+    }));
+    // Such a caller is editing the event anyway, so it needs the merge
+    // semantics — and the answered guest list has to ride along with it.
+    assert.equal(calendar.events.patch.mock.calls.length, 0);
+    const sent = calendar.events.update.mock.calls[0].arguments[0].requestBody;
+    assert.equal(sent.summary, 'Renamed');
+    assert.equal(sent.attendees.find((a: any) => a.self).responseStatus, 'accepted');
+    assert.deepEqual(sent.recurrence, ['RRULE:FREQ=WEEKLY;BYDAY=MO']);
+  });
+
+  it('leaves the guest list alone when no response was requested', async () => {
+    const calendar = mkInvitedCalendar('needsAction');
+    await performUpdateEvent(calendar, updateEventSchema.parse({ eventId: 'evt-1', summary: 'Renamed' }));
+    const sent = calendar.events.update.mock.calls[0].arguments[0].requestBody;
+    assert.equal(sent.attendees.find((a: any) => a.self).responseStatus, 'needsAction');
+  });
+
+  it('defaults to not emailing the organizer', async () => {
+    const calendar = mkInvitedCalendar('needsAction');
+    await performUpdateEvent(calendar, updateEventSchema.parse({ eventId: 'evt-1', myResponseStatus: 'accepted' }));
+    assert.equal(calendar.events.patch.mock.calls[0].arguments[0].sendUpdates, 'none');
+  });
+});
+
+describe('self-attendee helpers', () => {
+  it('finds the self row and reports needsAction as an explicit non-answer', () => {
+    const event: any = {
+      attendees: [
+        { email: 'a@example.com', responseStatus: 'accepted' },
+        { email: 'me@example.com', responseStatus: 'needsAction', self: true },
+      ],
+    };
+    assert.equal(findSelfAttendee(event)?.email, 'me@example.com');
+    // A planner hunting for invitations to answer is looking for exactly this
+    // state, so it must render rather than read as "nothing to see".
+    assert.match(describeSelfResponse(event)!, /needsAction/);
+  });
+
+  it('returns null when the caller is not a guest', () => {
+    assert.equal(describeSelfResponse({ attendees: [{ email: 'a@example.com' }] } as any), null);
+    assert.equal(describeSelfResponse({} as any), null);
+    assert.equal(findSelfAttendee({} as any), undefined);
+  });
+
+  it('projects self and the hoisted myResponseStatus for REST clients', () => {
+    const projected: any = projectEvent({
+      id: 'evt-1',
+      attendees: [
+        { email: 'a@example.com', responseStatus: 'accepted' },
+        { email: 'me@example.com', responseStatus: 'tentative', self: true },
+      ],
+    } as any);
+    assert.equal(projected.myResponseStatus, 'tentative');
+    assert.deepEqual(projected.attendees.map((a: any) => a.self), [false, true]);
+  });
+
+  it('projects myResponseStatus as null when the caller is not a guest', () => {
+    const projected: any = projectEvent({ id: 'evt-1', attendees: [{ email: 'a@example.com' }] } as any);
+    assert.equal(projected.myResponseStatus, null);
   });
 });

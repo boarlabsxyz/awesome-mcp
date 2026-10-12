@@ -416,7 +416,7 @@
       "patch": {
         "operationId": "updateEvent",
         "summary": "Update a calendar event",
-        "description": "Updates an existing calendar event. Only provided fields are changed; omitted fields are preserved.",
+        "description": "Updates an existing calendar event. Only provided fields are changed; omitted fields are preserved. Also answers an invitation: myResponseStatus sets this account's own attendee response without touching anyone else's. The response body reports the stored value in myResponseStatus, read back from Google rather than echoed.",
         "parameters": [
           {
             "name": "calendarId",
@@ -474,6 +474,15 @@
                     "type": "boolean",
                     "default": false,
                     "description": "If true, generate a Google Meet video conference for this event. Ignored if the event already has a conference attached."
+                  },
+                  "myResponseStatus": {
+                    "type": "string",
+                    "enum": [
+                      "accepted",
+                      "tentative",
+                      "declined"
+                    ],
+                    "description": "Answer an invitation: set YOUR OWN attendee response. Only your own entry is touched; other attendees' responses are preserved. Fails if this account is not in the guest list (an organizer often is not, and nothing is added on your behalf). With the default sendUpdates \"none\" the organizer is NOT emailed about your answer."
                   },
                   "sendUpdates": {
                     "type": "string",
@@ -643,7 +652,7 @@
       "post": {
         "operationId": "updateCalendarEvent",
         "summary": "Update an event, merging the fields given",
-        "description": "Updates an existing event. Fields that are omitted are preserved, not cleared: the handler reads the event first and merges, because the underlying Google call replaces the whole resource. Identical in behaviour to the legacy PATCH on this path, which shares the same handler; POST exists because the REST catalog's method union is GET or POST.",
+        "description": "Updates an existing event. Fields that are omitted are preserved, not cleared: the handler reads the event first and merges, because the underlying Google call replaces the whole resource. Identical in behaviour to the legacy PATCH on this path, which shares the same handler; POST exists because the REST catalog's method union is GET or POST. Also answers an invitation: myResponseStatus sets this account's own attendee response without touching anyone else's. The response body reports the stored value in myResponseStatus, read back from Google rather than echoed.",
         "parameters": [
           {
             "name": "calendarId",
@@ -702,6 +711,15 @@
                     "type": "boolean",
                     "default": false,
                     "description": "If true, generate a Google Meet video conference for this event. Ignored if the event already has a conference attached."
+                  },
+                  "myResponseStatus": {
+                    "type": "string",
+                    "enum": [
+                      "accepted",
+                      "tentative",
+                      "declined"
+                    ],
+                    "description": "Answer an invitation: set YOUR OWN attendee response. Only your own entry is touched; other attendees' responses are preserved. Fails if this account is not in the guest list (an organizer often is not, and nothing is added on your behalf). With the default sendUpdates \"none\" the organizer is NOT emailed about your answer."
                   },
                   "sendUpdates": {
                     "type": "string",
