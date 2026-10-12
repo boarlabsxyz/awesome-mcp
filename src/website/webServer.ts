@@ -1213,6 +1213,88 @@ const PASTE_CONNECTION_BUILDERS: Record<string, (input: PasteConnectionInput) =>
   browserbase: buildBrowserbasePasteConnection,
 };
 
+/**
+ * Prefixes whose REST bodies are documents rather than records, and so get the
+ * 5 MB parser instead of the 100 kb global one.
+ *
+ * Keep in step with the POST handlers in registerRestApiRoutes. These are
+ * prefixes, so each covers the collection POST and every by-id POST under it.
+ */
+const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
+  '/api/v1/redmine/issues',   // createIssue / updateIssue — description and notes are full issue bodies
+  '/api/v1/redmine/projects', // updateWikiPage — `text` replaces an entire wiki page
+  '/api/v1/hubspot/notes',    // createNote — free text
+  '/api/v1/hubspot/calls',    // logCall — can be a whole transcript
+  '/api/v1/hubspot/meetings', // logMeeting — can be full minutes
+  // Docs writes carry document-sized payloads: appended text, an import body,
+  // a 50-operation batch, a base64 image.
+  '/api/v1/docs',
+  // Sheets writes are the clearest case for this plane: `values` is a 2D array
+  // of rows, and bulk rows are the whole reason the endpoint exists, so the
+  // global 100kb would 413 the use case. Covers /write, /append, /batchUpdate,
+  // /ranges/clear and POST /api/v1/sheets (createSpreadsheet.initialData).
+  '/api/v1/sheets',
+  // An Outline document body is markdown of arbitrary length, and createDocument
+  // / updateDocument exist on this plane precisely so a whole page can be
+  // pushed in one request. Covers the collection and comment writes too.
+  '/api/v1/outline',
+  // ClickUp Doc page content (createPage / editPage) and the base64 image
+  // branch of the page-image route. The task and list writes under
+  // /api/v1/clickup carry markdown_content bodies for the same reason.
+  '/api/v1/clickup',
+];
+
+/**
+ * Mount every JSON body parser the REST data plane needs.
+ *
+ * EVERY app factory that calls registerRestApiRoutes must call this, and must
+ * call it FIRST. createMcpOnlyApp did not, and the consequence was not subtle:
+ * with no parser mounted at all, `req.body` was `undefined` on every REST POST
+ * served from a per-service subdomain, so each handler's
+ * `safeParse({ ...req.body, id })` spread undefined into `{}` and answered 400
+ * "range: Required / values: Required" for a request whose body was perfectly
+ * valid. GET routes worked throughout, which is what made it read as a schema
+ * or proxy problem rather than a missing middleware.
+ *
+ * Ordering, both halves of which are load-bearing:
+ *  - The large-body prefixes come first. body-parser sets `req._body` on the
+ *    first successful parse and every later json() skips the request — but the
+ *    reverse does not hold, so a parser registered next to its handler would
+ *    never see a request the 100 kb parser had already rejected with 413.
+ *  - This must be mounted AFTER the raw-body routes (the ClickUp and Slack
+ *    webhook ingests, the image blob upload), which need the unparsed stream to
+ *    verify an HMAC.
+ */
+function registerRestBodyParsers(app: express.Express): void {
+  for (const prefix of REST_LARGE_BODY_PREFIXES) {
+    app.use(prefix, express.json({ limit: REST_LARGE_BODY_LIMIT }));
+  }
+}
+
+/**
+ * Body-parser failures on the REST plane answer JSON, not Express's default
+ * HTML error page: a curl client told this API speaks JSON cannot tell an
+ * oversize body from a proxy fault when it gets HTML back.
+ *
+ * Must be registered AFTER the parsers and BEFORE the routes — Express walks
+ * forward from the throw site looking for an error handler, so one mounted
+ * after the routes never sees a parser error and one mounted before the parsers
+ * does not either.
+ */
+function registerRestBodyParseErrorHandler(app: express.Express): void {
+  app.use('/api/v1', (err: any, _req: Request, res: Response, next: NextFunction) => {
+    if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+      res.status(413).json({ error: `Request body too large (max ${REST_LARGE_BODY_LIMIT} on the endpoints that accept a document body, 100kb elsewhere).` });
+      return;
+    }
+    if (err && (err.type === 'entity.parse.failed' || err.status === 400)) {
+      res.status(400).json({ error: 'Request body is not valid JSON.' });
+      return;
+    }
+    next(err);
+  });
+}
+
 function registerSharedRoutes(app: express.Express): void {
   // Serve config to frontend (BASE_URL, auth mode)
   app.get('/api/config', (_req, res) => {
@@ -1702,66 +1784,17 @@ function registerSharedRoutes(app: express.Express): void {
   // by its own express.raw() rather than a JSON parser.
   registerImageBlobRoutes(app);
 
-  // Large-body REST write endpoints get their own JSON parser, and it MUST be
-  // mounted before the global one below rather than beside each handler.
-  // body-parser sets req._body on the first successful parse and every later
-  // json() middleware then skips the request — but the reverse does not hold: a
-  // per-route parser registered next to the handler (thousands of lines below,
-  // in registerRestApiRoutes) would never see a request the 100 kb global had
-  // already rejected with 413. These paths are prefixes, so they cover both the
-  // collection POST and the by-id POST underneath it.
-  //
-  // Keep in step with the POST handlers in registerRestApiRoutes; each entry is
-  // there because its body is a document, not a record:
-  const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
-    '/api/v1/redmine/issues',   // createIssue / updateIssue — description and notes are full issue bodies
-    '/api/v1/redmine/projects', // updateWikiPage — `text` replaces an entire wiki page
-    '/api/v1/hubspot/notes',    // createNote — free text
-    '/api/v1/hubspot/calls',    // logCall — can be a whole transcript
-    '/api/v1/hubspot/meetings', // logMeeting — can be full minutes
-    // Docs writes carry document-sized payloads: appended text, an import body,
-    // a 50-operation batch, a base64 image.
-    '/api/v1/docs',
-    // Sheets writes are the clearest case for this plane: `values` is a 2D array
-    // of rows, and bulk rows are the whole reason the endpoint exists, so the
-    // global 100kb would 413 the use case. Covers /write, /append, /batchUpdate,
-    // /ranges/clear and POST /api/v1/sheets (createSpreadsheet.initialData).
-    '/api/v1/sheets',
-    // An Outline document body is markdown of arbitrary length, and createDocument
-    // / updateDocument exist on this plane precisely so a whole page can be
-    // pushed in one request. Covers the collection and comment writes too.
-    '/api/v1/outline',
-    // ClickUp Doc page content (createPage / editPage) and the base64 image
-    // branch of the page-image route. The task and list writes under
-    // /api/v1/clickup carry markdown_content bodies for the same reason.
-    '/api/v1/clickup',
-  ];
-  for (const prefix of REST_LARGE_BODY_PREFIXES) {
-    app.use(prefix, express.json({ limit: REST_LARGE_BODY_LIMIT }));
-  }
+  // Large-body REST write endpoints plus the global JSON parser. Extracted so
+  // createMcpOnlyApp mounts the same thing — see registerRestBodyParsers.
+  registerRestBodyParsers(app);
 
-  // JSON body parser for API routes
+  // JSON body parser for everything else on this app (the dashboard and the
+  // marketing pages). Scoped globally here, unlike in createMcpOnlyApp, because
+  // this factory serves those routes too.
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
-  // Body-parser failures on the REST plane answer JSON, not Express's default
-  // HTML error page: a curl client told this API speaks JSON cannot tell an
-  // oversize body from a proxy fault when it gets HTML back. Registered here —
-  // after the parsers, before the routes — because Express walks FORWARD from
-  // the throw site looking for an error handler, so a handler mounted after the
-  // routes would never see a parser error while one mounted before the parsers
-  // would not either.
-  app.use('/api/v1', (err: any, _req: Request, res: Response, next: NextFunction) => {
-    if (err && (err.type === 'entity.too.large' || err.status === 413)) {
-      res.status(413).json({ error: `Request body too large (max ${REST_LARGE_BODY_LIMIT} on the endpoints that accept a document body, 100kb elsewhere).` });
-      return;
-    }
-    if (err && (err.type === 'entity.parse.failed' || err.status === 400)) {
-      res.status(400).json({ error: 'Request body is not valid JSON.' });
-      return;
-    }
-    next(err);
-  });
+  registerRestBodyParseErrorHandler(app);
 
   // === Per-MCP OAuth Connection ===
 
@@ -8933,25 +8966,45 @@ function registerRestApiRoutes(app: express.Express): void {
   });
 
   // GET /api/v1/redmine/time-entries - Logged time
-  // Any hours total computed from one response is per page, not per project.
+  //
+  // `?allPages=true` is the only way to get an hours total that is actually a
+  // total: Redmine caps `limit` at 100, so a sum over one response is wrong by
+  // whatever did not fit. It also reaches the per-project fallback, which
+  // matters because `/time_entries.json` is a single route and has been seen
+  // broken on its own (a proxy rule bouncing it to the sign-in page) on an
+  // instance where every other endpoint answered fine.
+  //
+  // The JSON shape differs by design between the two modes. One page answers
+  // `{ items, page }` as every other list route does; a full scan answers
+  // `{ items, scan }` with NO `page`, because there is no window to report and
+  // echoing one would invite a client to page a set already exhausted. `scan`
+  // is what says whether the number is a total or a floor.
   app.get('/api/v1/redmine/time-entries', requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const client = await redmineRestClient(req, res);
       if (!client) return;
       const { listTimeEntriesSchema } = await import('../redmine/schemas.js');
-      const { timeEntryListQuery } = await import('../redmine/ops.js');
+      const { timeEntryListQuery, scanTimeEntries } = await import('../redmine/ops.js');
       const { formatTimeEntryList, REDMINE_MAX_LIMIT } = await import('../redmine/apiHelpers.js');
       const parsed = listTimeEntriesSchema.safeParse({
         projectId: qstr(req.query.projectId) || undefined,
         issueId: qstr(req.query.issueId) || undefined,
         userId: qstr(req.query.userId) || undefined,
+        activityId: qstr(req.query.activityId) || undefined,
         spentOn: qstr(req.query.spentOn) || undefined,
         from: qstr(req.query.from) || undefined,
         to: qstr(req.query.to) || undefined,
         offset: qint(req.query.offset, 0, { min: 0 }),
         limit: qint(req.query.limit, 25, { min: 1, max: REDMINE_MAX_LIMIT }),
+        allPages: qflag(req.query.allPages),
       });
       if (!parsed.success) { sendInvalidQuery(res, parsed.error.flatten()); return; }
+      if (parsed.data.allPages) {
+        const scanned = await scanTimeEntries(client, parsed.data, REST_PROVIDER_LOG);
+        const payload = { items: scanned.items, scan: scanned.scan };
+        respondNegotiated(req, res, payload, () => formatTimeEntryList(scanned.items, undefined, scanned.scan));
+        return;
+      }
       const result = await client.listTimeEntries(timeEntryListQuery(parsed.data));
       respondNegotiated(req, res, result, () => formatTimeEntryList(result.items, result.page));
     } catch (err: any) {
@@ -9411,6 +9464,22 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
       });
     }
   };
+
+  // Body parsers for the REST plane. These were missing here, and that is the
+  // whole of the "REST POST bodies are dropped" bug: this factory registered
+  // the routes but no json() middleware, so every POST on a per-service
+  // subdomain (google-sheets.awesome-mcp.xyz) arrived with `req.body`
+  // undefined and was rejected by its own schema as if the caller had sent an
+  // empty object — "range: Required" for a request that carried a range.
+  //
+  // Scoped to /api/v1 rather than mounted globally, which is the one real
+  // difference from registerSharedRoutes: this app also proxies /mcp and /sse,
+  // and a global express.json() would consume those request streams before
+  // http-proxy-middleware could forward them, breaking every MCP call on the
+  // subdomain to fix the REST ones.
+  registerRestBodyParsers(app);
+  app.use('/api/v1', express.json());
+  registerRestBodyParseErrorHandler(app);
 
   // REST data plane (/api/v1/*). Same routes createWebApp / createWebOnlyApp
   // mount — kept reachable in MCP_MODE=mcp (per-service Railway subdomains

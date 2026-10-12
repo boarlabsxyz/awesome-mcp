@@ -19,7 +19,7 @@ const log = { info: () => {}, error: () => {} };
 
 type Recorded = { url: string; init: RequestInit };
 let recorded: Recorded[] = [];
-let respond: (url: string, init: RequestInit) => { status?: number; json?: unknown; text?: string; contentType?: string | null };
+let respond: (url: string, init: RequestInit) => { status?: number; json?: unknown; text?: string; contentType?: string | null; location?: string };
 const realFetch = globalThis.fetch;
 
 beforeEach(() => {
@@ -34,7 +34,14 @@ beforeEach(() => {
     return {
       ok: status >= 200 && status < 300,
       status,
-      headers: { get: (h: string) => (h.toLowerCase() === 'content-type' ? contentType : null) },
+      headers: {
+        get: (h: string) => {
+          const name = h.toLowerCase();
+          if (name === 'content-type') return contentType;
+          if (name === 'location') return r.location ?? null;
+          return null;
+        },
+      },
       json: async () => r.json,
       text: async () => r.text ?? (r.json ? JSON.stringify(r.json) : ''),
     } as any as Response;
@@ -66,12 +73,14 @@ describe('RedmineClient.request', () => {
     assert.equal(headers['X-Redmine-API-Key'], undefined);
   });
 
-  // Node's fetch keeps custom headers across an origin change, so following a
-  // redirect would hand X-Redmine-API-Key to the Location host.
-  test('refuses to follow redirects', async () => {
+  // Node's fetch keeps custom headers across an origin change, so letting IT
+  // follow a redirect would hand X-Redmine-API-Key to the Location host. The
+  // mode is 'manual' so the decision — and the Location — belong to us; the
+  // cross-origin case below proves the key still never crosses an origin.
+  test('never delegates redirect handling to fetch', async () => {
     const client = new RedmineClient('KEY', BASE);
     await client.getCurrentUser();
-    assert.equal(recorded[0].init.redirect, 'error');
+    assert.equal(recorded[0].init.redirect, 'manual');
   });
 
   test('strips trailing slashes from the base URL', async () => {
@@ -149,6 +158,140 @@ describe('RedmineClient.request', () => {
       throw err;
     }) as any;
     await assert.rejects(() => client.getCurrentUser(), /timed out after 30000ms/);
+  });
+
+  // --- Redirects -----------------------------------------------------------
+  //
+  // One instance served /issues.json, /projects.json and /users/current fine
+  // while /time_entries.json alone was redirected, and the old message said
+  // only "the request was redirected away from <host> and was refused" — which
+  // cannot distinguish a proxy rewrite from an SSO hop from a login bounce, so
+  // there was nothing to act on and the endpoint stayed unusable.
+
+  test('a same-origin redirect is followed with the credential still attached', async () => {
+    const client = new RedmineClient('KEY', BASE, 'apiKey');
+    respond = (url) =>
+      url.includes('/time_entries.json')
+        ? { status: 302, location: '/spent_time.json', contentType: null }
+        : { status: 200, json: { time_entries: [{ id: 1, hours: 2 }], total_count: 1 } };
+    const res = await client.listTimeEntries({});
+    assert.deepEqual(res.items, [{ id: 1, hours: 2 }]);
+    assert.equal(recorded.length, 2);
+    assert.match(recorded[1].url, /\/spent_time\.json$/);
+    assert.equal((recorded[1].init.headers as Record<string, string>)['X-Redmine-API-Key'], 'KEY');
+  });
+
+  test('a cross-origin redirect never carries the key and names the host', async () => {
+    const client = new RedmineClient('KEY', BASE, 'apiKey');
+    respond = () => ({ status: 302, location: 'https://sso.example.net/authorize', contentType: null });
+    await assert.rejects(
+      () => client.listTimeEntries({}),
+      (err: any) => {
+        assert.equal(err.redirect.sameOrigin, false);
+        assert.equal(err.redirect.host, 'sso.example.net');
+        return true;
+      },
+    );
+    // One request, and nothing was sent to the other host.
+    assert.equal(recorded.length, 1);
+    assert.ok(!recorded.some(r => r.url.includes('sso.example.net')));
+  });
+
+  test('a login bounce retries with ?key= and then HTTP Basic', async () => {
+    // Redmine accepts a personal key three ways — the X-Redmine-API-Key header,
+    // a `key` query param, and as the HTTP Basic username. A proxy that strips
+    // unknown X-* headers on one route breaks only the first, and the symptom is
+    // a bounce to /login on a credential that works everywhere else.
+    const client = new RedmineClient('KEY012345678', BASE, 'apiKey');
+    respond = (url, init) => {
+      const basic = (init.headers as Record<string, string>)?.Authorization;
+      if (basic?.startsWith('Basic ')) return { status: 200, json: { time_entries: [{ id: 9, hours: 1 }], total_count: 1 } };
+      return { status: 302, location: '/login?back_url=%2Ftime_entries.json', contentType: null };
+    };
+    const res = await client.listTimeEntries({});
+    assert.deepEqual(res.items, [{ id: 9, hours: 1 }]);
+    assert.equal(recorded.length, 3, 'header, then ?key=, then Basic');
+    assert.match(recorded[1].url, /[?&]key=KEY012345678/);
+    const third = recorded[2].init.headers as Record<string, string>;
+    assert.equal(third.Authorization, `Basic ${Buffer.from('KEY012345678:x').toString('base64')}`);
+  });
+
+  test('each fallback ADDS a credential form rather than swapping one in', async () => {
+    // If the proxy is stripping the header, the added form is what survives. If
+    // it is not, keeping the header means the retry is never weaker than the
+    // call that just failed — dropping it would make attempt 1 strictly worse
+    // than attempt 0 whenever the header was never the problem.
+    const client = new RedmineClient('KEY012345678', BASE, 'apiKey');
+    respond = () => ({ status: 302, location: '/login', contentType: null });
+    await assert.rejects(() => client.listTimeEntries({}), /HTTP 302/);
+    for (const call of recorded) {
+      assert.equal((call.init.headers as Record<string, string>)['X-Redmine-API-Key'], 'KEY012345678');
+    }
+  });
+
+  test('all three presentations bouncing is reported as a route problem', async () => {
+    const client = new RedmineClient('KEY012345678', BASE, 'apiKey');
+    respond = () => ({ status: 302, location: '/login?back_url=%2Ftime_entries.json', contentType: null });
+    await assert.rejects(
+      () => client.listTimeEntries({}),
+      (err: any) => {
+        assert.equal(err.redirect.loginBounce, true);
+        assert.match(err.message, /Retried with the key query parameter and then HTTP Basic/);
+        return true;
+      },
+    );
+    assert.equal(recorded.length, 3);
+  });
+
+  test('the key never reaches the error text via back_url', async () => {
+    // The second fallback puts the key in the query string, so Redmine's own
+    // back_url echoes it back — into the message, the log and the transcript.
+    const KEY = 'KEY012345678';
+    const client = new RedmineClient(KEY, BASE, 'apiKey');
+    respond = (url) => ({
+      status: 302,
+      location: `/login?back_url=${encodeURIComponent(url)}`,
+      contentType: null,
+    });
+    await assert.rejects(
+      () => client.listTimeEntries({}),
+      (err: any) => {
+        assert.ok(!err.message.includes(KEY), 'key leaked into the message');
+        assert.ok(!JSON.stringify(err.redirect).includes(KEY), 'key leaked into .redirect');
+        return true;
+      },
+    );
+  });
+
+  test('a write is never replayed three ways past a bounce', async () => {
+    // Replaying a POST through each credential form could log the same hours
+    // three times. No diagnostic is worth that.
+    const client = new RedmineClient('KEY012345678', BASE, 'apiKey');
+    respond = () => ({ status: 302, location: '/login', contentType: null });
+    await assert.rejects(() => client.createTimeEntry({ hours: 1 }), /HTTP 302/);
+    assert.equal(recorded.length, 1);
+  });
+
+  test('an OAuth connection gets no key fallbacks', async () => {
+    // `?key=` and Basic are API-key presentations; a bearer has no equivalent,
+    // so there is nothing to fall back to and trying would just leak the token
+    // into a query string.
+    const client = new RedmineClient('TOKEN0123456', BASE, 'oauth');
+    respond = () => ({ status: 302, location: '/login', contentType: null });
+    await assert.rejects(() => client.listTimeEntries({}), /HTTP 302/);
+    assert.equal(recorded.length, 1);
+  });
+
+  test('a real answer on a fallback is reported instead of the bounce', async () => {
+    // A 403 on the retry is Redmine having evaluated the request. That is a
+    // better error than "it bounced", so it stops the chain.
+    const client = new RedmineClient('KEY012345678', BASE, 'apiKey');
+    respond = (url) =>
+      url.includes('key=')
+        ? { status: 403, text: 'Forbidden' }
+        : { status: 302, location: '/login', contentType: null };
+    await assert.rejects(() => client.listTimeEntries({}), /403/);
+    assert.equal(recorded.length, 2, 'stopped before trying Basic');
   });
 
   test('splits a collection into items and the pagination envelope', async () => {

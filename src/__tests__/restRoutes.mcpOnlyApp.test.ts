@@ -102,3 +102,67 @@ describe('MCP endpoint 401s carry WWW-Authenticate (re-auth discovery)', () => {
     }
   });
 });
+
+// Second regression in the same factory, and a nastier one than the missing
+// routes above because it failed with a *plausible* error instead of a 404.
+//
+// createMcpOnlyApp registered registerRestApiRoutes but mounted NO json() body
+// parser, so on every per-service subdomain `req.body` was undefined for every
+// REST POST. Each handler does `safeParse({ ...req.body, id: req.params.id })`,
+// and spreading undefined yields `{}` — so the route answered 400 with
+// "range: Required, values: Required" for a request that carried both. GET
+// routes worked throughout, which is exactly why this was reported as a body
+// parser or proxy fault rather than as a missing middleware.
+//
+// The auth gate runs before the parser matters, so these assert the gate's 401
+// rather than a 200: what is being pinned is that a *parser* is mounted on the
+// path at all. The 400-with-a-valid-body signature is pinned below.
+describe('REST POST bodies are parsed in createMcpOnlyApp', () => {
+  const POST_WITH_BODY: ReadonlyArray<{ path: string; body: object }> = [
+    { path: '/api/v1/sheets/abc123/write', body: { range: 'A1:B2', values: [['a', 'b']] } },
+    { path: '/api/v1/sheets/abc123/append', body: { range: 'A1', values: [['a']] } },
+    { path: '/api/v1/sheets/abc123/batchUpdate', body: { operations: [{ type: 'addSheet', title: 't' }] } },
+    { path: '/api/v1/sheets/abc123/ranges/clear', body: { range: 'A1:B2' } },
+  ];
+
+  for (const { path, body } of POST_WITH_BODY) {
+    it(`POST ${path} is not rejected as an empty body`, async () => {
+      const app = createMcpOnlyApp(3001);
+      const res = await request(app).post(path).send(body).set('Content-Type', 'application/json');
+      // 401 (unauthenticated) is the expected answer. The failure this guards
+      // against is a 400 whose issues name the fields we just sent — that is
+      // the "body was dropped" signature, and it would mean the parser is gone
+      // again even though the auth gate happens to run first today.
+      assert.notEqual(res.status, 404, `${path} is not registered in createMcpOnlyApp`);
+      if (res.status === 400) {
+        assert.fail(`${path} rejected a valid body as invalid — body parser missing: ${JSON.stringify(res.body)}`);
+      }
+      assert.equal(res.status, 401);
+    });
+  }
+
+  it('mounts a JSON parser on /api/v1 (a valid body survives to the handler)', async () => {
+    // The direct form of the assertion above: reach past the auth gate by
+    // checking the parser itself, which is the thing that was missing. An
+    // unparseable body must come back as the REST plane's own JSON 400, not as
+    // Express's HTML error page — which only happens if a parser ran.
+    const app = createMcpOnlyApp(3001);
+    const res = await request(app)
+      .post('/api/v1/sheets/abc123/write')
+      .set('Content-Type', 'application/json')
+      .send('{"range": not json}');
+    assert.equal(res.status, 400);
+    assert.match(String(res.body?.error ?? ''), /not valid JSON/i);
+  });
+
+  it('leaves /mcp and /sse request streams unparsed for the proxy', async () => {
+    // The parser is scoped to /api/v1 precisely so it cannot consume the
+    // proxied MCP request stream. A global express.json() here would fix the
+    // REST POSTs and break every MCP call on the same subdomain, so the scope
+    // is pinned: an unauthenticated POST to /mcp must still be the edge's 401,
+    // never a body-parser error.
+    const app = createMcpOnlyApp(3001);
+    const res = await request(app).post('/mcp').send({ jsonrpc: '2.0', method: 'tools/list', id: 1 });
+    assert.equal(res.status, 401);
+  });
+});

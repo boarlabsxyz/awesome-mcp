@@ -246,11 +246,20 @@ export const listTimeEntriesSchema = z.object({
     projectId: z.string().optional().describe('Restrict to one project (ID or identifier).'),
     issueId: z.union([z.string(), z.number()]).optional().describe('Restrict to one issue.'),
     userId: z.string().optional().describe('Restrict to one user ID, or "me" for the connected account.'),
+    activityId: z
+      .union([z.string(), z.number()])
+      .optional()
+      .describe('Restrict to one time-tracking activity ID from listTimeEntryActivities. Billable/non-billable is modelled as an activity on most instances (names prefixed "B:" / "NB:"), so this is how you split the two.'),
     spentOn: z.string().optional().describe('Exact date (YYYY-MM-DD), or a Redmine operator expression like ">=2026-01-01".'),
     from: isoDate.optional().describe('Start of the date range (YYYY-MM-DD), inclusive.'),
     to: isoDate.optional().describe('End of the date range (YYYY-MM-DD), inclusive.'),
     offset: offsetParam,
     limit: limitParam,
+    allPages: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe('Page to the end of the result set and report hours for the WHOLE set rather than one page. Set this whenever you are summing hours — a single page is capped at 100 entries, so a per-person or per-project total computed from one page is silently wrong. Ignores `offset`; stops at 5000 entries and says so if it hits that.'),
   });
 
 /** Parameters for the `getTimeEntry` tool. */
