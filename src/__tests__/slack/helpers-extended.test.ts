@@ -4,6 +4,9 @@ import sharp from 'sharp';
 import { resolveUsers, getWorkspaceUrl, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, handleSearchMessages, handleSearchFiles } from '../../slack/helpers.js';
 import { __setImageBlobPoolForTests } from '../../images/imageBlobStore.js';
 
+/** What the last chatPostMessage call was handed as its options argument. */
+let lastPostOptions: any;
+
 function mockSlackClient(overrides: Record<string, any> = {}): any {
   return {
     usersInfo: async (uid: string) => ({
@@ -26,10 +29,10 @@ function mockSlackClient(overrides: Record<string, any> = {}): any {
       has_more: false,
       response_metadata: {},
     }),
-    chatPostMessage: async (channel: string, text: string, threadTs?: string) => ({
-      ts: '9999.0000',
-      channel,
-    }),
+    chatPostMessage: async (channel: string, text: string, threadTs?: string, options?: any) => {
+      lastPostOptions = options;
+      return { ts: '9999.0000', channel };
+    },
     chatUpdate: async (channel: string, ts: string, text: string) => ({ ts, channel, text }),
     ...overrides,
   };
@@ -221,6 +224,61 @@ describe('handleReplyInThread', () => {
       if (origEnv === undefined) delete process.env.SLACK_WRITES_ENABLED;
       else process.env.SLACK_WRITES_ENABLED = origEnv;
     }
+  });
+});
+
+describe('unfurl options on posts', () => {
+  function withWrites<T>(fn: () => Promise<T>): Promise<T> {
+    const origEnv = process.env.SLACK_WRITES_ENABLED;
+    process.env.SLACK_WRITES_ENABLED = 'true';
+    return fn().finally(() => {
+      if (origEnv === undefined) delete process.env.SLACK_WRITES_ENABLED;
+      else process.env.SLACK_WRITES_ENABLED = origEnv;
+    });
+  }
+
+  it('should forward both unfurl flags from handlePostMessage', async () => {
+    await withWrites(async () => {
+      lastPostOptions = undefined;
+      await handlePostMessage(mockSlackClient(), 'C123', 'see https://example.com', {
+        unfurlLinks: false, unfurlMedia: false,
+      });
+      assert.equal(lastPostOptions?.unfurlLinks, false);
+      assert.equal(lastPostOptions?.unfurlMedia, false);
+    });
+  });
+
+  it('should forward unfurl flags from handleReplyInThread', async () => {
+    await withWrites(async () => {
+      lastPostOptions = undefined;
+      await handleReplyInThread(mockSlackClient(), 'C123', '1.0', 'reply', { unfurlMedia: false });
+      assert.equal(lastPostOptions?.unfurlMedia, false);
+      assert.equal(lastPostOptions?.unfurlLinks, undefined);
+    });
+  });
+
+  // The flags are reported as *requested*, not as applied: chat.postMessage's
+  // response carries no unfurl state, so claiming Slack honoured them would be
+  // an assertion nothing here can make.
+  it('should report the flags it sent, as requested rather than applied', async () => {
+    await withWrites(async () => {
+      const result = await handlePostMessage(mockSlackClient(), 'C123', 'x', { unfurlLinks: false });
+      assert.ok(result.includes('unfurl_links=false'), result);
+      assert.ok(!result.includes('unfurl_media'), result);
+      assert.ok(/requested/i.test(result), result);
+    });
+  });
+
+  // The default confirmation string must stay byte-identical for every caller
+  // that passes no flags — the note is additive, not a reformat.
+  it('should leave the confirmation unchanged when no flag is given', async () => {
+    await withWrites(async () => {
+      const result = await handlePostMessage(mockSlackClient(), 'C123', 'x');
+      assert.equal(result, 'Message posted to C123 (ts: 9999.0000)');
+
+      const reply = await handleReplyInThread(mockSlackClient(), 'C123', '1.0', 'x');
+      assert.equal(reply, 'Reply posted to thread 1.0 in C123 (ts: 9999.0000)');
+    });
   });
 });
 

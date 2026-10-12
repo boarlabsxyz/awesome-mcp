@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { SlackClient } from '../slack/apiHelpers.js';
-import { resolveUsers, getTeamId, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, handleSearchMessages, handleSearchFiles, type ChannelFilter } from '../slack/helpers.js';
+import { resolveUsers, getTeamId, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, handleSearchMessages, handleSearchFiles, unfurlParams, type ChannelFilter } from '../slack/helpers.js';
 import {
   CAPTURED_SLACK_EVENTS,
   parseTimestampInput,
@@ -599,31 +599,33 @@ slackUserServer.addTool({
 slackUserServer.addTool({
   name: 'postMessage',
   annotations: { readOnlyHint: false },
-  description: 'Post a message to a Slack channel.',
+  description: 'Post a message to a Slack channel. Slack renders a preview card for links in the message; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID to post to.'),
     text: z.string().describe('Message text (supports Slack markdown/mrkdwn).'),
+    ...unfurlParams,
   }),
   execute: async (args, { session }) => {
     const client = getSlackUserClient(session);
     await enforceAccess(client, session!, args.channelId);
-    return handlePostMessage(client, args.channelId, args.text);
+    return handlePostMessage(client, args.channelId, args.text, args);
   },
 });
 
 slackUserServer.addTool({
   name: 'replyInThread',
   annotations: { readOnlyHint: false },
-  description: 'Reply to a thread in a Slack channel.',
+  description: 'Reply to a thread in a Slack channel. Slack renders a preview card for links in the reply; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID containing the thread.'),
     threadTs: z.string().describe('The timestamp of the parent message to reply to.'),
     text: z.string().describe('Reply text (supports Slack markdown/mrkdwn).'),
+    ...unfurlParams,
   }),
   execute: async (args, { session }) => {
     const client = getSlackUserClient(session);
     await enforceAccess(client, session!, args.channelId);
-    return handleReplyInThread(client, args.channelId, args.threadTs, args.text);
+    return handleReplyInThread(client, args.channelId, args.threadTs, args.text, args);
   },
 });
 

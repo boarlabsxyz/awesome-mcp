@@ -224,6 +224,24 @@ function formatScopeDetail(data: any): string {
   return ` (${parts.join('; ')})`;
 }
 
+/**
+ * Per-message control over Slack's link previews ("unfurls").
+ *
+ * Both flags are optional, and an omitted one is left out of the request body
+ * entirely rather than sent as `false` — because Slack's own default is not a
+ * single value. A bot-token post does not unfurl primarily text-based links by
+ * default but does unfurl media; a user-token post behaves like a human's and
+ * unfurls both. Sending `false` for a flag the caller never set would silently
+ * change behaviour on one of those paths, so "omitted" has to stay
+ * distinguishable from "off".
+ */
+export interface SlackUnfurlOptions {
+  /** `false` suppresses previews for primarily text-based links. */
+  unfurlLinks?: boolean;
+  /** `false` suppresses previews for media (image, video) links. */
+  unfurlMedia?: boolean;
+}
+
 export class SlackClient {
   constructor(private botToken: string) {}
 
@@ -398,13 +416,25 @@ export class SlackClient {
 
   // === Chat ===
 
-  async chatPostMessage(channel: string, text: string, threadTs?: string): Promise<{
+  /**
+   * Post a message, optionally suppressing Slack's link previews.
+   *
+   * The unfurl flags are spread in only when set. `request()` already drops
+   * `undefined` from the form body, but writing the condition out here keeps
+   * the omitted-is-not-false invariant (see `SlackUnfurlOptions`) from
+   * depending on a filter several hundred lines away.
+   */
+  async chatPostMessage(
+    channel: string, text: string, threadTs?: string, options?: SlackUnfurlOptions,
+  ): Promise<{
     ts: string; channel: string;
   }> {
     return this.request('chat.postMessage', {
       channel,
       text,
       ...(threadTs ? { thread_ts: threadTs } : {}),
+      ...(options?.unfurlLinks !== undefined ? { unfurl_links: options.unfurlLinks } : {}),
+      ...(options?.unfurlMedia !== undefined ? { unfurl_media: options.unfurlMedia } : {}),
     });
   }
 
