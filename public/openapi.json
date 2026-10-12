@@ -3938,7 +3938,7 @@
       "post": {
         "operationId": "updateClickUpTask",
         "summary": "Update a task, or re-parent it",
-        "description": "camelCase sibling of the legacy uncatalogued PATCH on /api/v1/clickup/tasks/{taskId}, which takes ClickUp-native keys instead. On the re-parent path the change is VERIFIED by a re-read, because ClickUp answers a parent change it silently ignores with HTTP 200 and emits no webhook for one: ALWAYS check reparentConfirmed.",
+        "description": "camelCase sibling of the legacy uncatalogued PATCH on /api/v1/clickup/tasks/{taskId}, which takes ClickUp-native keys instead. On the re-parent path the change is VERIFIED by a re-read, because ClickUp answers a parent change it silently ignores with HTTP 200 and emits no webhook for one: ALWAYS check reparentConfirmed. Removing a due date is clearDueDate: true — dueDate cannot express it. That clear is verified by a re-read too, so check dueDateCleared (true / false / null = unconfirmed).",
         "parameters": [
           {
             "name": "taskId",
@@ -3981,7 +3981,11 @@
                   },
                   "dueDate": {
                     "type": "string",
-                    "description": "ISO string or Unix ms."
+                    "description": "ISO string or Unix ms. To REMOVE an existing due date use clearDueDate — an empty string is refused as an invalid date."
+                  },
+                  "clearDueDate": {
+                    "type": "boolean",
+                    "description": "true removes the task's due date (ClickUp clears it on due_date: null). Cannot be combined with dueDate. Check dueDateCleared in the response: ClickUp answers an update it ignored with HTTP 200."
                   },
                   "startDate": {
                     "type": "string",

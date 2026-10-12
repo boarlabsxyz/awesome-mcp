@@ -447,6 +447,83 @@ describe('ClickUp server tools', () => {
       assert.deepEqual(body.assignees, { add: [5], rem: [] });
     });
 
+    // === Clearing a due date ===
+    //
+    // `dueDate` is a string funnelled through toClickUpTimestamp, so no value it
+    // accepts can mean "remove this date" — "" and a bad ISO string both parse
+    // to NaN and are refused. ClickUp clears the field when it receives an
+    // explicit null, which only a separate flag can express.
+    it('sends due_date: null when clearDueDate is set', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
+      const result = await callTool('updateTask', { taskId: 't1', clearDueDate: true });
+
+      const body = JSON.parse(calls[0].body!);
+      // The KEY must be present and null. An omitted key leaves the date alone,
+      // which is the silent no-op this whole path exists to avoid.
+      assert.ok('due_date' in body, `due_date missing from body: ${calls[0].body}`);
+      assert.equal(body.due_date, null);
+      assert.ok(result.includes('Due date removed'), result);
+    });
+
+    it('costs exactly one API call when the echo already shows no due date', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
+      await callTool('updateTask', { taskId: 't1', clearDueDate: true });
+      assert.equal(calls.length, 1, 'a confirming read was spent on an echo that already agreed');
+    });
+
+    // A PUT echo carrying a stale due date and a clear ClickUp silently ignored
+    // are indistinguishable from the echo alone, so a disagreeing echo is
+    // re-read rather than reported as a failure.
+    it('confirms the clear from a follow-up read when the echo is stale', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: { id: 't1', name: 'X', status: { status: 'open' }, due_date: '1796090400000' } },
+        { status: 200, body: { id: 't1', name: 'X', status: { status: 'open' }, due_date: null } },
+      ]);
+      const result = await callTool('updateTask', { taskId: 't1', clearDueDate: true });
+      assert.equal(calls.length, 2);
+      assert.ok(result.includes('Due date removed'), result);
+      assert.ok(/stale/i.test(result), result);
+    });
+
+    // The reported bug: ClickUp answers an update it did not apply with 200, so
+    // a clear that did nothing must not read as success.
+    it('reports a clear that did NOT take effect', async () => {
+      mockFetch([
+        { status: 200, body: { id: 't1', name: 'X', status: { status: 'open' }, due_date: '1796090400000' } },
+        { status: 200, body: { id: 't1', name: 'X', status: { status: 'open' }, due_date: '1796090400000' } },
+      ]);
+      const result = await callTool('updateTask', { taskId: 't1', clearDueDate: true });
+      assert.ok(result.includes('was NOT removed'), result);
+      assert.ok(!/removed — confirmed/.test(result), result);
+    });
+
+    it('reports the clear as unconfirmed when the follow-up read fails', async () => {
+      mockFetch([
+        { status: 200, body: { id: 't1', name: 'X', status: { status: 'open' }, due_date: '1796090400000' } },
+        { status: 500, text: 'boom' },
+      ]);
+      const result = await callTool('updateTask', { taskId: 't1', clearDueDate: true });
+      assert.ok(/unconfirmed/.test(result), result);
+    });
+
+    // Which one the caller meant is unknowable, so neither wins.
+    it('refuses dueDate and clearDueDate together without writing', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 't1' } }]);
+      await assert.rejects(
+        () => callTool('updateTask', { taskId: 't1', dueDate: '2026-01-01T00:00:00Z', clearDueDate: true }),
+        (err: any) => err instanceof UserError && /either dueDate or clearDueDate/.test(err.message),
+      );
+      assert.equal(calls.length, 0, 'the task was written despite an ambiguous request');
+    });
+
+    it('treats clearDueDate: false as no due-date change', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
+      const result = await callTool('updateTask', { taskId: 't1', name: 'X', clearDueDate: false });
+      const body = JSON.parse(calls[0].body!);
+      assert.ok(!('due_date' in body), `due_date should be absent: ${calls[0].body}`);
+      assert.ok(!/Due date removed/.test(result), result);
+    });
+
     it('maps taskTypeId to custom_item_id', async () => {
       const { calls } = mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
       await callTool('updateTask', { taskId: 't1', taskTypeId: 1300 });

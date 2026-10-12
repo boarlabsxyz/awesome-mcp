@@ -207,6 +207,64 @@ describe('REST data plane: ClickUp and Outline handler bodies', () => {
       assert.equal((callsTo('/task/task-1')[0].body as any).due_date, 8640000000000000);
     });
 
+    // === clearDueDate on the REST plane ===
+    //
+    // The reported bug was that no route could remove a due date: `dueDate: ""`
+    // is refused (correctly — see above), and `{"dueDate": null}` fails the
+    // schema. clearDueDate is the in-band way to ask, and `dueDateCleared` is
+    // what tells a curl client whether it actually happened.
+    it('sends an explicit null due_date for clearDueDate', async () => {
+      reset();
+      when('/task/task-1', { json: { id: 'task-1', name: 'X' } });
+      const res = await request(app).post('/api/v1/clickup/tasks/task-1/update').set(auth())
+        .send({ clearDueDate: true });
+      assert.equal(res.status, 200);
+      const sent = callsTo('/task/task-1')[0].body as any;
+      assert.ok('due_date' in sent, `due_date must be present and null: ${JSON.stringify(sent)}`);
+      assert.equal(sent.due_date, null);
+      assert.equal(res.body.dueDateCleared, true);
+    });
+
+    it('satisfies the at-least-one-field refine on its own', async () => {
+      reset();
+      when('/task/task-1', { json: { id: 'task-1' } });
+      // Before clearDueDate existed there was no single field that meant
+      // "remove the date", so the only way to express it was a body the refine
+      // rejected as empty — the 400 the bug report hit.
+      await request(app).post('/api/v1/clickup/tasks/task-1/update').set(auth())
+        .send({ clearDueDate: true }).expect(200);
+    });
+
+    it('reports dueDateCleared false when ClickUp ignored the clear', async () => {
+      reset();
+      // Both the PUT echo and the confirming read still carry the date: ClickUp
+      // answered 200 and changed nothing. A 200 with no verdict would read as
+      // success, which is the silent no-op this field exists to expose.
+      when('/task/task-1', { json: { id: 'task-1', due_date: '1796090400000' } });
+      const res = await request(app).post('/api/v1/clickup/tasks/task-1/update').set(auth())
+        .send({ clearDueDate: true });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.dueDateCleared, false);
+    });
+
+    it('refuses dueDate and clearDueDate together with 400 and no write', async () => {
+      reset();
+      const res = await request(app).post('/api/v1/clickup/tasks/task-1/update').set(auth())
+        .send({ dueDate: '2026-03-01T00:00:00.000Z', clearDueDate: true });
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /either dueDate or clearDueDate/i);
+      assert.equal(calls.length, 0, 'nothing may reach ClickUp on an ambiguous request');
+    });
+
+    it('leaves dueDateCleared null when no clear was requested', async () => {
+      reset();
+      when('/task/task-1', { json: { id: 'task-1', name: 'N' } });
+      const res = await request(app).post('/api/v1/clickup/tasks/task-1/update').set(auth())
+        .send({ name: 'N' });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.dueDateCleared, null);
+    });
+
     it('refuses an unparseable list dueDate too', async () => {
       reset();
       const res = await request(app).post('/api/v1/clickup/lists/list-1/update').set(auth())

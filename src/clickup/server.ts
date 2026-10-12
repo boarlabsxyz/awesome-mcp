@@ -39,6 +39,8 @@ import {
   editPageFields,
   insertImageFields,
   listUpdateFields,
+  resolveDueDateUpdate,
+  taskHasDueDate,
   taskUpdateFields,
   toClickUpTimestamp,
 } from './restWrites.js';
@@ -349,7 +351,10 @@ clickUpServer.addTool({
     + 'ClickUp silently ignores the change it says so instead of claiming success. It also reports the parent\'s list '
     + 'and the task\'s list, so the response tells you what ClickUp did about a cross-list parent. '
     + 'Note ClickUp emits NO webhook event for a parent change, so getTaskEventHistory will never show one; this '
-    + 'response is the only record. moveTask changes a task\'s LIST, not its parent — the two are independent.',
+    + 'response is the only record. moveTask changes a task\'s LIST, not its parent — the two are independent. '
+    + 'To REMOVE a due date pass clearDueDate: true — dueDate cannot express it, since every value it accepts is a '
+    + 'date and an empty string is refused. That clear is verified by reading the task back, because ClickUp answers '
+    + 'an update it ignored with HTTP 200.',
   parameters: z.object({
     taskId: z.string().describe('The task ID to update.'),
     ...taskUpdateFields,
@@ -444,7 +449,11 @@ clickUpServer.addTool({
     }
     if (args.status !== undefined) data.status = args.status;
     if (args.priority !== undefined) data.priority = args.priority;
-    if (args.dueDate !== undefined) data.due_date = toClickUpTimestamp('dueDate', args.dueDate);
+    // Shared with the REST route so the dueDate/clearDueDate refusal and the
+    // null that performs the clear exist in exactly one place. Resolved before
+    // the write, so a conflicting pair is refused with nothing mutated.
+    const due = resolveDueDateUpdate(args);
+    if (due) data.due_date = due.due_date;
     if (args.startDate !== undefined) data.start_date = toClickUpTimestamp('startDate', args.startDate);
     if (args.addAssignees || args.removeAssignees) {
       data.assignees = { add: args.addAssignees || [], rem: args.removeAssignees || [] };
@@ -487,9 +496,43 @@ clickUpServer.addTool({
       }
     }
 
+    // Due-date clear confirmation.
+    //
+    // ClickUp answers an update it did not apply with HTTP 200, and `formatTask`
+    // renders `Due:` only when a date is present — so a clear that silently did
+    // nothing looks identical to one that worked, and the caller's only clue
+    // would be the absence of a line. That absence is not evidence, which is why
+    // the outcome is stated.
+    //
+    // The echo is trusted when it AGREES with the request, and only a
+    // disagreeing echo costs a confirming read: a PUT echo carrying a stale due
+    // date and a clear ClickUp ignored are indistinguishable from the echo
+    // alone, and reporting a successful clear as a failure is as wrong as the
+    // reverse. A plain update that does not ask for a clear still costs exactly
+    // one API call.
+    let clearNote = '';
+    if (due && due.due_date === null) {
+      if (!taskHasDueDate(echo)) {
+        clearNote = '\n\nDue date removed — confirmed by ClickUp.';
+      } else {
+        let reread: any = null;
+        try { reread = await client.getTask(args.taskId); } catch { /* reported below */ }
+        if (!reread) {
+          clearNote = '\n\nRequested the due date be removed. ClickUp returned 200 but still echoed a due date, and '
+            + `the follow-up read failed, so this is unconfirmed — call getTask("${args.taskId}") to check.`;
+        } else if (taskHasDueDate(reread)) {
+          clearNote = '\n\n⚠ The due date was NOT removed. ClickUp accepted the update (HTTP 200) but the task still '
+            + `reports a due date of ${new Date(parseInt(String(reread.due_date))).toISOString()}. Clear it in the `
+            + 'ClickUp UI; do not treat this as done.';
+        } else {
+          clearNote = '\n\nDue date removed — confirmed by a follow-up read (ClickUp\'s update echo was stale).';
+        }
+      }
+    }
+
     // Everything below is the re-parent path. A plain update stays exactly one
     // API call and returns exactly the string it always did.
-    if (!resolvedParent) return `Task updated successfully:\n${formatTask(echo)}${archiveNote}`;
+    if (!resolvedParent) return `Task updated successfully:\n${formatTask(echo)}${archiveNote}${clearNote}`;
 
     // Re-read rather than trusting the PUT echo: a stale echo would let a silent
     // no-op read as success, which is the failure this parameter exists to
@@ -513,14 +556,14 @@ clickUpServer.addTool({
     if (!verified) {
       return `Task updated successfully:\n${formatTask(echo)}\n\nParent set to ${parentLabel}. ClickUp returned 200 on `
         + `the update, but the follow-up verification read failed — this is the requested state, not a confirmed one. `
-        + `Call getTask("${args.taskId}") to confirm.`;
+        + `Call getTask("${args.taskId}") to confirm.${clearNote}`;
     }
 
     if (verified.parent !== resolvedParent.id) {
       return `⚠ Re-parent did NOT take effect. ClickUp accepted the update (HTTP 200) but ${args.taskId} still `
         + `reports parent ${JSON.stringify(verified.parent ?? null)}, not the requested ${parentLabel}. ClickUp emits `
         + `neither an error nor a webhook for a rejected parent change, so this silent no-op is the only signal — do `
-        + `not treat the move as done. Other fields in this call may have applied. Current state:\n${formatTask(verified)}`;
+        + `not treat the move as done. Other fields in this call may have applied. Current state:\n${formatTask(verified)}${clearNote}`;
     }
 
     // Cross-list observation. ClickUp's docs do not say whether a parent in
@@ -535,7 +578,7 @@ clickUpServer.addTool({
 
     return `Task updated successfully:\n${formatTask(verified)}\n\nRe-parent confirmed: now a subtask of ${parentLabel}.`
       + `\n  Parent's list: ${resolvedParent.list?.name ?? 'unknown'} (${parentListId ?? 'unknown'})`
-      + `\n  This task's list: ${verified.list?.name ?? 'unknown'} (${taskListId ?? 'unknown'})${crossList}${archiveNote}`;
+      + `\n  This task's list: ${verified.list?.name ?? 'unknown'} (${taskListId ?? 'unknown'})${crossList}${archiveNote}${clearNote}`;
   },
 });
 
