@@ -1,10 +1,12 @@
 // src/slack/helpers.ts
 // Shared helpers for Slack MCP servers (bot and user OAuth).
 import { UserError, imageContent, type ImageContent } from 'fastmcp';
+import { z } from 'zod';
 import {
   SlackClient, fileShareTargets,
   type SlackFileRef, type SlackFileInfo,
   type SlackFileMatch, type SlackMessageMatch, type SlackSearchPage,
+  type SlackUnfurlOptions,
 } from './apiHelpers.js';
 
 /** Module-level user name cache: key = "token:userId", value = { name, expiresAt }. */
@@ -520,20 +522,67 @@ export async function handleDownloadFile(
     '(images and text files are supported). Open it in Slack using the permalink above.';
 }
 
+/**
+ * The two unfurl parameters, defined once.
+ *
+ * Both Slack servers register `postMessage` and `replyInThread`, so a
+ * description that drifts between the two copies is a description that is
+ * wrong on one of them — the same reason the ClickUp and Outline REST writes
+ * keep their fields in one object and spread it.
+ *
+ * Both are `.optional()` with no `.default()`: Slack's own default is not a
+ * single value (see `SlackUnfurlOptions`), so a Zod default would quietly pick
+ * one for every caller who said nothing.
+ */
+export const unfurlParams = {
+  unfurlLinks: z.boolean().optional().describe(
+    'Set false to suppress the preview card for primarily text-based links (articles, docs, ' +
+    "issue trackers). Omit to leave Slack's own default, which depends on the token: a bot-token " +
+    'post usually does not unfurl these, a user-token post does. Suppressing every preview on a ' +
+    'message needs unfurlMedia: false as well.',
+  ),
+  unfurlMedia: z.boolean().optional().describe(
+    'Set false to suppress the inline preview for media links (images, video). Omit to leave ' +
+    "Slack's default, which unfurls media on both token types. This applies at post time only — " +
+    'there is no way to strip a preview off a message that is already in the channel.',
+  ),
+};
+
+/**
+ * Report what was asked of Slack's unfurl flags — and that it is only what was
+ * asked.
+ *
+ * `chat.postMessage` answers with `ts` and `channel` and carries no unfurl
+ * state at all, so there is nothing to read back: a caller who passes
+ * `unfurlMedia: false` through a bot token and then sees a preview in the
+ * channel would otherwise have no way to tell a flag that was ignored from one
+ * that was never sent. The note is emitted only when a flag was actually
+ * given, so the default confirmation string stays byte-identical for every
+ * existing caller.
+ */
+function unfurlNote(options?: SlackUnfurlOptions): string {
+  const parts: string[] = [];
+  if (options?.unfurlLinks !== undefined) parts.push(`unfurl_links=${options.unfurlLinks}`);
+  if (options?.unfurlMedia !== undefined) parts.push(`unfurl_media=${options.unfurlMedia}`);
+  if (parts.length === 0) return '';
+  return `\nLink previews: sent ${parts.join(', ')}. Slack's response does not echo these back, ` +
+    'so this reports what was requested, not what it rendered.';
+}
+
 export async function handlePostMessage(
-  client: SlackClient, channelId: string, text: string,
+  client: SlackClient, channelId: string, text: string, options?: SlackUnfurlOptions,
 ): Promise<string> {
   assertWritesEnabled();
-  const result = await client.chatPostMessage(channelId, text);
-  return `Message posted to ${result.channel} (ts: ${result.ts})`;
+  const result = await client.chatPostMessage(channelId, text, undefined, options);
+  return `Message posted to ${result.channel} (ts: ${result.ts})${unfurlNote(options)}`;
 }
 
 export async function handleReplyInThread(
-  client: SlackClient, channelId: string, threadTs: string, text: string,
+  client: SlackClient, channelId: string, threadTs: string, text: string, options?: SlackUnfurlOptions,
 ): Promise<string> {
   assertWritesEnabled();
-  const result = await client.chatPostMessage(channelId, text, threadTs);
-  return `Reply posted to thread ${threadTs} in ${result.channel} (ts: ${result.ts})`;
+  const result = await client.chatPostMessage(channelId, text, threadTs, options);
+  return `Reply posted to thread ${threadTs} in ${result.channel} (ts: ${result.ts})${unfurlNote(options)}`;
 }
 
 /**

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { SlackClient } from './apiHelpers.js';
-import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread } from './helpers.js';
+import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, unfurlParams } from './helpers.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
@@ -123,27 +123,29 @@ slackBotServer.addTool({
 slackBotServer.addTool({
   name: 'postMessage',
   annotations: { readOnlyHint: false },
-  description: 'Post a message to a Slack channel.',
+  description: 'Post a message to a Slack channel. Slack renders a preview card for links in the message; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID to post to.'),
     text: z.string().describe('Message text (supports Slack markdown/mrkdwn).'),
+    ...unfurlParams,
   }),
   execute: async (args, { session }) => {
-    return handlePostMessage(getSlackClient(session), args.channelId, args.text);
+    return handlePostMessage(getSlackClient(session), args.channelId, args.text, args);
   },
 });
 
 slackBotServer.addTool({
   name: 'replyInThread',
   annotations: { readOnlyHint: false },
-  description: 'Reply to a thread in a Slack channel.',
+  description: 'Reply to a thread in a Slack channel. Slack renders a preview card for links in the reply; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID containing the thread.'),
     threadTs: z.string().describe('The timestamp of the parent message to reply to.'),
     text: z.string().describe('Reply text (supports Slack markdown/mrkdwn).'),
+    ...unfurlParams,
   }),
   execute: async (args, { session }) => {
-    return handleReplyInThread(getSlackClient(session), args.channelId, args.threadTs, args.text);
+    return handleReplyInThread(getSlackClient(session), args.channelId, args.threadTs, args.text, args);
   },
 });
 

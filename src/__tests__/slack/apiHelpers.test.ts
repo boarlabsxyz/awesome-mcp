@@ -45,6 +45,21 @@ describe('SlackClient', () => {
     }) as any;
   }
 
+  /** Capture the form-urlencoded body a client method sends. */
+  function mockFetchCapturingBody(response: any = { ok: true, ts: '1.0', channel: 'C1' }) {
+    const captured: { body: string } = { body: '' };
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      captured.body = opts.body;
+      return {
+        ok: true, status: 200,
+        headers: { get: () => null },
+        json: async () => response,
+        text: async () => JSON.stringify(response),
+      };
+    }) as any;
+    return captured;
+  }
+
   describe('request basics', () => {
     it('should call Slack API and return data on success', async () => {
       mockFetch({ ok: true, user_id: 'U123', team: 'Test', team_id: 'T123', url: 'https://test.slack.com' });
@@ -335,6 +350,42 @@ describe('SlackClient', () => {
       const client = new SlackClient('xoxb-test');
       await client.chatPostMessage('C1', 'hello', '999.0');
       assert.ok(capturedBody.includes('thread_ts=999.0'));
+    });
+
+    // The unfurl flags are only useful as `false`, and `false` is exactly the
+    // value a careless body builder drops. These assert that it survives the
+    // form encoding, and that an omitted flag is omitted rather than sent as
+    // false — Slack's default differs by token type, so sending false for a
+    // flag nobody set would change behaviour on the bot path.
+    it('should send unfurl_links=false when suppressing text link previews', async () => {
+      const captured = mockFetchCapturingBody();
+      const client = new SlackClient('xoxb-test');
+      await client.chatPostMessage('C1', 'see https://example.com', undefined, { unfurlLinks: false });
+      assert.ok(captured.body.includes('unfurl_links=false'), captured.body);
+      assert.ok(!captured.body.includes('unfurl_media'), captured.body);
+    });
+
+    it('should send both unfurl flags alongside thread_ts', async () => {
+      const captured = mockFetchCapturingBody();
+      const client = new SlackClient('xoxb-test');
+      await client.chatPostMessage('C1', 'hi', '999.0', { unfurlLinks: false, unfurlMedia: false });
+      assert.ok(captured.body.includes('unfurl_links=false'), captured.body);
+      assert.ok(captured.body.includes('unfurl_media=false'), captured.body);
+      assert.ok(captured.body.includes('thread_ts=999.0'), captured.body);
+    });
+
+    it('should send unfurl_links=true when a caller opts previews in', async () => {
+      const captured = mockFetchCapturingBody();
+      const client = new SlackClient('xoxb-test');
+      await client.chatPostMessage('C1', 'hi', undefined, { unfurlLinks: true });
+      assert.ok(captured.body.includes('unfurl_links=true'), captured.body);
+    });
+
+    it('should omit both unfurl flags when neither is given', async () => {
+      const captured = mockFetchCapturingBody();
+      const client = new SlackClient('xoxb-test');
+      await client.chatPostMessage('C1', 'hi');
+      assert.ok(!captured.body.includes('unfurl'), captured.body);
     });
   });
 
