@@ -1946,6 +1946,9 @@
     let rulesCurrentOrgId = null; // Always included in allowedOrgs
     // Whether the server could enumerate every reachable org, plus why not.
     let rulesOrgDiscovery = { truncated: false, notes: [] };
+    // Kept so addOrgById() can re-render the form without refetching.
+    let rulesCurrentOrg = { id: '', name: 'Unknown' };
+    let rulesConnectedOrgs = [];
     let searchDebounce = null;
 
     async function openAccessRules(instanceId) {
@@ -1975,6 +1978,8 @@
     }
 
     function renderAccessRulesForm(currentOrg, connectedOrgs) {
+      rulesCurrentOrg = currentOrg;
+      rulesConnectedOrgs = connectedOrgs;
       const orgsHtml = [
         `<label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; opacity: 0.7;">
           <input type="checkbox" checked disabled style="width: 16px; height: 16px; accent-color: #4f8df7;" />
@@ -1987,9 +1992,11 @@
           const label = org.nameResolved
             ? escapeHtml(org.name)
             : `${escapeHtml(org.id)} <span style="color: #666; font-size: 11px;">(external workspace)</span>`;
-          const savedNote = org.saved
-            ? ' <span style="color: #666; font-size: 11px;">(saved — not seen in this scan)</span>'
-            : '';
+          const savedNote = org.manual
+            ? ' <span style="color: #666; font-size: 11px;">(added by ID)</span>'
+            : org.saved
+              ? ' <span style="color: #666; font-size: 11px;">(saved — not seen in this scan)</span>'
+              : '';
           return `
           <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer;">
             <input type="checkbox" data-org-id="${escapeAttr(org.id)}" ${rulesState.allowedOrgs.includes(org.id) ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #4f8df7;" />
@@ -2005,6 +2012,17 @@
              <br />${rulesOrgDiscovery.notes.map(n => escapeHtml(n)).join('<br />')}
            </p>`
         : '';
+
+      // Every cap in org discovery is reported rather than hidden, but a
+      // reported cap still leaves the user with no checkbox to tick. This is the
+      // way out: paste the workspace ID Slack names in the access-denied message
+      // (or in Slack's own Connections page) and allow it directly.
+      const orgManualHtml = `
+        <div style="display: flex; gap: 6px; margin-top: 8px;">
+          <input type="text" id="orgIdInput" placeholder="Or add a workspace ID, e.g. T01ABCDEF" autocomplete="off" spellcheck="false" class="rules-input" aria-label="Allow an organisation by workspace ID" />
+          <button type="button" onclick="addOrgById()" class="rules-add-btn">Add</button>
+        </div>
+        <p id="orgIdError" role="alert" style="color: #f87171; font-size: 11px; margin: 4px 0 0; display: none;"></p>`;
 
       const blacklistHtml = rulesBlacklistUserDetails.map(u => `
         <span class="chip">
@@ -2039,6 +2057,7 @@
             <div class="rules-section-label" style="color: #a78bfa;">Allowed Organisations</div>
             ${orgsHtml}
             ${orgWarningHtml}
+            ${orgManualHtml}
           </div>
 
           <div class="rules-section">
@@ -2096,6 +2115,36 @@
       const expanded = !document.getElementById('rulesHelp').classList.contains('hidden');
       toggle.setAttribute('aria-expanded', String(expanded));
     });
+
+    /**
+     * Allow an organisation discovery did not offer a checkbox for.
+     *
+     * Slack workspace IDs start with T; an Enterprise Grid org ID starts with E.
+     * A wrong ID is harmless — it matches no channel — so this validates shape
+     * only and never tries to confirm the workspace exists: team.info on a
+     * foreign org fails by design, so a confirmation step would reject exactly
+     * the IDs this control exists to accept.
+     */
+    function addOrgById() {
+      const input = document.getElementById('orgIdInput');
+      const error = document.getElementById('orgIdError');
+      const showError = (msg) => { error.textContent = msg; error.style.display = msg ? 'block' : 'none'; };
+      const val = (input.value || '').trim().toUpperCase();
+      if (!val) return;
+      if (!/^[TE][A-Z0-9]{2,}$/.test(val)) {
+        showError('That does not look like a Slack workspace ID — they start with T (or E for an Enterprise Grid org), e.g. T01ABCDEF.');
+        return;
+      }
+      showError('');
+      input.value = '';
+
+      if (val === rulesCurrentOrg.id) return; // the current workspace is always allowed
+      if (!rulesState.allowedOrgs.includes(val)) rulesState.allowedOrgs.push(val);
+      if (!rulesConnectedOrgs.some(o => o.id === val)) {
+        rulesConnectedOrgs = rulesConnectedOrgs.concat([{ id: val, name: val, nameResolved: false, manual: true }]);
+      }
+      renderAccessRulesForm(rulesCurrentOrg, rulesConnectedOrgs);
+    }
 
     function addPattern(type) {
       const inputId = type === 'whitelist' ? 'whitelistInput' : 'blacklistInput';

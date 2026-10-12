@@ -43,6 +43,83 @@ describe('discoverConnectedOrgs — shared channels', () => {
     assert.equal(result.truncated, false);
   });
 
+  it('spends the conversations.info budget on the user\'s own channels first', async () => {
+    // The reported bug. The workspace-wide sweep queues its channels before the
+    // member-scoped one does, so insertion order spent the whole budget on
+    // channels the user is not in and truncated away the private Slack Connect
+    // channel they are — leaving its org with no checkbox, hence unreachable.
+    const workspaceChannels = Array.from({ length: CHANNEL_INFO_MAX + 50 }, (_, i) => ({
+      id: `C_WS_${i}`, is_shared: true,
+    }));
+    const client = mockClient({
+      conversationsListAll: async () => ({ channels: workspaceChannels }),
+      conversationsList: async (_cursor: string | undefined, types: string) => (
+        types === 'im,mpim'
+          ? { channels: [] }
+          : { channels: [{ id: 'C_MINE', is_ext_shared: true }] }
+      ),
+      conversationsInfo: async (id: string) => ({ channel: { id, connected_team_ids: [`T_${id}`] } }),
+    });
+
+    const result = await discoverConnectedOrgs(client, { currentOrgId: 'T_HOME' });
+
+    assert.ok(
+      result.orgs.some(o => o.id === 'T_C_MINE'),
+      'the org of a shared channel the user is a member of must survive the cap',
+    );
+    assert.equal(result.truncated, true);
+  });
+
+  it('says when the skipped channels are ones the user is not a member of', async () => {
+    const client = mockClient({
+      conversationsListAll: async () => ({
+        channels: Array.from({ length: CHANNEL_INFO_MAX + 3 }, (_, i) => ({ id: `C${i}`, is_shared: true })),
+      }),
+      conversationsInfo: async (id: string) => ({ channel: { id, connected_team_ids: [`T_${id}`] } }),
+    });
+
+    const result = await discoverConnectedOrgs(client, { currentOrgId: 'T_HOME' });
+
+    assert.ok(
+      result.notes.some(n => n.includes('you are not a member of')),
+      result.notes.join(' | '),
+    );
+  });
+
+  it('reports a shared channel it could not inspect instead of swallowing it', async () => {
+    // 100 sequential tier-3 lookups routinely hit a 429. A failure that is not
+    // reported is indistinguishable from an org that is not there.
+    const client = mockClient({
+      conversationsListAll: async () => ({ channels: [{ id: 'C1', is_ext_shared: true }] }),
+      conversationsInfo: async () => { throw new Error('ratelimited'); },
+    });
+
+    const result = await discoverConnectedOrgs(client, { currentOrgId: 'T_HOME' });
+
+    assert.equal(result.truncated, true);
+    assert.ok(
+      result.notes.some(n => n.includes('could not be inspected')),
+      result.notes.join(' | '),
+    );
+  });
+
+  it('prefers an externally-shared channel over a merely org-shared one', async () => {
+    // is_shared alone is also set for Enterprise Grid internal sharing, which
+    // can never name a foreign org.
+    const channels = [
+      ...Array.from({ length: CHANNEL_INFO_MAX }, (_, i) => ({ id: `C_INT_${i}`, is_shared: true })),
+      { id: 'C_EXT', is_ext_shared: true },
+    ];
+    const client = mockClient({
+      conversationsListAll: async () => ({ channels }),
+      conversationsInfo: async (id: string) => ({ channel: { id, connected_team_ids: [`T_${id}`] } }),
+    });
+
+    const result = await discoverConnectedOrgs(client, { currentOrgId: 'T_HOME' });
+
+    assert.ok(result.orgs.some(o => o.id === 'T_C_EXT'), 'the externally-shared channel must be inspected');
+  });
+
   it('reports truncation instead of silently dropping shared channels', async () => {
     const channels = Array.from({ length: CHANNEL_INFO_MAX + 5 }, (_, i) => ({
       id: `C${i}`, is_ext_shared: true,
