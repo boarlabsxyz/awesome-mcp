@@ -47,7 +47,22 @@ export const taskUpdateFields = {
   markdownContent: z.string().optional().describe('New description in markdown format. Takes precedence over description. Supports bold, italic, code blocks, lists, etc.'),
   status: z.string().optional().describe('New status name.'),
   priority: z.number().int().min(1).max(4).nullable().optional().describe('Priority: 1=Urgent, 2=High, 3=Normal, 4=Low, null=none.'),
-  dueDate: z.string().optional().describe('New due date as ISO string or Unix timestamp in ms.'),
+  dueDate: z.string().optional().describe('New due date as ISO string or Unix timestamp in ms. To REMOVE an existing due date use clearDueDate instead — an empty string is not a way to clear it and is refused as an invalid date.'),
+  // A separate boolean rather than letting `dueDate` be nullable or empty.
+  // `dueDate` is a string that every path funnels through toClickUpTimestamp,
+  // so there is no in-band value that can mean "clear": "" and a bad ISO string
+  // both parse to NaN and are refused (correctly — NaN serialises to null, which
+  // ClickUp reads as a clear, so accepting them would wipe the date on a typo).
+  // Making the field `.nullable()` instead would collide with that refusal: a
+  // client that sends null by accident would clear the date, which is the same
+  // silent-destruction failure in the other direction. An explicit flag cannot
+  // be arrived at by accident.
+  clearDueDate: z.boolean().optional().describe(
+    'Set true to REMOVE the task\'s due date, which ClickUp does by receiving due_date: null. '
+    + 'Cannot be combined with dueDate — passing both is refused rather than resolved by precedence, '
+    + 'since which one the caller meant is unknowable. The response confirms the date is actually gone '
+    + 'by reading the task back, because ClickUp answers an ignored update with HTTP 200.',
+  ),
   startDate: z.string().optional().describe('New start date as ISO string or Unix timestamp in ms.'),
   addAssignees: z.array(z.number()).optional().describe('User IDs to add as assignees.'),
   removeAssignees: z.array(z.number()).optional().describe('User IDs to remove from assignees.'),
@@ -127,6 +142,49 @@ export function toClickUpTimestamp(field: string, raw: string): number {
 }
 
 /**
+ * Resolve the two mutually exclusive due-date inputs into what ClickUp's body
+ * should carry, or null when the caller asked for no due-date change.
+ *
+ * Shared by both surfaces because the MCP tool builds its update body inline
+ * rather than through `buildTaskUpdateBody` — so without this the refusal and
+ * the null would exist in two copies and could disagree about whether
+ * `{ dueDate, clearDueDate }` together is legal.
+ *
+ * `clearDueDate: false` is treated as "no change", not as "set a date": it is
+ * the natural thing for a client to send when templating a body, and the only
+ * other reading would be meaningless.
+ */
+export function resolveDueDateUpdate(
+  args: { dueDate?: string; clearDueDate?: boolean },
+): { due_date: number | null } | null {
+  if (args.clearDueDate) {
+    if (args.dueDate !== undefined) {
+      throw new UserError(
+        'Pass either dueDate or clearDueDate, not both. clearDueDate: true removes the due date; '
+        + 'dueDate sets one. Which was intended cannot be inferred, so nothing was changed.',
+      );
+    }
+    return { due_date: null };
+  }
+  if (args.dueDate !== undefined) return { due_date: toClickUpTimestamp('dueDate', args.dueDate) };
+  return null;
+}
+
+/**
+ * Whether a ClickUp task payload carries a due date.
+ *
+ * The predicate is shared, the prose is not: the REST op reports a boolean and
+ * the MCP tool renders a sentence, but both must agree on what "cleared" means.
+ * ClickUp represents an absent due date as `null` on some reads and omits the
+ * key on others, and `formatTask` already renders `Due:` only when truthy, so
+ * the check has to cover null, undefined and the empty string alike.
+ */
+export function taskHasDueDate(task: any): boolean {
+  const raw = task?.due_date;
+  return raw !== null && raw !== undefined && raw !== '';
+}
+
+/**
  * Build ClickUp's native update body from the camelCase parameters.
  *
  * Shared with nothing yet, but kept separate from the request so the field
@@ -142,7 +200,8 @@ export function buildTaskUpdateBody(args: UpdateTaskRestArgs, parentId?: string)
   else if (args.description !== undefined) data.description = args.description;
   if (args.status !== undefined) data.status = args.status;
   if (args.priority !== undefined) data.priority = args.priority;
-  if (args.dueDate !== undefined) data.due_date = toClickUpTimestamp('dueDate', args.dueDate);
+  const due = resolveDueDateUpdate(args);
+  if (due) data.due_date = due.due_date;
   if (args.startDate !== undefined) data.start_date = toClickUpTimestamp('startDate', args.startDate);
   if (args.addAssignees || args.removeAssignees) {
     data.assignees = { add: args.addAssignees || [], rem: args.removeAssignees || [] };
@@ -164,12 +223,19 @@ export function buildTaskUpdateBody(args: UpdateTaskRestArgs, parentId?: string)
  * a REST caller has even less recourse. `reparentConfirmed` is therefore
  * three-valued: true, false (ClickUp disagrees — do NOT treat the move as done),
  * or null (the confirming read failed, so this is the requested state only).
+ *
+ * `dueDateCleared` carries the same three-valued contract for clearDueDate, and
+ * for the same reason: ClickUp answers an update it did not apply with HTTP 200,
+ * so a clear that silently did nothing would read as success. It costs no extra
+ * request in the common case — the PUT echo is checked first, and the task is
+ * only re-read when the echo still shows a due date, which is the one case where
+ * a stale echo and a real no-op have to be told apart.
  */
 export async function performUpdateTask(
   client: ClickUpClient,
   taskId: string,
   args: UpdateTaskRestArgs,
-): Promise<{ task: any; reparentConfirmed: boolean | null }> {
+): Promise<{ task: any; reparentConfirmed: boolean | null; dueDateCleared: boolean | null }> {
   const selfTaskId = taskId.trim();
   let requestedParentId: string | undefined;
   if (args.parentTaskId !== undefined) {
@@ -189,15 +255,35 @@ export async function performUpdateTask(
     }
   }
 
-  const echo = await client.updateTask(taskId, buildTaskUpdateBody(args, requestedParentId));
-  if (!requestedParentId) return { task: echo, reparentConfirmed: null };
+  // Resolved before the write so a dueDate/clearDueDate conflict is refused with
+  // nothing mutated; buildTaskUpdateBody calls it again, which is free.
+  const wantsClear = resolveDueDateUpdate(args)?.due_date === null;
 
-  // Best-effort by design: a failed confirmation must never turn a move that did
-  // happen into an error, so the outcome is reported as unconfirmed instead.
+  const echo = await client.updateTask(taskId, buildTaskUpdateBody(args, requestedParentId));
+
+  // One re-read serves both verifications. It is spent only when something
+  // actually needs confirming: a re-parent always, a clear only when the echo
+  // disagrees with what was asked.
+  const needsReread = Boolean(requestedParentId) || (wantsClear && taskHasDueDate(echo));
+  if (!needsReread) {
+    return {
+      task: echo,
+      reparentConfirmed: null,
+      // The echo already agrees, so the clear is confirmed without a second call.
+      dueDateCleared: wantsClear ? true : null,
+    };
+  }
+
+  // Best-effort by design: a failed confirmation must never turn a change that
+  // did happen into an error, so the outcome is reported as unconfirmed instead.
   let verified: any = null;
   try { verified = await client.getTask(taskId); } catch { /* reported as null below */ }
-  if (!verified) return { task: echo, reparentConfirmed: null };
-  return { task: verified, reparentConfirmed: verified.parent === requestedParentId };
+  if (!verified) return { task: echo, reparentConfirmed: null, dueDateCleared: null };
+  return {
+    task: verified,
+    reparentConfirmed: requestedParentId ? verified.parent === requestedParentId : null,
+    dueDateCleared: wantsClear ? !taskHasDueDate(verified) : null,
+  };
 }
 
 /** Shared camelCase fields of a ClickUp list update. See taskUpdateFields. */

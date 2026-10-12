@@ -3920,7 +3920,7 @@
       "post": {
         "operationId": "updateClickUpTask",
         "summary": "Update a task, or re-parent it",
-        "description": "camelCase sibling of the legacy uncatalogued PATCH on /api/v1/clickup/tasks/{taskId}, which takes ClickUp-native keys instead. On the re-parent path the change is VERIFIED by a re-read, because ClickUp answers a parent change it silently ignores with HTTP 200 and emits no webhook for one: ALWAYS check reparentConfirmed.",
+        "description": "camelCase sibling of the legacy uncatalogued PATCH on /api/v1/clickup/tasks/{taskId}, which takes ClickUp-native keys instead. On the re-parent path the change is VERIFIED by a re-read, because ClickUp answers a parent change it silently ignores with HTTP 200 and emits no webhook for one: ALWAYS check reparentConfirmed. Removing a due date is clearDueDate: true — dueDate cannot express it. That clear is verified by a re-read too, so check dueDateCleared (true / false / null = unconfirmed).",
         "parameters": [
           {
             "name": "taskId",
@@ -3963,7 +3963,11 @@
                   },
                   "dueDate": {
                     "type": "string",
-                    "description": "ISO string or Unix ms."
+                    "description": "ISO string or Unix ms. To REMOVE an existing due date use clearDueDate — an empty string is refused as an invalid date."
+                  },
+                  "clearDueDate": {
+                    "type": "boolean",
+                    "description": "true removes the task's due date (ClickUp clears it on due_date: null). Cannot be combined with dueDate. Check dueDateCleared in the response: ClickUp answers an update it ignored with HTTP 200."
                   },
                   "startDate": {
                     "type": "string",
@@ -21397,6 +21401,174 @@
         "description": "List Slack workspace users. Mirrors the MCP tool `listUsers`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
         "tags": [
           "slack"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/browserbase/sessions": {
+      "get": {
+        "operationId": "listBrowserSessions",
+        "summary": "List Browserbase sessions and flag which are still running",
+        "description": "List Browserbase sessions and flag which are still running. Mirrors the MCP tool `listBrowserSessions`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "browserbase"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/browserbase/sessions/{sessionId}": {
+      "get": {
+        "operationId": "getBrowserbaseSession",
+        "summary": "Get one Browserbase session with its status and expiry",
+        "description": "Get one Browserbase session with its status and expiry. Mirrors the MCP tool `getBrowserSession`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "browserbase"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/browserbase/sessions/start": {
+      "post": {
+        "operationId": "startBrowserSession",
+        "summary": "Start a cloud browser session (or reattach to one) and return its id",
+        "description": "Start a cloud browser session (or reattach to one) and return its id. Mirrors the MCP tool `start`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "browserbase"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/browserbase/sessions/{sessionId}/navigate": {
+      "post": {
+        "operationId": "navigateBrowser",
+        "summary": "Open a URL in a browser session",
+        "description": "Open a URL in a browser session. Mirrors the MCP tool `navigate`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "browserbase"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/browserbase/sessions/{sessionId}/observe": {
+      "post": {
+        "operationId": "observeBrowserPage",
+        "summary": "Find actionable elements on the current page",
+        "description": "Find actionable elements on the current page. Mirrors the MCP tool `observe`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "browserbase"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/browserbase/sessions/{sessionId}/extract": {
+      "post": {
+        "operationId": "extractFromBrowserPage",
+        "summary": "Extract data or text from the current page",
+        "description": "Extract data or text from the current page. Mirrors the MCP tool `extract`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "browserbase"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/browserbase/sessions/{sessionId}/release": {
+      "post": {
+        "operationId": "releaseBrowserSession",
+        "summary": "Force a Browserbase session to close so it stops billing",
+        "description": "Force a Browserbase session to close so it stops billing. Mirrors the MCP tool `forceEndBrowserSession`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "browserbase"
         ],
         "responses": {
           "200": {

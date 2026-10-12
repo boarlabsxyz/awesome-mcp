@@ -26,7 +26,7 @@ import {
 /** Field groups, with the exact keys each is expected to carry. */
 const GROUPS: Record<string, [Record<string, z.ZodTypeAny>, string[]]> = {
   taskUpdateFields: [taskUpdateFields as any, [
-    'name', 'description', 'markdownContent', 'status', 'priority', 'dueDate', 'startDate',
+    'name', 'description', 'markdownContent', 'status', 'priority', 'dueDate', 'clearDueDate', 'startDate',
     'addAssignees', 'removeAssignees', 'timeEstimate', 'archived', 'taskTypeId', 'parentTaskId',
   ]],
   listUpdateFields: [listUpdateFields as any, ['name', 'content', 'dueDate', 'priority']],
