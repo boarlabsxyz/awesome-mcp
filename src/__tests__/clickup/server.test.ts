@@ -393,6 +393,19 @@ describe('ClickUp server tools', () => {
       await callTool('createTask', { listId: 'l1', name: 'Plain' });
       assert.equal(JSON.parse(calls[0].body!).custom_item_id, undefined);
     });
+
+    it('sends both date_time flags, so a created task keeps its time of day', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
+      await callTool('createTask', {
+        listId: 'l1', name: 'X',
+        dueDate: '2026-10-20T09:00:00Z',
+        startDate: '2026-10-19',
+      });
+      const body = JSON.parse(calls[0].body!);
+      assert.equal(body.due_date, Date.parse('2026-10-20T09:00:00Z'));
+      assert.equal(body.due_date_time, true);
+      assert.equal(body.start_date_time, false);
+    });
   });
 
   describe('updateTask', () => {
@@ -453,6 +466,58 @@ describe('ClickUp server tools', () => {
     // accepts can mean "remove this date" — "" and a bad ISO string both parse
     // to NaN and are refused. ClickUp clears the field when it receives an
     // explicit null, which only a separate flag can express.
+    // === due_date_time / start_date_time ===
+    //
+    // ClickUp pairs each date with a `*_date_time` boolean and OMITTING IT IS
+    // NOT NEUTRAL: it defaults to false, which makes ClickUp discard the time of
+    // day and pin the date to 04:00 in the workspace timezone. Verified live
+    // (2026-10-13): 09:00Z and 18:30Z on the same date both stored as 01:00Z,
+    // and 23:30Z stored as the NEXT DAY, because the date kept is the local one.
+    it('sends due_date_time: true when the due date names a time', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
+      await callTool('updateTask', { taskId: 't1', dueDate: '2026-10-20T09:00:00Z' });
+      const body = JSON.parse(calls[0].body!);
+      assert.equal(body.due_date, Date.parse('2026-10-20T09:00:00Z'));
+      assert.equal(body.due_date_time, true, 'without this ClickUp stores 04:00 local, not 09:00Z');
+    });
+
+    it('sends due_date_time: false for a date-only due date', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
+      await callTool('updateTask', { taskId: 't1', dueDate: '2026-10-20' });
+      assert.equal(JSON.parse(calls[0].body!).due_date_time, false);
+    });
+
+    // A millisecond value designates an instant — the caller chose that
+    // precision, so treating it as a whole day would be deciding for them.
+    it('treats a Unix-ms due date as carrying a time', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
+      await callTool('updateTask', { taskId: 't1', dueDate: '1700000000000' });
+      const body = JSON.parse(calls[0].body!);
+      assert.equal(body.due_date, 1700000000000);
+      assert.equal(body.due_date_time, true);
+    });
+
+    it('sends start_date_time alongside a start date', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
+      await callTool('updateTask', { taskId: 't1', startDate: '2026-10-20T14:45:00Z', dueDate: '2026-10-21' });
+      const body = JSON.parse(calls[0].body!);
+      assert.equal(body.start_date, Date.parse('2026-10-20T14:45:00Z'));
+      assert.equal(body.start_date_time, true);
+      // The two flags are independent: one date may carry a time and the other not.
+      assert.equal(body.due_date_time, false);
+    });
+
+    // There is no date left for the boolean to qualify, and a flag beside a null
+    // is a contradiction ClickUp need not resolve.
+    it('sends no due_date_time when clearing the due date', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
+      await callTool('updateTask', { taskId: 't1', clearDueDate: true });
+      const body = JSON.parse(calls[0].body!);
+      assert.equal(body.due_date, null);
+      assert.ok(!('due_date_time' in body), `due_date_time should be absent: ${calls[0].body}`);
+    });
+
+
     it('sends due_date: null when clearDueDate is set', async () => {
       const { calls } = mockFetch([{ status: 200, body: { id: 't1', name: 'X', status: { status: 'open' } } }]);
       const result = await callTool('updateTask', { taskId: 't1', clearDueDate: true });

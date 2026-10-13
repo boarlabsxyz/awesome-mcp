@@ -247,6 +247,40 @@ describe('REST data plane: ClickUp and Outline handler bodies', () => {
       assert.equal(res.body.dueDateCleared, false);
     });
 
+    // ClickUp pairs each date with a `*_date_time` boolean, and omitting it is
+    // not neutral — it defaults to false, discarding the time of day and pinning
+    // the date to 04:00 workspace-local (which can land on the adjacent day).
+    it('sends due_date_time and start_date_time with the dates', async () => {
+      reset();
+      when('/task/task-1', { json: { id: 'task-1' } });
+      await request(app).post('/api/v1/clickup/tasks/task-1/update').set(auth())
+        .send({ dueDate: '2026-10-20T09:00:00Z', startDate: '2026-10-19' }).expect(200);
+      const sent = callsTo('/task/task-1')[0].body as any;
+      assert.equal(sent.due_date, Date.parse('2026-10-20T09:00:00Z'));
+      assert.equal(sent.due_date_time, true);
+      // Independent per field: this one named no time.
+      assert.equal(sent.start_date_time, false);
+    });
+
+    it('sends no due_date_time when clearing', async () => {
+      reset();
+      when('/task/task-1', { json: { id: 'task-1' } });
+      await request(app).post('/api/v1/clickup/tasks/task-1/update').set(auth())
+        .send({ clearDueDate: true }).expect(200);
+      const sent = callsTo('/task/task-1')[0].body as any;
+      assert.equal(sent.due_date, null);
+      assert.ok(!('due_date_time' in sent), `due_date_time should be absent: ${JSON.stringify(sent)}`);
+    });
+
+    it('sends due_date_time on a list update too', async () => {
+      reset();
+      when('/list/list-1', { json: { id: 'list-1', name: 'L' } });
+      await request(app).post('/api/v1/clickup/lists/list-1/update').set(auth())
+        .send({ dueDate: '2026-10-20T09:00:00Z' }).expect(200);
+      const sent = callsTo('/list/list-1')[0].body as any;
+      assert.equal(sent.due_date_time, true);
+    });
+
     it('refuses dueDate and clearDueDate together with 400 and no write', async () => {
       reset();
       const res = await request(app).post('/api/v1/clickup/tasks/task-1/update').set(auth())
