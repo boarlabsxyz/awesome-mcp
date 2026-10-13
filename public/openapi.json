@@ -3981,7 +3981,7 @@
                   },
                   "dueDate": {
                     "type": "string",
-                    "description": "ISO string or Unix ms. To REMOVE an existing due date use clearDueDate — an empty string is refused as an invalid date."
+                    "description": "ISO string or Unix ms. Include a time (2026-10-20T09:00:00Z) to set a due TIME; a bare date (2026-10-20) means the whole day, which ClickUp shows at 04:00 in the workspace timezone. To REMOVE an existing due date use clearDueDate — an empty string is refused as an invalid date."
                   },
                   "clearDueDate": {
                     "type": "boolean",
@@ -3989,7 +3989,7 @@
                   },
                   "startDate": {
                     "type": "string",
-                    "description": "ISO string or Unix ms."
+                    "description": "ISO string or Unix ms. Include a time to set a start TIME; a bare date means the whole day."
                   },
                   "addAssignees": {
                     "type": "array",
@@ -4199,7 +4199,7 @@
                   },
                   "dueDate": {
                     "type": "string",
-                    "description": "ISO string."
+                    "description": "ISO string. Include a time to set a due TIME; a bare date means the whole day."
                   },
                   "priority": {
                     "type": "integer",

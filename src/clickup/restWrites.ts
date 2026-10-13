@@ -47,7 +47,7 @@ export const taskUpdateFields = {
   markdownContent: z.string().optional().describe('New description in markdown format. Takes precedence over description. Supports bold, italic, code blocks, lists, etc.'),
   status: z.string().optional().describe('New status name.'),
   priority: z.number().int().min(1).max(4).nullable().optional().describe('Priority: 1=Urgent, 2=High, 3=Normal, 4=Low, null=none.'),
-  dueDate: z.string().optional().describe('New due date as ISO string or Unix timestamp in ms. To REMOVE an existing due date use clearDueDate instead — an empty string is not a way to clear it and is refused as an invalid date.'),
+  dueDate: z.string().optional().describe('New due date as ISO string or Unix timestamp in ms. Include a time (2026-10-20T09:00:00Z) to set a due TIME; a bare date (2026-10-20) means the whole day, which ClickUp shows at 04:00 in the workspace timezone. To REMOVE an existing due date use clearDueDate instead — an empty string is not a way to clear it and is refused as an invalid date.'),
   // A separate boolean rather than letting `dueDate` be nullable or empty.
   // `dueDate` is a string that every path funnels through toClickUpTimestamp,
   // so there is no in-band value that can mean "clear": "" and a bad ISO string
@@ -63,7 +63,7 @@ export const taskUpdateFields = {
     + 'since which one the caller meant is unknowable. The response confirms the date is actually gone '
     + 'by reading the task back, because ClickUp answers an ignored update with HTTP 200.',
   ),
-  startDate: z.string().optional().describe('New start date as ISO string or Unix timestamp in ms.'),
+  startDate: z.string().optional().describe('New start date as ISO string or Unix timestamp in ms. Include a time to set a start TIME; a bare date means the whole day.'),
   addAssignees: z.array(z.number()).optional().describe('User IDs to add as assignees.'),
   removeAssignees: z.array(z.number()).optional().describe('User IDs to remove from assignees.'),
   timeEstimate: z.number().int().optional().describe('Time estimate in milliseconds.'),
@@ -142,6 +142,61 @@ export function toClickUpTimestamp(field: string, raw: string): number {
 }
 
 /**
+ * Whether a caller's date string names a time of day.
+ *
+ * This is the whole input to ClickUp's `due_date_time` / `start_date_time`
+ * booleans, and getting it from the input's SHAPE rather than from a new
+ * parameter is deliberate: the caller already states the intent by writing a
+ * time or not, and a flag they had to pass separately could contradict the value
+ * beside it.
+ *
+ * A bare Unix-ms value counts as a time. It designates an instant — the caller
+ * chose millisecond precision — and the alternative is to decide on their behalf
+ * that they meant a whole day.
+ */
+function inputCarriesTimeOfDay(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (/^-?\d+$/.test(trimmed)) return true;
+  // A date followed by at least hours and minutes, separated by `T` or a space.
+  return /\d[T ]\d{1,2}:\d{2}/.test(trimmed);
+}
+
+/** A validated ClickUp date, plus whether it carries a time of day. */
+export interface ClickUpDateValue {
+  /** Epoch milliseconds, as `toClickUpTimestamp` validates it. */
+  ts: number;
+  /** Feeds ClickUp's `*_date_time` boolean. See `toClickUpDateValue`. */
+  hasTime: boolean;
+}
+
+/**
+ * Parse a date the way ClickUp actually needs it: an instant AND whether that
+ * instant's time of day is meaningful.
+ *
+ * ClickUp pairs every date field with a `*_date_time` boolean, and **omitting it
+ * is not neutral** — the field defaults to false, which makes ClickUp discard
+ * the time of day, convert the instant to the workspace's own timezone, keep the
+ * local calendar date and pin the result to 04:00 local. Verified live
+ * (2026-10-13): `2026-10-20T09:00:00Z` and `2026-10-20T18:30:00Z` both stored as
+ * `2026-10-20T01:00:00Z`, which is 04:00 in a UTC+3 workspace.
+ *
+ * The consequence is worse than a lost time, which is why this is a data bug and
+ * not a cosmetic one: because the DATE kept is the *local* one,
+ * `2026-10-20T23:30:00Z` is 02:30 on the 21st in that workspace and came back
+ * stored as `2026-10-21T01:00:00Z` — a task due a day later than asked, with
+ * nothing in the 200 response to say so.
+ *
+ * A date-only input still sends `false`, which is what it means and is also
+ * exactly the behaviour such callers have today. Note the pre-existing edge that
+ * this does NOT fix: a date-only value is parsed as UTC midnight, so in a
+ * workspace at a negative UTC offset its local date is the day before. Fixing
+ * that needs the workspace's timezone, which this layer does not have.
+ */
+export function toClickUpDateValue(field: string, raw: string): ClickUpDateValue {
+  return { ts: toClickUpTimestamp(field, raw), hasTime: inputCarriesTimeOfDay(raw) };
+}
+
+/**
  * Resolve the two mutually exclusive due-date inputs into what ClickUp's body
  * should carry, or null when the caller asked for no due-date change.
  *
@@ -156,7 +211,7 @@ export function toClickUpTimestamp(field: string, raw: string): number {
  */
 export function resolveDueDateUpdate(
   args: { dueDate?: string; clearDueDate?: boolean },
-): { due_date: number | null } | null {
+): { due_date: number | null; due_date_time?: boolean } | null {
   if (args.clearDueDate) {
     if (args.dueDate !== undefined) {
       throw new UserError(
@@ -164,9 +219,15 @@ export function resolveDueDateUpdate(
         + 'dueDate sets one. Which was intended cannot be inferred, so nothing was changed.',
       );
     }
+    // No `due_date_time` on a clear: there is no date left for it to qualify,
+    // and sending one alongside a null is a contradiction ClickUp need not
+    // resolve.
     return { due_date: null };
   }
-  if (args.dueDate !== undefined) return { due_date: toClickUpTimestamp('dueDate', args.dueDate) };
+  if (args.dueDate !== undefined) {
+    const { ts, hasTime } = toClickUpDateValue('dueDate', args.dueDate);
+    return { due_date: ts, due_date_time: hasTime };
+  }
   return null;
 }
 
@@ -201,8 +262,15 @@ export function buildTaskUpdateBody(args: UpdateTaskRestArgs, parentId?: string)
   if (args.status !== undefined) data.status = args.status;
   if (args.priority !== undefined) data.priority = args.priority;
   const due = resolveDueDateUpdate(args);
-  if (due) data.due_date = due.due_date;
-  if (args.startDate !== undefined) data.start_date = toClickUpTimestamp('startDate', args.startDate);
+  if (due) {
+    data.due_date = due.due_date;
+    if (due.due_date_time !== undefined) data.due_date_time = due.due_date_time;
+  }
+  if (args.startDate !== undefined) {
+    const start = toClickUpDateValue('startDate', args.startDate);
+    data.start_date = start.ts;
+    data.start_date_time = start.hasTime;
+  }
   if (args.addAssignees || args.removeAssignees) {
     data.assignees = { add: args.addAssignees || [], rem: args.removeAssignees || [] };
   }
@@ -290,7 +358,7 @@ export async function performUpdateTask(
 export const listUpdateFields = {
   name: z.string().optional().describe('New name for the list.'),
   content: z.string().optional().describe('New description/content.'),
-  dueDate: z.string().optional().describe('New due date as ISO string.'),
+  dueDate: z.string().optional().describe('New due date as ISO string. Include a time to set a due TIME; a bare date means the whole day.'),
   priority: z.number().int().min(1).max(4).optional().describe('Priority: 1=Urgent, 2=High, 3=Normal, 4=Low.'),
 } as const;
 
@@ -314,7 +382,11 @@ export async function performUpdateList(
   const data: Record<string, unknown> = {};
   if (args.name !== undefined) data.name = args.name;
   if (args.content !== undefined) data.content = args.content;
-  if (args.dueDate !== undefined) data.due_date = toClickUpTimestamp('dueDate', args.dueDate);
+  if (args.dueDate !== undefined) {
+    const due = toClickUpDateValue('dueDate', args.dueDate);
+    data.due_date = due.ts;
+    data.due_date_time = due.hasTime;
+  }
   if (args.priority !== undefined) data.priority = args.priority;
   return client.updateList(listId, data);
 }

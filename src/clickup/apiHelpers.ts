@@ -362,7 +362,7 @@ export class ClickUpClient {
     return this.request('GET', `/space/${spaceId}/list${params}`);
   }
 
-  async createList(folderId: string, data: { name: string; content?: string; markdown_content?: string; due_date?: number; priority?: number; assignee?: number; status?: string }): Promise<any> {
+  async createList(folderId: string, data: { name: string; content?: string; markdown_content?: string; due_date?: number; due_date_time?: boolean; priority?: number; assignee?: number; status?: string }): Promise<any> {
     return this.request('POST', `/folder/${folderId}/list`, data);
   }
 
@@ -370,7 +370,7 @@ export class ClickUpClient {
     return this.request('POST', `/space/${spaceId}/list`, data);
   }
 
-  async updateList(listId: string, data: { name?: string; content?: string; due_date?: number; priority?: number; assignee_add?: number; assignee_rem?: number; unset_status?: boolean }): Promise<any> {
+  async updateList(listId: string, data: { name?: string; content?: string; due_date?: number; due_date_time?: boolean; priority?: number; assignee_add?: number; assignee_rem?: number; unset_status?: boolean }): Promise<any> {
     return this.request('PUT', `/list/${listId}`, data);
   }
 
@@ -432,7 +432,12 @@ export class ClickUpClient {
     status?: string;
     priority?: number | null;
     due_date?: number;
+    // ClickUp DISCARDS the time of day unless this is true, pinning the date to
+    // 04:00 in the workspace timezone -- which can also move it to the adjacent
+    // day. See toClickUpDateValue in ./restWrites.ts.
+    due_date_time?: boolean;
     start_date?: number;
+    start_date_time?: boolean;
     tags?: string[];
     time_estimate?: number;
     parent?: string;
@@ -447,8 +452,11 @@ export class ClickUpClient {
     markdown_content?: string;
     status?: string;
     priority?: number | null;
-    due_date?: number;
+    due_date?: number | null;
+    /** See the note on createTask: omitting this loses the time of day. */
+    due_date_time?: boolean;
     start_date?: number;
+    start_date_time?: boolean;
     assignees?: { add?: number[]; rem?: number[] };
     time_estimate?: number;
     archived?: boolean;

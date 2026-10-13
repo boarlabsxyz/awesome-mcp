@@ -42,6 +42,7 @@ import {
   resolveDueDateUpdate,
   taskHasDueDate,
   taskUpdateFields,
+  toClickUpDateValue,
   toClickUpTimestamp,
 } from './restWrites.js';
 import {
@@ -311,8 +312,8 @@ clickUpServer.addTool({
     assignees: z.array(z.number()).optional().describe('Array of user IDs to assign.'),
     status: z.string().optional().describe('Task status name.'),
     priority: z.number().int().min(1).max(4).nullable().optional().describe('Priority: 1=Urgent, 2=High, 3=Normal, 4=Low, null=none.'),
-    dueDate: z.string().optional().describe('Due date as ISO string or Unix timestamp in ms.'),
-    startDate: z.string().optional().describe('Start date as ISO string or Unix timestamp in ms.'),
+    dueDate: z.string().optional().describe('Due date as ISO string or Unix timestamp in ms. Include a time (2026-10-20T09:00:00Z) to set a due TIME; a bare date (2026-10-20) means the whole day, which ClickUp shows at 04:00 in the workspace timezone.'),
+    startDate: z.string().optional().describe('Start date as ISO string or Unix timestamp in ms. Include a time to set a start TIME; a bare date means the whole day.'),
     tags: z.array(z.string()).optional().describe('Array of tag names.'),
     timeEstimate: z.number().int().optional().describe('Time estimate in milliseconds.'),
     parentTaskId: z.string().optional().describe('Parent task ID to create as subtask.'),
@@ -322,6 +323,11 @@ clickUpServer.addTool({
   }),
   execute: async (args, { session }) => {
     const client = getClickUpClient(session);
+    // `*_date_time` rides with every date: without it ClickUp drops the time of
+    // day and pins the date to 04:00 workspace-local, which can also shift it to
+    // the next day. See toClickUpDateValue.
+    const due = args.dueDate ? toClickUpDateValue('dueDate', args.dueDate) : undefined;
+    const start = args.startDate ? toClickUpDateValue('startDate', args.startDate) : undefined;
     const task = await client.createTask(args.listId, {
       name: args.name,
       description: args.markdownContent ? undefined : args.description,
@@ -329,8 +335,10 @@ clickUpServer.addTool({
       assignees: args.assignees,
       status: args.status,
       priority: args.priority,
-      due_date: args.dueDate ? toClickUpTimestamp('dueDate', args.dueDate) : undefined,
-      start_date: args.startDate ? toClickUpTimestamp('startDate', args.startDate) : undefined,
+      due_date: due?.ts,
+      due_date_time: due?.hasTime,
+      start_date: start?.ts,
+      start_date_time: start?.hasTime,
       tags: args.tags,
       time_estimate: args.timeEstimate,
       parent: args.parentTaskId,
@@ -453,8 +461,15 @@ clickUpServer.addTool({
     // null that performs the clear exist in exactly one place. Resolved before
     // the write, so a conflicting pair is refused with nothing mutated.
     const due = resolveDueDateUpdate(args);
-    if (due) data.due_date = due.due_date;
-    if (args.startDate !== undefined) data.start_date = toClickUpTimestamp('startDate', args.startDate);
+    if (due) {
+      data.due_date = due.due_date;
+      if (due.due_date_time !== undefined) data.due_date_time = due.due_date_time;
+    }
+    if (args.startDate !== undefined) {
+      const start = toClickUpDateValue('startDate', args.startDate);
+      data.start_date = start.ts;
+      data.start_date_time = start.hasTime;
+    }
     if (args.addAssignees || args.removeAssignees) {
       data.assignees = { add: args.addAssignees || [], rem: args.removeAssignees || [] };
     }
@@ -1795,7 +1810,11 @@ clickUpServer.addTool({
     const data: any = {};
     if (args.name !== undefined) data.name = args.name;
     if (args.content !== undefined) data.content = args.content;
-    if (args.dueDate !== undefined) data.due_date = toClickUpTimestamp('dueDate', args.dueDate);
+    if (args.dueDate !== undefined) {
+      const due = toClickUpDateValue('dueDate', args.dueDate);
+      data.due_date = due.ts;
+      data.due_date_time = due.hasTime;
+    }
     if (args.priority !== undefined) data.priority = args.priority;
     const list = await client.updateList(args.listId, data);
     return `List updated:\n  Name: ${list.name}\n  ID: ${list.id}`;
