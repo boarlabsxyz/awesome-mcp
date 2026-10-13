@@ -6,7 +6,8 @@ import {
   SlackClient, fileShareTargets,
   type SlackFileRef, type SlackFileInfo,
   type SlackFileMatch, type SlackMessageMatch, type SlackSearchPage,
-  type SlackUnfurlOptions,
+  type SlackUnfurlOptions, type SlackMessageContent,
+  type SlackPostOptions, type SlackUpdateOptions, type SlackPostedMessage,
 } from './apiHelpers.js';
 
 /** Module-level user name cache: key = "token:userId", value = { name, expiresAt }. */
@@ -549,6 +550,225 @@ export const unfurlParams = {
 };
 
 /**
+ * The two ways to send something mrkdwn cannot express, defined once.
+ *
+ * Slack's mrkdwn has no list syntax, so `- item` and `1. item` in `text`
+ * render as a literal hyphen and a literal digit — a message posted through
+ * this connector could not contain a real list at all, which is the gap these
+ * close. Spread into `postMessage`, `replyInThread` and `editMessage` on both
+ * servers, for the reason `unfurlParams` states: six copies of a description
+ * is a description that is wrong on five of them.
+ *
+ * Both `.optional()` with no `.default()`, and which combinations are legal is
+ * NOT expressed here — see `resolveMessageBody`.
+ */
+export const richTextParams = {
+  markdownText: z.string().max(12000).optional().describe(
+    'Standard markdown, converted by Slack into native message elements. THIS IS THE WAY TO POST ' +
+    'A REAL SLACK LIST: "- item" becomes a bullet and "1. item" a numbered entry, which the plain ' +
+    'text parameter cannot do (Slack mrkdwn has no list syntax, so there a hyphen stays a hyphen). ' +
+    'Also supports headings, bold, italic, strikethrough, blockquote, code blocks and tables. ' +
+    'Carries the WHOLE message, so do not also pass text or blocks — Slack rejects that ' +
+    'combination. Max 12,000 characters.',
+  ),
+  blocks: z.array(z.record(z.any())).optional().describe(
+    'Block Kit blocks, for layouts markdownText cannot express — use markdownText for ordinary ' +
+    'lists and prose. A bulleted or numbered list here is a block of type "rich_text" whose ' +
+    'elements contain one {type: "rich_text_list", style: "bullet" | "ordered", elements: [...]} ' +
+    'holding rich_text_section entries (optional indent for sub-lists, offset to start an ordered ' +
+    'list at another number). Pass text as well: Slack uses it for notifications and screen ' +
+    'readers, where blocks are not read.',
+  ),
+};
+
+/**
+ * `reply_broadcast` — its own object because only `replyInThread` takes it.
+ *
+ * This is the "Also send to channel" checkbox, and it is why a thread reply
+ * made through this connector could never also reach the channel.
+ */
+export const broadcastParam = {
+  broadcast: z.boolean().optional().describe(
+    'Set true to also send this thread reply to the channel, like the "Also send to channel" ' +
+    'checkbox. Slack accepts this only as the reply is posted, so it cannot be turned on for a ' +
+    'reply that is already in the thread.',
+  ),
+};
+
+/** What a caller asked the message to contain, before it is checked. */
+export interface MessageBodyInput extends SlackMessageContent {
+  text?: string;
+}
+
+/**
+ * Decide — and refuse — how the message body is expressed.
+ *
+ * Three parameters can carry the content and they do not freely combine, so
+ * this is the one place the rules live. Both servers' three write tools call
+ * it, which is what stops the refusals diverging between six registrations.
+ *
+ * It is a plain function rather than a Zod `.refine()`, for two independent
+ * reasons:
+ *
+ *  1. A `.refine()`/`.superRefine()` returns a `ZodEffects`, which has no
+ *     `.shape`. `src/__tests__/slack-user/tools.test.ts` walks
+ *     `parameters.shape` to assert every parameter carries a `.describe()`,
+ *     and that guard would break on every tool covered.
+ *  2. A Zod-level rejection surfaces as FastMCP's generic `InvalidParams`,
+ *     which is the unexplained failure these messages exist to replace — the
+ *     same reasoning as ClickUp's `resolveDueDateUpdate`, which refuses
+ *     `dueDate` + `clearDueDate` in the resolution function for this reason.
+ *
+ * Nothing is written when it throws: every caller runs it before the API call.
+ */
+export function resolveMessageBody(input: MessageBodyInput): MessageBodyInput {
+  const { text, markdownText, blocks } = input;
+
+  // Slack answers this combination with `markdown_text_conflict`, which names
+  // neither the offending argument nor which one to drop.
+  if (markdownText !== undefined && text !== undefined) {
+    throw new UserError(
+      'Pass either markdownText or text, not both — Slack rejects a message that carries both ' +
+      '(markdown_text_conflict). markdownText holds the entire message, so move the text into it: ' +
+      'it renders the same prose and additionally supports real bullet and numbered lists.',
+    );
+  }
+  if (markdownText !== undefined && blocks !== undefined) {
+    throw new UserError(
+      'Pass either markdownText or blocks, not both — Slack rejects a message that carries both ' +
+      '(markdown_text_conflict). markdownText is already converted into blocks by Slack; use ' +
+      'blocks alone if you need a layout it cannot express.',
+    );
+  }
+
+  // An empty array is not the same as an omitted one, and the difference is
+  // destructive on an edit: `chat.update` reads `blocks: []` as "remove the
+  // blocks", which would read back as a successful no-op.
+  if (blocks !== undefined && blocks.length === 0) {
+    throw new UserError(
+      'blocks is empty. Omit it rather than passing an empty array — on an edit Slack reads an ' +
+      'empty array as "remove every block from this message", which would look like a successful ' +
+      'no-op. Pass text or markdownText to set the content.',
+    );
+  }
+
+  // Slack would answer `no_text` here, which does not say that two other
+  // parameters would also have satisfied it.
+  if (text === undefined && markdownText === undefined && blocks === undefined) {
+    throw new UserError(
+      'Nothing to send. Pass one of: text (plain mrkdwn), markdownText (markdown, and the only ' +
+      'one of the three that renders real bullet and numbered lists), or blocks (Block Kit).',
+    );
+  }
+
+  // blocks + text is deliberately allowed: Slack uses `text` as the
+  // notification and screen-reader fallback, where blocks are not read.
+  return { text, markdownText, blocks };
+}
+
+/**
+ * Rewrite the content-shape rejections Slack answers with a bare code.
+ *
+ * Rethrows untouched when the error is something else, so each caller keeps
+ * whatever other mapping it has — it is a filter, not a catch-all.
+ *
+ * These are reachable despite `resolveMessageBody`: that refuses the illegal
+ * *combinations*, but a malformed block shape is Slack's to judge, and its
+ * codes name neither the parameter nor what is wrong with it. All three writes
+ * run this, because a hand-built `blocks` array is most likely to be wrong on
+ * the first post rather than on a later edit — mapping it on `editMessage`
+ * alone would put the clear message on the rarer path.
+ */
+export function mapContentError(err: any): void {
+  const slackError = String(err?.message || '');
+
+  // `invalid_blocks_format` contains `invalid_blocks`, so this covers both.
+  if (slackError.includes('invalid_blocks')) {
+    throw new UserError(
+      'Slack rejected the blocks array as malformed. A bulleted or numbered list is one block of ' +
+      'type "rich_text" whose elements hold {type: "rich_text_list", style: "bullet" | "ordered", ' +
+      'elements: [{type: "rich_text_section", elements: [{type: "text", text: "..."}]}]}. Passing ' +
+      'markdownText instead lets Slack build the blocks itself.',
+    );
+  }
+  if (slackError.includes('msg_blocks_too_long')) {
+    throw new UserError(
+      'The blocks array is larger than Slack allows for one message (50 blocks, and 3,000 ' +
+      'characters per text object). Split it across several messages, or send fewer blocks.',
+    );
+  }
+  if (slackError.includes('markdown_text_conflict')) {
+    throw new UserError(
+      'Slack refused the message because markdownText cannot be combined with text or blocks. ' +
+      'markdownText carries the whole message on its own.',
+    );
+  }
+}
+
+/**
+ * Report what Slack actually stored, for the fields where it tells us.
+ *
+ * This is the half the unfurl flags could not have. Those are absent from the
+ * response, so `unfurlNote` can only report what was *requested*. A posted or
+ * edited message, by contrast, comes back with the blocks Slack stored — so
+ * "did my list actually become a list?" is answerable here rather than by
+ * opening Slack, and that is the exact question that went unanswered while
+ * `- item` was silently arriving as a hyphen.
+ *
+ * Emitted only when one of the new parameters was actually passed, so the
+ * confirmation string stays byte-identical for every pre-existing caller
+ * (there is a test on that).
+ */
+export function renderNote(
+  message: SlackPostedMessage | undefined, used: { rich: boolean; broadcast?: boolean },
+): string {
+  const parts: string[] = [];
+
+  if (used.rich) {
+    const blocks = message?.blocks;
+    if (!blocks?.length) {
+      // Reported as "may have", not "was": a response without blocks is an
+      // absence of evidence. Asserting the message is plain text on that basis
+      // would be the same overreach as reporting a silent no-op as success.
+      parts.push(
+        "⚠ Slack's response carried no blocks, so this message may have been stored as plain " +
+        'text rather than as rendered elements.',
+      );
+    } else {
+      parts.push(`Rendered as: ${describeBlocks(blocks)}.`);
+    }
+  }
+
+  if (used.broadcast) {
+    parts.push(message?.subtype === 'thread_broadcast'
+      ? 'Also sent to the channel (Slack recorded it as a thread_broadcast).'
+      : "Also sent to the channel: requested, but Slack's response did not confirm it — check the " +
+        'channel itself.');
+  }
+
+  return parts.length ? `\n${parts.join('\n')}` : '';
+}
+
+/**
+ * Name the block types Slack returned, and the element types inside a
+ * `rich_text` block — the latter being where the answer lives, since a bullet
+ * list and a paragraph are both a `rich_text` block and differ only by whether
+ * `rich_text_list` is among its elements.
+ */
+function describeBlocks(blocks: NonNullable<SlackPostedMessage['blocks']>): string {
+  return blocks.map(block => {
+    const counts = new Map<string, number>();
+    for (const el of block.elements || []) {
+      const type = el?.type || 'unknown';
+      counts.set(type, (counts.get(type) || 0) + 1);
+    }
+    const inner = [...counts].map(([type, n]) => (n > 1 ? `${type} ×${n}` : type)).join(', ');
+    const type = block.type || 'unknown';
+    return inner ? `${type} (${inner})` : type;
+  }).join(', ');
+}
+
+/**
  * Report what was asked of Slack's unfurl flags — and that it is only what was
  * asked.
  *
@@ -570,19 +790,45 @@ function unfurlNote(options?: SlackUnfurlOptions): string {
 }
 
 export async function handlePostMessage(
-  client: SlackClient, channelId: string, text: string, options?: SlackUnfurlOptions,
+  client: SlackClient, channelId: string, text: string | undefined, options?: SlackPostOptions,
 ): Promise<string> {
   assertWritesEnabled();
-  const result = await client.chatPostMessage(channelId, text, undefined, options);
-  return `Message posted to ${result.channel} (ts: ${result.ts})${unfurlNote(options)}`;
+  // Before the API call: a refused combination must leave nothing posted.
+  const body = resolveMessageBody({ text, markdownText: options?.markdownText, blocks: options?.blocks });
+  const result = await postOrExplain(client, channelId, body.text, undefined, options);
+  return `Message posted to ${result.channel} (ts: ${result.ts})` +
+    renderNote(result.message, { rich: usedRichContent(body) }) +
+    unfurlNote(options);
 }
 
 export async function handleReplyInThread(
-  client: SlackClient, channelId: string, threadTs: string, text: string, options?: SlackUnfurlOptions,
+  client: SlackClient, channelId: string, threadTs: string, text: string | undefined,
+  options?: SlackPostOptions,
 ): Promise<string> {
   assertWritesEnabled();
-  const result = await client.chatPostMessage(channelId, text, threadTs, options);
-  return `Reply posted to thread ${threadTs} in ${result.channel} (ts: ${result.ts})${unfurlNote(options)}`;
+  const body = resolveMessageBody({ text, markdownText: options?.markdownText, blocks: options?.blocks });
+  const result = await postOrExplain(client, channelId, body.text, threadTs, options);
+  return `Reply posted to thread ${threadTs} in ${result.channel} (ts: ${result.ts})` +
+    renderNote(result.message, { rich: usedRichContent(body), broadcast: options?.broadcast }) +
+    unfurlNote(options);
+}
+
+/** Whether the caller asked for anything mrkdwn `text` could not have carried. */
+function usedRichContent(body: SlackMessageContent): boolean {
+  return body.markdownText !== undefined || body.blocks !== undefined;
+}
+
+/** `chat.postMessage` with the content-shape codes turned into instructions. */
+async function postOrExplain(
+  client: SlackClient, channelId: string, text: string | undefined,
+  threadTs: string | undefined, options?: SlackPostOptions,
+) {
+  try {
+    return await client.chatPostMessage(channelId, text, threadTs, options);
+  } catch (err: any) {
+    mapContentError(err);
+    throw err;
+  }
 }
 
 /**
@@ -601,13 +847,16 @@ export async function handleReplyInThread(
  * caller can actually do about it.
  */
 export async function handleEditMessage(
-  client: SlackClient, channelId: string, ts: string, text: string,
+  client: SlackClient, channelId: string, ts: string, text: string | undefined,
+  options?: SlackUpdateOptions,
 ): Promise<string> {
   assertWritesEnabled();
 
-  let result: { ts: string; channel: string; text?: string };
+  const body = resolveMessageBody({ text, markdownText: options?.markdownText, blocks: options?.blocks });
+
+  let result: { ts: string; channel: string; text?: string; message?: SlackPostedMessage };
   try {
-    result = await client.chatUpdate(channelId, ts, text);
+    result = await client.chatUpdate(channelId, ts, body.text, body);
   } catch (err: any) {
     const slackError = String(err?.message || '');
 
@@ -640,7 +889,19 @@ export async function handleEditMessage(
         'dashboard to re-consent.',
       );
     }
+    mapContentError(err);
     throw err;
+  }
+
+  const note = renderNote(result.message, { rich: usedRichContent(body) });
+
+  // With blocks or markdownText there may be no `text` at all, so printing the
+  // old "it now reads" body would show an empty message. The echoed block
+  // types are the useful record in that case — and `note` already carries
+  // them, so the tail only has to stop claiming to quote text that is absent.
+  if (usedRichContent(body)) {
+    return `Message ${result.ts} in ${result.channel} edited.${note}` +
+      (result.text ? `\nIts fallback text now reads: ${result.text}` : '');
   }
 
   return `Message ${result.ts} in ${result.channel} edited. It now reads:\n\n${result.text ?? text}`;

@@ -242,6 +242,80 @@ export interface SlackUnfurlOptions {
   unfurlMedia?: boolean;
 }
 
+/**
+ * How the message body is expressed, beyond plain mrkdwn `text`.
+ *
+ * Slack's mrkdwn has no list syntax at all, so `- item` and `1. item` in `text`
+ * arrive as a literal hyphen and a literal digit. There are exactly two routes
+ * to real list elements and both live here:
+ *
+ * - `markdownText` → the `markdown_text` argument, which Slack converts into
+ *   blocks server-side. It supports ordered and unordered lists, headings,
+ *   blockquote, code blocks and tables, and is capped at 12,000 characters.
+ *   Slack documents it as mutually exclusive with BOTH `text` and `blocks`
+ *   (`markdown_text_conflict`), which is why `resolveMessageBody` in
+ *   `helpers.ts` refuses the combination before anything is written.
+ * - `blocks` → a Block Kit array, the escape hatch for `rich_text` /
+ *   `rich_text_list` and for multi-section layouts. `text` is still wanted
+ *   alongside it as the notification and accessibility fallback.
+ */
+export interface SlackMessageContent {
+  /**
+   * Block Kit blocks. Serialised with `JSON.stringify` by the client methods
+   * below, NOT by the caller — `request()` form-encodes every value through
+   * `String(v)`, so an array handed straight to it becomes the literal
+   * `[object Object]` and Slack answers a bare `invalid_blocks_format`.
+   * Keeping the serialisation in one place is what stops a future call site
+   * from skipping it.
+   */
+  blocks?: unknown[];
+  /** Standard markdown; becomes `markdown_text`. Replaces `text` entirely. */
+  markdownText?: string;
+}
+
+/** Everything `chat.postMessage` accepts here. */
+export interface SlackPostOptions extends SlackUnfurlOptions, SlackMessageContent {
+  /**
+   * `reply_broadcast` — also send a thread reply to the channel (the "Also
+   * send to channel" checkbox). Only meaningful with `thread_ts`.
+   *
+   * Omitted rather than sent as `false` when unset, for the same reason the
+   * unfurl flags are. Slack's documented default here IS `false`, so this is
+   * consistency rather than necessity — but it keeps one rule for every
+   * optional boolean in this file.
+   */
+  broadcast?: boolean;
+}
+
+/**
+ * Everything `chat.update` accepts here.
+ *
+ * No `broadcast`: Slack's `chat.update` reference does list `reply_broadcast`
+ * ("Broadcast an existing thread reply to make it visible to everyone"), but
+ * that has not been exercised end-to-end and the response does not echo the
+ * flag, so a no-op would be indistinguishable from success — the same call as
+ * the declined Browserbase `timeoutSeconds`. The unfurl flags are absent for
+ * the reason already recorded on `handleEditMessage`.
+ */
+export type SlackUpdateOptions = SlackMessageContent;
+
+/**
+ * The message `chat.postMessage` / `chat.update` echo back.
+ *
+ * This is the evidence the unfurl flags never had. Those answer with `ts` and
+ * `channel` and carry no unfurl state, so the confirmation could only report
+ * what was *requested*. A posted message, by contrast, comes back with the
+ * blocks Slack actually stored — which is the only way to answer "are there
+ * list elements in it?" without opening Slack, and that is precisely the
+ * question that went unanswered when `markdownText` did not exist.
+ */
+export interface SlackPostedMessage {
+  text?: string;
+  /** `thread_broadcast` on a reply that was broadcast to the channel. */
+  subtype?: string;
+  blocks?: Array<{ type?: string; elements?: Array<{ type?: string }> }>;
+}
+
 export class SlackClient {
   constructor(private botToken: string) {}
 
@@ -417,22 +491,40 @@ export class SlackClient {
   // === Chat ===
 
   /**
-   * Post a message, optionally suppressing Slack's link previews.
+   * Post a message — plain mrkdwn `text`, `markdownText`, or Block Kit
+   * `blocks` — optionally in a thread, broadcast to the channel, and with
+   * Slack's link previews suppressed.
    *
-   * The unfurl flags are spread in only when set. `request()` already drops
+   * Every optional field is spread in only when set. `request()` already drops
    * `undefined` from the form body, but writing the condition out here keeps
    * the omitted-is-not-false invariant (see `SlackUnfurlOptions`) from
    * depending on a filter several hundred lines away.
+   *
+   * `blocks` is `JSON.stringify`d HERE rather than by the caller, because
+   * `request()` form-encodes through `String(v)`: an array that reached it
+   * unserialised would go out as the literal `[object Object]`.
+   *
+   * Which content fields may be combined is NOT decided here — see
+   * `resolveMessageBody` in `helpers.ts`, which refuses the conflicting
+   * combinations before anything is written.
    */
   async chatPostMessage(
-    channel: string, text: string, threadTs?: string, options?: SlackUnfurlOptions,
+    channel: string, text: string | undefined, threadTs?: string, options?: SlackPostOptions,
   ): Promise<{
-    ts: string; channel: string;
+    ts: string; channel: string; message?: SlackPostedMessage;
   }> {
     return this.request('chat.postMessage', {
       channel,
-      text,
+      // Left out of the body entirely when absent, not sent as an empty
+      // string: a `markdown_text` call carrying a blank `text` is still a
+      // `markdown_text_conflict` as far as Slack is concerned. `request()`
+      // drops undefined anyway, but see the note above about not depending on
+      // a filter several hundred lines away.
+      ...(text !== undefined ? { text } : {}),
       ...(threadTs ? { thread_ts: threadTs } : {}),
+      ...(options?.blocks ? { blocks: JSON.stringify(options.blocks) } : {}),
+      ...(options?.markdownText !== undefined ? { markdown_text: options.markdownText } : {}),
+      ...(options?.broadcast !== undefined ? { reply_broadcast: options.broadcast } : {}),
       ...(options?.unfurlLinks !== undefined ? { unfurl_links: options.unfurlLinks } : {}),
       ...(options?.unfurlMedia !== undefined ? { unfurl_media: options.unfurlMedia } : {}),
     });
@@ -444,11 +536,31 @@ export class SlackClient {
    * a user token edits that user's own messages, a bot token only the bot's.
    * Slack enforces that itself and answers `cant_update_message`; see
    * `handleEditMessage` for the mapping of that and the other refusals.
+   *
+   * Takes the same content fields as `chatPostMessage` minus `broadcast`, so a
+   * message posted as plain text can be converted into one with real list
+   * elements after the fact. Note the asymmetry in Slack's replacement rule,
+   * spelled out at the call below: omitting `blocks` while providing `text`
+   * REMOVES any blocks the message already had.
    */
-  async chatUpdate(channel: string, ts: string, text: string): Promise<{
-    ts: string; channel: string; text?: string;
+  async chatUpdate(
+    channel: string, ts: string, text: string | undefined, options?: SlackUpdateOptions,
+  ): Promise<{
+    ts: string; channel: string; text?: string; message?: SlackPostedMessage;
   }> {
-    return this.request('chat.update', { channel, ts, text });
+    return this.request('chat.update', {
+      channel,
+      ts,
+      // Slack's replacement rule for this call is worth stating where it is
+      // sent: "if the `text` argument is provided and `blocks` are not
+      // provided, the `blocks` will be removed". So a text-only edit of a
+      // message that currently has blocks STRIPS them. That is Slack's
+      // behaviour, not something this layer can soften — `handleEditMessage`
+      // and the tool description say so.
+      ...(text !== undefined ? { text } : {}),
+      ...(options?.blocks ? { blocks: JSON.stringify(options.blocks) } : {}),
+      ...(options?.markdownText !== undefined ? { markdown_text: options.markdownText } : {}),
+    });
   }
 
   // === Users ===

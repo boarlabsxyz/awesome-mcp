@@ -387,6 +387,117 @@ describe('SlackClient', () => {
       await client.chatPostMessage('C1', 'hi');
       assert.ok(!captured.body.includes('unfurl'), captured.body);
     });
+
+    // The regression that would otherwise ship silently.
+    //
+    // request() form-encodes every value through String(v), so an array that
+    // reached it unserialised would go out as the literal "[object Object]"
+    // and Slack would answer a bare invalid_blocks_format. Nothing else in
+    // this file sends a non-scalar, so this is the only guard on it.
+    it('should send blocks as a JSON string, not [object Object]', async () => {
+      const captured = mockFetchCapturingBody();
+      const client = new SlackClient('xoxb-test');
+      const blocks = [{
+        type: 'rich_text',
+        elements: [{
+          type: 'rich_text_list',
+          style: 'bullet',
+          elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text: 'one' }] }],
+        }],
+      }];
+      await client.chatPostMessage('C1', 'fallback', undefined, { blocks });
+
+      assert.ok(!captured.body.includes('object%20Object'), captured.body);
+      const sent = new URLSearchParams(captured.body).get('blocks');
+      assert.deepEqual(JSON.parse(sent!), blocks);
+      // text rides along as the notification fallback.
+      assert.equal(new URLSearchParams(captured.body).get('text'), 'fallback');
+    });
+
+    it('should send markdown_text and omit text entirely when text is undefined', async () => {
+      const captured = mockFetchCapturingBody();
+      const client = new SlackClient('xoxb-test');
+      await client.chatPostMessage('C1', undefined, undefined, { markdownText: '- one\n- two' });
+
+      const params = new URLSearchParams(captured.body);
+      assert.equal(params.get('markdown_text'), '- one\n- two');
+      // Not merely empty: Slack treats a text argument sent alongside
+      // markdown_text as markdown_text_conflict, blank or not.
+      assert.equal(params.has('text'), false, captured.body);
+    });
+
+    it('should send reply_broadcast in both directions', async () => {
+      const client = new SlackClient('xoxb-test');
+
+      const on = mockFetchCapturingBody();
+      await client.chatPostMessage('C1', 'hi', '999.0', { broadcast: true });
+      assert.ok(on.body.includes('reply_broadcast=true'), on.body);
+      assert.ok(on.body.includes('thread_ts=999.0'), on.body);
+
+      // false is a real instruction, not an absence, so it must survive the
+      // form encoding exactly as the unfurl flags do.
+      const off = mockFetchCapturingBody();
+      await client.chatPostMessage('C1', 'hi', '999.0', { broadcast: false });
+      assert.ok(off.body.includes('reply_broadcast=false'), off.body);
+    });
+
+    it('should omit blocks, markdown_text and reply_broadcast when unset', async () => {
+      const captured = mockFetchCapturingBody();
+      const client = new SlackClient('xoxb-test');
+      await client.chatPostMessage('C1', 'hi');
+      for (const key of ['blocks', 'markdown_text', 'reply_broadcast']) {
+        assert.ok(!captured.body.includes(key), `${key} should be absent: ${captured.body}`);
+      }
+    });
+
+    it('should surface the message Slack echoes back', async () => {
+      // The readback is what lets the tools report whether a list really
+      // became a list, instead of reporting what was requested.
+      mockFetchCapturingBody({
+        ok: true, ts: '1.0', channel: 'C1',
+        message: { subtype: 'thread_broadcast', blocks: [{ type: 'rich_text' }] },
+      });
+      const client = new SlackClient('xoxb-test');
+      const result = await client.chatPostMessage('C1', 'hi', '999.0', { broadcast: true });
+      assert.equal(result.message?.subtype, 'thread_broadcast');
+      assert.deepEqual(result.message?.blocks, [{ type: 'rich_text' }]);
+    });
+  });
+
+  // chat.update's body was previously untested at this layer.
+  describe('chatUpdate', () => {
+    it('should send channel, ts and text', async () => {
+      const captured = mockFetchCapturingBody();
+      const client = new SlackClient('xoxb-test');
+      await client.chatUpdate('C1', '1609459200.000100', 'corrected');
+
+      const params = new URLSearchParams(captured.body);
+      assert.equal(params.get('channel'), 'C1');
+      assert.equal(params.get('ts'), '1609459200.000100');
+      assert.equal(params.get('text'), 'corrected');
+      assert.equal(params.has('blocks'), false);
+    });
+
+    it('should send blocks as a JSON string and markdown_text, and no reply_broadcast', async () => {
+      const captured = mockFetchCapturingBody();
+      const client = new SlackClient('xoxb-test');
+      const blocks = [{ type: 'rich_text', elements: [{ type: 'rich_text_list', style: 'ordered' }] }];
+      await client.chatUpdate('C1', '1.0', undefined, { blocks });
+
+      const params = new URLSearchParams(captured.body);
+      assert.deepEqual(JSON.parse(params.get('blocks')!), blocks);
+      assert.equal(params.has('text'), false);
+      // Slack documents reply_broadcast on chat.update, but it is deliberately
+      // not forwarded: unverified here, and the response does not echo it.
+      assert.equal(params.has('reply_broadcast'), false);
+    });
+
+    it('should send markdown_text on an edit', async () => {
+      const captured = mockFetchCapturingBody();
+      const client = new SlackClient('xoxb-test');
+      await client.chatUpdate('C1', '1.0', undefined, { markdownText: '1. first' });
+      assert.equal(new URLSearchParams(captured.body).get('markdown_text'), '1. first');
+    });
   });
 
   describe('usersInfo', () => {
