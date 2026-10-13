@@ -2753,7 +2753,12 @@ function registerSharedRoutes(app: express.Express): void {
         discovery = cached.result;
       } else {
         if (cached) orgDiscoveryCache.delete(cacheKey);
-        discovery = await discoverConnectedOrgs(client, { currentOrgId: currentOrg.id, savedOrgIds });
+        // `tokenKey` is the Slack token, the same key the MCP server's
+        // getTokenKey returns — so a team name resolved here is reusable when an
+        // access denial has to name an org, and vice versa. Without it the name
+        // cache is bypassed entirely and every open of this dialog re-spends the
+        // team.info budget.
+        discovery = await discoverConnectedOrgs(client, { currentOrgId: currentOrg.id, savedOrgIds, tokenKey: accessToken });
         orgDiscoveryCache.set(cacheKey, { result: discovery, expiresAt: Date.now() + ORG_DISCOVERY_TTL_MS });
         pruneOrgDiscoveryCache();
       }

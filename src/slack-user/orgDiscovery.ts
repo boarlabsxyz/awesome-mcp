@@ -18,6 +18,14 @@
 // and never reached the shared ones. The member-scoped sweep (1b) exists so
 // that the channels the user is actually in are always swept, whatever the
 // size of the workspace around them.
+//
+// That fixed the *listing* and left the same starvation one step downstream:
+// the shared channels whose list payload names no partner go into one queue for
+// `conversations.info`, and the workspace-wide sweep fills it first — so in a
+// workspace with hundreds of shared channels the budget was spent on channels
+// the user is not in, and the private Slack Connect channel they *are* in fell
+// off the end. The queue is ranked by `infoPriority` now, not by discovery
+// order, and a lookup that fails is counted rather than silently skipped.
 import {
   channelSharedTeamIds,
   channelTeamIds,
@@ -129,6 +137,66 @@ function cap(acc: Accumulator, note: string): void {
 }
 
 /**
+ * A shared channel whose list payload named no partner org, queued for a
+ * `conversations.info` lookup in sweep 4.
+ */
+interface InfoTarget {
+  /**
+   * The user is a member. These are the channels they can actually read, so
+   * they are the ones whose org they need a checkbox for — which is why the
+   * budget is spent on them first.
+   */
+  member: boolean;
+  /**
+   * Shared *outside* this workspace (or invited to be), rather than merely
+   * `is_shared`, which an Enterprise Grid also sets for internal sharing.
+   */
+  external: boolean;
+}
+
+/**
+ * Queue a shared channel for enrichment, if the list payload left it blank.
+ *
+ * Gate enrichment on the shared team lists alone. `context_team_id` is the
+ * *viewing* workspace, so a payload carrying only that names no partner —
+ * counting it as resolved is what silently dropped the external org.
+ */
+function queueInfo(
+  queue: Map<string, InfoTarget>,
+  channel: SlackChannelTeamFields & {
+    id: string; is_shared?: boolean; is_ext_shared?: boolean;
+    is_org_shared?: boolean; is_pending_ext_shared?: boolean;
+  },
+  flags: { member: boolean },
+): void {
+  if (!isSharedChannel(channel)) return;
+  if (channelSharedTeamIds(channel, { includePending: true }).length > 0) return;
+  const external = !!(channel.is_ext_shared || channel.is_pending_ext_shared);
+  const existing = queue.get(channel.id);
+  if (existing) {
+    existing.member = existing.member || flags.member;
+    existing.external = existing.external || external;
+    return;
+  }
+  queue.set(channel.id, { member: flags.member, external });
+}
+
+/**
+ * Lower sorts first. The workspace-wide sweep runs before the member-scoped one
+ * and in a big workspace queues thousands of channels, so insertion order spends
+ * the whole `conversations.info` budget on channels the user is not even in and
+ * truncates away the private shared channel they are — the reported bug. Rank by
+ * usefulness instead: a channel the user is a member of is one they can read, and
+ * an externally-shared channel is the only kind that can name a *foreign* org.
+ */
+function infoPriority(target: InfoTarget): number {
+  if (target.member && target.external) return 0;
+  if (target.member) return 1;
+  if (target.external) return 2;
+  return 3;
+}
+
+/**
  * Sweep every source of org identity this token can see.
  *
  * Ordering matters only for cost: the cheap bulk sweeps (channel list, DM list,
@@ -148,7 +216,7 @@ export async function discoverConnectedOrgs(
   // conversations.list already carries team IDs on many payloads; harvest those
   // for free and only queue a conversations.info call for shared channels that
   // came back without any.
-  const needsInfo: string[] = [];
+  const needsInfo = new Map<string, InfoTarget>();
   try {
     let cursor: string | undefined;
     let pages = 0;
@@ -159,9 +227,7 @@ export async function discoverConnectedOrgs(
         // Gate enrichment on the shared lists alone. `context_team_id` is the
         // viewing workspace, so a payload carrying only that names no partner —
         // counting it as resolved silently dropped the external org.
-        if (isSharedChannel(ch) && channelSharedTeamIds(ch, { includePending: true }).length === 0) {
-          needsInfo.push(ch.id);
-        }
+        queueInfo(needsInfo, ch, { member: false });
       }
       cursor = result.response_metadata?.next_cursor || undefined;
       pages++;
@@ -196,9 +262,7 @@ export async function discoverConnectedOrgs(
         // found, and the DM pass below is what collects counterpart user IDs.
         if (ch.is_im || ch.is_mpim) continue;
         for (const tid of channelTeamIds(ch, { includePending: true })) add(acc, tid, 'channel');
-        if (isSharedChannel(ch) && channelSharedTeamIds(ch, { includePending: true }).length === 0) {
-          needsInfo.push(ch.id);
-        }
+        queueInfo(needsInfo, ch, { member: true });
       }
       cursor = result.response_metadata?.next_cursor || undefined;
       pages++;
@@ -263,15 +327,31 @@ export async function discoverConnectedOrgs(
   for (const teamId of userTeams.values()) add(acc, teamId, 'user');
 
   // --- 4. conversations.info for shared channels the list pass left blank ---
-  const infoTargets = [...new Set(needsInfo)];
-  if (infoTargets.length > CHANNEL_INFO_MAX) {
-    cap(acc, `${infoTargets.length - CHANNEL_INFO_MAX} shared channel(s) beyond the first ${CHANNEL_INFO_MAX} were not inspected; an org shared only through those is not listed.`);
+  // Array.prototype.sort is stable, so equal-priority channels keep the order
+  // they were discovered in.
+  const infoTargets = [...needsInfo.entries()]
+    .sort(([, a], [, b]) => infoPriority(a) - infoPriority(b));
+  const skipped = infoTargets.slice(CHANNEL_INFO_MAX);
+  if (skipped.length > 0) {
+    const skippedMember = skipped.filter(([, t]) => t.member).length;
+    cap(acc, skippedMember > 0
+      ? `${skipped.length} shared channel(s) beyond the first ${CHANNEL_INFO_MAX} were not inspected, including ${skippedMember} you are a member of; an org shared only through those is not listed.`
+      : `${skipped.length} shared channel(s) you are not a member of were not inspected (the budget of ${CHANNEL_INFO_MAX} went to your own channels first); an org shared only through those is not listed.`);
   }
-  for (const channelId of infoTargets.slice(0, CHANNEL_INFO_MAX)) {
+  let infoFailures = 0;
+  for (const [channelId] of infoTargets.slice(0, CHANNEL_INFO_MAX)) {
     try {
       const { channel } = await client.conversationsInfo(channelId);
       for (const tid of channelTeamIds(channel, { includePending: true })) add(acc, tid, 'channel-info');
-    } catch { /* skip — rate limit or a channel this token cannot inspect */ }
+    } catch {
+      // Rate limit, or a channel this token cannot inspect. Counted rather than
+      // swallowed: 100 sequential tier-3 calls routinely hit a 429, and a lookup
+      // that never happened is indistinguishable from an org that is not there.
+      infoFailures++;
+    }
+  }
+  if (infoFailures > 0) {
+    cap(acc, `${infoFailures} shared channel(s) could not be inspected (Slack rate limit, or no access); an org shared only through those is not listed. Reopening this dialog in a minute may find more.`);
   }
 
   // --- 5. users.info for DM counterparts users.list did not cover ----------
