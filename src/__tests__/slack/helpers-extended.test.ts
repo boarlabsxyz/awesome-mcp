@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import sharp from 'sharp';
-import { resolveUsers, getWorkspaceUrl, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, handleSearchMessages, handleSearchFiles } from '../../slack/helpers.js';
+import { resolveUsers, getWorkspaceUrl, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, handleSearchMessages, handleSearchFiles, resolveMessageBody } from '../../slack/helpers.js';
 import { __setImageBlobPoolForTests } from '../../images/imageBlobStore.js';
 
 /** What the last chatPostMessage call was handed as its options argument. */
@@ -278,6 +278,277 @@ describe('unfurl options on posts', () => {
 
       const reply = await handleReplyInThread(mockSlackClient(), 'C123', '1.0', 'x');
       assert.equal(reply, 'Reply posted to thread 1.0 in C123 (ts: 9999.0000)');
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rich content: markdownText / blocks / broadcast.
+//
+// The gap these close is that Slack mrkdwn has no list syntax, so "- item" in
+// `text` renders as a literal hyphen -- a message posted through this
+// connector could not contain a real list at all.
+
+describe('resolveMessageBody', () => {
+  // Deliberately NOT a Zod .refine(): a ZodEffects has no `.shape`, which the
+  // registry guard walks, and a Zod rejection surfaces as FastMCP's generic
+  // InvalidParams -- the unexplained failure these messages replace.
+  it('refuses markdownText alongside text, naming the fix', () => {
+    assert.throws(
+      () => resolveMessageBody({ text: 'hi', markdownText: '- one' }),
+      (err: any) => {
+        assert.match(err.message, /either markdownText or text/i);
+        // Slack's own markdown_text_conflict names neither argument.
+        assert.match(err.message, /markdownText holds the entire message/i);
+        return true;
+      },
+    );
+  });
+
+  it('refuses markdownText alongside blocks', () => {
+    assert.throws(
+      () => resolveMessageBody({ markdownText: '- one', blocks: [{ type: 'rich_text' }] }),
+      /either markdownText or blocks/i,
+    );
+  });
+
+  it('refuses an empty blocks array rather than treating it as absent', () => {
+    // On an edit, Slack reads `blocks: []` as "remove every block", which
+    // would read back as a successful no-op.
+    assert.throws(
+      () => resolveMessageBody({ text: 'hi', blocks: [] }),
+      /empty array/i,
+    );
+  });
+
+  it('refuses a message with no content at all, naming all three options', () => {
+    assert.throws(
+      () => resolveMessageBody({}),
+      (err: any) => {
+        for (const param of ['text', 'markdownText', 'blocks']) {
+          assert.ok(err.message.includes(param), `${param} not named: ${err.message}`);
+        }
+        return true;
+      },
+    );
+  });
+
+  it('allows blocks with text, which Slack uses as the notification fallback', () => {
+    const blocks = [{ type: 'rich_text' }];
+    assert.deepEqual(
+      resolveMessageBody({ text: 'fallback', blocks }),
+      { text: 'fallback', markdownText: undefined, blocks },
+    );
+  });
+
+  it('allows each content parameter on its own', () => {
+    assert.equal(resolveMessageBody({ text: 'hi' }).text, 'hi');
+    assert.equal(resolveMessageBody({ markdownText: '- one' }).markdownText, '- one');
+    assert.deepEqual(resolveMessageBody({ blocks: [{ type: 'rich_text' }] }).blocks, [{ type: 'rich_text' }]);
+  });
+});
+
+describe('rich content on posts, replies and edits', () => {
+  function withWrites<T>(fn: () => Promise<T>): Promise<T> {
+    const origEnv = process.env.SLACK_WRITES_ENABLED;
+    process.env.SLACK_WRITES_ENABLED = 'true';
+    return fn().finally(() => {
+      if (origEnv === undefined) delete process.env.SLACK_WRITES_ENABLED;
+      else process.env.SLACK_WRITES_ENABLED = origEnv;
+    });
+  }
+
+  /** A client that echoes a message back, as Slack does. */
+  function echoingClient(message: any) {
+    return mockSlackClient({
+      chatPostMessage: async (channel: string, _text: any, _threadTs?: string, options?: any) => {
+        lastPostOptions = options;
+        return { ts: '9999.0000', channel, message };
+      },
+      chatUpdate: async (channel: string, ts: string, text: any) => ({ ts, channel, text, message }),
+    });
+  }
+
+  // A refusal that still posts is the failure mode worth pinning: the whole
+  // point of resolving before the call is that nothing is written.
+  it('posts nothing when the combination is refused', async () => {
+    await withWrites(async () => {
+      let called = false;
+      const client = mockSlackClient({
+        chatPostMessage: async () => { called = true; return { ts: '1', channel: 'C1' }; },
+      });
+
+      await assert.rejects(
+        () => handlePostMessage(client, 'C123', 'hi', { markdownText: '- one' } as any),
+        /either markdownText or text/i,
+      );
+      await assert.rejects(
+        () => handleReplyInThread(client, 'C123', '1.0', undefined, { blocks: [] } as any),
+        /empty array/i,
+      );
+      await assert.rejects(() => handlePostMessage(client, 'C123', undefined), /Nothing to send/i);
+
+      assert.equal(called, false, 'chatPostMessage must not be reached');
+    });
+  });
+
+  it('edits nothing when the combination is refused', async () => {
+    await withWrites(async () => {
+      let called = false;
+      const client = mockSlackClient({
+        chatUpdate: async () => { called = true; return { ts: '1', channel: 'C1' }; },
+      });
+      await assert.rejects(
+        () => handleEditMessage(client, 'C123', '1.0', 'hi', { markdownText: '- one' }),
+        /either markdownText or text/i,
+      );
+      assert.equal(called, false, 'chatUpdate must not be reached');
+    });
+  });
+
+  it('forwards markdownText and blocks to the client', async () => {
+    await withWrites(async () => {
+      lastPostOptions = undefined;
+      await handlePostMessage(mockSlackClient(), 'C123', undefined, { markdownText: '- one' } as any);
+      assert.equal(lastPostOptions?.markdownText, '- one');
+
+      const blocks = [{ type: 'rich_text' }];
+      lastPostOptions = undefined;
+      await handleReplyInThread(mockSlackClient(), 'C123', '1.0', 'fallback', { blocks } as any);
+      assert.deepEqual(lastPostOptions?.blocks, blocks);
+    });
+  });
+
+  // This is the reporter's actual question -- "are there list elements in it?"
+  // -- answered from Slack's echo rather than from what was requested. The
+  // unfurl flags could not do this; they are absent from the response.
+  it('names the block and rich_text element types Slack stored', async () => {
+    await withWrites(async () => {
+      const client = echoingClient({
+        blocks: [{
+          type: 'rich_text',
+          elements: [
+            { type: 'rich_text_section' },
+            { type: 'rich_text_list' },
+            { type: 'rich_text_list' },
+          ],
+        }],
+      });
+      const result = await handlePostMessage(client, 'C123', undefined, { markdownText: '- a\n- b' } as any);
+      assert.ok(result.includes('Rendered as: rich_text (rich_text_section, rich_text_list ×2)'), result);
+    });
+  });
+
+  it('warns when Slack echoes no blocks at all', async () => {
+    await withWrites(async () => {
+      const client = echoingClient({ text: 'plain' });
+      const result = await handlePostMessage(client, 'C123', undefined, { markdownText: '- one' } as any);
+      // "may have been", not "was": a response without blocks is an absence of
+      // evidence, not evidence of absence.
+      assert.ok(result.includes('may have been stored as plain text'), result);
+      assert.ok(result.includes('⚠'), result);
+    });
+  });
+
+  it('confirms a broadcast from the thread_broadcast subtype, and only then', async () => {
+    await withWrites(async () => {
+      const confirmed = await handleReplyInThread(
+        echoingClient({ subtype: 'thread_broadcast' }), 'C123', '1.0', 'x', { broadcast: true } as any,
+      );
+      assert.ok(confirmed.includes('Also sent to the channel (Slack recorded it as a thread_broadcast)'), confirmed);
+
+      const unconfirmed = await handleReplyInThread(
+        echoingClient({}), 'C123', '1.0', 'x', { broadcast: true } as any,
+      );
+      assert.ok(/did not confirm it/.test(unconfirmed), unconfirmed);
+
+      // broadcast: false is not a broadcast, so it gets no note either way.
+      const off = await handleReplyInThread(
+        echoingClient({ subtype: 'thread_broadcast' }), 'C123', '1.0', 'x', { broadcast: false } as any,
+      );
+      assert.ok(!off.includes('Also sent to the channel'), off);
+    });
+  });
+
+  // With blocks or markdownText there may be no text at all, so the old tail
+  // would have printed an empty "it now reads" body.
+  it('reports an edit by what it renders when there is no text to quote', async () => {
+    await withWrites(async () => {
+      const client = echoingClient({ blocks: [{ type: 'rich_text', elements: [{ type: 'rich_text_list' }] }] });
+      const result = await handleEditMessage(client, 'C123', '1.0', undefined, { markdownText: '1. first' });
+      assert.ok(!result.includes('It now reads'), result);
+      assert.ok(result.includes('rich_text_list'), result);
+    });
+  });
+
+  // The same mapping has to be on the post path, not just the edit path: a
+  // hand-built blocks array is most likely to be wrong on the FIRST post.
+  it('maps the content-shape codes on posts and replies too', async () => {
+    await withWrites(async () => {
+      const failingPost = (slackError: string): any => mockSlackClient({
+        chatPostMessage: async () => { throw new Error(`Slack API error (chat.postMessage): ${slackError}`); },
+      });
+
+      await assert.rejects(
+        () => handlePostMessage(failingPost('invalid_blocks'), 'C123', 'x', { blocks: [{ type: 'x' }] } as any),
+        (err: any) => {
+          assert.match(err.message, /rich_text_list/);
+          assert.ok(!err.message.includes('invalid_blocks'), 'raw code should not leak');
+          return true;
+        },
+      );
+      await assert.rejects(
+        () => handleReplyInThread(failingPost('msg_blocks_too_long'), 'C123', '1.0', 'x', { blocks: [{ type: 'x' }] } as any),
+        /50 blocks/,
+      );
+      // Anything else is rethrown untouched -- mapContentError is a filter,
+      // not a catch-all, so the existing rate-limit and scope errors survive.
+      await assert.rejects(
+        () => handlePostMessage(failingPost('ratelimited'), 'C123', 'x'),
+        /ratelimited/,
+      );
+    });
+  });
+
+  it('maps invalid_blocks and markdown_text_conflict on an edit', async () => {
+    await withWrites(async () => {
+      await assert.rejects(
+        () => handleEditMessage(failingUpdate('invalid_blocks'), 'C123', '1.0', undefined, { blocks: [{ type: 'x' }] }),
+        (err: any) => {
+          assert.match(err.message, /rich_text_list/);
+          assert.ok(!err.message.includes('invalid_blocks'), 'raw code should not leak');
+          return true;
+        },
+      );
+      await assert.rejects(
+        () => handleEditMessage(failingUpdate('markdown_text_conflict'), 'C123', '1.0', 'x'),
+        /cannot be combined/i,
+      );
+    });
+  });
+
+  function failingUpdate(slackError: string): any {
+    return mockSlackClient({
+      chatUpdate: async () => { throw new Error(`Slack API error (chat.update): ${slackError}`); },
+    });
+  }
+
+  // The additive-note contract: a caller passing none of the new parameters
+  // must get the exact same string as before, on all three tools.
+  it('leaves all three confirmations byte-identical without the new parameters', async () => {
+    await withWrites(async () => {
+      assert.equal(
+        await handlePostMessage(mockSlackClient(), 'C123', 'x'),
+        'Message posted to C123 (ts: 9999.0000)',
+      );
+      assert.equal(
+        await handleReplyInThread(mockSlackClient(), 'C123', '1.0', 'x'),
+        'Reply posted to thread 1.0 in C123 (ts: 9999.0000)',
+      );
+      assert.equal(
+        await handleEditMessage(mockSlackClient(), 'C123', '1.0', 'corrected'),
+        'Message 1.0 in C123 edited. It now reads:\n\ncorrected',
+      );
     });
   });
 });

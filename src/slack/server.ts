@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { SlackClient } from './apiHelpers.js';
-import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, unfurlParams } from './helpers.js';
+import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, unfurlParams, richTextParams, broadcastParam } from './helpers.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
@@ -123,10 +123,15 @@ slackBotServer.addTool({
 slackBotServer.addTool({
   name: 'postMessage',
   annotations: { readOnlyHint: false },
-  description: 'Post a message to a Slack channel. Slack renders a preview card for links in the message; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards.',
+  description: 'Post a message to a Slack channel. For a bulleted or numbered list use markdownText, not text — Slack mrkdwn has no list syntax, so "- item" in text renders as a literal hyphen. Slack renders a preview card for links in the message; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID to post to.'),
-    text: z.string().describe('Message text (supports Slack markdown/mrkdwn).'),
+    text: z.string().optional().describe(
+      'Message text as Slack mrkdwn. Supports bold, italic, strikethrough, code and blockquote, ' +
+      'but NOT lists — use markdownText for those. Optional, but pass it alongside blocks as the ' +
+      'notification fallback. Exactly one of text or markdownText.',
+    ),
+    ...richTextParams,
     ...unfurlParams,
   }),
   execute: async (args, { session }) => {
@@ -137,15 +142,51 @@ slackBotServer.addTool({
 slackBotServer.addTool({
   name: 'replyInThread',
   annotations: { readOnlyHint: false },
-  description: 'Reply to a thread in a Slack channel. Slack renders a preview card for links in the reply; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards.',
+  description: 'Reply to a thread in a Slack channel. For a bulleted or numbered list use markdownText, not text — Slack mrkdwn has no list syntax. Pass broadcast: true to also send the reply to the channel ("Also send to channel"), which Slack only accepts as the reply is posted. Slack renders a preview card for links in the reply; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID containing the thread.'),
     threadTs: z.string().describe('The timestamp of the parent message to reply to.'),
-    text: z.string().describe('Reply text (supports Slack markdown/mrkdwn).'),
+    text: z.string().optional().describe(
+      'Reply text as Slack mrkdwn. Supports bold, italic, strikethrough, code and blockquote, but ' +
+      'NOT lists — use markdownText for those. Optional, but pass it alongside blocks as the ' +
+      'notification fallback. Exactly one of text or markdownText.',
+    ),
+    ...richTextParams,
+    ...broadcastParam,
     ...unfurlParams,
   }),
   execute: async (args, { session }) => {
     return handleReplyInThread(getSlackClient(session), args.channelId, args.threadTs, args.text, args);
+  },
+});
+
+// `editMessage` on the bot server.
+//
+// The handler has always lived in the shared `helpers.ts` so this server could
+// register it in one block; it was left unregistered because "a bot editing
+// its own status message is a separate workflow nobody has asked for". It has
+// now been asked for — as the way to fix a message's formatting after posting,
+// which is what the content parameters below make possible.
+//
+// No `enforceAccess`: access rules are a slack-user mechanism and no tool on
+// this server has one.
+slackBotServer.addTool({
+  name: 'editMessage',
+  annotations: { readOnlyHint: false },
+  description: 'Edit a message this bot posted, replacing its content. A bot token can only edit the bot\'s own messages — Slack refuses anything else. Pass markdownText or blocks to convert a message that was posted as plain text into one with real bullet or numbered lists. WARNING: passing only text on a message that currently has blocks REMOVES those blocks (Slack\'s own replacement rule), so to keep rendered content re-send it. Get the ts from readChannelHistory or readThreadReplies.',
+  parameters: z.object({
+    channelId: z.string().describe('The Slack channel ID containing the message.'),
+    ts: z.string().describe('Timestamp of the message to edit, from readChannelHistory or readThreadReplies. Timestamps are per-channel.'),
+    text: z.string().optional().describe(
+      'The new message text as Slack mrkdwn, replacing the old content entirely. Does not support ' +
+      'lists — use markdownText for those. Note that sending this alone strips any blocks the ' +
+      'message already had.',
+    ),
+    ...richTextParams,
+  }),
+  execute: async (args, { log, session }) => {
+    log.info(`Editing message ${args.ts} in ${args.channelId}`);
+    return handleEditMessage(getSlackClient(session), args.channelId, args.ts, args.text, args);
   },
 });
 

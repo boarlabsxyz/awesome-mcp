@@ -14,7 +14,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Gmail](#gmail) (14)
 - [Google Slides](#google-slides) (6)
 - [ClickUp](#clickup) (48)
-- [Slack (bot)](#slack-bot-) (8)
+- [Slack (bot)](#slack-bot-) (9)
 - [Slack (user)](#slack-user-) (17)
 - [Outline](#outline) (27)
 - [PeopleForce](#peopleforce) (45)
@@ -214,7 +214,7 @@ Source: `src/clickup/server.ts` — 48 tools.
 
 ## Slack (bot)
 
-Source: `src/slack/server.ts` — 8 tools.
+Source: `src/slack/server.ts` — 9 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -222,8 +222,9 @@ Source: `src/slack/server.ts` — 8 tools.
 | `readChannelHistory` | Read recent messages from a Slack channel. Returns messages in chronological order. | `GET /api/v1/slack/channels/{channelId}/messages` |
 | `readThreadReplies` | Read replies in a Slack thread. The first message is the thread parent. | `GET /api/v1/slack/channels/{channelId}/threads/{threadTs}` |
 | `downloadFile` | Download a file attached to a Slack message. Get the fileId from the 📎 lines in readChannelHistory or readThreadReplies output, and pass the channel you read it from. Images: format "url" (default) re-hosts the image at a public URL suitable for tools that take an image URL (e.g. insertImageFromUrl), format "inline" returns the image itself so you can look at it. Text files are returned as text; other file types return metadata only. | — |
-| `postMessage` | Post a message to a Slack channel. Slack renders a preview card for links in the message; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards. | — |
-| `replyInThread` | Reply to a thread in a Slack channel. Slack renders a preview card for links in the reply; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards. | — |
+| `postMessage` | Post a message to a Slack channel. For a bulleted or numbered list use markdownText, not text — Slack mrkdwn has no list syntax, so "- item" in text renders as a literal hyphen. Slack renders a preview card for links in the message; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards. | — |
+| `replyInThread` | Reply to a thread in a Slack channel. For a bulleted or numbered list use markdownText, not text — Slack mrkdwn has no list syntax. Pass broadcast: true to also send the reply to the channel ("Also send to channel"), which Slack only accepts as the reply is posted. Slack renders a preview card for links in the reply; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards. | — |
+| `editMessage` | Edit a message this bot posted, replacing its content. A bot token can only edit the bot's own messages — Slack refuses anything else. Pass markdownText or blocks to convert a message that was posted as plain text into one with real bullet or numbered lists. WARNING: passing only text on a message that currently has blocks REMOVES those blocks (Slack's own replacement rule), so to keep rendered content re-send it. Get the ts from readChannelHistory or readThreadReplies. | — |
 | `listUsers` | List workspace members. Use this to find a user by name and get their user ID for opening a DM. | `GET /api/v1/slack/users` |
 | `openDm` | Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage. | — |
 
@@ -239,9 +240,9 @@ Source: `src/slack-user/server.ts` — 17 tools.
 | `downloadFile` | Download a file attached to a Slack message. Get the fileId from the 📎 lines in readChannelHistory or readThreadReplies output, and pass the channel you read it from. Images: format "url" (default) re-hosts the image at a public URL suitable for tools that take an image URL (e.g. insertImageFromUrl), format "inline" returns the image itself so you can look at it. Text files are returned as text; other file types return metadata only. Access rules are enforced. | — |
 | `searchMessages` | Search Slack messages across the workspace by keyword. Use this instead of paging readChannelHistory when looking for a specific message. Supports Slack search operators in the query: in:#channel, from:@user, before:YYYY-MM-DD, after:YYYY-MM-DD, has:link. Access rules are enforced — matches in channels you are not allowed to read are removed from the results. | — |
 | `searchFiles` | Search files shared in Slack by name or content. Returns each file with its ID and the channels it is shared in — pass one of those channel IDs to downloadFile to fetch the content. Access rules are enforced: a file is shown only if at least one channel it is shared in is one you are allowed to read, and a file Slack reports no channel for is withheld (the response says how many, separately from rules denials). | — |
-| `postMessage` | Post a message to a Slack channel. Slack renders a preview card for links in the message; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards. | — |
-| `replyInThread` | Reply to a thread in a Slack channel. Slack renders a preview card for links in the reply; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards. | — |
-| `editMessage` | Edit one of your own Slack messages, replacing its text. Get the ts from readChannelHistory or readThreadReplies. | — |
+| `postMessage` | Post a message to a Slack channel. For a bulleted or numbered list use markdownText, not text — Slack mrkdwn has no list syntax, so "- item" in text renders as a literal hyphen. Slack renders a preview card for links in the message; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards. | — |
+| `replyInThread` | Reply to a thread in a Slack channel. For a bulleted or numbered list use markdownText, not text — Slack mrkdwn has no list syntax. Pass broadcast: true to also send the reply to the channel ("Also send to channel"), which Slack only accepts as the reply is posted. Slack renders a preview card for links in the reply; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards. | — |
+| `editMessage` | Edit one of your own Slack messages, replacing its content. Pass markdownText or blocks to convert a message that was posted as plain text into one with real bullet or numbered lists. WARNING: passing only text on a message that currently has blocks REMOVES those blocks (Slack's own replacement rule), so to keep rendered content re-send it. Get the ts from readChannelHistory or readThreadReplies. | — |
 | `listUsers` | List workspace members. Use this to find a user by name and get their user ID for opening a DM. | — |
 | `openDm` | Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage. | — |
 | `subscribeToChannelEvents` | Record interest in a Slack channel's events so they accrue in a durable store you can query later with getChannelEventHistory, instead of re-reading the channel and tracking your own watermark. IDEMPOTENT: re-calling for the same channel returns the existing subscription. Events are "message" (new messages and thread replies in public channels, private channels, DMs, and group DMs; join/leave noise is excluded) and "reaction_added". Slack delivers each of those channel types through a SEPARATE app-level toggle (message.channels / message.groups / message.im / message.mpim), so a workspace with only message.channels enabled records nothing for a DM — this tool names the one your channel needs. Optionally set matchPattern to record only messages whose text contains it (case-insensitive substring). History accrues from this moment forward — for anything earlier use readChannelHistory. Requires the operator to have configured the Slack app's Event Subscriptions Request URL and SLACK_SIGNING_SECRET; run debugChannelEventSubscription if events do not arrive. Access rules are enforced. | — |
@@ -489,4 +490,4 @@ Source: `src/browserbase/server.ts` — 9 tools.
 
 ---
 
-**Grand total: 352 tools across 16 sections.**
+**Grand total: 353 tools across 16 sections.**

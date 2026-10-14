@@ -77,11 +77,16 @@ describe('slack-user tool registry', () => {
     assert.equal(annotations.destructiveHint, undefined);
   });
 
-  it('requires channelId, ts and text to edit, and describes each', () => {
+  it('requires channelId and ts to edit, and describes every parameter', () => {
     const parameters = toolMap.get('editMessage').parameters;
     assert.throws(() => parameters.parse({}), /channelId/i);
     assert.throws(() => parameters.parse({ channelId: 'C1' }), /ts/i);
-    assert.throws(() => parameters.parse({ channelId: 'C1', ts: '1.0' }), /text/i);
+    // `text` is deliberately NOT required any more: markdownText or blocks can
+    // carry the content instead, and markdownText cannot be combined with text
+    // at all. Which combinations are legal is enforced by resolveMessageBody,
+    // not by Zod -- see its doc comment, and the coverage in
+    // __tests__/slack/helpers-extended.test.ts.
+    assert.deepEqual(parameters.parse({ channelId: 'C1', ts: '1.0' }), { channelId: 'C1', ts: '1.0' });
     assert.deepEqual(
       parameters.parse({ channelId: 'C1', ts: '1.0', text: 'x' }),
       { channelId: 'C1', ts: '1.0', text: 'x' },
@@ -89,6 +94,48 @@ describe('slack-user tool registry', () => {
     for (const [param, schema] of Object.entries<any>(parameters.shape)) {
       assert.ok(schema.description, `editMessage.${param} has no .describe()`);
     }
+  });
+
+  // The schema must stay a plain ZodObject across all three write tools.
+  // resolveMessageBody could just as easily have been a .refine(), which
+  // returns a ZodEffects with no `.shape` -- and the describe() walks above
+  // (plus the ones for the search and event tools) would silently stop
+  // checking anything, or crash. This is the assertion that keeps the
+  // cross-field validation out of the schema layer.
+  it('keeps the write tools\' parameters introspectable as objects', () => {
+    for (const name of ['postMessage', 'replyInThread', 'editMessage']) {
+      const shape = toolMap.get(name).parameters.shape;
+      assert.ok(shape, `${name}.parameters has no .shape -- is it wrapped in a refine()?`);
+      for (const [param, schema] of Object.entries<any>(shape)) {
+        assert.ok(schema.description, `${name}.${param} has no .describe()`);
+      }
+    }
+  });
+
+  it('offers markdownText, blocks and broadcast where each belongs', () => {
+    // The reported gap: text alone cannot express a list, so every write tool
+    // needs markdownText/blocks. broadcast belongs only to replyInThread --
+    // Slack has nothing to broadcast on a top-level post, and chat.update's
+    // reply_broadcast is unverified here.
+    for (const name of ['postMessage', 'replyInThread', 'editMessage']) {
+      const shape = toolMap.get(name).parameters.shape;
+      assert.ok(shape.markdownText, `${name} should accept markdownText`);
+      assert.ok(shape.blocks, `${name} should accept blocks`);
+    }
+    assert.ok(toolMap.get('replyInThread').parameters.shape.broadcast);
+    assert.equal(toolMap.get('postMessage').parameters.shape.broadcast, undefined);
+    assert.equal(toolMap.get('editMessage').parameters.shape.broadcast, undefined);
+
+    // Block Kit arrives as an array and has to stay one. z.any() renders as
+    // the empty JSON Schema `{}`, which is what let a ClickUp array arrive as
+    // its own JSON text (86cba13av); an array schema gives a client something
+    // to hold onto.
+    const blocks = toolMap.get('postMessage').parameters.shape.blocks;
+    assert.deepEqual(
+      blocks.parse([{ type: 'rich_text', elements: [] }]),
+      [{ type: 'rich_text', elements: [] }],
+    );
+    assert.throws(() => blocks.parse('[{"type":"rich_text"}]'));
   });
 
   it('marks unsubscribe destructive, because it discards captured history', () => {
