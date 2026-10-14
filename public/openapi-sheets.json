@@ -474,7 +474,7 @@
             }
           },
           "400": {
-            "description": "Bad request - invalid range or values, or the write runs past the tab's grid (Google: \"exceeds grid limits\"). values.update does not grow a sheet: append rows with /append, or add rows first via /batchUpdate appendDimension.",
+            "description": "Bad request - invalid range or values, or the write runs past the tab's grid (Google: \"exceeds grid limits\"). values.update does not grow a sheet. To retry this write, add rows or columns first with POST .../batchUpdate appendDimension (ROWS or COLUMNS, matching the limit named in the error). POST .../append grows the grid too, but it writes the rows itself, after the existing data rather than at this range \u2014 use it instead of this write, not before retrying it.",
             "content": {
               "application/json": {
                 "schema": {

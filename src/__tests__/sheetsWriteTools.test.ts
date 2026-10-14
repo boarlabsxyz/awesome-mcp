@@ -542,9 +542,17 @@ describe('a write that runs off the end of the grid says how to make room', () =
         // added is the part it never says: which call grows a grid.
         assert.match(err.message, /exceeds grid limits/);
         assert.match(err.message, /3196 row\(s\) x 1 column\(s\) sent/);
-        assert.match(err.message, /appendSpreadsheetRows/);
         assert.match(err.message, /appendDimension/);
         assert.match(err.message, /addSpreadsheetSheet rowCount/);
+        // Both dimensions, because the same 400 is how a max-COLUMNS rejection
+        // arrives: guidance that only ever says ROWS sends a column overflow
+        // through a retry that fails identically.
+        assert.match(err.message, /"COLUMNS" for a max-columns one/);
+        // appendSpreadsheetRows is offered as a REPLACEMENT, never as the
+        // make-room step: it writes the rows itself, after the detected table
+        // rather than at this range, so append-then-retry writes them twice.
+        assert.match(err.message, /appendSpreadsheetRows grows the grid AND writes the rows/);
+        assert.match(err.message, /INSTEAD of this write, never before retrying it/);
         // The status rides along so the REST twin can answer 400 rather than
         // reporting the caller's range as a server fault.
         assert.equal((err as any).code, 400);

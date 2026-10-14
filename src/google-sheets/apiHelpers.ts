@@ -141,7 +141,7 @@ export async function writeRange(
       // rejection, and the row count explains the far more common one.
       const widest = values.reduce((max, row) => Math.max(max, row?.length ?? 0), 0);
       throw upstreamUserError(
-        `${error.message} This write does not fit the tab's current grid (${values.length} row(s) x ${widest} column(s) sent), and values.update — what writeSpreadsheet calls — never grows a grid. Make room first, then retry: appendSpreadsheetRows appends and grows the grid itself; batchUpdateSpreadsheet with {"type":"appendDimension","dimension":"ROWS","length":N} (plus "sheetName") adds rows to an existing tab; a new tab can be created at the right size with addSpreadsheetSheet rowCount/columnCount or the addSheet operation's rowCount/columnCount.`,
+        `${error.message} This write does not fit the tab's current grid (${values.length} row(s) x ${widest} column(s) sent), and values.update — what writeSpreadsheet calls — never grows a grid. To retry THIS write, enlarge the grid without writing anything: batchUpdateSpreadsheet with {"type":"appendDimension","sheetName":"<tab>","dimension":"ROWS","length":N} — pass "ROWS" for a max-rows rejection and "COLUMNS" for a max-columns one, whichever limit the message above names — or create the tab at the needed size up front with addSpreadsheetSheet rowCount/columnCount (or the addSheet operation's rowCount/columnCount). Or skip the retry: appendSpreadsheetRows grows the grid AND writes the rows in one call, but it appends after the existing data instead of at this range — so use it INSTEAD of this write, never before retrying it, or the values land twice.`,
         error,
       );
     }
@@ -158,6 +158,12 @@ export async function writeRange(
  * grow a sheet while `values.append` grows one, so the same 3,196 rows succeed
  * or fail depending only on which tool was reached for. Matching on the text is
  * the only option — Google sends no machine-readable reason for this.
+ *
+ * The message separates the two routes deliberately. `appendDimension` is pure
+ * capacity and leaves the retry to the caller; `appendSpreadsheetRows` is
+ * itself a write, placed after the detected table rather than at the requested
+ * range, so offering it as "make room, then retry" would have the rows written
+ * twice — once off-range by the append and once by the retry.
  */
 function isGridLimitError(error: any): boolean {
   return typeof error?.message === 'string' && /exceeds grid limits/i.test(error.message);
