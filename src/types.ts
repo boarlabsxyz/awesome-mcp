@@ -432,6 +432,36 @@ const AddSheetOp = z.object({
   type: z.literal('addSheet'),
   title: z.string().describe('Title of the new tab.'),
   index: z.number().int().min(0).optional().describe('0-based insertion position.'),
+  rowCount: z.number().int().min(1).optional().describe('Rows in the new tab. Google defaults to 1000; set this when the data is taller, because writeSpreadsheet does not grow a grid.'),
+  columnCount: z.number().int().min(1).optional().describe('Columns in the new tab. Google defaults to 26 (A-Z); set this when the data is wider.'),
+});
+
+// --- Grid growth ---
+//
+// A tab is created with 1000 rows, and `values.update` (writeSpreadsheet) does
+// NOT grow the grid: writing 3,196 rows to a fresh tab fails with Google's
+// "exceeds grid limits. Max rows: 1000", and until these two operations existed
+// there was nothing on this plane that could make room, so a bulk import had to
+// be chunked by hand (reported in ticket 1245xaweemn). `appendSpreadsheetRows`
+// grows the grid itself, so these matter for the fixed-range write path and for
+// sizing a tab up front.
+//
+// Indices are 1-based and inclusive here, like columnWidth/rowHeight, not
+// Google's 0-based half-open range.
+const AppendDimensionOp = z.object({
+  type: z.literal('appendDimension'),
+  sheetName: z.string().optional().describe('Existing tab name. Defaults to the first sheet.'),
+  dimension: z.enum(['ROWS', 'COLUMNS']).describe('Whether to add rows or columns.'),
+  length: z.number().int().min(1).describe('How many rows/columns to add at the END of the grid. This only makes room; it writes nothing.'),
+});
+
+const InsertDimensionOp = z.object({
+  type: z.literal('insertDimension'),
+  sheetName: z.string().optional().describe('Existing tab name. Defaults to the first sheet.'),
+  dimension: z.enum(['ROWS', 'COLUMNS']).describe('Whether to insert rows or columns.'),
+  startIndex: z.number().int().min(1).describe('1-based row/column to insert at (inclusive). Existing content from here on is pushed down/right.'),
+  endIndex: z.number().int().min(1).describe('1-based end row/column (inclusive). Equal to startIndex inserts one.'),
+  inheritFromBefore: z.boolean().optional().describe('Inherit formatting from the row/column BEFORE the insertion point instead of the one after. Cannot be true when startIndex is 1 — nothing precedes the first row/column.'),
 });
 
 export const BatchUpdateOperationSchema = z.discriminatedUnion('type', [
@@ -449,6 +479,8 @@ export const BatchUpdateOperationSchema = z.discriminatedUnion('type', [
   DeleteSheetOp,
   DuplicateSheetOp,
   AddSheetOp,
+  AppendDimensionOp,
+  InsertDimensionOp,
 ]);
 
 export type BatchUpdateOperation = z.infer<typeof BatchUpdateOperationSchema>;

@@ -389,3 +389,177 @@ describe('sheets write tools', () => {
     }
   });
 });
+
+// === Grid growth ===
+//
+// A tab is 1000 rows at creation, and writeSpreadsheet (values.update) refuses
+// to grow one, so a 3,196-row import failed with Google's "exceeds grid limits"
+// and nothing on this surface could make room — the import had to be chunked
+// through the model's context instead (ticket 1245xaweemn). These pin the two
+// operations that fix it, the sizing at creation, and the message that tells a
+// caller which of the three to reach for.
+describe('grid growth operations', () => {
+  it('appendDimension adds rows to a named tab and leaves values alone', async () => {
+    const sheets = mkSheets();
+    const out = await performBatchUpdateSpreadsheet(sheets, batchUpdateSpreadsheetSchema.parse({
+      spreadsheetId: 'ss-1',
+      operations: [{ type: 'appendDimension', sheetName: 'Data', dimension: 'ROWS', length: 5000 }],
+    }));
+    const req = sheets.spreadsheets.batchUpdate.mock.calls[0].arguments[0].requestBody.requests[0];
+    assert.deepEqual(req, { appendDimension: { sheetId: 77, dimension: 'ROWS', length: 5000 } });
+    // The amount is the whole content of the op, so the audit line carries it.
+    assert.match(out.summaries[0], /appendDimension → Data \(\+5000 ROWS\)/);
+  });
+
+  it('appendDimension defaults to the first sheet', async () => {
+    const sheets = mkSheets();
+    const out = await performBatchUpdateSpreadsheet(sheets, batchUpdateSpreadsheetSchema.parse({
+      spreadsheetId: 'ss-1',
+      operations: [{ type: 'appendDimension', dimension: 'COLUMNS', length: 4 }],
+    }));
+    const req = sheets.spreadsheets.batchUpdate.mock.calls[0].arguments[0].requestBody.requests[0];
+    assert.equal(req.appendDimension.sheetId, 0);
+    assert.match(out.summaries[0], /\(first sheet\) \(\+4 COLUMNS\)/);
+  });
+
+  it('insertDimension converts 1-based inclusive indices to Google half-open', async () => {
+    const sheets = mkSheets();
+    const out = await performBatchUpdateSpreadsheet(sheets, batchUpdateSpreadsheetSchema.parse({
+      spreadsheetId: 'ss-1',
+      operations: [{ type: 'insertDimension', sheetName: 'Data', dimension: 'ROWS', startIndex: 5, endIndex: 6, inheritFromBefore: true }],
+    }));
+    const req = sheets.spreadsheets.batchUpdate.mock.calls[0].arguments[0].requestBody.requests[0];
+    // Rows 5 and 6, inclusive, are Google's [4, 6). Getting this wrong inserts
+    // in the wrong place, which is silent — the request succeeds either way.
+    assert.deepEqual(req, {
+      insertDimension: {
+        range: { sheetId: 77, dimension: 'ROWS', startIndex: 4, endIndex: 6 },
+        inheritFromBefore: true,
+      },
+    });
+    assert.match(out.summaries[0], /insertDimension → Data \(ROWS 5-6\)/);
+  });
+
+  it('insertDimension omits inheritFromBefore when it was not asked for', async () => {
+    const sheets = mkSheets();
+    await performBatchUpdateSpreadsheet(sheets, batchUpdateSpreadsheetSchema.parse({
+      spreadsheetId: 'ss-1',
+      operations: [{ type: 'insertDimension', dimension: 'ROWS', startIndex: 2, endIndex: 2 }],
+    }));
+    const req = sheets.spreadsheets.batchUpdate.mock.calls[0].arguments[0].requestBody.requests[0];
+    assert.equal('inheritFromBefore' in req.insertDimension, false);
+  });
+
+  it('insertDimension refuses a reversed range and inheritFromBefore at row 1, naming the operation', async () => {
+    for (const [op, pattern] of [
+      [{ type: 'insertDimension', dimension: 'ROWS', startIndex: 9, endIndex: 3 }, /endIndex must be >= startIndex/],
+      // Google answers this one with a bare "invalid request"; the reason is
+      // that there is nothing before the first row to inherit from.
+      [{ type: 'insertDimension', dimension: 'ROWS', startIndex: 1, endIndex: 1, inheritFromBefore: true }, /no row\/column before the first one/],
+    ] as const) {
+      await assert.rejects(
+        () => performBatchUpdateSpreadsheet(mkSheets(), batchUpdateSpreadsheetSchema.parse({
+          spreadsheetId: 'ss-1', operations: [op],
+        })),
+        (err: any) => {
+          assert.ok(err instanceof UserError);
+          assert.match(err.message, /operation\[0\] \(type=insertDimension\)/);
+          assert.match(err.message, pattern);
+          return true;
+        },
+      );
+    }
+  });
+
+  it('addSheet sizes the new tab, and sends no gridProperties when unsized', async () => {
+    const sized = mkSheets();
+    await performBatchUpdateSpreadsheet(sized, batchUpdateSpreadsheetSchema.parse({
+      spreadsheetId: 'ss-1',
+      operations: [{ type: 'addSheet', title: 'Import', rowCount: 4000, columnCount: 12 }],
+    }));
+    assert.deepEqual(
+      sized.spreadsheets.batchUpdate.mock.calls[0].arguments[0].requestBody.requests[0],
+      { addSheet: { properties: { title: 'Import', gridProperties: { rowCount: 4000, columnCount: 12 } } } },
+    );
+
+    const plain = mkSheets();
+    await performBatchUpdateSpreadsheet(plain, batchUpdateSpreadsheetSchema.parse({
+      spreadsheetId: 'ss-1', operations: [{ type: 'addSheet', title: 'Plain' }],
+    }));
+    // An explicit gridProperties of {} is a request to size the tab; every
+    // pre-existing caller must keep getting Google's 1000 x 26 default.
+    assert.deepEqual(
+      plain.spreadsheets.batchUpdate.mock.calls[0].arguments[0].requestBody.requests[0],
+      { addSheet: { properties: { title: 'Plain' } } },
+    );
+  });
+
+  it('addSpreadsheetSheet forwards the grid and reports the one Google created', async () => {
+    const sheets = mkSheets({
+      spreadsheets: {
+        batchUpdate: mock.fn(async () => ({
+          data: { replies: [{ addSheet: { properties: { title: 'Import', sheetId: 9, gridProperties: { rowCount: 4000, columnCount: 26 } } } }] },
+        })),
+      },
+    });
+    const out = await callTool('addSpreadsheetSheet', {
+      spreadsheetId: 'ss-1', sheetTitle: 'Import', rowCount: 4000,
+    }, { googleSheets: sheets });
+    const props = sheets.spreadsheets.batchUpdate.mock.calls[0].arguments[0].requestBody.requests[0].addSheet.properties;
+    assert.deepEqual(props, { title: 'Import', gridProperties: { rowCount: 4000 } });
+    // Read off the reply, not the request: a count Google clamped must not be
+    // reported as the size that exists, since the next write depends on it.
+    assert.match(out, /Grid: 4000 rows x 26 columns/);
+  });
+
+  it('addSpreadsheetSheet says nothing about the grid when Google reports none', async () => {
+    const sheets = mkSheets({
+      spreadsheets: {
+        batchUpdate: mock.fn(async () => ({ data: { replies: [{ addSheet: { properties: { title: 'Plain', sheetId: 3 } } }] } })),
+      },
+    });
+    const out = await callTool('addSpreadsheetSheet', { spreadsheetId: 'ss-1', sheetTitle: 'Plain' }, { googleSheets: sheets });
+    assert.equal(sheets.spreadsheets.batchUpdate.mock.calls[0].arguments[0].requestBody.requests[0].addSheet.properties.gridProperties, undefined);
+    assert.doesNotMatch(out, /Grid:/);
+  });
+});
+
+describe('a write that runs off the end of the grid says how to make room', () => {
+  const gridErr = () => {
+    const e: any = new Error("Range ('Import'!A1:Z3196) exceeds grid limits. Max rows: 1000, max columns: 26");
+    e.code = 400;
+    return e;
+  };
+
+  it('names every route out of it and keeps the 400', async () => {
+    const sheets = mkSheets({ values: { update: mock.fn(async () => { throw gridErr(); }) } });
+    await assert.rejects(
+      () => callTool('writeSpreadsheet', writeSpreadsheetSchema.parse({
+        spreadsheetId: 'ss-1', range: 'Import!A1', values: Array.from({ length: 3196 }, () => ['x']),
+      }), { googleSheets: sheets }),
+      (err: any) => {
+        // Google's own text is kept — it names the actual limits — and what is
+        // added is the part it never says: which call grows a grid.
+        assert.match(err.message, /exceeds grid limits/);
+        assert.match(err.message, /3196 row\(s\) x 1 column\(s\) sent/);
+        assert.match(err.message, /appendSpreadsheetRows/);
+        assert.match(err.message, /appendDimension/);
+        assert.match(err.message, /addSpreadsheetSheet rowCount/);
+        // The status rides along so the REST twin can answer 400 rather than
+        // reporting the caller's range as a server fault.
+        assert.equal((err as any).code, 400);
+        return true;
+      },
+    );
+  });
+
+  it('leaves every other write failure worded as it was', async () => {
+    const sheets = mkSheets({ values: { update: mock.fn(async () => { throw mkErr(400, 'Unable to parse range: Sheet1!Z'); }) } });
+    await assert.rejects(
+      () => callTool('writeSpreadsheet', writeSpreadsheetSchema.parse({
+        spreadsheetId: 'ss-1', range: 'Sheet1!Z', values: [['x']],
+      }), { googleSheets: sheets }),
+      (err: any) => /Failed to write range: Unable to parse range/.test(err.message) && !/appendDimension/.test(err.message),
+    );
+  });
+});

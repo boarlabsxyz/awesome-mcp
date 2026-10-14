@@ -20130,7 +20130,7 @@
             }
           },
           "400": {
-            "description": "Bad request - invalid range or values",
+            "description": "Bad request - invalid range or values, or the write runs past the tab's grid (Google: \"exceeds grid limits\"). values.update does not grow a sheet: append rows with /append, or add rows first via /batchUpdate appendDimension.",
             "content": {
               "application/json": {
                 "schema": {
@@ -20291,7 +20291,7 @@
       "post": {
         "operationId": "batchUpdateSpreadsheet",
         "summary": "Apply formatting and sheet-lifecycle operations atomically",
-        "description": "Applies an ordered list of operations in a single atomic batch: if one is rejected, none of them apply. Sheet names are resolved against the live spreadsheet, including sheets added earlier in the same batch. WARNING: the deleteSheet operation destroys a tab and every value on it, and there is no confirmation step on this plane.",
+        "description": "Applies an ordered list of operations in a single atomic batch: if one is rejected, none of them apply. Sheet names are resolved against the live spreadsheet. appendDimension and insertDimension grow the grid, which /write does not do: a tab is 1000 rows and a taller write fails with \"exceeds grid limits\" until rows are added (or the tab is created at size with addSheet rowCount/columnCount). WARNING: the deleteSheet operation destroys a tab and every value on it, and there is no confirmation step on this plane.",
         "parameters": [
           {
             "name": "spreadsheetId",
@@ -20339,7 +20339,9 @@
                             "updateSheetProperties",
                             "deleteSheet",
                             "duplicateSheet",
-                            "addSheet"
+                            "addSheet",
+                            "appendDimension",
+                            "insertDimension"
                           ]
                         }
                       },

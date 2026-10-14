@@ -146,11 +146,16 @@ export async function performCreateSpreadsheet(
  * Translate the operation list into Google requests and apply them in one batch.
  *
  * The translation is the valuable part and the reason this is shared: each
- * operation is resolved against the spreadsheet's live metadata (sheet names to
- * sheetIds) through a `batchState` that also tracks sheets ADDED earlier in the
- * same batch, so an addSheet followed by a format on that new sheet resolves.
+ * operation is resolved against the spreadsheet's live metadata, mapping sheet
+ * names to sheetIds, with a `batchState` carrying the per-sheet conditional-format
+ * insertion indices so a batch of rules keeps the caller's order.
  * A per-operation failure is re-thrown with the operation's index and type,
  * because "invalid request" against a 40-operation batch is undiagnosable.
+ *
+ * That metadata is read ONCE, before any operation runs, so a sheet added by an
+ * addSheet earlier in the same batch has no sheetId to resolve and cannot be
+ * named by a later operation — which is why addSheet takes rowCount/columnCount
+ * rather than leaving an appendDimension to size the new tab.
  */
 export async function performBatchUpdateSpreadsheet(
   sheets: sheets_v4.Sheets,
@@ -169,7 +174,13 @@ export async function performBatchUpdateSpreadsheet(
         : ('sourceSheetName' in op && op.sourceSheetName) ? op.sourceSheetName
         : ('title' in op && op.title) ? op.title
         : '(first sheet)';
-      summaries.push(`  ${i}. ${op.type} → ${target}`);
+      // How much the grid grew IS the content of a dimension op, so the audit
+      // line carries it: "appendDimension → Data" alone says nothing about
+      // whether 5 or 5000 rows were added.
+      const detail = op.type === 'appendDimension' ? ` (+${op.length} ${op.dimension})`
+        : op.type === 'insertDimension' ? ` (${op.dimension} ${op.startIndex}-${op.endIndex})`
+        : '';
+      summaries.push(`  ${i}. ${op.type} → ${target}${detail}`);
     } catch (e: any) {
       if (e instanceof UserError) {
         throw new UserError(`operation[${i}] (type=${op.type}): ${e.message}`);
@@ -361,24 +372,36 @@ sheetsServer.addTool({
 sheetsServer.addTool({
   name: 'addSpreadsheetSheet',
   annotations: { readOnlyHint: false },
-  description: 'Adds a new sheet/tab to an existing Google Spreadsheet.',
+  description: 'Adds a new sheet/tab to an existing Google Spreadsheet. Google sizes a new tab at 1000 rows x 26 columns, and writeSpreadsheet does NOT grow a grid — pass rowCount/columnCount when the data is bigger, or the write fails with "exceeds grid limits".',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
     sheetTitle: z.string().min(1).describe('Title for the new sheet/tab.'),
+    rowCount: z.number().int().min(1).optional().describe('Rows in the new tab (Google default: 1000). Set this to at least the number of rows you are about to write.'),
+    columnCount: z.number().int().min(1).optional().describe('Columns in the new tab (Google default: 26, i.e. A-Z).'),
   }),
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);
     log.info(`Adding sheet "${args.sheetTitle}" to spreadsheet ${args.spreadsheetId}`);
 
     try {
-      const response = await SheetsHelpers.addSheet(sheets, args.spreadsheetId, args.sheetTitle);
+      const response = await SheetsHelpers.addSheet(sheets, args.spreadsheetId, args.sheetTitle, {
+        rowCount: args.rowCount,
+        columnCount: args.columnCount,
+      });
       const addedSheet = response.replies?.[0]?.addSheet?.properties;
 
       if (!addedSheet) {
         throw new UserError('Failed to add sheet - no sheet properties returned.');
       }
 
-      return `Successfully added sheet "${addedSheet.title}" (Sheet ID: ${addedSheet.sheetId}) to spreadsheet.`;
+      // The grid comes from Google's reply, not from the request: a rowCount it
+      // clamped or ignored must not be reported back as the size that was
+      // created, since the next writeSpreadsheet depends on it.
+      const grid = addedSheet.gridProperties;
+      const gridInfo = grid?.rowCount != null || grid?.columnCount != null
+        ? ` Grid: ${grid?.rowCount ?? '?'} rows x ${grid?.columnCount ?? '?'} columns.`
+        : '';
+      return `Successfully added sheet "${addedSheet.title}" (Sheet ID: ${addedSheet.sheetId}) to spreadsheet.${gridInfo}`;
     } catch (error: any) {
       log.error(`Error adding sheet to spreadsheet ${args.spreadsheetId}: ${error.message || error}`);
       if (error instanceof UserError) throw error;
@@ -569,7 +592,7 @@ sheetsServer.addTool({
 sheetsServer.addTool({
   name: 'batchUpdateSpreadsheet',
   annotations: { readOnlyHint: false },
-  description: 'Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, column/row sizing, and tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet).',
+  description: 'Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, column/row sizing, tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet), and grid growth (appendDimension adds rows/columns at the end, insertDimension makes room in the middle). Use appendDimension before a writeSpreadsheet that exceeds the tab\'s current row count — writeSpreadsheet does not grow the grid. A tab added by addSheet in THIS batch cannot be targeted by a later operation in the same batch (it has no sheetId yet), so size it with addSheet rowCount/columnCount instead.',
   parameters: batchUpdateSpreadsheetSchema,
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);

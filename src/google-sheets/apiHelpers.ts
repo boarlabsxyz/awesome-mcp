@@ -135,8 +135,32 @@ export async function writeRange(
     if (error.code === 403) {
       throw upstreamUserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`, error);
     }
+    if (isGridLimitError(error)) {
+      // Both dimensions, because Google's message may be naming the column
+      // limit: "26 columns sent" is the fact that explains a max-columns
+      // rejection, and the row count explains the far more common one.
+      const widest = values.reduce((max, row) => Math.max(max, row?.length ?? 0), 0);
+      throw upstreamUserError(
+        `${error.message} This write does not fit the tab's current grid (${values.length} row(s) x ${widest} column(s) sent), and values.update — what writeSpreadsheet calls — never grows a grid. Make room first, then retry: appendSpreadsheetRows appends and grows the grid itself; batchUpdateSpreadsheet with {"type":"appendDimension","dimension":"ROWS","length":N} (plus "sheetName") adds rows to an existing tab; a new tab can be created at the right size with addSpreadsheetSheet rowCount/columnCount or the addSheet operation's rowCount/columnCount.`,
+        error,
+      );
+    }
     throw upstreamUserError(`Failed to write range: ${error.message || 'Unknown error'}`, error);
   }
+}
+
+/**
+ * Google's answer to a write that runs off the end of the grid, e.g.
+ * "Range ('Sheet1'!A1:Z3196) exceeds grid limits. Max rows: 1000, max columns: 26".
+ *
+ * It is a 400 whose message describes the grid and never says what to do about
+ * it, and the thing to do is not guessable: `values.update` silently refuses to
+ * grow a sheet while `values.append` grows one, so the same 3,196 rows succeed
+ * or fail depending only on which tool was reached for. Matching on the text is
+ * the only option — Google sends no machine-readable reason for this.
+ */
+function isGridLimitError(error: any): boolean {
+  return typeof error?.message === 'string' && /exceeds grid limits/i.test(error.message);
 }
 
 /**
@@ -226,19 +250,26 @@ export async function getSpreadsheetMetadata(
 export async function addSheet(
   sheets: Sheets,
   spreadsheetId: string,
-  sheetTitle: string
+  sheetTitle: string,
+  grid?: { rowCount?: number; columnCount?: number }
 ): Promise<sheets_v4.Schema$BatchUpdateSpreadsheetResponse> {
   try {
+    const properties: sheets_v4.Schema$SheetProperties = { title: sheetTitle };
+    // Only sent when asked for: an explicit gridProperties of {} would be a
+    // request to size the tab, and Google's own defaults (1000 x 26) are what
+    // every existing caller has been getting.
+    if (grid?.rowCount !== undefined || grid?.columnCount !== undefined) {
+      const gridProperties: sheets_v4.Schema$GridProperties = {};
+      if (grid?.rowCount !== undefined) gridProperties.rowCount = grid.rowCount;
+      if (grid?.columnCount !== undefined) gridProperties.columnCount = grid.columnCount;
+      properties.gridProperties = gridProperties;
+    }
     const response = await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
       requestBody: {
         requests: [
           {
-            addSheet: {
-              properties: {
-                title: sheetTitle,
-              },
-            },
+            addSheet: { properties },
           },
         ],
       },
