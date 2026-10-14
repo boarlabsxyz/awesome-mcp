@@ -306,7 +306,50 @@ export function operationToRequest(
     case 'addSheet': {
       const properties: sheets_v4.Schema$SheetProperties = { title: op.title };
       if (op.index !== undefined) properties.index = op.index;
+      // Sizing the tab at creation is the ONLY way to get a tall new tab in one
+      // request: a sheet added in this batch has no sheetId yet, so an
+      // appendDimension later in the same batch cannot resolve it by name.
+      if (op.rowCount !== undefined || op.columnCount !== undefined) {
+        const gridProperties: sheets_v4.Schema$GridProperties = {};
+        if (op.rowCount !== undefined) gridProperties.rowCount = op.rowCount;
+        if (op.columnCount !== undefined) gridProperties.columnCount = op.columnCount;
+        properties.gridProperties = gridProperties;
+      }
       return { addSheet: { properties } };
+    }
+
+    case 'appendDimension': {
+      const sheetId = resolveSheetId(metadata, op.sheetName);
+      return {
+        appendDimension: {
+          sheetId,
+          dimension: op.dimension,
+          length: op.length,
+        },
+      };
+    }
+
+    case 'insertDimension': {
+      const sheetId = resolveSheetId(metadata, op.sheetName);
+      if (op.endIndex < op.startIndex) {
+        throw new UserError('insertDimension: endIndex must be >= startIndex.');
+      }
+      // Google rejects inheritFromBefore at startIndex 0 with a bare
+      // "invalid request"; refusing it here names the reason, and the
+      // operation's index is added by the caller.
+      if (op.inheritFromBefore && op.startIndex === 1) {
+        throw new UserError('insertDimension: inheritFromBefore cannot be true when startIndex is 1 — there is no row/column before the first one to inherit from.');
+      }
+      const req: sheets_v4.Schema$InsertDimensionRequest = {
+        range: {
+          sheetId,
+          dimension: op.dimension,
+          startIndex: op.startIndex - 1,
+          endIndex: op.endIndex,
+        },
+      };
+      if (op.inheritFromBefore !== undefined) req.inheritFromBefore = op.inheritFromBefore;
+      return { insertDimension: req };
     }
   }
 }

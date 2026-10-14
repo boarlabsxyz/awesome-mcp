@@ -4889,6 +4889,16 @@ function registerRestApiRoutes(app: express.Express): void {
       });
     } catch (err: any) {
       console.error('Error writing range:', err);
+      // A Google 400 on this path describes the request, not an upstream fault,
+      // and the common one is "exceeds grid limits" — whose message (see
+      // writeRange in google-sheets/apiHelpers.ts) names the three ways to make
+      // room. sendUpstreamError only knows 404 and 403, so letting it through
+      // would answer 500 and read as "server problem, retry", sending the
+      // caller to look at Google instead of at their range.
+      if (err?.code === 400) {
+        res.status(400).json({ error: err.message || 'Failed to write to range' });
+        return;
+      }
       sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to write to range' });
     }
   });

@@ -80,13 +80,13 @@ Source: `src/google-sheets/server.ts` — 12 tools.
 | `appendSpreadsheetRows` | Appends rows of data to the end of a sheet in a Google Spreadsheet. | `POST /api/v1/sheets/{spreadsheetId}/append` |
 | `clearSpreadsheetRange` | Clears all values from a specific range in a Google Spreadsheet. | `POST /api/v1/sheets/{spreadsheetId}/ranges/clear` |
 | `getSpreadsheetInfo` | Gets detailed information about a Google Spreadsheet including all sheets/tabs. | `GET /api/v1/sheets/{spreadsheetId}` |
-| `addSpreadsheetSheet` | Adds a new sheet/tab to an existing Google Spreadsheet. | — |
+| `addSpreadsheetSheet` | Adds a new sheet/tab to an existing Google Spreadsheet. Google sizes a new tab at 1000 rows x 26 columns, and writeSpreadsheet does NOT grow a grid — pass rowCount/columnCount when the data is bigger, or the write fails with "exceeds grid limits". | — |
 | `createSpreadsheet` | Creates a new Google Spreadsheet (works with shared drives). | `POST /api/v1/sheets` |
 | `listGoogleSheets` | Lists Google Spreadsheets from your Google Drive and shared drives with optional filtering. | `GET /api/v1/sheets` |
 | `findRowByValue` | Search a column for a specific value and return the 1-based row number where it was found. | `GET /api/v1/sheets/{spreadsheetId}/search` |
 | `readRowByField` | Look up a row by searching a column for a value, then return the row as a named JSON object using header names from row 1. | `GET /api/v1/sheets/{spreadsheetId}/rows/{rowNumber}` |
 | `updateCellByFieldName` | Find a row by searching a column for a value, then update a specific field (identified by header name) in that row. Assumes row 1 contains the header names. | — |
-| `batchUpdateSpreadsheet` | Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, column/row sizing, and tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet). | `POST /api/v1/sheets/{spreadsheetId}/batchUpdate` |
+| `batchUpdateSpreadsheet` | Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, column/row sizing, tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet), and grid growth (appendDimension adds rows/columns at the end, insertDimension makes room in the middle). Use appendDimension before a writeSpreadsheet that exceeds the tab's current row count — writeSpreadsheet does not grow the grid. A tab added by addSheet in THIS batch cannot be targeted by a later operation in the same batch (it has no sheetId yet), so size it with addSheet rowCount/columnCount instead. | `POST /api/v1/sheets/{spreadsheetId}/batchUpdate` |
 
 ## Google Calendar
 
