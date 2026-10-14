@@ -16,7 +16,7 @@ import {
   parseCloseWindow,
   parseTimestampInput,
 } from './apiHelpers.js';
-import { formatTask, formatTaskList } from './formatHelpers.js';
+import { formatTask, formatTaskList, formatTaskComments } from './formatHelpers.js';
 import {
   CustomFieldDefinition,
   CustomFieldValueError,
@@ -998,27 +998,38 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'getTaskComments',
   annotations: { readOnlyHint: true },
-  description: 'Get comments on a ClickUp task.',
+  description: 'Get the comments on a ClickUp task, paging through the WHOLE history by default. ClickUp returns only the 25 newest comments per request, with no total and no cursor in the response, so a single request silently loses the beginning of any longer discussion — this tool repeats the request until a page comes back short. The response says how many comments it holds and whether that is all of them; when it is not, it names why and gives the start/startId cursor to continue from. Comments come back newest first (ClickUp\'s own order) — pass oldestFirst=true to read a thread in the order it was written, which is what you want before summarising one. Threaded replies are NOT included: ClickUp keeps them behind a separate endpoint that is not exposed here and that accepts no paging parameters, so a comment marked "N threaded replies" has that much more text this API cannot reach.',
   parameters: z.object({
     taskId: z.string().describe('The task ID to get comments for.'),
+    limit: z.number().int().positive().optional().describe('Maximum number of comments to return, newest first. Omit to return every comment on the task. When the limit cuts the history short the response says so and gives the cursor to resume from.'),
+    oldestFirst: z.boolean().optional().describe('Render comments oldest first (chronological) instead of ClickUp\'s newest-first order. Does not change which comments are fetched.'),
+    start: z.union([z.string(), z.number()]).optional().describe('Resume cursor: the `date` of the last comment of a previous response. Must be passed together with startId.'),
+    startId: z.string().optional().describe('Resume cursor: the `id` of the last comment of a previous response. Must be passed together with start.'),
   }),
-  execute: async (args, { session }) => {
+  execute: async (args, { session, log }) => {
+    // Refused here rather than in Zod: a .refine() rejection surfaces as
+    // FastMCP's generic InvalidParams, which is the unexplained failure this
+    // message exists to replace. ClickUp itself ignores one half of the cursor
+    // without the other and answers with the newest 25 again — a silent no-op
+    // that reads as "paging does nothing", which is how this bug was reported.
+    const hasStart = args.start !== undefined && String(args.start) !== '';
+    const hasStartId = args.startId !== undefined && args.startId !== '';
+    if (hasStart !== hasStartId) {
+      throw new UserError(
+        `ClickUp pages task comments by start AND startId together; ${hasStart ? 'start was given without startId' : 'startId was given without start'}. `
+        + 'Pass the `date` and the `id` of the last comment of the previous response, or omit both to read from the newest comment. '
+        + 'Sent alone, the parameter is ignored upstream and the newest 25 comments come back again.',
+      );
+    }
+
     const client = getClickUpClient(session);
-    const result = await client.getTaskComments(args.taskId);
-    const comments = result?.comments || [];
-    if (comments.length === 0) return 'No comments on this task.';
-    return comments.map((c: any) => {
-      const author = c.user?.username || c.user?.email || 'unknown';
-      const date = c.date ? new Date(parseInt(c.date)).toISOString() : 'unknown date';
-      const text = c.comment_text
-        || (Array.isArray(c.comment) ? c.comment.map((p: any) => p.text || '').join('') : '')
-        || '[empty]';
-      // Return the full comment text. This is the only comments tool, so
-      // truncating silently (previously at 300 chars, with no ellipsis or
-      // length signal) dropped thread content with no way for the caller to
-      // tell — the same silent-truncation failure fixed for getTask.
-      return `Comment by ${author} (${date}):\n  ${text}`;
-    }).join('\n\n');
+    const scan = await client.getAllTaskComments(args.taskId, {
+      limit: args.limit,
+      start: args.start,
+      startId: args.startId,
+    });
+    log.info(`[clickup] getTaskComments ${args.taskId}: ${scan.comments.length} comment(s) in ${scan.pagesScanned} page(s), complete=${scan.complete}`);
+    return formatTaskComments(scan, { oldestFirst: args.oldestFirst });
   },
 });
 

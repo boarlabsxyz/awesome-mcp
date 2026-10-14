@@ -4,6 +4,8 @@
 // can reuse the same markdown rendering when callers request
 // `Accept: text/plain` on the JSON-default REST endpoints.
 
+import { COMMENTS_PAGE_SIZE } from './apiHelpers.js';
+
 export function formatCustomFieldValue(cf: any): string {
   if (cf.value === null || cf.value === undefined) return '[empty]';
   if (cf.type === 'drop_down' && cf.type_config?.options) {
@@ -108,4 +110,92 @@ export function formatTask(task: any, opts: { fullDescription?: boolean } = {}):
 export function formatTaskList(tasks: any[]): string {
   if (!tasks || tasks.length === 0) return 'No tasks found.';
   return tasks.map((t) => formatTask(t)).join('\n\n');
+}
+
+/** One comment, with its full text. The previous 300-char cut was silent --
+ *  no ellipsis, no length -- so thread content vanished with no way for the
+ *  caller to tell. Same reasoning as getTask's full description. */
+export function formatComment(c: any): string {
+  const author = c?.user?.username || c?.user?.email || 'unknown';
+  const date = c?.date ? new Date(parseInt(String(c.date), 10)).toISOString() : 'unknown date';
+  const text = c?.comment_text
+    || (Array.isArray(c?.comment) ? c.comment.map((p: any) => p.text || '').join('') : '')
+    || '[empty]';
+  // Threaded replies live behind GET /comment/{id}/reply, which is not exposed
+  // here and takes no paging parameters. Printing the count is the only thing
+  // that keeps a threaded discussion from being invisible rather than merely
+  // unread.
+  const replies = Number(c?.reply_count) > 0 ? ` [${c.reply_count} threaded repl${Number(c.reply_count) === 1 ? 'y' : 'ies'}, not included]` : '';
+  const resolved = c?.resolved ? ' [resolved]' : '';
+  return `Comment by ${author} (${date})${resolved}${replies}:\n  ${text}`;
+}
+
+/**
+ * Render a comment scan, stating the count, the order, and -- the point of the
+ * whole thing -- whether this is every comment on the task.
+ *
+ * ClickUp hands back the newest 25 per request with no total and no cursor in
+ * the response, so a bare list of comments cannot be told apart from a list
+ * that was cut off. Every incomplete outcome is named, with the cursor to
+ * continue from when there is one.
+ */
+export function formatTaskComments(
+  scan: {
+    comments: any[];
+    pagesScanned: number;
+    complete: boolean;
+    hitCap: boolean;
+    hitLimit: boolean;
+    stalled: boolean;
+    rateLimited: boolean;
+    cursorUnavailable: boolean;
+    nextStart?: string;
+    nextStartId?: string;
+  },
+  opts: { oldestFirst?: boolean } = {},
+): string {
+  const ordered = opts.oldestFirst ? [...scan.comments].reverse() : scan.comments;
+  const order = opts.oldestFirst ? 'oldest first' : 'newest first';
+  const n = ordered.length;
+
+  if (n === 0) {
+    // An empty first page is a real "no comments"; an empty result after a
+    // failed scan is not, and must not read as one.
+    if (scan.complete || scan.pagesScanned === 0) return 'No comments on this task.';
+    return `No comments returned, but the scan did not complete (${scanReason(scan)}). This is NOT evidence that the task has no comments.`;
+  }
+
+  const head = scan.complete
+    ? `${n} comment(s) on this task — the complete history, ${order}:`
+    : `${n} comment(s), ${order} — INCOMPLETE: ${scanReason(scan)}`;
+
+  const parts = [head, '', ordered.map(formatComment).join('\n\n')];
+
+  if (!scan.complete) {
+    if (scan.nextStart && scan.nextStartId) {
+      parts.push('', `To continue from where this stopped, call again with start=${scan.nextStart} and startId=${scan.nextStartId} (both are required; ClickUp ignores one without the other).`);
+    } else if (scan.cursorUnavailable) {
+      parts.push('', 'No resume cursor could be built: the comment to page from carried no id or no date, and ClickUp offers no other way to reach older comments.');
+    }
+  }
+
+  return parts.join('\n');
+}
+
+/** Why a scan stopped short. Precedence matters: the caller's own limit is a
+ *  better explanation than anything else that was also true. */
+function scanReason(scan: {
+  pagesScanned: number;
+  hitCap: boolean;
+  hitLimit: boolean;
+  stalled: boolean;
+  rateLimited: boolean;
+  cursorUnavailable: boolean;
+}): string {
+  if (scan.hitLimit) return 'stopped at the requested limit, so older comments remain unread';
+  if (scan.rateLimited) return `ClickUp rate-limited the scan after ${scan.pagesScanned} page(s), so older comments remain unread`;
+  if (scan.hitCap) return `stopped at the ${scan.pagesScanned}-page cap (${scan.pagesScanned * COMMENTS_PAGE_SIZE} comments), so older comments remain unread`;
+  if (scan.stalled) return 'ClickUp returned the same page again for the next cursor, so paging could not advance past these';
+  if (scan.cursorUnavailable) return 'paging could not continue because the oldest comment fetched carried no id or date';
+  return 'the scan stopped before a short page confirmed the end of the history';
 }

@@ -2829,8 +2829,8 @@
     "/api/v1/clickup/tasks/{taskId}/comments": {
       "get": {
         "operationId": "getTaskComments",
-        "summary": "Get task comments",
-        "description": "Gets all comments on a task.",
+        "summary": "Get task comments (paged to completion)",
+        "description": "Returns the comments on a task, paging through the whole history. ClickUp's upstream endpoint returns only the 25 newest comments per request and its response carries no total and no cursor, so this endpoint repeats the request with start/start_id until a page comes back short. Branch on `scan.complete`: false means comments remain unread, and `scan.nextStart` + `scan.nextStartId` are how to reach them. Threaded replies are not included.",
         "parameters": [
           {
             "name": "taskId",
@@ -2840,11 +2840,61 @@
               "type": "string"
             },
             "description": "The task ID"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "Maximum comments to return, newest first. Omit to return every comment on the task."
+          },
+          {
+            "name": "allPages",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true
+            },
+            "description": "Set false to return only ClickUp's newest 25 comments (one upstream request). The response still reports scan.complete=false and a resume cursor."
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resume cursor: the `date` of the last comment of a previous response. Must be sent together with start_id; ClickUp ignores one without the other and returns the newest 25 again."
+          },
+          {
+            "name": "start_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resume cursor: the `id` of the last comment of a previous response. Must be sent together with start. `startId` is accepted as an alias."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text"
+              ]
+            },
+            "description": "Set to `text` (or send Accept: text/plain) for the markdown rendering instead of JSON."
           }
         ],
         "responses": {
           "200": {
-            "description": "Comments retrieved successfully",
+            "description": "Comments retrieved. Check scan.complete before treating the array as the whole history.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2855,8 +2905,74 @@
                       "items": {
                         "$ref": "#/components/schemas/Comment"
                       }
+                    },
+                    "scan": {
+                      "type": "object",
+                      "description": "Extent of the scan. `complete` is the field to branch on.",
+                      "properties": {
+                        "returned": {
+                          "type": "integer",
+                          "description": "Comments in the comments array."
+                        },
+                        "pagesScanned": {
+                          "type": "integer",
+                          "description": "Upstream requests made."
+                        },
+                        "pageSize": {
+                          "type": "integer",
+                          "description": "Comments ClickUp returns per request (25). A page holding fewer is the only end-of-history signal the API gives."
+                        },
+                        "complete": {
+                          "type": "boolean",
+                          "description": "True only when a short page confirmed the end of the history. False means comments remain unread."
+                        },
+                        "hitCap": {
+                          "type": "boolean",
+                          "description": "Stopped at the internal page cap (40 pages / 1000 comments)."
+                        },
+                        "hitLimit": {
+                          "type": "boolean",
+                          "description": "Stopped at the requested limit."
+                        },
+                        "stalled": {
+                          "type": "boolean",
+                          "description": "ClickUp returned the same page again for the next cursor, so paging could not advance."
+                        },
+                        "rateLimited": {
+                          "type": "boolean",
+                          "description": "ClickUp rate-limited the scan partway through; the pages already fetched are returned."
+                        },
+                        "cursorUnavailable": {
+                          "type": "boolean",
+                          "description": "The comment the next cursor had to be built from carried no id or date."
+                        },
+                        "nextStart": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Pass back as start to continue. Null when nothing remains or no cursor could be built."
+                        },
+                        "nextStartId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Pass back as start_id to continue."
+                        }
+                      }
                     }
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported query parameter (page/cursor), half a start/start_id cursor, contradictory start_id spellings, or a non-positive limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }

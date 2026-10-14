@@ -132,7 +132,7 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `getTask` | `GET /api/v1/clickup/tasks/{taskId}` | live | Get a ClickUp task (JSON or markdown via Accept) |
 | `getAccessibleCustomFields` | `GET /api/v1/clickup/lists/{listId}/fields` | live | List accessible custom fields on a list |
 | `getTaskMembers` | `GET /api/v1/clickup/tasks/{taskId}/members` | live | List members of a task |
-| `getTaskComments` | `GET /api/v1/clickup/tasks/{taskId}/comments` | live | List comments on a task |
+| `getTaskComments` | `GET /api/v1/clickup/tasks/{taskId}/comments` | live | List comments on a task, paging through the whole history — _ClickUp returns only the 25 newest comments per request, with no total and no cursor in its response, so this pages with start/start_id until a page comes back short. Branch on scan.complete: false means comments remain unread and scan.nextStart/nextStartId are how to reach them. ?allPages=false returns just the newest 25; ?limit=N the newest N; both still report an incomplete scan. page and cursor are refused by name — ClickUp has no such parameters here._ |
 | `searchTasks` | `GET /api/v1/clickup/workspaces/{workspaceId}/tasks/search` | live | Search tasks across a workspace |
 | `filterTeamTasks` | `GET /api/v1/clickup/workspaces/{workspaceId}/tasks/filter` | live | Filter tasks across a workspace with server-side filters (assignees, statuses, date ranges, etc.) |
 | `getTaskEventHistory` | `GET /api/v1/clickup/workspaces/{workspaceId}/events` | live | Read task-event transitions (status/assignee/moves) from the webhook store |

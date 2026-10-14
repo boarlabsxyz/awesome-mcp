@@ -185,6 +185,66 @@ export interface DocsScanResult {
   rateLimited: boolean;
 }
 
+// Task-comment pagination.
+//
+// ClickUp's Get Task Comments endpoint returns the 25 most recent comments and
+// nothing else: it has no `limit`, no page number, and its response carries no
+// total and no cursor. Older comments are reached by repeating the request with
+// `start` (the `date` of the LAST comment of the previous page, i.e. its oldest)
+// and `start_id` (that comment's `id`), until a page holds fewer than 25.
+// https://developer.clickup.com/docs/task-comments-pagination
+//
+// A caller that sends the first request only therefore gets the newest 25 with
+// nothing saying the list was cut -- the silent first page this scan replaces.
+// The same shape as listDocs/searchDocs (ticket 86cb5r680).
+
+/** Comments ClickUp returns per page. NOT configurable -- the endpoint has no
+ *  `limit` parameter, and a page holding fewer than this is the only signal
+ *  the API gives that the history is exhausted. */
+export const COMMENTS_PAGE_SIZE = 25;
+
+/** Comment pages to request before giving up: 40 x 25 = 1000 comments. */
+export const COMMENTS_MAX_PAGES = 40;
+
+export interface CommentsScanResult {
+  /** Newest first, as ClickUp returns them, deduplicated by comment id. */
+  comments: any[];
+  pagesScanned: number;
+  /** A page held fewer than COMMENTS_PAGE_SIZE: this is the whole history.
+   *  Every other terminal flag below means comments remain unread. */
+  complete: boolean;
+  /** Stopped at maxPages with a full page in hand. */
+  hitCap: boolean;
+  /** Stopped at the caller's `limit`. */
+  hitLimit: boolean;
+  /** A full page added nothing not already seen, so ClickUp did not advance
+   *  past the cursor and repeating would re-read the same 25 forever. */
+  stalled: boolean;
+  /** Stopped early because ClickUp rate-limited us mid-scan. */
+  rateLimited: boolean;
+  /** The comment the next cursor had to be built from carried no id or no
+   *  date, so there is no way to ask for the page after it. */
+  cursorUnavailable: boolean;
+  /** Resume cursor -- set only when comments remain AND one could be built.
+   *  Pass both back together as start/startId. */
+  nextStart?: string;
+  nextStartId?: string;
+}
+
+/**
+ * Build the start/start_id cursor ClickUp needs in order to return the page
+ * after `c`, or undefined when `c` carries no id/date to reference it by.
+ *
+ * Both halves are required: ClickUp ignores one without the other and answers
+ * with the newest 25 again, which reads as "paging does nothing".
+ */
+function commentCursor(c: any): { start: string; startId: string } | undefined {
+  const id = c?.id === undefined || c?.id === null ? '' : String(c.id);
+  const date = c?.date === undefined || c?.date === null ? '' : String(c.date);
+  if (!id || !date) return undefined;
+  return { start: date, startId: id };
+}
+
 // Client-side pagination + filter for tasks closed within a window.
 //
 // ClickUp's Get Tasks / team-task-filter endpoints don't support
@@ -605,12 +665,144 @@ export class ClickUpClient {
 
   // === Comments ===
 
-  async getTaskComments(taskId: string, start?: number, startId?: string): Promise<any> {
+  /**
+   * One page of task comments: the 25 newest, or the 25 after the
+   * start/start_id cursor. Prefer getAllTaskComments -- a single call here is
+   * the silent first page described above.
+   */
+  async getTaskComments(taskId: string, start?: number | string, startId?: string): Promise<any> {
     const params = new URLSearchParams();
-    if (start !== undefined) params.set('start', String(start));
+    if (start !== undefined && start !== null && String(start) !== '') params.set('start', String(start));
     if (startId) params.set('start_id', startId);
     const qs = params.toString();
-    return this.request('GET', `/task/${taskId}/comment${qs ? '?' + qs : ''}`);
+    return this.request('GET', `/task/${encodeURIComponent(taskId)}/comment${qs ? '?' + qs : ''}`);
+  }
+
+  /**
+   * Page through a task's comments to exhaustion and report whether it got
+   * there.
+   *
+   * Comments are deduplicated by id and kept in ClickUp's newest-first order.
+   * Every stopping condition is reported rather than inferred by the caller
+   * from the length, because "25 comments" and "25 comments and that is all of
+   * them" are the two cases this exists to separate.
+   */
+  async getAllTaskComments(
+    taskId: string,
+    opts?: { limit?: number; start?: number | string; startId?: string; maxPages?: number },
+  ): Promise<CommentsScanResult> {
+    const maxPages = opts?.maxPages ?? COMMENTS_MAX_PAGES;
+    const limit = opts?.limit;
+    const comments: any[] = [];
+    const seen = new Set<string>();
+    let start = opts?.start;
+    let startId = opts?.startId;
+    let pagesScanned = 0;
+    let complete = false;
+    let hitCap = false;
+    let hitLimit = false;
+    let stalled = false;
+    let rateLimited = false;
+    let cursorUnavailable = false;
+    let nextStart: string | undefined;
+    let nextStartId: string | undefined;
+
+    for (let p = 0; p < maxPages; p++) {
+      let page: any;
+      try {
+        page = await this.getTaskComments(taskId, start, startId);
+      } catch (err: any) {
+        // A 429 partway through is not a reason to throw away the pages
+        // already in hand -- a labelled partial beats an exception. Any other
+        // failure, and any failure on the first page, is a real error.
+        if (p > 0 && /rate limit/i.test(String(err?.message || ''))) {
+          rateLimited = true;
+          break;
+        }
+        throw err;
+      }
+
+      const batch: any[] = Array.isArray(page?.comments) ? page.comments : [];
+      pagesScanned = p + 1;
+
+      let added = 0;
+      let stoppedAt = -1;
+      for (let i = 0; i < batch.length; i++) {
+        const c = batch[i];
+        const id = c?.id === undefined || c?.id === null ? '' : String(c.id);
+        if (id && seen.has(id)) continue;
+        if (id) seen.add(id);
+        comments.push(c);
+        added++;
+        if (limit !== undefined && comments.length >= limit) {
+          stoppedAt = i;
+          break;
+        }
+      }
+
+      if (limit !== undefined && comments.length >= limit) {
+        // A limit that lands on the last comment of a short page has not cut
+        // anything off -- the history really is exhausted, and reporting a
+        // resume cursor there would send the caller after comments that do
+        // not exist.
+        const moreInThisPage = stoppedAt >= 0 && stoppedAt < batch.length - 1;
+        if (!moreInThisPage && batch.length < COMMENTS_PAGE_SIZE) {
+          complete = true;
+        } else {
+          hitLimit = true;
+          // Resume from the last comment actually handed back, not the last of
+          // the page: anything past the limit was never returned.
+          const cursor = commentCursor(comments[comments.length - 1]);
+          if (cursor) {
+            nextStart = cursor.start;
+            nextStartId = cursor.startId;
+          } else {
+            cursorUnavailable = true;
+          }
+        }
+        break;
+      }
+
+      // The documented end-of-history signal, and the only one there is.
+      if (batch.length < COMMENTS_PAGE_SIZE) {
+        complete = true;
+        break;
+      }
+
+      // A full page of nothing new means ClickUp ignored the cursor. Pressing
+      // on would re-read the same 25 for every remaining page.
+      if (added === 0) {
+        stalled = true;
+        break;
+      }
+
+      const cursor = commentCursor(batch[batch.length - 1]);
+      if (!cursor) {
+        cursorUnavailable = true;
+        break;
+      }
+      start = cursor.start;
+      startId = cursor.startId;
+
+      if (p === maxPages - 1) {
+        hitCap = true;
+        nextStart = cursor.start;
+        nextStartId = cursor.startId;
+      }
+    }
+
+    return {
+      comments,
+      pagesScanned,
+      complete,
+      hitCap,
+      hitLimit,
+      stalled,
+      rateLimited,
+      cursorUnavailable,
+      nextStart,
+      nextStartId,
+    };
   }
 
   async addTaskComment(taskId: string, data: (
