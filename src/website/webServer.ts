@@ -5790,13 +5790,110 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
-  // GET /api/v1/clickup/tasks/:taskId/comments - Get comments
+  // GET /api/v1/clickup/tasks/:taskId/comments - Get comments.
+  //
+  // Pages to the end of the history by default. ClickUp hands back the 25
+  // newest comments per request and nothing that says so, so the previous
+  // single-call version answered `{comments: [...25]}` for a 40-comment task
+  // with no total, no cursor and no way to ask for the rest — this plane was
+  // the documented escape hatch for exactly the bulk read it could not do.
+  // The `comments` key and its element shape are unchanged; `scan` is additive
+  // and is what tells a client whether the array is the whole history.
   app.get('/api/v1/clickup/tasks/:taskId/comments', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    // `page` and `cursor` are not parameters of this endpoint and never were:
+    // ClickUp pages task comments by start + start_id only. Ignoring them is
+    // how a caller concludes that paging "changes nothing", so they are
+    // refused by name instead.
+    const unsupported = ['page', 'cursor'].filter((k) => req.query[k] !== undefined);
+    if (unsupported.length) {
+      res.status(400).json({
+        error: `Unsupported query parameter(s): ${unsupported.join(', ')}. ClickUp pages task comments by start (the \`date\` of the last comment of the previous response) and start_id (its \`id\`), passed together. This endpoint pages to the end of the history on its own — use ?allPages=false for only the newest 25, or ?limit=N for the newest N.`,
+      });
+      return;
+    }
+
+    // Express parses a repeated `?start=a&start=b` into an ARRAY and a nested
+    // `?start[x]=y` into an object, both of which qstr drops to ''. A dropped
+    // cursor is answered upstream with the newest 25 — the very thing this
+    // route now exists to avoid — so a non-scalar is refused by name rather
+    // than quietly ignored (same rule as redmineCustomFieldFilters).
+    const nonScalar = ['start', 'start_id', 'startId']
+      .filter((k) => req.query[k] !== undefined && typeof req.query[k] !== 'string');
+    if (nonScalar.length) {
+      res.status(400).json({
+        error: `Query parameter(s) ${nonScalar.join(', ')} must be given exactly once, as a plain value.`,
+      });
+      return;
+    }
+
+    // Accepting two spellings of one parameter has to refuse a genuine
+    // disagreement rather than pick a winner — which one was meant is
+    // unknowable. Both are accepted because `start_id` is ClickUp's own name
+    // and `startId` is what the MCP tool takes, and a caller reaching for this
+    // escape hatch tries both.
+    const startIdNative = qstr(req.query.start_id) || undefined;
+    const startIdCamel = qstr(req.query.startId) || undefined;
+    if (startIdNative && startIdCamel && startIdNative !== startIdCamel) {
+      res.status(400).json({ error: 'start_id and startId were both given with different values; pass only one.' });
+      return;
+    }
+    const startId = startIdNative || startIdCamel;
+    const start = qstr(req.query.start) || undefined;
+
+    // One half of the cursor is ignored upstream and returns the newest 25
+    // again: a silent no-op that reads as a successful page.
+    if (!!start !== !!startId) {
+      res.status(400).json({
+        error: `ClickUp pages task comments by start AND start_id together; ${start ? 'start was given without start_id' : 'start_id was given without start'}. Pass the \`date\` and the \`id\` of the last comment of the previous response, or omit both to read from the newest comment.`,
+      });
+      return;
+    }
+
+    const limit = qoptint(req.query.limit);
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+      res.status(400).json({ error: 'limit must be a positive integer.' });
+      return;
+    }
+
+    // Opt out, not opt in: the single page is the bug, so completeness is the
+    // default and `allPages=false` is for a caller that deliberately wants
+    // only ClickUp's newest 25.
+    const singlePage = qflag(req.query.allPages) === false;
+
     try {
-      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const { ClickUpClient, COMMENTS_PAGE_SIZE } = await import('../clickup/apiHelpers.js');
       const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
-      const result = await client.getTaskComments(req.params.taskId as string);
-      res.json({ comments: result.comments || [] });
+      const scan = await client.getAllTaskComments(req.params.taskId as string, {
+        limit,
+        start,
+        startId,
+        maxPages: singlePage ? 1 : undefined,
+      });
+      if (negotiateFormat(req) === 'text') {
+        const { formatTaskComments } = await import('../clickup/formatHelpers.js');
+        res.type('text/plain; charset=utf-8').send(formatTaskComments(scan, {
+          oldestFirst: qflag(req.query.oldestFirst) === true,
+        }));
+        return;
+      }
+      // `complete` is the field to branch on: false means comments remain
+      // unread, and nextStart/nextStartId are how to reach them.
+      res.json({
+        comments: scan.comments,
+        scan: {
+          returned: scan.comments.length,
+          pagesScanned: scan.pagesScanned,
+          pageSize: COMMENTS_PAGE_SIZE,
+          complete: scan.complete,
+          hitCap: scan.hitCap,
+          hitLimit: scan.hitLimit,
+          stalled: scan.stalled,
+          rateLimited: scan.rateLimited,
+          cursorUnavailable: scan.cursorUnavailable,
+          nextStart: scan.nextStart ?? null,
+          nextStartId: scan.nextStartId ?? null,
+        },
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to get comments' });
     }

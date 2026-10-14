@@ -124,6 +124,139 @@ describe('REST data plane: ClickUp and Outline handler bodies', () => {
       assert.equal(res.status, 200);
       assert.deepEqual(res.body.tags, []);
     });
+
+    // === Task comments (ticket 1245xaweyh4) ===
+    //
+    // ClickUp answers with the 25 newest comments and nothing that says so.
+    // This route was the documented escape hatch for the bulk read the MCP
+    // tool could not do, and it had the identical cap.
+
+    const commentPage = (from: number, count: number) => ({
+      comments: Array.from({ length: count }, (_, i) => ({
+        id: `c${from + i}`,
+        date: String(2_000_000_000_000 - (from + i)),
+        comment_text: `comment ${from + i}`,
+      })),
+    });
+
+    it('pages past ClickUp\'s 25-comment first page', async () => {
+      reset();
+      // First match wins, so the cursor-bearing URL has to be registered first.
+      when('start_id=c24', { json: commentPage(25, 15) });
+      when('/comment', { json: commentPage(0, 25) });
+
+      const res = await request(app).get('/api/v1/clickup/tasks/task-9/comments').set(auth());
+      assert.equal(res.status, 200);
+      assert.equal(res.body.comments.length, 40);
+      assert.equal(res.body.comments[39].id, 'c39', 'the oldest comment must be present');
+      assert.equal(res.body.scan.complete, true);
+      assert.equal(res.body.scan.pagesScanned, 2);
+      assert.equal(res.body.scan.nextStart, null);
+    });
+
+    it('keeps the comments key and element shape the old single-page response had', async () => {
+      reset();
+      when('/comment', { json: commentPage(0, 2) });
+      const res = await request(app).get('/api/v1/clickup/tasks/task-9/comments').set(auth());
+      assert.equal(res.status, 200);
+      assert.deepEqual(res.body.comments.map((c: any) => c.id), ['c0', 'c1']);
+      assert.equal(res.body.scan.returned, 2);
+      assert.equal(res.body.scan.pageSize, 25);
+    });
+
+    it('allPages=false returns only the newest page and says it is incomplete', async () => {
+      reset();
+      when('/comment', { json: commentPage(0, 25) });
+      const res = await request(app)
+        .get('/api/v1/clickup/tasks/task-9/comments?allPages=false').set(auth());
+      assert.equal(res.status, 200);
+      assert.equal(res.body.comments.length, 25);
+      assert.equal(res.body.scan.complete, false);
+      assert.equal(res.body.scan.hitCap, true);
+      // Without a cursor the opt-out would be the original bug by another name.
+      assert.equal(res.body.scan.nextStartId, 'c24');
+      assert.equal(callsTo('/comment').length, 1);
+    });
+
+    it('forwards a start/start_id cursor to ClickUp', async () => {
+      reset();
+      when('/comment', { json: commentPage(25, 5) });
+      const res = await request(app)
+        .get('/api/v1/clickup/tasks/task-9/comments?start=1791987416497&start_id=c24').set(auth());
+      assert.equal(res.status, 200);
+      const sent = callsTo('/comment')[0].url;
+      assert.ok(sent.includes('start=1791987416497'), sent);
+      assert.ok(sent.includes('start_id=c24'), sent);
+      assert.equal(res.body.scan.complete, true);
+    });
+
+    it('accepts startId as a spelling of start_id', async () => {
+      reset();
+      when('/comment', { json: commentPage(25, 5) });
+      const res = await request(app)
+        .get('/api/v1/clickup/tasks/task-9/comments?start=123&startId=c24').set(auth());
+      assert.equal(res.status, 200);
+      assert.ok(callsTo('/comment')[0].url.includes('start_id=c24'));
+    });
+
+    it('refuses the two spellings of start_id when they disagree', async () => {
+      reset();
+      const res = await request(app)
+        .get('/api/v1/clickup/tasks/task-9/comments?start=123&start_id=a&startId=b').set(auth());
+      assert.equal(res.status, 400);
+      assert.equal(calls.length, 0, 'nothing may be fetched on a contradiction');
+    });
+
+    it('refuses a repeated cursor param rather than dropping it', async () => {
+      reset();
+      // Express turns this into an array, which a plain coercion would drop to
+      // '' — and a dropped cursor is answered with the newest 25.
+      const res = await request(app)
+        .get('/api/v1/clickup/tasks/task-9/comments?start=1&start=2&start_id=c24').set(auth());
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /start/);
+      assert.equal(calls.length, 0);
+    });
+
+    it('refuses half a cursor instead of letting ClickUp ignore it', async () => {
+      reset();
+      const res = await request(app)
+        .get('/api/v1/clickup/tasks/task-9/comments?start=123').set(auth());
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /start AND start_id together/);
+      assert.equal(calls.length, 0);
+    });
+
+    it('refuses page and cursor by name rather than ignoring them', async () => {
+      reset();
+      // Silently ignoring these is how the bug report concluded that ClickUp's
+      // own paging parameters "change nothing".
+      const res = await request(app)
+        .get('/api/v1/clickup/tasks/task-9/comments?page=2&cursor=abc').set(auth());
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /page, cursor/);
+      assert.match(res.body.error, /start_id/);
+      assert.equal(calls.length, 0);
+    });
+
+    it('rejects a non-positive limit before calling ClickUp', async () => {
+      reset();
+      const res = await request(app)
+        .get('/api/v1/clickup/tasks/task-9/comments?limit=0').set(auth());
+      assert.equal(res.status, 400);
+      assert.equal(calls.length, 0);
+    });
+
+    it('serves the markdown rendering on ?format=text', async () => {
+      reset();
+      when('/comment', { json: commentPage(0, 2) });
+      const res = await request(app)
+        .get('/api/v1/clickup/tasks/task-9/comments?format=text').set(auth());
+      assert.equal(res.status, 200);
+      assert.match(res.headers['content-type'], /text\/plain/);
+      assert.match(res.text, /2 comment\(s\)/);
+      assert.match(res.text, /complete history/);
+    });
   });
 
   // ===================== ClickUp writes =====================

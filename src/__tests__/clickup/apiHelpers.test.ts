@@ -202,6 +202,175 @@ describe('ClickUpClient', () => {
       await client.getTaskComments('task1');
       assert.equal(calls[0].url, 'https://api.clickup.com/api/v2/task/task1/comment');
     });
+
+    it('forwards start and start_id as ClickUp spells them', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { comments: [] } }]);
+      const client = new ClickUpClient('token');
+      await client.getTaskComments('task1', '1791987416497', '1200870000094355');
+      assert.ok(calls[0].url.includes('start=1791987416497'));
+      assert.ok(calls[0].url.includes('start_id=1200870000094355'));
+    });
+
+    it('encodes the task id into the path', async () => {
+      const { calls } = mockFetch([{ status: 200, body: { comments: [] } }]);
+      const client = new ClickUpClient('token');
+      await client.getTaskComments('a/b?c');
+      // A bare `?` would truncate the path and turn the id into a query.
+      assert.ok(calls[0].url.startsWith('https://api.clickup.com/api/v2/task/a%2Fb%3Fc/comment'));
+    });
+  });
+
+  describe('getAllTaskComments', () => {
+    // ClickUp returns 25 per page, newest first, and the ONLY end-of-history
+    // signal is a page holding fewer than 25.
+    const page = (from: number, count: number) => ({
+      comments: Array.from({ length: count }, (_, i) => ({
+        id: `c${from + i}`,
+        date: String(2_000_000_000_000 - (from + i)),
+        comment_text: `comment ${from + i}`,
+      })),
+    });
+
+    it('pages past the first 25 and reports the history as complete', async () => {
+      // The ticket's own case: 40 comments behind a 25-comment first page.
+      const { calls } = mockFetch([
+        { status: 200, body: page(0, 25) },
+        { status: 200, body: page(25, 15) },
+      ]);
+      const client = new ClickUpClient('token');
+      const scan = await client.getAllTaskComments('task1');
+      assert.equal(scan.comments.length, 40);
+      assert.equal(scan.complete, true);
+      assert.equal(scan.pagesScanned, 2);
+      assert.equal(scan.hitCap, false);
+      assert.equal(scan.comments[39].id, 'c39', 'the oldest comment must be present');
+      // The second request must carry the cursor built from the LAST comment of
+      // the first page, which is its oldest.
+      assert.equal(calls.length, 2);
+      assert.ok(calls[1].url.includes('start_id=c24'));
+      assert.ok(calls[1].url.includes(`start=${2_000_000_000_000 - 24}`));
+    });
+
+    it('stops after one request when the first page is short', async () => {
+      const { calls } = mockFetch([{ status: 200, body: page(0, 3) }]);
+      const client = new ClickUpClient('token');
+      const scan = await client.getAllTaskComments('task1');
+      assert.equal(scan.comments.length, 3);
+      assert.equal(scan.complete, true);
+      assert.equal(calls.length, 1, 'a short first page needs no second request');
+    });
+
+    it('a task with exactly 25 comments costs a second request and reads complete', async () => {
+      // 25 is indistinguishable from "a full page with more behind it" without
+      // asking, so it must ask -- and must not report hitCap for doing so.
+      const { calls } = mockFetch([
+        { status: 200, body: page(0, 25) },
+        { status: 200, body: { comments: [] } },
+      ]);
+      const client = new ClickUpClient('token');
+      const scan = await client.getAllTaskComments('task1');
+      assert.equal(scan.comments.length, 25);
+      assert.equal(scan.complete, true);
+      assert.equal(scan.hitCap, false);
+      assert.equal(calls.length, 2);
+    });
+
+    it('a task with 26 comments comes back whole', async () => {
+      mockFetch([
+        { status: 200, body: page(0, 25) },
+        { status: 200, body: page(25, 1) },
+      ]);
+      const client = new ClickUpClient('token');
+      const scan = await client.getAllTaskComments('task1');
+      assert.equal(scan.comments.length, 26);
+      assert.equal(scan.complete, true);
+    });
+
+    it('deduplicates by id and stops when a page adds nothing new', async () => {
+      // If ClickUp ever ignores the cursor it answers with the same 25 again.
+      // Without this the scan would loop to the page cap and hand back the
+      // same comments 40 times over.
+      const { calls } = mockFetch([{ status: 200, body: page(0, 25) }]);
+      const client = new ClickUpClient('token');
+      const scan = await client.getAllTaskComments('task1');
+      assert.equal(scan.comments.length, 25);
+      assert.equal(scan.stalled, true);
+      assert.equal(scan.complete, false, 'a stall is not a complete history');
+      assert.equal(calls.length, 2, 'one wasted request, then it gives up');
+    });
+
+    it('stops at maxPages and reports the cap with a resume cursor', async () => {
+      mockFetch([
+        { status: 200, body: page(0, 25) },
+        { status: 200, body: page(25, 25) },
+      ]);
+      const client = new ClickUpClient('token');
+      const scan = await client.getAllTaskComments('task1', { maxPages: 2 });
+      assert.equal(scan.comments.length, 50);
+      assert.equal(scan.complete, false);
+      assert.equal(scan.hitCap, true);
+      assert.equal(scan.nextStartId, 'c49');
+      assert.equal(scan.nextStart, String(2_000_000_000_000 - 49));
+    });
+
+    it('stops at the caller limit mid-page and resumes from the last comment returned', async () => {
+      mockFetch([{ status: 200, body: page(0, 25) }]);
+      const client = new ClickUpClient('token');
+      const scan = await client.getAllTaskComments('task1', { limit: 10 });
+      assert.equal(scan.comments.length, 10);
+      assert.equal(scan.hitLimit, true);
+      assert.equal(scan.complete, false);
+      // c9 was the last one handed back; c10..c24 were fetched but withheld and
+      // must come back on the next call.
+      assert.equal(scan.nextStartId, 'c9');
+    });
+
+    it('a limit landing on the last comment of a short page reports complete, not a false cursor', async () => {
+      mockFetch([{ status: 200, body: page(0, 5) }]);
+      const client = new ClickUpClient('token');
+      const scan = await client.getAllTaskComments('task1', { limit: 5 });
+      assert.equal(scan.comments.length, 5);
+      assert.equal(scan.complete, true);
+      assert.equal(scan.hitLimit, false);
+      assert.equal(scan.nextStartId, undefined, 'there is nothing to resume from');
+    });
+
+    it('starts from a caller-supplied cursor', async () => {
+      const { calls } = mockFetch([{ status: 200, body: page(25, 5) }]);
+      const client = new ClickUpClient('token');
+      const scan = await client.getAllTaskComments('task1', { start: '123', startId: 'c24' });
+      assert.ok(calls[0].url.includes('start=123'));
+      assert.ok(calls[0].url.includes('start_id=c24'));
+      assert.equal(scan.complete, true);
+    });
+
+    it('keeps the pages already fetched when ClickUp rate-limits mid-scan', async () => {
+      mockFetch([
+        { status: 200, body: page(0, 25) },
+        { status: 429 },
+      ]);
+      const client = new ClickUpClient('token');
+      const scan = await client.getAllTaskComments('task1');
+      assert.equal(scan.comments.length, 25);
+      assert.equal(scan.rateLimited, true);
+      assert.equal(scan.complete, false);
+    });
+
+    it('propagates a failure on the first page instead of reporting an empty history', async () => {
+      mockFetch([{ status: 404, text: '{"err":"Task not found"}' }]);
+      const client = new ClickUpClient('token');
+      await assert.rejects(() => client.getAllTaskComments('nope'), /404/);
+    });
+
+    it('stops when the oldest comment of a full page carries no cursor', async () => {
+      const broken = { comments: Array.from({ length: 25 }, (_, i) => ({ id: `x${i}`, comment_text: 'no date' })) };
+      mockFetch([{ status: 200, body: broken }]);
+      const client = new ClickUpClient('token');
+      const scan = await client.getAllTaskComments('task1');
+      assert.equal(scan.comments.length, 25);
+      assert.equal(scan.cursorUnavailable, true);
+      assert.equal(scan.complete, false);
+    });
   });
 
   describe('addTaskComment', () => {

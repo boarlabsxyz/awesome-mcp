@@ -1455,6 +1455,96 @@ describe('ClickUp server tools', () => {
       assert.ok(result.includes('unknown'));
       assert.ok(result.includes('[empty]'));
     });
+
+    // === Pagination (ticket 1245xaweyh4) ===
+    //
+    // ClickUp answers with the 25 newest comments and nothing that says so, so
+    // every assertion here is about the difference between "25 comments" and
+    // "25 comments and that is all of them".
+
+    const page = (from: number, count: number) => ({
+      comments: Array.from({ length: count }, (_, i) => ({
+        id: `c${from + i}`,
+        date: String(2_000_000_000_000 - (from + i)),
+        user: { username: 'alice' },
+        comment_text: `comment ${from + i}`,
+      })),
+    });
+
+    it('pages past 25 and returns the oldest comment', async () => {
+      mockFetch([
+        { status: 200, body: page(0, 25) },
+        { status: 200, body: page(25, 15) },
+      ]);
+      const result = await callTool('getTaskComments', { taskId: 't1' });
+      assert.ok(result.includes('comment 39'), 'the oldest comment must be present');
+      assert.ok(result.includes('comment 0'));
+      assert.ok(result.includes('40 comment(s)'));
+      assert.ok(result.includes('complete history'));
+    });
+
+    it('says so when the history is NOT complete, and gives the cursor', async () => {
+      mockFetch([
+        { status: 200, body: page(0, 25) },
+        { status: 200, body: page(25, 25) },
+      ]);
+      const result = await callTool('getTaskComments', { taskId: 't1', limit: 30 });
+      assert.ok(result.includes('INCOMPLETE'), result.slice(0, 200));
+      assert.ok(result.includes('start=') && result.includes('startId='), 'must carry a resume cursor');
+      assert.ok(!result.includes('complete history'));
+    });
+
+    it('renders oldest first on request without changing what was fetched', async () => {
+      mockFetch([{ status: 200, body: page(0, 3) }]);
+      const result = await callTool('getTaskComments', { taskId: 't1', oldestFirst: true });
+      assert.ok(result.includes('oldest first'));
+      assert.ok(result.indexOf('comment 2') < result.indexOf('comment 0'));
+    });
+
+    it('states the order on the default path too', async () => {
+      mockFetch([{ status: 200, body: page(0, 3) }]);
+      const result = await callTool('getTaskComments', { taskId: 't1' });
+      assert.ok(result.includes('newest first'));
+      assert.ok(result.indexOf('comment 0') < result.indexOf('comment 2'));
+    });
+
+    it('refuses start without startId rather than letting ClickUp ignore it', async () => {
+      mockFetch([{ status: 200, body: { comments: [] } }]);
+      await assert.rejects(
+        () => callTool('getTaskComments', { taskId: 't1', start: '123' }),
+        /start AND startId together/,
+      );
+    });
+
+    it('refuses startId without start', async () => {
+      mockFetch([{ status: 200, body: { comments: [] } }]);
+      await assert.rejects(
+        () => callTool('getTaskComments', { taskId: 't1', startId: 'c9' }),
+        /start AND startId together/,
+      );
+    });
+
+    it('reports a threaded-reply count rather than leaving replies invisible', async () => {
+      mockFetch([{
+        status: 200,
+        body: { comments: [{ id: 'c1', date: '1700000000000', user: { username: 'alice' }, comment_text: 'parent', reply_count: 4 }] },
+      }]);
+      const result = await callTool('getTaskComments', { taskId: 't1' });
+      assert.ok(result.includes('4 threaded replies'));
+      assert.ok(result.includes('not included'));
+    });
+
+    it('does not report an empty result as "no comments" when the scan failed', async () => {
+      // An empty page after a rate limit is absence of evidence, not evidence
+      // that the task has no comments.
+      mockFetch([
+        { status: 200, body: page(0, 25) },
+        { status: 429 },
+      ]);
+      const result = await callTool('getTaskComments', { taskId: 't1' });
+      assert.ok(result.includes('INCOMPLETE'));
+      assert.ok(result.includes('rate-limited'));
+    });
   });
 
   // === Tier 3: Search ===
