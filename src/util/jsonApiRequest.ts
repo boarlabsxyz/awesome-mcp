@@ -28,9 +28,10 @@
 //   4. 204 and non-JSON answers resolve to undefined instead of throwing out of
 //      res.json(). An empty body is a legitimate answer to a write.
 //
-// Used by BrowserbaseClient and RedmineClient. Each keeps only what is
-// genuinely its own — Redmine its query-string builder and its dual-mode auth
-// header, Browserbase its single key header. ClickUp and the others predate
+// Used by BrowserbaseClient, RedmineClient and GitHubClient. Each keeps only
+// what is genuinely its own — Redmine its query-string builder and its
+// dual-mode auth header, Browserbase its single key header, GitHub its Link
+// pagination and header-driven error diagnosis. ClickUp and the others predate
 // this and still carry their own copies; moving them over is worthwhile but is
 // a bigger change than it looks, because ClickUpClient tags its status on a
 // Symbol and ~24 of its REST routes currently depend on that quirk.
@@ -252,6 +253,20 @@ function redactWith(secrets: readonly string[] | undefined, text: string): strin
   return out;
 }
 
+/** A parsed body plus the response metadata some APIs put their answer in. */
+export interface JsonApiResponse<T> {
+  /** Parsed JSON, or `undefined` for 204 and any non-JSON response. */
+  data: T | undefined;
+  /** Final response status (after any followed same-origin hops). */
+  status: number;
+  /**
+   * Final response headers. GitHub is why this exists: pagination lives in
+   * `Link`, and its rate-limit and OAuth-scope diagnostics live in
+   * `x-ratelimit-*` / `x-oauth-scopes`, none of which survive a body-only API.
+   */
+  headers: Headers;
+}
+
 /**
  * Perform the request and parse a JSON body.
  *
@@ -260,6 +275,17 @@ function redactWith(secrets: readonly string[] | undefined, text: string): strin
  * that was not followed, and a named message on timeout.
  */
 export async function jsonApiRequest<T>(config: JsonApiRequestConfig): Promise<T | undefined> {
+  return (await jsonApiRequestWithMeta<T>(config)).data;
+}
+
+/**
+ * `jsonApiRequest`, but resolving to the body AND the response's status and
+ * headers. Same four rules, same errors — a thrown non-2xx additionally
+ * carries the response headers on a non-enumerable `.headers`, because the
+ * header is often the only thing that separates two causes sharing a status
+ * (GitHub answers both "rate limited" and "forbidden" with 403).
+ */
+export async function jsonApiRequestWithMeta<T>(config: JsonApiRequestConfig): Promise<JsonApiResponse<T>> {
   const { method, headers, body, timeoutMs, serviceLabel } = config;
   const doFetch = config.fetchImpl ?? fetch;
   const redact = (text: string) => redactWith(config.secrets, text);
@@ -353,14 +379,16 @@ export async function jsonApiRequest<T>(config: JsonApiRequestConfig): Promise<T
       // but `console.error(err)` and JSON.stringify no longer dump an entire
       // upstream payload into the logs. The message carries a capped excerpt.
       Object.defineProperty(error, 'body', { value: text, enumerable: false, writable: true, configurable: true });
+      Object.defineProperty(error, 'headers', { value: res.headers, enumerable: false, writable: true, configurable: true });
       throw error;
     }
 
-    if (res.status === 204) return undefined;
+    const meta = { status: res.status, headers: res.headers };
+    if (res.status === 204) return { data: undefined, ...meta };
     const contentType = res.headers.get('content-type') || '';
-    if (!contentType.includes('application/json')) return undefined;
+    if (!contentType.includes('application/json')) return { data: undefined, ...meta };
     try {
-      return (await res.json()) as T;
+      return { data: (await res.json()) as T, ...meta };
     } catch (err: any) {
       if (err?.name === 'AbortError') throw timedOut();
       throw err;

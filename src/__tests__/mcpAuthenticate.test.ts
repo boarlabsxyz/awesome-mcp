@@ -28,6 +28,7 @@ function makeDeps(overrides: Partial<AuthDeps> = {}): AuthDeps {
     createHubSpotSession: mock.fn(() => fakeSession),
     createRedmineSession: mock.fn(() => fakeSession),
     createBrowserbaseSession: mock.fn(() => fakeSession),
+    createGitHubSession: mock.fn(() => fakeSession),
     ...overrides,
   };
 }
@@ -282,5 +283,17 @@ describe('authenticateRequest', () => {
     await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.inst1' }), 'clickup', deps);
     assert.equal((deps.createClickUpSession as any).mock.calls.length, 1);
     assert.equal((deps.createOutlineSession as any).mock.calls.length, 0);
+  });
+
+  it('routes github connections through createGitHubSession', async () => {
+    // Without this branch a GitHub connection falls through to the Google
+    // path: auth passes and every tool then reports "GitHub not connected".
+    const githubConnection = { ...fakeConnection, mcpSlug: 'github', provider: 'github' };
+    const deps = makeDeps({
+      getMcpConnectionByInstanceId: mock.fn(async () => githubConnection),
+    });
+    await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.inst1' }), 'github', deps);
+    assert.equal((deps.createGitHubSession as any).mock.calls.length, 1);
+    assert.equal((deps.createUserSessionFromConnection as any).mock.calls.length, 0);
   });
 });

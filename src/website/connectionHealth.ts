@@ -29,6 +29,7 @@ import { validatePeopleForceToken } from '../peopleforce/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
 import { validateRedmineToken } from '../redmine/connectToken.js';
 import { validateBrowserbaseToken } from '../browserbase/connectToken.js';
+import { validateGitHubToken } from '../github/connectToken.js';
 import { resolveRedmineAuthMode } from '../redmine/authMode.js';
 
 /**
@@ -417,6 +418,17 @@ export async function checkConnectionHealth(
         return fromValidateResult(await validateBrowserbaseToken({
           token: accessToken, fetchImpl,
         } as any), false);
+      }
+
+      case 'github': {
+        if (!accessToken) return { state: 'reauth', reason: 'No GitHub token stored.' };
+        // canSelfHeal follows the refresh token: an OAuth App token and a PAT
+        // never expire, so a rejection is conclusive; a GitHub App user token
+        // is routinely expired at rest (8h) and renewed at call time, so its
+        // rejection here says nothing about the grant.
+        return fromValidateResult(await validateGitHubToken({
+          token: accessToken, fetchImpl,
+        }), !!providerTokens.refresh_token);
       }
 
       default:

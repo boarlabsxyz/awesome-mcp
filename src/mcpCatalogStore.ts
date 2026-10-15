@@ -3,6 +3,7 @@ import * as fs from 'fs/promises';
 import { stripTrailingSlashes } from './util/url.js';
 import * as path from 'path';
 import { isDatabaseAvailable, getPool } from './db.js';
+import { GITHUB_AUTHORIZE_URL, GITHUB_TOKEN_URL, GITHUB_OAUTH_SCOPES } from './github/oauthCallback.js';
 
 const DATA_DIR = process.env.DATA_DIR || './data';
 const CATALOG_FILE = path.join(DATA_DIR, 'mcp-catalog.json');
@@ -319,6 +320,50 @@ async function seedRedmineCatalog(normalizeUrl: NormalizeUrl): Promise<void> {
         ]
       : [],
     isLocal: !process.env.REDMINE_MCP_URL,
+    isActive: true,
+  });
+}
+
+/**
+ * Seed the GitHub catalog row.
+ *
+ * Env-gated dual mode, like Outline and Redmine, but simpler: github.com is
+ * one host, so one OAuth app (registered once, at github.com/settings/developers
+ * or as a GitHub App) serves every user and no base URL is involved.
+ *
+ *   OAuth flow    — GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET set, with the app's
+ *                   callback URL <BASE_URL>/connect/github/callback. Dashboard
+ *                   shows "Connect with GitHub". Works for an OAuth App
+ *                   (non-expiring token, `scope` honoured) and for a GitHub App
+ *                   (expiring token + rotating refresh token, `scope` ignored in
+ *                   favour of the app's configured permissions).
+ *   Paste-token   — otherwise. Each user pastes a classic or fine-grained
+ *                   personal access token, validated via GET /user.
+ *
+ * The client id/secret must be set on BOTH the web service (this seed and the
+ * /connect exchange) and the github MCP service (call-time refresh), or a
+ * GitHub App connection works for 8 hours and then 401s.
+ */
+async function seedGitHubCatalog(normalizeUrl: NormalizeUrl): Promise<void> {
+  const githubClientId     = process.env.GITHUB_CLIENT_ID || null;
+  const githubClientSecret = process.env.GITHUB_CLIENT_SECRET || null;
+  const githubOauthEnabled = !!(githubClientId && githubClientSecret);
+
+  await createMcpCatalog({
+    slug: 'github',
+    name: 'GitHub MCP Server',
+    description: 'Browse repositories, read and commit files, and manage issues and pull requests on GitHub',
+    iconUrl: 'https://github.com/favicon.ico',
+    mcpUrl: normalizeUrl(process.env.GITHUB_MCP_URL, '/github'),
+    provider: 'github',
+    scopes: [],
+    googleClientId: githubClientId,
+    googleClientSecret: githubClientSecret,
+    oauthAuthorizationUrl: githubOauthEnabled ? GITHUB_AUTHORIZE_URL : '',
+    oauthTokenUrl:         githubOauthEnabled ? GITHUB_TOKEN_URL     : '',
+    // See GITHUB_OAUTH_SCOPES for why this is `repo` alone (and why not `workflow`).
+    oauthScopes: githubOauthEnabled ? GITHUB_OAUTH_SCOPES : [],
+    isLocal: !process.env.GITHUB_MCP_URL,
     isActive: true,
   });
 }
@@ -762,6 +807,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
   });
 
   await seedRedmineCatalog(normalizeUrl);
+  await seedGitHubCatalog(normalizeUrl);
 
   console.error('Default MCP catalog entries seeded.');
 }

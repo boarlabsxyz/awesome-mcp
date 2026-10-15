@@ -94,6 +94,21 @@ export interface UserSession {
   browserbaseProjectId?: string;
   /** Connection instance id, so per-call domain rules can be re-read from the store. */
   browserbaseInstanceId?: string;
+  /**
+   * GitHub credential: an OAuth App token, a GitHub App user token, or a pasted
+   * personal access token (classic or fine-grained) — all sent as Bearer. No
+   * base URL field: github.com only (see src/github/constants.ts on GHES).
+   */
+  githubAccessToken?: string;
+  /** Refresh token — GitHub App user tokens only; OAuth App tokens and PATs have none. */
+  githubRefreshToken?: string;
+  /** Access-token expiry as ms-epoch; absent = non-expiring (OAuth App token or PAT). */
+  githubTokenExpiry?: number;
+  /** OAuth client credentials (from env) used to drive the refresh_token grant. */
+  githubOauthClientId?: string;
+  githubOauthClientSecret?: string;
+  /** Connection instance id, so a refresh can persist the rotated tokens back to the store. */
+  githubInstanceId?: string;
 }
 
 // Cache sessions to avoid recreating clients per request
@@ -635,6 +650,59 @@ export function createBrowserbaseSession(
     // rules the user has already changed on the dashboard.
     browserbaseInstanceId: connection.instanceId,
     // Null placeholders for Google clients (Browserbase MCP won't use them)
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
+  };
+
+  mcpSessionCache.set(cacheKey, session);
+  return session;
+}
+
+/**
+ * Create a user session for GitHub connections.
+ *
+ * Three credential shapes land here and need no flag to tell apart: an OAuth
+ * App token and a pasted PAT carry neither refresh token nor expiry (so the
+ * refresh path in withGitHubClient no-ops), while a GitHub App user token
+ * carries both and is refreshed at call time — with the refresh token ROTATED,
+ * which is why the instance id rides along for the write-back.
+ */
+export function createGitHubSession(
+  user: UserRecord,
+  connection: McpConnection,
+): UserSession {
+  const providerTokens = connection.providerTokens as {
+    access_token?: string;
+    refresh_token?: string;
+    expiry_date?: number;
+  } | undefined;
+  const accessToken = providerTokens?.access_token;
+  if (!accessToken) {
+    throw new Error(`GitHub access token missing for connection ${connection.instanceId}. Please reconnect.`);
+  }
+
+  const cacheKey = `${user.apiKey}:${connection.instanceId}`;
+  const cached = cachedSessionFor(cacheKey, accessToken, s => s.githubAccessToken);
+  if (cached) return cached;
+
+  const session: UserSession = {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: connection.mcpSlug,
+    githubAccessToken: accessToken,
+    githubRefreshToken: providerTokens?.refresh_token,
+    githubTokenExpiry: providerTokens?.expiry_date,
+    // Present only on OAuth deployments (the same vars the catalog seed reads).
+    githubOauthClientId: process.env.GITHUB_CLIENT_ID || undefined,
+    githubOauthClientSecret: process.env.GITHUB_CLIENT_SECRET || undefined,
+    githubInstanceId: connection.instanceId,
+    // Null placeholders for Google clients (GitHub MCP won't use them)
     googleDocs: null as any,
     googleDrive: null as any,
     googleSheets: null as any,

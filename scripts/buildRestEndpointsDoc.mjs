@@ -58,9 +58,10 @@ const SERVICE_TITLE = {
   hubspot: 'HubSpot',
   redmine: 'Redmine',
   browserbase: 'Browserbase',
+  github: 'GitHub',
 };
 
-const SERVICE_ORDER = ['docs', 'sheets', 'calendar', 'drive', 'gmail', 'slides', 'clickup', 'slack', 'outline', 'peopleforce', 'hubspot', 'redmine', 'browserbase'];
+const SERVICE_ORDER = ['docs', 'sheets', 'calendar', 'drive', 'gmail', 'slides', 'clickup', 'slack', 'outline', 'peopleforce', 'hubspot', 'redmine', 'browserbase', 'github'];
 
 const lines = [];
 lines.push('# REST Data Plane — Endpoint Catalog');

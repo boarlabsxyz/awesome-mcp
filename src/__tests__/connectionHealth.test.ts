@@ -144,7 +144,9 @@ describe('checkConnectionHealth — a refreshable connection is not a broken one
     providerTokens: { access_token: 'bad', baseUrl: 'https://x.test' },
   } as any);
 
-  for (const provider of ['outline', 'hubspot']) {
+  // github: a GitHub App user token expires in 8h and refreshes at call time,
+  // exactly like these; an OAuth App token or PAT stores no refresh token.
+  for (const provider of ['outline', 'hubspot', 'github']) {
     it(`${provider}: 401 with a refresh token stored is unknown, not reauth`, async () => {
       const health = await checkConnectionHealth(withRefresh(provider), NO_CREDS, {
         fetchImpl: respond(401, {}),
