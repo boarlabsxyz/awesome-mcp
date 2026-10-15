@@ -39,6 +39,8 @@ import {
   formatWikiPage,
   formatWikiPageList,
   mergeCustomFieldFilters,
+  noteRedmineEvidence,
+  type RedminePage,
 } from './apiHelpers.js';
 import {
   listIssuesSchema,
@@ -445,6 +447,12 @@ async function scanTimeEntriesPerProject(
   projectsTotal?: number;
   failed: string[];
   truncated: boolean;
+  /** Projects Redmine listed at all, whether or not one could be requested. */
+  listed: number;
+  /** Projects the project-scoped route was actually requested for. */
+  attempted: number;
+  /** Of those, how many Redmine REFUSED (401/403) rather than failed otherwise. */
+  denied: number;
 }> {
   const projects = await client.listProjects({ offset: 0, limit: REDMINE_MAX_LIMIT });
   // Deduplicated by entry id, which is not a belt-and-braces measure: Redmine
@@ -461,6 +469,9 @@ async function scanTimeEntriesPerProject(
   const failed: string[] = [];
   let scanned = 0;
   let truncated = false;
+  let deniedInARow = 0;
+  let attempted = 0;
+  let denied = 0;
   const collected = () => byId.size + unidentified.length;
 
   for (const project of projects.items) {
@@ -475,6 +486,7 @@ async function scanTimeEntriesPerProject(
       truncated = true;
       break;
     }
+    attempted += 1;
     try {
       const scoped = await scanAllTimeEntries(
         client,
@@ -492,11 +504,30 @@ async function scanTimeEntriesPerProject(
       }
       if (scoped.truncated) truncated = true;
       scanned += 1;
-    } catch {
+    } catch (projectErr: any) {
       // One project failing (archived, module disabled, no permission) must not
       // lose the projects that answered — but it does mean the total is a floor,
       // which is why the names are collected rather than swallowed.
       failed.push(project.name ?? id);
+      // Nothing has answered yet and this one REFUSED. If the account really
+      // lacks the permission, so will all 100, and the sweep is then just a
+      // slow way to the message the first failure already carried. Only
+      // consecutive refusals count, and only before anything has been
+      // collected: once one project has answered, the route plainly works and
+      // the rest of the list is worth finishing.
+      if (isDenial(projectErr)) denied += 1;
+      if (scanned === 0 && isDenial(projectErr)) {
+        deniedInARow += 1;
+        if (deniedInARow >= DENIAL_PROBE_LIMIT) {
+          log.info(
+            `Per-project time-entry scan abandoned: the first ${deniedInARow} project(s) all refused, ` +
+            'so this is a refusal rather than a blocked route',
+          );
+          break;
+        }
+      } else {
+        deniedInARow = 0;
+      }
     }
   }
   return {
@@ -505,7 +536,46 @@ async function scanTimeEntriesPerProject(
     projectsTotal: projects.page.total_count,
     failed,
     truncated,
+    listed: projects.items.length,
+    attempted,
+    denied,
   };
+}
+
+/**
+ * What the sweep proved, in the words the observations support — which is the
+ * whole thesis of this change applied to its own message.
+ *
+ * `projectsScanned === 0` has four causes and only ONE of them is evidence:
+ * every attempt was refused. An empty project list and a list whose entries
+ * carry no usable identifier mean the other route was never exercised, so
+ * claiming it "refused too" asserts a conclusion from zero observations; and a
+ * 404 or a 5xx is a failure but not a refusal, so it cannot carry "this is not
+ * one blocked path" either. Returns null when there is nothing honest to add,
+ * because no note is better than one that argues against the diagnosis.
+ */
+function perProjectSweepEvidence(sweep: {
+  listed: number;
+  attempted: number;
+  denied: number;
+}): string | null {
+  const route = 'The project-scoped route /projects/{id}/time_entries.json';
+  if (sweep.attempted === 0) {
+    return sweep.listed === 0
+      ? `${route} was never tried: Redmine listed no projects for this account, so the project list is the ` +
+        'thing to look at first — it says nothing either way about the time-entry route.'
+      : `${route} was never tried: none of the ${sweep.listed} project(s) Redmine listed carried an id or ` +
+        'identifier to request one with.';
+  }
+  if (sweep.denied === sweep.attempted) {
+    return `${route} was tried on ${sweep.attempted} project(s) and refused there too, so this is not one ` +
+      'blocked path.';
+  }
+  return (
+    `${route} was tried on ${sweep.attempted} project(s) and failed there too` +
+    `${sweep.denied > 0 ? ` (${sweep.denied} refused, the rest failed for another reason)` : ''} — some of ` +
+    'those were not refusals, so they do not say whether this route is blocked.'
+  );
 }
 
 /**
@@ -528,11 +598,35 @@ export async function scanTimeEntries(
       scan: { scanned: { total: scan.total, truncated: scan.truncated, ceiling: TIME_ENTRY_SCAN_MAX } },
     };
   } catch (err: any) {
-    // Only the global route is worth working around, and only when the failure
-    // was the route rather than the answer: a 403 is Redmine saying this account
-    // may not read time entries, and scanning 100 projects to be told that 100
-    // more times is just a slower way to the same message.
-    if (args.projectId || !isRouteLevelFailure(err)) throw err;
+    if (!isGlobalRouteWorthRetrying(err)) throw err;
+    // A named project needs no sweep at all: it has exactly ONE other route,
+    // and this is the case the old guard refused outright on the grounds that
+    // "naming one already uses a project-scoped query". It does not — naming
+    // one adds `project_id` to /time_entries.json, which is the same route
+    // that just failed. So the single case with the cheapest way out was the
+    // one case with no way out.
+    if (args.projectId) {
+      const projectId = args.projectId;
+      log.info(`Workspace-wide time-entry scan failed; scanning project ${projectId} on its own route`);
+      try {
+        const scoped = await scanAllTimeEntries(
+          client,
+          args,
+          log,
+          (query) => client.listProjectTimeEntries(projectId, { ...query, project_id: undefined }),
+        );
+        return {
+          items: scoped.items,
+          scan: {
+            scanned: { total: scoped.total, truncated: scoped.truncated, ceiling: TIME_ENTRY_SCAN_MAX },
+            projectRoute: { projectId, reason: err?.message ?? 'the workspace-wide route failed' },
+          },
+        };
+      } catch (projectErr: any) {
+        noteRedmineEvidence(err, projectRouteEvidence(projectId, err, projectErr));
+        throw err;
+      }
+    }
     log.info('Global /time_entries.json failed; falling back to a per-project scan');
     let perProject: Awaited<ReturnType<typeof scanTimeEntriesPerProject>>;
     try {
@@ -543,7 +637,11 @@ export async function scanTimeEntries(
     // Nothing answered. Reporting that as an empty result with a note would
     // read as "this workspace logged no hours", and would bury the redirect
     // (or whatever it was) that is the actual thing to fix.
-    if (perProject.projectsScanned === 0) throw err;
+    if (perProject.projectsScanned === 0) {
+      const evidence = perProjectSweepEvidence(perProject);
+      if (evidence) noteRedmineEvidence(err, evidence);
+      throw err;
+    }
     return {
       items: perProject.items,
       scan: {
@@ -559,30 +657,152 @@ export async function scanTimeEntries(
   }
 }
 
+/**
+ * The note a single-page read needs when it came from the fallback route.
+ *
+ * Exported so the REST twin renders the identical line — the two surfaces
+ * share the fetch, so they must share what it says about itself, or a curl
+ * client and an LLM get different accounts of the same call.
+ */
+export function projectRouteNotes(projectRoute?: { projectId: string; reason: string }): string[] | undefined {
+  if (!projectRoute) return undefined;
+  return [
+    `⚠ The workspace-wide /time_entries.json route did not work on this instance, so this page came from ` +
+    `/projects/${projectRoute.projectId}/time_entries.json instead — the same data from a different path. ` +
+    `Reason the workspace-wide route failed: ${projectRoute.reason}`,
+  ];
+}
+
 /** Body of the `listTimeEntries` tool. */
 export async function opListTimeEntries(client: RedmineClient, args: z.infer<typeof listTimeEntriesSchema>, log: RedmineToolLog): Promise<string> {
   log.info(`Listing Redmine time entries (project=${args.projectId ?? 'all'}, user=${args.userId ?? 'all'}, activity=${args.activityId ?? 'all'}, offset=${args.offset}, allPages=${args.allPages})`);
 
   if (!args.allPages) {
-    const res = await client.listTimeEntries(timeEntryListQuery(args));
-    return formatTimeEntryList(res.items, res.page);
+    const res = await listTimeEntriesPage(client, args, log);
+    return formatTimeEntryList(res.items, res.page, undefined, projectRouteNotes(res.projectRoute));
   }
   const scanned = await scanTimeEntries(client, args, log);
   return formatTimeEntryList(scanned.items, undefined, scanned.scan);
 }
 
 /**
- * Is this failure about the ROUTE, or about the answer?
+ * Could the project-scoped route survive what the workspace-wide one just
+ * answered?
  *
- * A refused redirect, a 404 and a 5xx all mean the global list never ran. A
- * 401/403/422 is Redmine having evaluated the request and declined it, and the
- * per-project route would decline it identically.
+ * A refused redirect, a 404/405/501 and a 5xx all mean the global list never
+ * ran, and `/projects/{id}/time_entries.json` is a genuinely different path.
+ *
+ * 403 is in this set too, which it was NOT before, and the reason is the whole
+ * point: Redmine answers 403 both when the account may not read time entries
+ * AND when something in front of this one route refuses API requests, with
+ * nothing in the response to separate them (reported live — an account that
+ * reads a project's spent time in the browser, where Redmine runs the
+ * IDENTICAL authorization check, got 403 from every time-entry call). Treating
+ * 403 as a final answer is what left that instance with no working path at
+ * all, including the per-project fallback built for exactly its symptom.
+ *
+ * It buys a BOUNDED probe, not a sweep: one extra request when a project was
+ * named, and at most DENIAL_PROBE_LIMIT when it was not, after which the
+ * original error is reported. That keeps the old reasoning intact — being told
+ * "no" a hundred times is a slower route to the same message — while letting
+ * the one request that could prove it wrong actually happen.
+ *
+ * 401, 422 and 429 stay out. A rejected credential, a rejected query and a
+ * rate limit are answers the other route would repeat verbatim.
  */
-function isRouteLevelFailure(err: any): boolean {
+function isGlobalRouteWorthRetrying(err: any): boolean {
   if (err instanceof RedirectRefusedError) return true;
   const status = typeof err?.status === 'number' ? err.status : undefined;
   if (status === undefined) return false;
-  return status === 404 || status === 405 || status === 501 || status === 502 || status === 503;
+  return status === 403 || status === 404 || status === 405 || status === 501 || status === 502 || status === 503;
+}
+
+/** 401/403 from the project route: Redmine evaluated the request and refused. */
+function isDenial(err: any): boolean {
+  const status = typeof err?.status === 'number' ? err.status : undefined;
+  return status === 401 || status === 403;
+}
+
+/**
+ * How many projects may refuse before the per-project sweep is abandoned, when
+ * nothing has been collected yet.
+ *
+ * Not 1: the first project in the list can legitimately be one this account
+ * cannot read, or one with time tracking switched off, and giving up there
+ * would throw away a sweep that was about to work. Not unbounded either: if
+ * the account really lacks the permission every project refuses, and 100
+ * requests to hear that is the thing the old 403 rule was right about. Three
+ * bounds the wasted cost at four requests.
+ */
+const DENIAL_PROBE_LIMIT = 3;
+
+/**
+ * One page of a time-entry query, with the project-scoped route as a fallback.
+ *
+ * Shared by the tool and the REST route for the single-page read, and the
+ * reason a plain `client.listTimeEntries` call no longer appears in either:
+ * when `/time_entries.json` is blocked on an instance, every default call to
+ * this tool failed while the data sat behind a path this client already knew
+ * how to request.
+ *
+ * Only a NAMED project can be retried, because the fallback route needs an id
+ * in its path. Without one the caller is asking for the workspace, and the
+ * sweep in scanTimeEntries is the only way to assemble that.
+ */
+export async function listTimeEntriesPage(
+  client: RedmineClient,
+  args: z.infer<typeof listTimeEntriesSchema>,
+  log: RedmineToolLog,
+): Promise<{
+  items: RedmineTimeEntry[];
+  page: RedminePage;
+  projectRoute?: { projectId: string; reason: string };
+}> {
+  try {
+    const res = await client.listTimeEntries(timeEntryListQuery(args));
+    return { items: res.items, page: res.page };
+  } catch (err: any) {
+    const projectId = args.projectId;
+    if (!projectId || !isGlobalRouteWorthRetrying(err)) throw err;
+    log.info(
+      `Workspace-wide /time_entries.json failed (${err?.status ?? 'no status'}); retrying project ` +
+      `${projectId} on its own route`,
+    );
+    try {
+      const res = await client.listProjectTimeEntries(projectId, {
+        // The project rides in the PATH here. Leaving `project_id` in the query
+        // as well is harmless but says the project twice, and the whole point
+        // of this call is that it is not the query-parameter form.
+        ...timeEntryListQuery(args),
+        project_id: undefined,
+      });
+      return {
+        items: res.items,
+        page: res.page,
+        projectRoute: { projectId, reason: err?.message ?? 'the workspace-wide route failed' },
+      };
+    } catch (projectErr: any) {
+      // Report the original: it names the route the caller asked for. The note
+      // carries what the other one said, which is the part that separates a
+      // single blocked path from a genuine refusal.
+      noteRedmineEvidence(err, projectRouteEvidence(projectId, err, projectErr));
+      throw err;
+    }
+  }
+}
+
+/** What the project-scoped route answered, for the 403 message to quote. */
+function projectRouteEvidence(projectId: string, globalErr: any, projectErr: any): string {
+  const globalStatus = typeof globalErr?.status === 'number' ? globalErr.status : undefined;
+  const projectStatus = typeof projectErr?.status === 'number' ? projectErr.status : undefined;
+  const answered = projectStatus ?? (projectErr instanceof RedirectRefusedError ? 'a refused redirect' : 'an error');
+  const agreement =
+    projectStatus !== undefined && projectStatus === globalStatus
+      ? ' — the same as the workspace-wide route, so this is not one blocked path.'
+      : '.';
+  return (
+    `The project-scoped route /projects/${projectId}/time_entries.json answered ${answered}${agreement}`
+  );
 }
 
 /** Body of the `getTimeEntry` tool. */

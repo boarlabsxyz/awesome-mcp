@@ -392,22 +392,147 @@ describe('time entry ops', () => {
     );
   });
 
-  test('a 403 on the global list is reported, not worked around per project', async () => {
-    // Redmine saying "this account may not read time entries" is an ANSWER.
-    // Scanning 100 projects to be told so 100 more times is a slower route to
-    // the same message, and would hide it behind a partial-scan note.
-    const denied: any = new Error('Redmine API GET /time_entries.json failed: 403');
-    denied.status = 403;
-    let projectCalls = 0;
+  test('a 403 on the global list buys a BOUNDED probe, then is reported', async () => {
+    // Redmine answers 403 both for "this account may not read time entries" and
+    // for "something in front of this one route refuses API requests", and the
+    // response cannot tell them apart — so a 403 can no longer be trusted as a
+    // final answer. What it must not become is a sweep: being told no a hundred
+    // times is a slower route to the message the first failure already carried.
+    const denied = () => { const e: any = new Error('Redmine API GET /time_entries.json failed: 403'); e.status = 403; return e; };
+    const projectAttempts: string[] = [];
     const client = {
-      listProjects: async () => { projectCalls += 1; return { items: [], page: {} }; },
-      listTimeEntries: async () => { throw denied; },
+      listProjects: async () => ({
+        items: Array.from({ length: 40 }, (_, i) => ({ id: i + 1, identifier: `p${i + 1}`, name: `P${i + 1}` })),
+        page: { total_count: 40 },
+      }),
+      listTimeEntries: async () => { throw denied(); },
+      listProjectTimeEntries: async (id: string) => { projectAttempts.push(id); throw denied(); },
     } as unknown as RedmineClient;
     await assert.rejects(
       () => ops.opListTimeEntries(client, { allPages: true, offset: 0, limit: 25 } as any, log),
       /403/,
     );
-    assert.equal(projectCalls, 0);
+    // Three refusals with nothing collected is a refusal, not a blocked route.
+    assert.deepEqual(projectAttempts, ['p1', 'p2', 'p3']);
+  });
+
+  test('a sweep that is already working is not abandoned by later refusals', async () => {
+    // The probe limit counts CONSECUTIVE refusals before anything has answered.
+    // Once one project has answered, the route plainly works and the remaining
+    // projects are worth finishing — a later run of unreadable ones must not
+    // truncate the scan, because that would turn a floor into a smaller floor
+    // with nothing in the output to say which.
+    const denied = () => { const e: any = new Error('nope'); e.status = 403; return e; };
+    const client = {
+      listProjects: async () => ({
+        items: ['ok', 'a', 'b', 'c', 'd', 'last'].map((id, i) => ({ id: i + 1, identifier: id, name: id })),
+        page: { total_count: 6 },
+      }),
+      listTimeEntries: async () => { throw denied(); },
+      listProjectTimeEntries: async (id: string) => {
+        if (id === 'ok') return { items: [{ id: 1, hours: 2 }], page: { total_count: 1 } };
+        if (id === 'last') return { items: [{ id: 2, hours: 3 }], page: { total_count: 1 } };
+        throw denied();
+      },
+    } as unknown as RedmineClient;
+    const out = await ops.opListTimeEntries(client, { allPages: true, offset: 0, limit: 25 } as any, log);
+    assert.match(out, /: 5$/m);
+    assert.match(out, /4 project\(s\) could not be read/);
+  });
+
+  test('a NAMED project falls back to its own route rather than giving up', async () => {
+    // The reported bug, second half: naming a project was excluded from the
+    // fallback on the grounds that it "already uses a project-scoped query". It
+    // does not — it adds project_id to /time_entries.json, the same route that
+    // just failed. So the one case with a single cheap way out had none, and a
+    // nightly per-project hours check had no working path at all.
+    const denied: any = new Error('Redmine API GET /time_entries.json failed: 403');
+    denied.status = 403;
+    const calls: Array<[string, Record<string, unknown>]> = [];
+    const client = {
+      listTimeEntries: async () => { throw denied; },
+      listProjectTimeEntries: async (id: string, query: Record<string, unknown>) => {
+        calls.push([id, query]);
+        return { items: [{ id: 1, hours: 4 }, { id: 2, hours: 2.5 }], page: { total_count: 2, offset: 0, limit: 25 } };
+      },
+    } as unknown as RedmineClient;
+
+    const page = await ops.opListTimeEntries(client, { projectId: '329', offset: 0, limit: 25 } as any, log);
+    assert.equal(calls[0][0], '329');
+    // The project must travel in the PATH only: as a query parameter it is the
+    // form that belongs to the route which just failed.
+    assert.equal(calls[0][1].project_id, undefined);
+    assert.match(page, /6.5/);
+    assert.match(page, /came from \/projects\/329\/time_entries.json/);
+
+    const scanned = await ops.opListTimeEntries(client, { projectId: '329', allPages: true, offset: 0, limit: 25 } as any, log);
+    // One project was asked for and that project answered in full, so this is a
+    // total — unlike the workspace sweep, which is a floor.
+    assert.match(scanned, /Hours across all 2 entries: 6.5/);
+    assert.doesNotMatch(scanned, /FLOOR, not a total/);
+  });
+
+  test('a named project whose own route also refuses reports the original failure, with what the other route said', async () => {
+    // Both routes agreeing is the evidence that separates a blocked path from a
+    // refusal, and it has to reach the message — otherwise the 403 is reported
+    // as a permission problem that the account may well not have.
+    const { noteRedmineEvidence, redmineEvidence } = await import('../../redmine/apiHelpers.js');
+    assert.equal(typeof noteRedmineEvidence, 'function');
+    const denied = () => { const e: any = new Error('Redmine API GET /time_entries.json failed: 403'); e.status = 403; return e; };
+    const globalErr = denied();
+    const client = {
+      listTimeEntries: async () => { throw globalErr; },
+      listProjectTimeEntries: async () => { throw denied(); },
+    } as unknown as RedmineClient;
+    await assert.rejects(
+      () => ops.opListTimeEntries(client, { projectId: '329', offset: 0, limit: 25 } as any, log),
+      /403/,
+    );
+    const evidence = redmineEvidence(globalErr).join(' ');
+    assert.match(evidence, /\/projects\/329\/time_entries.json answered 403/);
+    assert.match(evidence, /not one blocked path/);
+  });
+
+  test('the sweep evidence says only what the sweep observed', async () => {
+    // projectsScanned === 0 has four causes and only ONE is evidence. Claiming
+    // "refused there too, so this is not one blocked path" for an empty project
+    // list asserts a conclusion from zero observations — the exact failure this
+    // whole change is about, reproduced in its own message.
+    const { redmineEvidence } = await import('../../redmine/apiHelpers.js');
+    const denied = () => { const e: any = new Error('403 denied'); e.status = 403; return e; };
+    const run = async (projects: unknown[], projectFail: (id: string) => any) => {
+      const globalErr = denied();
+      const client = {
+        listProjects: async () => ({ items: projects, page: { total_count: projects.length } }),
+        listTimeEntries: async () => { throw globalErr; },
+        listProjectTimeEntries: async (id: string) => { throw projectFail(id); },
+      } as unknown as RedmineClient;
+      await assert.rejects(() => ops.opListTimeEntries(client, { allPages: true, offset: 0, limit: 25 } as any, log));
+      return redmineEvidence(globalErr).join(' ');
+    };
+
+    // Nothing was tried, so nothing may be concluded.
+    const empty = await run([], denied);
+    assert.match(empty, /never tried: Redmine listed no projects/);
+    assert.doesNotMatch(empty, /refused there too/);
+    assert.doesNotMatch(empty, /not one blocked path/);
+
+    // Listed, but with no id to build a request from — also not evidence.
+    const noIds = await run([{ name: 'No identifier' }], denied);
+    assert.match(noIds, /never tried: none of the 1 project\(s\)/);
+    assert.doesNotMatch(noIds, /not one blocked path/);
+
+    // A 5xx is a failure, not a refusal: it cannot carry the conclusion either.
+    const serverErr = await run(
+      [{ id: 1, identifier: 'alpha', name: 'Alpha' }],
+      () => { const e: any = new Error('boom'); e.status = 503; return e; },
+    );
+    assert.match(serverErr, /failed there too/);
+    assert.doesNotMatch(serverErr, /not one blocked path/);
+
+    // Every attempt refused — the one case that IS evidence.
+    const allDenied = await run([{ id: 1, identifier: 'alpha', name: 'Alpha' }], denied);
+    assert.match(allDenied, /refused there too, so this is not one blocked path/);
   });
 
   test('a project that cannot be read is named, not silently counted as zero', async () => {

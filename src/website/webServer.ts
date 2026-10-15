@@ -9096,7 +9096,7 @@ function registerRestApiRoutes(app: express.Express): void {
       const client = await redmineRestClient(req, res);
       if (!client) return;
       const { listTimeEntriesSchema } = await import('../redmine/schemas.js');
-      const { timeEntryListQuery, scanTimeEntries } = await import('../redmine/ops.js');
+      const { listTimeEntriesPage, projectRouteNotes, scanTimeEntries } = await import('../redmine/ops.js');
       const { formatTimeEntryList, REDMINE_MAX_LIMIT } = await import('../redmine/apiHelpers.js');
       const parsed = listTimeEntriesSchema.safeParse({
         projectId: qstr(req.query.projectId) || undefined,
@@ -9117,8 +9117,19 @@ function registerRestApiRoutes(app: express.Express): void {
         respondNegotiated(req, res, payload, () => formatTimeEntryList(scanned.items, undefined, scanned.scan));
         return;
       }
-      const result = await client.listTimeEntries(timeEntryListQuery(parsed.data));
-      respondNegotiated(req, res, result, () => formatTimeEntryList(result.items, result.page));
+      // Through listTimeEntriesPage, not client.listTimeEntries: the
+      // workspace-wide route can be blocked on an instance while the
+      // project-scoped one answers, and a curl client must not get a different
+      // verdict from the MCP tool on the same read. `projectRoute` travels as
+      // data so the JSON caller can tell which path produced the page.
+      const result = await listTimeEntriesPage(client, parsed.data, REST_PROVIDER_LOG);
+      const notes = projectRouteNotes(result.projectRoute);
+      respondNegotiated(
+        req,
+        res,
+        result,
+        () => formatTimeEntryList(result.items, result.page, undefined, notes),
+      );
     } catch (err: any) {
       console.error('Error listing Redmine time entries:', err);
       await sendRedmineError(res, err, { fallback: 'Failed to list time entries', permission: 'view_time_entries', baseUrl: req.userSession?.redmineBaseUrl });

@@ -420,7 +420,24 @@ export class RedmineClient {
         // A non-redirect failure is Redmine answering for real (403, 404, 422).
         // That is a better error than the bounce, so stop and report it rather
         // than burning the next attempt on a question already answered.
-        if (!(retryErr instanceof RedirectRefusedError)) return { handled: false, error: retryErr };
+        //
+        // But it is not the WHOLE answer, and reporting it bare is how a
+        // reported 403 came to be attributed to the account's permissions. The
+        // status below was answered to a DIFFERENT presentation of the key
+        // than the one the caller's request used, after that one was bounced to
+        // a sign-in page — a combination that says something about the route
+        // and nothing about any role. Record it, because mapRedmineError
+        // otherwise has only the status and has to guess.
+        if (!(retryErr instanceof RedirectRefusedError)) {
+          noteRedmineEvidence(
+            retryErr,
+            `Redmine bounced the X-Redmine-API-Key form of this request to ${redirect?.path ?? 'a sign-in page'} ` +
+            `(HTTP ${redirect?.status ?? '3xx'}), then answered ${retryErr?.status ?? 'this error'} to the same ` +
+            `key sent as a ${attempt.label}. Both ways are documented and equivalent, so the route — not the ` +
+            'credential and not a role — is what is behaving differently here.',
+          );
+          return { handled: false, error: retryErr };
+        }
         failures.push(attempt.label);
       }
     }
@@ -1013,12 +1030,32 @@ export interface TimeEntryScanContext {
     failed: string[];
     reason: string;
   };
+  /**
+   * Set when a NAMED project's entries came from `/projects/{id}/time_entries.json`
+   * because the workspace-wide route was blocked.
+   *
+   * Deliberately NOT part of the floor condition below, unlike `perProject`:
+   * one project was asked for and that one project answered in full, so the
+   * total is a total. What it changes is that the answer came from a different
+   * path than the one the tool normally uses, which is worth saying because it
+   * means this instance has a broken route someone should fix.
+   */
+  projectRoute?: {
+    projectId: string;
+    reason: string;
+  };
 }
 
 export function formatTimeEntryList(
   items: RedmineTimeEntry[],
   page?: RedminePage,
   scan?: TimeEntryScanContext,
+  /**
+   * Notes that are not about the scan — currently the single-page route
+   * fallback, which has no scan context to hang off. Appended after the scan
+   * notes so the ⚠ lines stay together.
+   */
+  extraNotes?: string[],
 ): string {
   const total = items.reduce((sum, entry) => sum + (typeof entry.hours === 'number' ? entry.hours : 0), 0);
   const body = renderList('Time entries', 'time entries', items, page, (entry, i) => {
@@ -1032,7 +1069,7 @@ export function formatTimeEntryList(
     return parts;
   });
 
-  const notes = scanNotes(items.length, scan);
+  const notes = [...scanNotes(items.length, scan), ...(extraNotes ?? [])];
   if (items.length === 0) return notes.length ? `${body}\n\n${notes.join('\n')}` : body;
 
   const hoursLabel = scan
@@ -1060,6 +1097,14 @@ function scanNotes(returned: number, scan?: TimeEntryScanContext): string[] {
     notes.push(
       `⚠ The scan stopped at the ${scan.scanned.ceiling}-entry ceiling${typeof scan.scanned.total === 'number' ? ` (Redmine reported ${scan.scanned.total} matching entries in total)` : ''}. ` +
       'Narrow the window with from/to, projectId or userId and run it again — any per-person total from this response is incomplete.',
+    );
+  }
+  if (scan.projectRoute) {
+    notes.push(
+      `⚠ The workspace-wide /time_entries.json route did not work on this instance, so this came from ` +
+      `/projects/${scan.projectRoute.projectId}/time_entries.json instead — the same data from a different ` +
+      `path, scoped to that project and its subprojects. The hours above are complete for it. ` +
+      `Reason the workspace-wide route failed: ${scan.projectRoute.reason}`,
     );
   }
   if (scan.perProject) {
@@ -1371,6 +1416,70 @@ function describeRefusedRedirect(prefix: string, baseUrlHint: string, error: any
 }
 
 /**
+ * What a Redmine 403 means — which the response does not say.
+ *
+ * FOUR causes land here with the same status and nothing in the body to tell
+ * them apart, and they have four different fixes. Naming only the permission
+ * (which is what this used to do) sends a project admin to grant a role that
+ * was never the problem — the same failure as telling a PeopleForce user to
+ * re-issue a key that could never have worked.
+ *
+ * The decisive test is in the message because it is cheap and the reader can
+ * run it: Redmine authorises its HTML and JSON routes through the IDENTICAL
+ * check — `find_optional_project` → `authorize_global` →
+ * `User#allowed_to?` — and for a GET the only differences are the credential
+ * (session cookie vs API key) and the response format. Verified against
+ * Redmine's own `app/controllers/application_controller.rb`. So "the same
+ * account sees this in the browser" is not weak evidence that the permission is
+ * fine, it is conclusive — and it moves the search to what is in front of this
+ * one route.
+ *
+ * One cause is ruled out here rather than listed: an anonymous API request
+ * cannot produce this. `require_login` answers an unauthenticated `.json`
+ * request **401** whenever the REST API is enabled and the action accepts API
+ * auth, so a 403 means Redmine did authenticate somebody — unless the REST API
+ * is off entirely, in which case every Redmine call fails, not one.
+ */
+function describeRedmineDenial(prefix: string, error: any, hints: RedmineErrorHints): string {
+  // Redmine answers an API 403 with an EMPTY body: render_403 goes through
+  // render_error, whose non-HTML branch is `head @status` and renders nothing
+  // (its own application_controller.rb). So a 403 carrying an HTML error page
+  // did not come from the authorization check at all, and none of the four
+  // causes below is the one to chase — which is worth saying outright, because
+  // the fix lives in a different system than any of them.
+  const body = typeof error?.body === 'string' ? error.body.trim() : '';
+  if (/^<(!doctype|html)/i.test(body) || /<html|<title>/i.test(body.slice(0, 500))) {
+    const server = /nginx|cloudflare|apache|traefik|gateway|forbidden by/i.exec(body)?.[0];
+    return (
+      `${prefix}: Redmine answered 403 with an HTML error page${server ? ` mentioning ${server}` : ''}, and ` +
+      'Redmine does not do that — it answers an API 403 with an empty body. So this refusal came from ' +
+      'something in FRONT of Redmine (reverse proxy, WAF, access gateway) on this route, not from the ' +
+      'account\'s permissions, the project module, or the REST API setting. The credential was never evaluated. ' +
+      'Whoever administers that proxy has to allow this path, or allow API requests on it without a session cookie.'
+    );
+  }
+  const permission = hints.permission ? `\`${hints.permission}\`` : 'the required';
+  const lines = [
+    `${prefix}: Redmine answered 403. Four causes produce that identically, so this is not by itself ` +
+    'evidence about the account\'s permissions:',
+    `  1. The account really lacks ${permission} permission — Administration → Roles and permissions, or add ` +
+    'the account to the project with a role that has it.',
+    '  2. The project has the module for it switched off (Project settings → Modules). Redmine checks that ' +
+    'BEFORE any role, so this 403s even for an administrator.',
+    '  3. A plugin or a reverse-proxy rule in front of this one route refuses API requests while leaving the ' +
+    'browser session working.',
+    '  4. The REST API is disabled instance-wide (Administration → Settings → API) — but that fails every ' +
+    'Redmine call, so if other Redmine tools are answering, it is not this.',
+    'To tell 1 and 2 from 3: open the same data in the browser as the SAME account. Redmine runs the identical ' +
+    'authorization check for its HTML and JSON routes, so if the page renders and this call does not, the ' +
+    'permission and the module are both fine and the difference is API-vs-session.',
+  ];
+  const evidence = redmineEvidence(error);
+  if (evidence.length) lines.push(`Already observed on this call: ${evidence.join(' ')}`);
+  return lines.join('\n');
+}
+
+/**
  * A thrown fetch (as opposed to a rejected response) carries no status, and
  * undici reports every one of them as the bare string "fetch failed". That is
  * undiagnosable, so unwrap the cause and name the case that actually happens:
@@ -1388,6 +1497,46 @@ function describeTransportFailure(prefix: string, baseUrlHint: string, error: an
     `${prefix}: could not reach ${baseUrlHint} (${cause || message}). The Redmine host, its TLS certificate, ` +
     'or the network path is the problem here — the credential was never evaluated.'
   );
+}
+
+/**
+ * Key for the evidence lines below. A Symbol so nothing collides with it and
+ * nothing that serialises an error carries it along — the same reason GitHub's
+ * `.headers` is non-enumerable. Only `mapRedmineError` reads it, so this is not
+ * the ClickUp mistake of hiding a STATUS where generic handlers cannot see it.
+ */
+const REDMINE_EVIDENCE = Symbol('redmineEvidence');
+
+/**
+ * Attach a line of evidence to an error on its way up.
+ *
+ * `mapRedmineError` has to turn a status into a cause, and for 403 Redmine
+ * answers four different causes identically (see the 403 branch). What
+ * separates them is often known only at a call site that already tried
+ * something else — that the API-key HEADER was bounced to the sign-in page
+ * before this 403 was answered to the same key in a query parameter, or that
+ * the project-scoped route answered the same way. Recording that beats
+ * asserting a cause the response cannot support.
+ */
+export function noteRedmineEvidence(error: unknown, note: string): void {
+  if (!error || typeof error !== 'object' || !note) return;
+  const existing = (error as any)[REDMINE_EVIDENCE];
+  if (Array.isArray(existing)) {
+    if (!existing.includes(note)) existing.push(note);
+    return;
+  }
+  Object.defineProperty(error, REDMINE_EVIDENCE, {
+    value: [note],
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+}
+
+/** The evidence lines recorded on an error, oldest first. */
+export function redmineEvidence(error: unknown): string[] {
+  const notes = error && typeof error === 'object' ? (error as any)[REDMINE_EVIDENCE] : undefined;
+  return Array.isArray(notes) ? notes.filter((n: unknown): n is string => typeof n === 'string') : [];
 }
 
 export function mapRedmineError(
@@ -1418,18 +1567,14 @@ export function mapRedmineError(
     );
   }
   if (status === 403) {
-    throw new UserError(
-      hints.adminOnly
-        ? `${prefix}: this endpoint is administrator-only in Redmine, and the connected account is not an ` +
-          'administrator. No project-level permission grants it — an admin has to run this, or grant the ' +
-          'account admin rights.'
-        : `${prefix}: Redmine denied access. The connected account lacks the ` +
-          `${hints.permission ? `\`${hints.permission}\` permission` : 'required permission'} ` +
-          'on this project — a project or site admin grants it under Administration → Roles and permissions, ' +
-          'or by adding the account to the project with a role that has it. ' +
-          '(403 is also what a fully disabled REST API returns, but that would fail every Redmine call, not ' +
-          'just this one — so if other Redmine tools are answering, this is permissions.)',
-    );
+    if (hints.adminOnly) {
+      throw new UserError(
+        `${prefix}: this endpoint is administrator-only in Redmine, and the connected account is not an ` +
+        'administrator. No project-level permission grants it — an admin has to run this, or grant the ' +
+        'account admin rights.',
+      );
+    }
+    throw new UserError(describeRedmineDenial(prefix, error, hints));
   }
   if (status === 404) {
     throw new UserError(`${prefix}: not found. Check the ID or identifier — Redmine also answers 404 for records you are not allowed to see.`);

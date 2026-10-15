@@ -18,6 +18,7 @@ import {
   getRedmineClient,
   mapRedmineError,
   mergeCustomFieldFilters,
+  noteRedmineEvidence,
   renderPageLine,
 } from '../redmine/apiHelpers.js';
 import { RedirectRefusedError } from '../util/jsonApiRequest.js';
@@ -187,14 +188,40 @@ describe('mapRedmineError', () => {
     }
   };
 
-  // 403 is Redmine's answer to both "no permission" and "REST API switched
-  // off". The message has to say how to tell them apart, or it is not
-  // actionable — which is what the first version of it got wrong.
-  test('403 names the permission gap and how to rule out a disabled REST API', () => {
+  // 403 is Redmine's answer to FOUR different things, and the message must not
+  // pick one. Asserting the permission is what sent a project admin to grant a
+  // role that was never the problem, on an instance where the same account read
+  // the same data in the browser — which, since Redmine authorises its HTML and
+  // JSON routes through the identical check, is conclusive proof it was not.
+  test('403 lists every cause and does not assert one', () => {
     const m = mapped(403);
     assert.match(m, /lacks the required permission/);
     assert.match(m, /Roles and permissions/);
-    assert.match(m, /would fail every Redmine call, not[\s\S]*just this one/);
+    // The module check runs BEFORE any role, so this 403s even for an admin —
+    // the cause nobody looks for because the message never mentioned it.
+    assert.match(m, /Modules/);
+    assert.match(m, /reverse-proxy rule/);
+    assert.match(m, /fails every[\s\S]*Redmine call/);
+    // The discriminator the reader can actually run.
+    assert.match(m, /open the same data in the browser/i);
+    assert.match(m, /identical[\s\S]*authorization check/);
+  });
+
+  // The evidence a call collected on its way up is the only thing that can
+  // narrow those four to one, so a 403 that has some must quote it. Without
+  // this the retry chain's own finding — that the API-key HEADER was bounced to
+  // a sign-in page and a second, equivalent presentation of the SAME key then
+  // got the 403 — was discarded at the point it mattered.
+  test('403 quotes the evidence collected on the way up', () => {
+    const err: any = Object.assign(new Error('boom'), { status: 403 });
+    noteRedmineEvidence(err, 'The project-scoped route answered 403 too.');
+    try {
+      mapRedmineError('Failed to list time entries', err, silentLog, { permission: 'view_time_entries' });
+      assert.fail('should have thrown');
+    } catch (mapped403: any) {
+      assert.match(mapped403.message, /Already observed on this call/);
+      assert.match(mapped403.message, /project-scoped route answered 403 too/);
+    }
   });
 
   test('403 names the governing permission when the caller knows it', () => {
@@ -205,6 +232,20 @@ describe('mapRedmineError', () => {
     } catch (err: any) {
       assert.match(err.message, /`view_issues` permission/);
     }
+  });
+
+  // Redmine answers an API 403 with an EMPTY body (render_403 -> render_error
+  // -> `head @status`, verified in its own application_controller.rb), so an
+  // HTML error page in a 403 is proof the refusal never reached the
+  // authorization check. Listing the four Redmine causes for that one would
+  // send the reader to Roles and permissions over a proxy rule.
+  test('a 403 carrying an HTML page is attributed to the proxy, not to Redmine', () => {
+    const m = mapped(403, '<html><head><title>403 Forbidden</title></head><body>nginx/1.24.0</body></html>');
+    assert.match(m, /Redmine does not do that/);
+    assert.match(m, /in FRONT of Redmine/);
+    assert.match(m, /nginx/);
+    // And none of the four Redmine-side causes may be offered for it.
+    assert.doesNotMatch(m, /Roles and permissions/);
   });
 
   test('401 mentions the pre-4.1 ambiguity', () => {
