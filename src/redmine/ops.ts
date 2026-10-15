@@ -447,6 +447,12 @@ async function scanTimeEntriesPerProject(
   projectsTotal?: number;
   failed: string[];
   truncated: boolean;
+  /** Projects Redmine listed at all, whether or not one could be requested. */
+  listed: number;
+  /** Projects the project-scoped route was actually requested for. */
+  attempted: number;
+  /** Of those, how many Redmine REFUSED (401/403) rather than failed otherwise. */
+  denied: number;
 }> {
   const projects = await client.listProjects({ offset: 0, limit: REDMINE_MAX_LIMIT });
   // Deduplicated by entry id, which is not a belt-and-braces measure: Redmine
@@ -464,6 +470,8 @@ async function scanTimeEntriesPerProject(
   let scanned = 0;
   let truncated = false;
   let deniedInARow = 0;
+  let attempted = 0;
+  let denied = 0;
   const collected = () => byId.size + unidentified.length;
 
   for (const project of projects.items) {
@@ -478,6 +486,7 @@ async function scanTimeEntriesPerProject(
       truncated = true;
       break;
     }
+    attempted += 1;
     try {
       const scoped = await scanAllTimeEntries(
         client,
@@ -506,6 +515,7 @@ async function scanTimeEntriesPerProject(
       // consecutive refusals count, and only before anything has been
       // collected: once one project has answered, the route plainly works and
       // the rest of the list is worth finishing.
+      if (isDenial(projectErr)) denied += 1;
       if (scanned === 0 && isDenial(projectErr)) {
         deniedInARow += 1;
         if (deniedInARow >= DENIAL_PROBE_LIMIT) {
@@ -526,7 +536,46 @@ async function scanTimeEntriesPerProject(
     projectsTotal: projects.page.total_count,
     failed,
     truncated,
+    listed: projects.items.length,
+    attempted,
+    denied,
   };
+}
+
+/**
+ * What the sweep proved, in the words the observations support — which is the
+ * whole thesis of this change applied to its own message.
+ *
+ * `projectsScanned === 0` has four causes and only ONE of them is evidence:
+ * every attempt was refused. An empty project list and a list whose entries
+ * carry no usable identifier mean the other route was never exercised, so
+ * claiming it "refused too" asserts a conclusion from zero observations; and a
+ * 404 or a 5xx is a failure but not a refusal, so it cannot carry "this is not
+ * one blocked path" either. Returns null when there is nothing honest to add,
+ * because no note is better than one that argues against the diagnosis.
+ */
+function perProjectSweepEvidence(sweep: {
+  listed: number;
+  attempted: number;
+  denied: number;
+}): string | null {
+  const route = 'The project-scoped route /projects/{id}/time_entries.json';
+  if (sweep.attempted === 0) {
+    return sweep.listed === 0
+      ? `${route} was never tried: Redmine listed no projects for this account, so the project list is the ` +
+        'thing to look at first — it says nothing either way about the time-entry route.'
+      : `${route} was never tried: none of the ${sweep.listed} project(s) Redmine listed carried an id or ` +
+        'identifier to request one with.';
+  }
+  if (sweep.denied === sweep.attempted) {
+    return `${route} was tried on ${sweep.attempted} project(s) and refused there too, so this is not one ` +
+      'blocked path.';
+  }
+  return (
+    `${route} was tried on ${sweep.attempted} project(s) and failed there too` +
+    `${sweep.denied > 0 ? ` (${sweep.denied} refused, the rest failed for another reason)` : ''} — some of ` +
+    'those were not refusals, so they do not say whether this route is blocked.'
+  );
 }
 
 /**
@@ -589,11 +638,8 @@ export async function scanTimeEntries(
     // read as "this workspace logged no hours", and would bury the redirect
     // (or whatever it was) that is the actual thing to fix.
     if (perProject.projectsScanned === 0) {
-      noteRedmineEvidence(
-        err,
-        `The project-scoped route /projects/{id}/time_entries.json was tried on ${perProject.failed.length} ` +
-        'project(s) and refused there too, so this is not one blocked path.',
-      );
+      const evidence = perProjectSweepEvidence(perProject);
+      if (evidence) noteRedmineEvidence(err, evidence);
       throw err;
     }
     return {

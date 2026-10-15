@@ -493,6 +493,48 @@ describe('time entry ops', () => {
     assert.match(evidence, /not one blocked path/);
   });
 
+  test('the sweep evidence says only what the sweep observed', async () => {
+    // projectsScanned === 0 has four causes and only ONE is evidence. Claiming
+    // "refused there too, so this is not one blocked path" for an empty project
+    // list asserts a conclusion from zero observations — the exact failure this
+    // whole change is about, reproduced in its own message.
+    const { redmineEvidence } = await import('../../redmine/apiHelpers.js');
+    const denied = () => { const e: any = new Error('403 denied'); e.status = 403; return e; };
+    const run = async (projects: unknown[], projectFail: (id: string) => any) => {
+      const globalErr = denied();
+      const client = {
+        listProjects: async () => ({ items: projects, page: { total_count: projects.length } }),
+        listTimeEntries: async () => { throw globalErr; },
+        listProjectTimeEntries: async (id: string) => { throw projectFail(id); },
+      } as unknown as RedmineClient;
+      await assert.rejects(() => ops.opListTimeEntries(client, { allPages: true, offset: 0, limit: 25 } as any, log));
+      return redmineEvidence(globalErr).join(' ');
+    };
+
+    // Nothing was tried, so nothing may be concluded.
+    const empty = await run([], denied);
+    assert.match(empty, /never tried: Redmine listed no projects/);
+    assert.doesNotMatch(empty, /refused there too/);
+    assert.doesNotMatch(empty, /not one blocked path/);
+
+    // Listed, but with no id to build a request from — also not evidence.
+    const noIds = await run([{ name: 'No identifier' }], denied);
+    assert.match(noIds, /never tried: none of the 1 project\(s\)/);
+    assert.doesNotMatch(noIds, /not one blocked path/);
+
+    // A 5xx is a failure, not a refusal: it cannot carry the conclusion either.
+    const serverErr = await run(
+      [{ id: 1, identifier: 'alpha', name: 'Alpha' }],
+      () => { const e: any = new Error('boom'); e.status = 503; return e; },
+    );
+    assert.match(serverErr, /failed there too/);
+    assert.doesNotMatch(serverErr, /not one blocked path/);
+
+    // Every attempt refused — the one case that IS evidence.
+    const allDenied = await run([{ id: 1, identifier: 'alpha', name: 'Alpha' }], denied);
+    assert.match(allDenied, /refused there too, so this is not one blocked path/);
+  });
+
   test('a project that cannot be read is named, not silently counted as zero', async () => {
     const bounce = new RedirectRefusedError('bounced', {
       status: 302, location: '/login', resolved: 'https://r.example.com/login',
