@@ -282,16 +282,29 @@ describe('RedmineClient.request', () => {
     assert.equal(recorded.length, 1);
   });
 
-  test('a real answer on a fallback is reported instead of the bounce', async () => {
+  test('a real answer on a fallback is reported instead of the bounce, and carries it', async () => {
     // A 403 on the retry is Redmine having evaluated the request. That is a
-    // better error than "it bounced", so it stops the chain.
+    // better error than "it bounced", so it stops the chain — but it is not the
+    // whole story, and reporting it bare is how a reported 403 came to be
+    // attributed to the account's permissions. The status below was answered to
+    // a DIFFERENT presentation of the same key, after the header form was
+    // bounced to a sign-in page: that pair says something about the route and
+    // nothing about any role, so it has to survive as far as the message.
+    const { redmineEvidence } = await import('../../redmine/apiHelpers.js');
     const client = new RedmineClient('KEY012345678', BASE, 'apiKey');
     respond = (url) =>
       url.includes('key=')
         ? { status: 403, text: 'Forbidden' }
         : { status: 302, location: '/login', contentType: null };
-    await assert.rejects(() => client.listTimeEntries({}), /403/);
+    const err = await client.listTimeEntries({}).then(() => null, (e) => e);
+    assert.match(String(err?.message), /403/);
     assert.equal(recorded.length, 2, 'stopped before trying Basic');
+    const evidence = redmineEvidence(err).join(' ');
+    assert.match(evidence, /bounced the X-Redmine-API-Key form/);
+    assert.match(evidence, /key query parameter/);
+    // And the key itself must not ride along in it — the bounce echoes the
+    // whole original URL back in back_url, which is why `secrets` exists.
+    assert.doesNotMatch(evidence, /KEY012345678/);
   });
 
   test('splits a collection into items and the pagination envelope', async () => {
