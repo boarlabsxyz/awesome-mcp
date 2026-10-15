@@ -249,6 +249,25 @@ describe('opGetPullRequestStatus', () => {
     assert.match(out, /PENDING/);
     assert.match(out, /Check runs: could not be read/);
   });
+
+  it('does not call green statuses PASSING when the check runs could not be read', async () => {
+    const { client } = stubClient(routes([{ state: 'success', context: 'ci', description: null, target_url: null }], httpError(403, { message: 'Resource not accessible by personal access token' })));
+    const out = await ops.opGetPullRequestStatus(client, args);
+    assert.match(out, /UNKNOWN — every commit status passed, but check runs could not be read/);
+    assert.doesNotMatch(out, /PASSING/);
+  });
+
+  it('does not call a truncated list PASSING: a failure may sit past the first page', async () => {
+    const { client } = stubClient(routes([], { total_count: 140, check_runs: [{ name: 'build', status: 'completed', conclusion: 'success' }] }));
+    const out = await ops.opGetPullRequestStatus(client, args);
+    assert.match(out, /UNKNOWN — the first 1 checks passed, but 139 more were not read/);
+    assert.doesNotMatch(out, /PASSING/);
+  });
+
+  it('still reports a failure on the first page as FAILING, not UNKNOWN', async () => {
+    const { client } = stubClient(routes([], { total_count: 140, check_runs: [{ name: 'build', status: 'completed', conclusion: 'failure' }] }));
+    assert.match(await ops.opGetPullRequestStatus(client, args), /FAILING \(1 failed\)/);
+  });
 });
 
 describe('issue ops', () => {
@@ -414,7 +433,7 @@ describe('remaining reads render what GitHub returned, and say where the page is
       { method: 'GET', path: `${R}/pulls/4/reviews`, reply: [{ id: 2, user, state: 'APPROVED', body: 'lgtm', submitted_at: '2026-01-02', html_url: 'u' }] },
     ]);
     assert.match(await ops.opGetPullRequestComments(client, { owner: 'octo', repo: 'app', pullNumber: 4 }), /a\.ts:7 \(outdated\).*reply to 99/);
-    assert.match(await ops.opGetPullRequestReviews(client, { owner: 'octo', repo: 'app', pullNumber: 4 }), /@ann: APPROVED · 2026-01-02\n  lgtm/);
+    assert.match(await ops.opGetPullRequestReviews(client, { owner: 'octo', repo: 'app', pullNumber: 4 }), /@ann: APPROVED · 2026-01-02\n {2}lgtm/);
   });
 
   it('getIssue points a pull request at getPullRequest and caps the body', async () => {

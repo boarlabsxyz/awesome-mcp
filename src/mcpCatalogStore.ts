@@ -161,6 +161,12 @@ async function dbCreateMcpCatalog(
   const scopesJson = JSON.stringify(entry.scopes);
   const oauthScopesJson = JSON.stringify(entry.oauthScopes || []);
 
+  // The OAuth URLs go in as `?? null`, not `|| null`: an empty string is how an
+  // env-gated seed (Outline, Redmine, GitHub) says "OAuth is OFF now", and
+  // turning it into NULL let the COALESCE below keep the URL from the last boot
+  // that had credentials, so the dashboard went on offering "Connect with X"
+  // against an app the deployment no longer configures. Only `undefined`
+  // means "leave it as stored", matching the file backend above.
   const { rows } = await pool.query(
     `INSERT INTO mcp_catalog (slug, name, description, icon_url, mcp_url, scopes, google_client_id, google_client_secret, oauth_scopes, is_local, is_active, created_at, updated_at, provider, oauth_authorization_url, oauth_token_url)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, $13, $14, $15)
@@ -180,7 +186,7 @@ async function dbCreateMcpCatalog(
        oauth_authorization_url = COALESCE(EXCLUDED.oauth_authorization_url, mcp_catalog.oauth_authorization_url),
        oauth_token_url = COALESCE(EXCLUDED.oauth_token_url, mcp_catalog.oauth_token_url)
      RETURNING id, slug, name, description, icon_url, mcp_url, scopes, google_client_id, google_client_secret, oauth_scopes, is_local, is_active, created_at, updated_at, provider, oauth_authorization_url, oauth_token_url`,
-    [entry.slug, entry.name, entry.description, entry.iconUrl, entry.mcpUrl, scopesJson, entry.googleClientId || null, entry.googleClientSecret || null, oauthScopesJson, entry.isLocal, entry.isActive, now, entry.provider || 'google', entry.oauthAuthorizationUrl || null, entry.oauthTokenUrl || null]
+    [entry.slug, entry.name, entry.description, entry.iconUrl, entry.mcpUrl, scopesJson, entry.googleClientId || null, entry.googleClientSecret || null, oauthScopesJson, entry.isLocal, entry.isActive, now, entry.provider || 'google', entry.oauthAuthorizationUrl ?? null, entry.oauthTokenUrl ?? null]
   );
 
   return mapRowToEntry(rows[0]);

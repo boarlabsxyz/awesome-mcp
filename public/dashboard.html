@@ -1829,8 +1829,7 @@
           '(<a href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noopener">github.com/settings/personal-access-tokens</a>). ' +
           'A <strong>fine-grained</strong> token is safest: pick the repositories, then grant <strong>Contents</strong>, ' +
           '<strong>Issues</strong> and <strong>Pull requests</strong> (read for lookups, read and write to commit, file issues or merge), ' +
-          'plus <strong>Commit statuses</strong> (read) for CI results. GitHub documents no fine-grained permission for ' +
-          'Actions check runs, so if CI results come back incomplete use a classic token instead. ' +
+          'plus <strong>Checks</strong> and <strong>Commit statuses</strong> (read) for CI results. ' +
           'A classic token needs the <code translate="no">repo</code> scope for private repositories. ' +
           'For an organization that uses SAML single sign-on, also authorize the token for that organization.';
         // github.com only: one API host, so no URL field.

@@ -453,6 +453,46 @@ export async function withGitHubClient<T>(
   try {
     return await fn(client);
   } catch (error: any) {
+    // A 401 means GitHub ran nothing, so one retry cannot duplicate a write.
+    if (error?.status === 401 && await reloadStoredGitHubToken(session, log)) {
+      try {
+        return await fn(getGitHubClient(session));
+      } catch (retryError: any) {
+        mapGitHubError(prefix, retryError, log, ctx);
+      }
+    }
     mapGitHubError(prefix, error, log, ctx);
+  }
+}
+
+/**
+ * Pick up a credential stored after this session was built. FastMCP's stateful
+ * httpStream transport authenticates once per MCP session and keeps that
+ * UserSession for its lifetime, so a Reconnect from the dashboard — another
+ * process — writes a new token that a session already open would never read:
+ * it would go on sending the revoked one and telling the user to reconnect,
+ * which they just did. Re-reading on every call would cost a store round-trip
+ * per tool call; on a 401 it costs one, and only when something is wrong.
+ *
+ * Returns true only when the stored token differs from the one that failed, so
+ * a genuinely dead credential is not retried. Never throws: a failed lookup
+ * leaves the original 401 to be reported.
+ */
+export async function reloadStoredGitHubToken(session: UserSession | undefined, log: GitHubToolLog): Promise<boolean> {
+  const instanceId = session?.githubInstanceId;
+  if (!session || !instanceId) return false;
+  try {
+    const { getMcpConnectionByInstanceId } = await import('../mcpConnectionStore.js');
+    const stored = (await getMcpConnectionByInstanceId(instanceId))?.providerTokens as
+      { access_token?: string; refresh_token?: string; expiry_date?: number } | undefined;
+    if (!stored?.access_token || stored.access_token === session.githubAccessToken) return false;
+    session.githubAccessToken = stored.access_token;
+    session.githubRefreshToken = stored.refresh_token || undefined;
+    session.githubTokenExpiry = stored.expiry_date || undefined;
+    log.info(`GitHub token for ${instanceId} was replaced in storage; retrying with it.`);
+    return true;
+  } catch (err: any) {
+    log.error(`Could not reload the stored GitHub token for ${instanceId}: ${err?.message ?? err}`);
+    return false;
   }
 }

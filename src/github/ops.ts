@@ -904,7 +904,14 @@ export async function opGetPullRequestStatus(client: GitHubClient, args: GetPull
       : 'NO CHECKS have reported on this commit';
   } else if (failing) verdict = `FAILING (${failing} failed)`;
   else if (pending) verdict = `PENDING (${pending} still running or queued)`;
-  else verdict = 'PASSING';
+  // PASSING is the verdict a model merges on, so it needs every check read.
+  // A failure past the first page, or in check runs we could not read at all,
+  // would otherwise pass for green.
+  else if (runsError) verdict = 'UNKNOWN — every commit status passed, but check runs could not be read';
+  else if (runsTotal > runs.length || combined.total_count > statuses.length) {
+    verdict = `UNKNOWN — the first ${runs.length + statuses.length} checks passed, but `
+      + `${runsTotal - runs.length + combined.total_count - statuses.length} more were not read`;
+  } else verdict = 'PASSING';
 
   const lines = [
     `Checks for #${args.pullNumber} in ${args.owner}/${args.repo} at head ${short(sha)}: ${verdict}`,

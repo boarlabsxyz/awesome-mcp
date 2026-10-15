@@ -169,6 +169,26 @@ describe('checkConnectionHealth — a refreshable connection is not a broken one
     });
   }
 
+  const respondWithHeaders = (status: number, headers: Record<string, string>) =>
+    (async () => ({ ok: false, status, headers: new Headers(headers), json: async () => ({}) })) as any;
+
+  it('github: a rate-limited 403 is unknown, not reauth — the token was never evaluated', async () => {
+    for (const headers of [{ 'x-ratelimit-remaining': '0' }, { 'retry-after': '60' }] as Record<string, string>[]) {
+      const health = await checkConnectionHealth(withoutRefresh('github'), NO_CREDS, {
+        fetchImpl: respondWithHeaders(403, headers),
+      });
+      assert.equal(health.state, 'unknown', JSON.stringify(headers));
+      assert.match((health as any).reason, /rate-limited/);
+    }
+  });
+
+  it('github: a 403 with quota left is still a rejection', async () => {
+    const health = await checkConnectionHealth(withoutRefresh('github'), NO_CREDS, {
+      fetchImpl: respondWithHeaders(403, { 'x-ratelimit-remaining': '4999' }),
+    });
+    assert.equal(health.state, 'reauth');
+  });
+
   it('peopleforce has no refresh token, so a rejection still prompts', async () => {
     const health = await checkConnectionHealth(withoutRefresh('peopleforce'), NO_CREDS, {
       fetchImpl: respond(401, {}),

@@ -2526,7 +2526,11 @@ function registerSharedRoutes(app: express.Express): void {
           return;
         }
 
-        const githubConnections = await getUserConnectedMcps(user.id);
+        // The name is only an identity when it was built from a verified
+        // login. If the /user lookup failed, every grant falls back to the
+        // same bare "GitHub", and matching on that would refuse a second
+        // account as already connected.
+        const githubConnections = exchange.login ? await getUserConnectedMcps(user.id) : [];
         const existingGitHub = githubConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === githubInstanceName);
         if (existingGitHub) {
           console.error(`User ${user.id} already has ${mcpSlug} for ${exchange.login}: ${existingGitHub.instanceId}`);

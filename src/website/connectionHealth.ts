@@ -426,9 +426,23 @@ export async function checkConnectionHealth(
         // never expire, so a rejection is conclusive; a GitHub App user token
         // is routinely expired at rest (8h) and renewed at call time, so its
         // rejection here says nothing about the grant.
-        return fromValidateResult(await validateGitHubToken({
-          token: accessToken, fetchImpl,
-        }), !!providerTokens.refresh_token);
+        // GitHub answers a rate limit with 403 as well as 429, and
+        // validatePasteToken folds every 403 into "rejected" — so a probe
+        // that merely ran out of quota would offer Reconnect for a token that
+        // works. Only the headers tell the two apart, so watch them here.
+        let rateLimited = false;
+        const watchRateLimit = (async (url: any, init: any) => {
+          const res = await fetchImpl(url, init);
+          if (res.status === 403 && (readHeader(res, 'x-ratelimit-remaining') === '0' || readHeader(res, 'retry-after') !== null)) {
+            rateLimited = true;
+          }
+          return res;
+        }) as typeof fetch;
+        const result = await validateGitHubToken({ token: accessToken, fetchImpl: watchRateLimit });
+        if (!result.ok && rateLimited) {
+          return { state: 'unknown', reason: 'GitHub rate-limited the health check (403), so the token was not evaluated.' };
+        }
+        return fromValidateResult(result, !!providerTokens.refresh_token);
       }
 
       default:
