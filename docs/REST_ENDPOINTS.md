@@ -330,24 +330,29 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 
 | MCP tool | REST endpoint | Status | Summary |
 |---|---|---|---|
-| `searchRepositories` | `GET /api/v1/github/search/repositories` | planned | Search GitHub repositories |
-| `searchCode` | `GET /api/v1/github/search/code` | planned | Search code across GitHub repositories |
-| `searchIssues` | `GET /api/v1/github/search/issues` | planned | Search GitHub issues and pull requests |
-| `searchUsers` | `GET /api/v1/github/search/users` | planned | Search GitHub users |
-| `getFileContents` | `GET /api/v1/github/repos/{owner}/{repo}/contents/{path}` | planned | Read a file or list a directory |
-| `listCommits` | `GET /api/v1/github/repos/{owner}/{repo}/commits` | planned | List commits on a branch |
-| `listIssues` | `GET /api/v1/github/repos/{owner}/{repo}/issues` | planned | List issues in a repository — _GitHub includes pull requests in this list._ |
-| `getIssue` | `GET /api/v1/github/repos/{owner}/{repo}/issues/{issueNumber}` | planned | Get a single issue |
-| `listPullRequests` | `GET /api/v1/github/repos/{owner}/{repo}/pulls` | planned | List pull requests in a repository |
-| `getPullRequest` | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}` | planned | Get a single pull request |
-| `getPullRequestFiles` | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/files` | planned | List files changed in a pull request |
-| `getPullRequestStatus` | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/status` | planned | Get check runs and commit statuses for a pull request |
-| `getPullRequestComments` | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/comments` | planned | List inline review comments on a pull request |
-| `getPullRequestReviews` | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/reviews` | planned | List reviews on a pull request |
+| `searchRepositories` | `GET /api/v1/github/search/repositories?q={query}` | live | Search GitHub repositories — _Answers {total_count, incomplete_results, items, page}. GitHub search returns at most 1000 results and has its own small rate budget; a used-up limit answers 429 with Retry-After._ |
+| `searchCode` | `GET /api/v1/github/search/code?q={query}` | live | Search code across GitHub repositories — _Answers {total_count, incomplete_results, items, page}. GitHub search returns at most 1000 results and has its own small rate budget; a used-up limit answers 429 with Retry-After. Code search covers default branches only, 10 requests a minute._ |
+| `searchIssues` | `GET /api/v1/github/search/issues?q={query}` | live | Search GitHub issues and pull requests — _Answers {total_count, incomplete_results, items, page}. GitHub search returns at most 1000 results and has its own small rate budget; a used-up limit answers 429 with Retry-After. Also takes ?sort and ?order._ |
+| `searchUsers` | `GET /api/v1/github/search/users?q={query}` | live | Search GitHub users — _Answers {total_count, incomplete_results, items, page}. GitHub search returns at most 1000 results and has its own small rate budget; a used-up limit answers 429 with Retry-After. Also takes ?sort and ?order._ |
+| `getFileContents` | `GET /api/v1/github/repos/{owner}/{repo}/contents/{path}` | live | Read a file or list a directory — _Raw GitHub contents payload: a file carries base64 content and its blob sha, a directory is an array. Omit the path for the repository root. Takes ?ref and ?format=text._ |
+| `listCommits` | `GET /api/v1/github/repos/{owner}/{repo}/commits` | live | List commits on a branch — _Answers {items, page}: items is the raw GitHub array, page.next is the page to request next (null on the last page). Takes ?page and ?perPage (max 100) and ?format=text. Filters: ?sha, ?path, ?author._ |
+| `listIssues` | `GET /api/v1/github/repos/{owner}/{repo}/issues` | live | List issues in a repository — _Answers {items, page}: items is the raw GitHub array, page.next is the page to request next (null on the last page). Takes ?page and ?perPage (max 100) and ?format=text. GitHub includes pull requests in this list (items with a pull_request key)._ |
+| `getIssue` | `GET /api/v1/github/repos/{owner}/{repo}/issues/{issueNumber}` | live | Get a single issue — _Raw GitHub issue. Takes ?format=text._ |
+| `listPullRequests` | `GET /api/v1/github/repos/{owner}/{repo}/pulls` | live | List pull requests in a repository — _Answers {items, page}: items is the raw GitHub array, page.next is the page to request next (null on the last page). Takes ?page and ?perPage (max 100) and ?format=text._ |
+| `getPullRequest` | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}` | live | Get a single pull request — _Raw GitHub pull request; mergeable is null while GitHub is still computing it. Takes ?format=text._ |
+| `getPullRequestFiles` | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/files` | live | List files changed in a pull request — _Answers {items, page}: items is the raw GitHub array, page.next is the page to request next (null on the last page). Takes ?page and ?perPage (max 100) and ?format=text. GitHub lists at most 3000 files per pull request._ |
+| `getPullRequestStatus` | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/status` | live | Get check runs and commit statuses for a pull request — _Answers {headSha, verdict, failing, pending, statuses, checkRuns, checkRunsError, unread}. verdict reads Actions check runs too; checkRunsError is set when the token cannot read them (a fine-grained token needs Checks read). verdict is passing only when every check was read: unread checks past the first page, or unreadable check runs, answer unknown._ |
+| `getPullRequestComments` | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/comments` | live | List inline review comments on a pull request — _Answers {items, page}: items is the raw GitHub array, page.next is the page to request next (null on the last page). Takes ?page and ?perPage (max 100) and ?format=text. Inline diff comments only, not the conversation thread._ |
+| `getPullRequestReviews` | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/reviews` | live | List reviews on a pull request — _Answers {items, page}: items is the raw GitHub array, page.next is the page to request next (null on the last page). Takes ?page and ?perPage (max 100) and ?format=text._ |
+| `createIssue` | `POST /api/v1/github/repos/{owner}/{repo}/issues` | live | Create an issue — _Exposed with explicit sign-off: the permanent dashboard API key can file issues. 201 with {issue, notApplied}; notApplied names labels, assignees or milestone GitHub silently dropped for an account without push access. Not idempotent._ |
+| `addIssueComment` | `POST /api/v1/github/repos/{owner}/{repo}/issues/{issueNumber}/comments` | live | Comment on an issue or pull request — _Exposed with explicit sign-off. 201 with the created comment. Posts to the conversation thread, not as an inline review comment. Not idempotent._ |
+| `pushFiles` | `POST /api/v1/github/repos/{owner}/{repo}/push` | live | Commit several files to a branch in one commit — _Exposed with explicit sign-off: the permanent dashboard API key can commit code to any repository the account can write to. Body limit 5mb. Fast-forward only: 409 when the branch moved meanwhile, and nothing is pushed. 201 when committed, 200 with pushed false when nothing changed. Cannot write .github/workflows._ |
+| `createOrUpdateFile` | `POST /api/v1/github/repos/{owner}/{repo}/contents/{path}` | live | Create or replace one file as a commit — _Exposed with explicit sign-off: the permanent dashboard API key can commit code. Body limit 5mb. Pass sha (from the GET) to get 409 instead of overwriting a file that changed. 201 created, 200 updated._ |
+| `mergePullRequest` | `POST /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/merge` | live | Merge a pull request — _Exposed with explicit sign-off: effectively irreversible. Pass expectedHeadSha to refuse a merge of commits pushed after review. 200 when merged, 409 when GitHub answered merged false, 405 when not mergeable._ |
 
 ## Status legend
 
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 245 endpoints.
+Catalog size: 250 endpoints.

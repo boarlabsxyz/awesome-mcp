@@ -31,7 +31,7 @@
 import { UserError } from 'fastmcp';
 
 import { sliceSafe } from '../google-docs/textSafety.js';
-import { describeGitHubError, repoPath, slashPath, seg, type GitHubClient, type PageInfo } from './apiHelpers.js';
+import { describeGitHubError, repoPath, slashPath, seg, type GitHubClient, type GitHubResponse, type PageInfo, type QueryValue } from './apiHelpers.js';
 import type {
   AddIssueCommentArgs,
   CreateBranchArgs,
@@ -216,13 +216,98 @@ export function normalizeRepoPath(raw: string): string {
   return path;
 }
 
+// ---- Read requests (shared with the REST plane) ----
+
+/**
+ * The upstream request a read tool makes, as data. The MCP op and the REST
+ * route both build their request from here, so the two surfaces cannot ask
+ * GitHub different questions — the drift the Calendar REST copy suffered.
+ */
+export interface GitHubRead {
+  path: string;
+  query?: Record<string, QueryValue>;
+  /** Media type, when a read needs more than the default representation. */
+  accept?: string;
+}
+
+/** Strip leading/trailing slashes; "" is the repository root. */
+export function cleanContentPath(path: string | undefined): string {
+  return (path ?? '').replace(/^\/+|\/+$/g, '');
+}
+
+const pullPath = (a: { owner: string; repo: string; pullNumber: number }) => `${repoPath(a.owner, a.repo)}/pulls/${a.pullNumber}`;
+
+export const READS = {
+  searchRepositories: (a: SearchRepositoriesArgs): GitHubRead => ({
+    path: '/search/repositories', query: { q: a.query, page: a.page, per_page: a.perPage },
+  }),
+  searchCode: (a: SearchCodeArgs): GitHubRead => ({
+    path: '/search/code', query: { q: a.query, page: a.page, per_page: a.perPage },
+    // The text-match media type is what makes GitHub return the matching
+    // fragments; without it a result is only a path.
+    accept: 'application/vnd.github.text-match+json',
+  }),
+  searchIssues: (a: SearchIssuesArgs): GitHubRead => ({
+    path: '/search/issues', query: { q: a.query, sort: a.sort, order: a.order, page: a.page, per_page: a.perPage },
+  }),
+  searchUsers: (a: SearchUsersArgs): GitHubRead => ({
+    path: '/search/users', query: { q: a.query, sort: a.sort, order: a.order, page: a.page, per_page: a.perPage },
+  }),
+  getFileContents: (a: GetFileContentsArgs): GitHubRead => {
+    const path = cleanContentPath(a.path);
+    return { path: `${repoPath(a.owner, a.repo)}/contents${path ? `/${slashPath(path)}` : ''}`, query: { ref: a.ref } };
+  },
+  listCommits: (a: ListCommitsArgs): GitHubRead => ({
+    path: `${repoPath(a.owner, a.repo)}/commits`,
+    query: { sha: a.sha, path: a.path, author: a.author, page: a.page, per_page: a.perPage },
+  }),
+  listIssues: (a: ListIssuesArgs): GitHubRead => ({
+    path: `${repoPath(a.owner, a.repo)}/issues`,
+    query: {
+      state: a.state, labels: a.labels?.join(','), sort: a.sort, direction: a.direction,
+      since: a.since, page: a.page, per_page: a.perPage,
+    },
+  }),
+  getIssue: (a: GetIssueArgs): GitHubRead => ({ path: `${repoPath(a.owner, a.repo)}/issues/${a.issueNumber}` }),
+  listPullRequests: (a: ListPullRequestsArgs): GitHubRead => ({
+    path: `${repoPath(a.owner, a.repo)}/pulls`,
+    query: {
+      state: a.state, head: a.head, base: a.base, sort: a.sort, direction: a.direction,
+      page: a.page, per_page: a.perPage,
+    },
+  }),
+  getPullRequest: (a: GetPullRequestArgs): GitHubRead => ({ path: pullPath(a) }),
+  getPullRequestFiles: (a: GetPullRequestFilesArgs): GitHubRead => ({
+    path: `${pullPath(a)}/files`, query: { page: a.page, per_page: a.perPage },
+  }),
+  getPullRequestComments: (a: GetPullRequestCommentsArgs): GitHubRead => ({
+    path: `${pullPath(a)}/comments`, query: { page: a.page, per_page: a.perPage },
+  }),
+  getPullRequestReviews: (a: GetPullRequestReviewsArgs): GitHubRead => ({
+    path: `${pullPath(a)}/reviews`, query: { page: a.page, per_page: a.perPage },
+  }),
+};
+
+export function runRead<T>(client: GitHubClient, read: GitHubRead): Promise<GitHubResponse<T>> {
+  return client.get<T>(read.path, read.query, read.accept);
+}
+
+/**
+ * A UserError that carries the upstream status it stands for, so the REST
+ * plane answers 404/409 rather than 400 when an op has already turned
+ * GitHub's answer into a sentence. The MCP surface only reads the message.
+ */
+function statusError(message: string, status: number): UserError {
+  const error = new UserError(message);
+  (error as any).status = status;
+  return error;
+}
+
 // ---- Repositories ----
 
 export async function opSearchRepositories(client: GitHubClient, args: SearchRepositoriesArgs): Promise<string> {
   const current = args.page ?? 1;
-  const { data, page } = await client.get<GhSearch<GhRepo>>('/search/repositories', {
-    q: args.query, page: args.page, per_page: args.perPage,
-  });
+  const { data, page } = await runRead<GhSearch<GhRepo>>(client, READS.searchRepositories(args));
   const lines = searchHeader('repositories', args.query, data);
   lines.push('');
   data.items.forEach((r, i) => {
@@ -338,17 +423,27 @@ function renderFile(args: GetFileContentsArgs, file: GhContentEntry): string {
 }
 
 export async function opGetFileContents(client: GitHubClient, args: GetFileContentsArgs): Promise<string> {
-  const path = (args.path ?? '').replace(/^\/+|\/+$/g, '');
-  const url = `${repoPath(args.owner, args.repo)}/contents${path ? `/${slashPath(path)}` : ''}`;
-  const { data } = await client.get<GhContentEntry | GhContentEntry[]>(url, { ref: args.ref });
-  const normalized = { ...args, path };
+  const { data } = await runRead<GhContentEntry | GhContentEntry[]>(client, READS.getFileContents(args));
+  const normalized = { ...args, path: cleanContentPath(args.path) };
   if (Array.isArray(data)) return renderDirectory(normalized, data);
   if (data.type === 'symlink') return `${data.path} is a symlink to ${data.target ?? '(unknown target)'}.`;
   if (data.type === 'submodule') return `${data.path} is a git submodule pointing at ${data.submodule_git_url ?? '(unknown URL)'} @ ${data.sha}.`;
   return renderFile(normalized, data);
 }
 
-export async function opCreateOrUpdateFile(client: GitHubClient, args: CreateOrUpdateFileArgs): Promise<string> {
+export interface FileWriteResult {
+  /** True when the file did not exist before (GitHub answered 201). */
+  created: boolean;
+  path: string;
+  branch: string;
+  commit: { sha: string; html_url?: string };
+  /** Blob SHA of the new content. */
+  blobSha: string | null;
+  /** True when no `sha` was given, so the existing file was replaced unchecked. */
+  overwroteUnchecked: boolean;
+}
+
+export async function performCreateOrUpdateFile(client: GitHubClient, args: CreateOrUpdateFileArgs): Promise<FileWriteResult> {
   const path = normalizeRepoPath(args.path);
   const rp = repoPath(args.owner, args.repo);
   const contentUrl = `${rp}/contents/${slashPath(path)}`;
@@ -381,13 +476,24 @@ export async function opCreateOrUpdateFile(client: GitHubClient, args: CreateOrU
     branch: args.branch,
     ...(sha ? { sha } : {}),
   });
+  return {
+    created: status === 201,
+    path,
+    branch: args.branch,
+    commit: data.commit,
+    blobSha: data.content?.sha ?? null,
+    overwroteUnchecked,
+  };
+}
 
+export async function opCreateOrUpdateFile(client: GitHubClient, args: CreateOrUpdateFileArgs): Promise<string> {
+  const r = await performCreateOrUpdateFile(client, args);
   const lines = [
-    `${status === 201 ? 'Created' : 'Updated'} ${path} on ${args.branch} in ${args.owner}/${args.repo}.`,
-    `  Commit: ${data.commit.sha}${data.commit.html_url ? ` — ${data.commit.html_url}` : ''}`,
+    `${r.created ? 'Created' : 'Updated'} ${r.path} on ${r.branch} in ${args.owner}/${args.repo}.`,
+    `  Commit: ${r.commit.sha}${r.commit.html_url ? ` — ${r.commit.html_url}` : ''}`,
   ];
-  if (data.content?.sha) lines.push(`  New blob SHA: ${data.content.sha}`);
-  if (overwroteUnchecked) {
+  if (r.blobSha) lines.push(`  New blob SHA: ${r.blobSha}`);
+  if (r.overwroteUnchecked) {
     lines.push('  No `sha` was given, so the current version was replaced without checking whether it had changed since you last read it.');
   }
   return lines.join('\n');
@@ -405,13 +511,24 @@ async function branchHead(client: GitHubClient, rp: string, owner: string, repo:
     return data.object.sha;
   } catch (error: any) {
     if (error?.status === 404) {
-      throw new UserError(`Branch "${branch}" does not exist in ${owner}/${repo}. Create it with createBranch first.`);
+      throw statusError(`Branch "${branch}" does not exist in ${owner}/${repo}. Create it with createBranch first.`, 404);
     }
     throw error;
   }
 }
 
-export async function opPushFiles(client: GitHubClient, args: PushFilesArgs): Promise<string> {
+export interface PushResult {
+  /** False when every file already had this content, so nothing was committed. */
+  pushed: boolean;
+  branch: string;
+  commitSha: string | null;
+  commitUrl: string | null;
+  files: Array<{ path: string; change: 'added' | 'modified'; mode: string }>;
+  /** New paths written without checking the old mode, because GitHub truncated the tree listing. */
+  modesUnverified: string[];
+}
+
+export async function performPushFiles(client: GitHubClient, args: PushFilesArgs): Promise<PushResult> {
   const files = args.files.map(f => ({ path: normalizeRepoPath(f.path), content: f.content }));
   const seen = new Set<string>();
   for (const f of files) {
@@ -450,8 +567,14 @@ export async function opPushFiles(client: GitHubClient, args: PushFilesArgs): Pr
       content: f.content,
     })),
   });
+  const changed = files.map(f => ({
+    path: f.path,
+    change: existing.has(f.path) ? 'modified' as const : 'added' as const,
+    mode: existing.get(f.path)?.mode ?? REGULAR_FILE,
+  }));
+  const modesUnverified = tree.truncated ? files.filter(f => !existing.has(f.path)).map(f => f.path) : [];
   if (newTree.sha === baseTreeSha) {
-    return `No changes: every file already has exactly this content on ${args.branch} in ${args.owner}/${args.repo}, so nothing was committed.`;
+    return { pushed: false, branch: args.branch, commitSha: null, commitUrl: null, files: changed, modesUnverified };
   }
 
   const { data: commit } = await client.post<{ sha: string }>(`${rp}/git/commits`, {
@@ -466,21 +589,33 @@ export async function opPushFiles(client: GitHubClient, args: PushFilesArgs): Pr
     await client.patch(`${rp}/git/refs/heads/${slashPath(args.branch)}`, { sha: commit.sha, force: false });
   } catch (error: any) {
     if (error?.status === 422 && /fast[- ]forward/i.test(error?.body ?? '')) {
-      throw new UserError(`Branch ${args.branch} moved while this commit was being built (someone pushed in the meantime), so it was NOT updated and nothing was pushed. Run pushFiles again to commit on top of the new head.`);
+      throw statusError(`Branch ${args.branch} moved while this commit was being built (someone pushed in the meantime), so it was NOT updated and nothing was pushed. Run pushFiles again to commit on top of the new head.`, 409);
     }
     throw error;
   }
 
+  return {
+    pushed: true,
+    branch: args.branch,
+    commitSha: commit.sha,
+    commitUrl: `https://github.com/${args.owner}/${args.repo}/commit/${commit.sha}`,
+    files: changed,
+    modesUnverified,
+  };
+}
+
+export async function opPushFiles(client: GitHubClient, args: PushFilesArgs): Promise<string> {
+  const r = await performPushFiles(client, args);
+  if (!r.pushed) {
+    return `No changes: every file already has exactly this content on ${args.branch} in ${args.owner}/${args.repo}, so nothing was committed.`;
+  }
   const lines = [
-    `Pushed ${files.length} file(s) to ${args.branch} in ${args.owner}/${args.repo} as one commit.`,
-    `  Commit: ${commit.sha} — https://github.com/${args.owner}/${args.repo}/commit/${commit.sha}`,
-    ...files.map(f => `  ${existing.has(f.path) ? 'M' : 'A'} ${f.path}${existing.get(f.path)?.mode === EXECUTABLE_FILE ? ' (kept executable)' : ''}`),
+    `Pushed ${r.files.length} file(s) to ${args.branch} in ${args.owner}/${args.repo} as one commit.`,
+    `  Commit: ${r.commitSha} — ${r.commitUrl}`,
+    ...r.files.map(f => `  ${f.change === 'modified' ? 'M' : 'A'} ${f.path}${f.mode === EXECUTABLE_FILE ? ' (kept executable)' : ''}`),
   ];
-  if (tree.truncated) {
-    const unseen = files.filter(f => !existing.has(f.path));
-    if (unseen.length) {
-      lines.push(`  Note: the repository tree was too large for GitHub to list in full, so these were written as regular non-executable files without checking what was there before: ${unseen.map(f => f.path).join(', ')}.`);
-    }
+  if (r.modesUnverified.length) {
+    lines.push(`  Note: the repository tree was too large for GitHub to list in full, so these were written as regular non-executable files without checking what was there before: ${r.modesUnverified.join(', ')}.`);
   }
   return lines.join('\n');
 }
@@ -497,14 +632,14 @@ export async function opCreateBranch(client: GitHubClient, args: CreateBranchArg
   try {
     sha = (await client.get<{ object: { sha: string } }>(`${rp}/git/ref/heads/${slashPath(from)}`)).data.object.sha;
   } catch (error: any) {
-    if (error?.status === 404) throw new UserError(`Source branch "${from}" does not exist in ${args.owner}/${args.repo}.`);
+    if (error?.status === 404) throw statusError(`Source branch "${from}" does not exist in ${args.owner}/${args.repo}.`, 404);
     throw error;
   }
   try {
     await client.post(`${rp}/git/refs`, { ref: `refs/heads/${args.branch}`, sha });
   } catch (error: any) {
     if (error?.status === 422 && /already exists/i.test(error?.body ?? '')) {
-      throw new UserError(`Branch "${args.branch}" already exists in ${args.owner}/${args.repo}; nothing was changed.`);
+      throw statusError(`Branch "${args.branch}" already exists in ${args.owner}/${args.repo}; nothing was changed.`, 409);
     }
     throw error;
   }
@@ -513,14 +648,12 @@ export async function opCreateBranch(client: GitHubClient, args: CreateBranchArg
 
 export async function opListCommits(client: GitHubClient, args: ListCommitsArgs): Promise<string> {
   const current = args.page ?? 1;
-  const { data, page } = await client.get<Array<{
+  const { data, page } = await runRead<Array<{
     sha: string;
     html_url: string;
     author: GhUser | null;
     commit: { message: string; author: { name?: string; date?: string } | null };
-  }>>(`${repoPath(args.owner, args.repo)}/commits`, {
-    sha: args.sha, path: args.path, author: args.author, page: args.page, per_page: args.perPage,
-  });
+  }>>(client, READS.listCommits(args));
   const scope = [args.sha && `on ${args.sha}`, args.path && `touching ${args.path}`, args.author && `by ${args.author}`].filter(Boolean).join(' ');
   if (!data.length) return `No commits ${scope || 'found'} in ${args.owner}/${args.repo}${current > 1 ? ` on page ${current}` : ''}.`;
   const lines = [`Commits in ${args.owner}/${args.repo}${scope ? ` ${scope}` : ''} (newest first):`, ''];
@@ -543,15 +676,7 @@ function issueLine(issue: GhIssue, repoName?: string): string {
 
 export async function opListIssues(client: GitHubClient, args: ListIssuesArgs): Promise<string> {
   const current = args.page ?? 1;
-  const { data, page } = await client.get<GhIssue[]>(`${repoPath(args.owner, args.repo)}/issues`, {
-    state: args.state,
-    labels: args.labels?.join(','),
-    sort: args.sort,
-    direction: args.direction,
-    since: args.since,
-    page: args.page,
-    per_page: args.perPage,
-  });
+  const { data, page } = await runRead<GhIssue[]>(client, READS.listIssues(args));
   if (!data.length) {
     return current > 1
       ? `Page ${current} of ${args.state ?? 'open'} issues in ${args.owner}/${args.repo} is empty — it is past the last page.`
@@ -568,7 +693,7 @@ export async function opListIssues(client: GitHubClient, args: ListIssuesArgs): 
 }
 
 export async function opGetIssue(client: GitHubClient, args: GetIssueArgs): Promise<string> {
-  const { data: i } = await client.get<GhIssue>(`${repoPath(args.owner, args.repo)}/issues/${args.issueNumber}`);
+  const { data: i } = await runRead<GhIssue>(client, READS.getIssue(args));
   const lines = [
     `${i.pull_request ? 'Pull request' : 'Issue'} #${i.number} in ${args.owner}/${args.repo}: ${i.title}`,
     `  State: ${i.state}${i.state_reason ? ` (${i.state_reason})` : ''}`,
@@ -619,7 +744,7 @@ function droppedNote(dropped: string[]): string[] {
   return [`  ⚠ GitHub did not apply: ${dropped.join('; ')}. It silently ignores these from accounts without push access to the repository (and ignores assignees who cannot be assigned), so they were NOT set.`];
 }
 
-export async function opCreateIssue(client: GitHubClient, args: CreateIssueArgs): Promise<string> {
+export async function performCreateIssue(client: GitHubClient, args: CreateIssueArgs): Promise<{ issue: GhIssue; notApplied: string[] }> {
   const { data } = await client.post<GhIssue>(`${repoPath(args.owner, args.repo)}/issues`, {
     title: args.title,
     body: args.body,
@@ -627,10 +752,15 @@ export async function opCreateIssue(client: GitHubClient, args: CreateIssueArgs)
     milestone: args.milestone,
     labels: args.labels,
   });
+  return { issue: data, notApplied: droppedIssueFields(args, data) };
+}
+
+export async function opCreateIssue(client: GitHubClient, args: CreateIssueArgs): Promise<string> {
+  const { issue, notApplied } = await performCreateIssue(client, args);
   return [
-    `Created issue #${data.number} in ${args.owner}/${args.repo}: ${data.title}`,
-    `  URL: ${data.html_url}`,
-    ...droppedNote(droppedIssueFields(args, data)),
+    `Created issue #${issue.number} in ${args.owner}/${args.repo}: ${issue.title}`,
+    `  URL: ${issue.html_url}`,
+    ...droppedNote(notApplied),
   ].join('\n');
 }
 
@@ -663,10 +793,15 @@ export async function opUpdateIssue(client: GitHubClient, args: UpdateIssueArgs)
   ].join('\n');
 }
 
-export async function opAddIssueComment(client: GitHubClient, args: AddIssueCommentArgs): Promise<string> {
+export async function performAddIssueComment(client: GitHubClient, args: AddIssueCommentArgs): Promise<{ id: number; html_url: string }> {
   const { data } = await client.post<{ id: number; html_url: string }>(
     `${repoPath(args.owner, args.repo)}/issues/${args.issueNumber}/comments`, { body: args.body },
   );
+  return data;
+}
+
+export async function opAddIssueComment(client: GitHubClient, args: AddIssueCommentArgs): Promise<string> {
+  const data = await performAddIssueComment(client, args);
   return `Added a comment to #${args.issueNumber} in ${args.owner}/${args.repo}: ${data.html_url}`;
 }
 
@@ -674,15 +809,12 @@ export async function opAddIssueComment(client: GitHubClient, args: AddIssueComm
 
 export async function opSearchCode(client: GitHubClient, args: SearchCodeArgs): Promise<string> {
   const current = args.page ?? 1;
-  const { data, page } = await client.get<GhSearch<{
+  const { data, page } = await runRead<GhSearch<{
     path: string;
     html_url: string;
     repository: { full_name: string };
     text_matches?: Array<{ fragment: string }>;
-  }>>('/search/code', { q: args.query, page: args.page, per_page: args.perPage },
-    // The text-match media type is what makes GitHub return the matching
-    // fragments; without it a result is only a path.
-    'application/vnd.github.text-match+json');
+  }>>(client, READS.searchCode(args));
   const lines = searchHeader('code results', args.query, data);
   lines.push('Note: GitHub code search covers each repository\'s default branch only, and skips files over 384 KB.', '');
   for (const item of data.items) {
@@ -697,9 +829,7 @@ export async function opSearchCode(client: GitHubClient, args: SearchCodeArgs): 
 
 export async function opSearchIssues(client: GitHubClient, args: SearchIssuesArgs): Promise<string> {
   const current = args.page ?? 1;
-  const { data, page } = await client.get<GhSearch<GhIssue>>('/search/issues', {
-    q: args.query, sort: args.sort, order: args.order, page: args.page, per_page: args.perPage,
-  });
+  const { data, page } = await runRead<GhSearch<GhIssue>>(client, READS.searchIssues(args));
   const lines = searchHeader('issues and pull requests', args.query, data);
   lines.push('');
   for (const issue of data.items) lines.push(`- ${issueLine(issue, repoFromUrl(issue.repository_url))}`, `  ${issue.html_url}`);
@@ -709,9 +839,7 @@ export async function opSearchIssues(client: GitHubClient, args: SearchIssuesArg
 
 export async function opSearchUsers(client: GitHubClient, args: SearchUsersArgs): Promise<string> {
   const current = args.page ?? 1;
-  const { data, page } = await client.get<GhSearch<GhUser>>('/search/users', {
-    q: args.query, sort: args.sort, order: args.order, page: args.page, per_page: args.perPage,
-  });
+  const { data, page } = await runRead<GhSearch<GhUser>>(client, READS.searchUsers(args));
   const lines = searchHeader('users', args.query, data);
   lines.push('');
   for (const u of data.items) lines.push(`- ${u.login}${u.type && u.type !== 'User' ? ` (${u.type})` : ''} — ${u.html_url ?? ''}`);
@@ -729,10 +857,7 @@ function pullState(pr: GhPull): string {
 
 export async function opListPullRequests(client: GitHubClient, args: ListPullRequestsArgs): Promise<string> {
   const current = args.page ?? 1;
-  const { data, page } = await client.get<GhPull[]>(`${repoPath(args.owner, args.repo)}/pulls`, {
-    state: args.state, head: args.head, base: args.base, sort: args.sort, direction: args.direction,
-    page: args.page, per_page: args.perPage,
-  });
+  const { data, page } = await runRead<GhPull[]>(client, READS.listPullRequests(args));
   if (!data.length) {
     return current > 1
       ? `Page ${current} of pull requests in ${args.owner}/${args.repo} is empty — it is past the last page.`
@@ -755,7 +880,7 @@ function mergeabilityLine(pr: GhPull): string {
 }
 
 export async function opGetPullRequest(client: GitHubClient, args: GetPullRequestArgs): Promise<string> {
-  const { data: pr } = await client.get<GhPull>(`${repoPath(args.owner, args.repo)}/pulls/${args.pullNumber}`);
+  const { data: pr } = await runRead<GhPull>(client, READS.getPullRequest(args));
   const lines = [
     `Pull request #${pr.number} in ${args.owner}/${args.repo}: ${pr.title}`,
     `  State: ${pullState(pr)}${pr.merged_at ? ` at ${pr.merged_at}${pr.merged_by ? ` by ${who(pr.merged_by)}` : ''}` : ''}`,
@@ -814,9 +939,9 @@ export async function opCreatePullRequestReview(client: GitHubClient, args: Crea
   ].join('\n');
 }
 
-export async function opMergePullRequest(client: GitHubClient, args: MergePullRequestArgs): Promise<string> {
+export async function performMergePullRequest(client: GitHubClient, args: MergePullRequestArgs): Promise<{ merged: boolean; sha: string; message: string }> {
   const { data } = await client.put<{ merged: boolean; sha: string; message: string }>(
-    `${repoPath(args.owner, args.repo)}/pulls/${args.pullNumber}/merge`,
+    `${pullPath(args)}/merge`,
     {
       merge_method: args.mergeMethod,
       commit_title: args.commitTitle,
@@ -824,6 +949,11 @@ export async function opMergePullRequest(client: GitHubClient, args: MergePullRe
       sha: args.expectedHeadSha,
     },
   );
+  return data;
+}
+
+export async function opMergePullRequest(client: GitHubClient, args: MergePullRequestArgs): Promise<string> {
+  const data = await performMergePullRequest(client, args);
   if (!data.merged) {
     return `GitHub did NOT merge #${args.pullNumber} in ${args.owner}/${args.repo}: ${data.message}`;
   }
@@ -836,14 +966,14 @@ const FILE_STATUS: Record<string, string> = {
 
 export async function opGetPullRequestFiles(client: GitHubClient, args: GetPullRequestFilesArgs): Promise<string> {
   const current = args.page ?? 1;
-  const { data, page } = await client.get<Array<{
+  const { data, page } = await runRead<Array<{
     filename: string;
     previous_filename?: string;
     status: string;
     additions: number;
     deletions: number;
     patch?: string;
-  }>>(`${repoPath(args.owner, args.repo)}/pulls/${args.pullNumber}/files`, { page: args.page, per_page: args.perPage });
+  }>>(client, READS.getPullRequestFiles(args));
   if (!data.length) {
     return current > 1
       ? `Page ${current} of the files in #${args.pullNumber} is empty — it is past the last page.`
@@ -866,70 +996,107 @@ export async function opGetPullRequestFiles(client: GitHubClient, args: GetPullR
 /** Check-run conclusions that mean "this did not pass". */
 const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale']);
 
-export async function opGetPullRequestStatus(client: GitHubClient, args: GetPullRequestStatusArgs): Promise<string> {
+interface GhStatus { state: string; context: string; description: string | null; target_url: string | null }
+interface GhCheckRun { name: string; status: string; conclusion: string | null; html_url?: string; app?: { name?: string } }
+
+/** Everything getPullRequestStatus learns, as data — what the REST route answers with. */
+export interface PullRequestChecks {
+  headSha: string;
+  /** passing | failing | pending | no_checks | unknown */
+  verdict: 'passing' | 'failing' | 'pending' | 'no_checks' | 'unknown';
+  failing: number;
+  pending: number;
+  statuses: GhStatus[];
+  statusesTotal: number;
+  checkRuns: GhCheckRun[];
+  checkRunsTotal: number;
+  /** Why check runs could not be read, or null when they were. */
+  checkRunsError: string | null;
+  /** Checks past the first page of either list, which were not read. */
+  unread: number;
+}
+
+export async function fetchPullRequestStatus(client: GitHubClient, args: GetPullRequestStatusArgs): Promise<PullRequestChecks> {
   const rp = repoPath(args.owner, args.repo);
-  const { data: pr } = await client.get<GhPull>(`${rp}/pulls/${args.pullNumber}`);
+  const { data: pr } = await runRead<GhPull>(client, READS.getPullRequest(args));
   const sha = pr.head.sha;
 
-  const { data: combined } = await client.get<{
-    total_count: number;
-    statuses: Array<{ state: string; context: string; description: string | null; target_url: string | null }>;
-  }>(`${rp}/commits/${seg(sha)}/status`, { per_page: 100 });
+  const { data: combined } = await client.get<{ total_count: number; statuses: GhStatus[] }>(
+    `${rp}/commits/${seg(sha)}/status`, { per_page: 100 },
+  );
 
   // Check runs are where GitHub Actions (and most modern CI) report. Read
   // best-effort: a fine-grained token without the Checks permission 403s here,
   // and the legacy statuses above are still worth returning.
-  let runs: Array<{ name: string; status: string; conclusion: string | null; html_url?: string; app?: { name?: string } }> = [];
-  let runsTotal = 0;
-  let runsError: string | null = null;
+  let checkRuns: GhCheckRun[] = [];
+  let checkRunsTotal = 0;
+  let checkRunsError: string | null = null;
   try {
-    const { data } = await client.get<{ total_count: number; check_runs: typeof runs }>(
+    const { data } = await client.get<{ total_count: number; check_runs: GhCheckRun[] }>(
       `${rp}/commits/${seg(sha)}/check-runs`, { per_page: 100 },
     );
-    runs = data.check_runs;
-    runsTotal = data.total_count;
+    checkRuns = data.check_runs;
+    checkRunsTotal = data.total_count;
   } catch (error) {
-    runsError = describeGitHubError(error);
+    checkRunsError = describeGitHubError(error);
   }
 
   const statuses = combined.statuses ?? [];
   const failing = statuses.filter(s => s.state === 'failure' || s.state === 'error').length
-    + runs.filter(r => r.status === 'completed' && FAILING_CONCLUSIONS.has(r.conclusion ?? '')).length;
-  const pending = statuses.filter(s => s.state === 'pending').length + runs.filter(r => r.status !== 'completed').length;
+    + checkRuns.filter(r => r.status === 'completed' && FAILING_CONCLUSIONS.has(r.conclusion ?? '')).length;
+  const pending = statuses.filter(s => s.state === 'pending').length + checkRuns.filter(r => r.status !== 'completed').length;
 
-  let verdict: string;
-  if (!statuses.length && !runs.length) {
-    verdict = runsError
-      ? 'UNKNOWN — no commit statuses, and check runs could not be read'
-      : 'NO CHECKS have reported on this commit';
-  } else if (failing) verdict = `FAILING (${failing} failed)`;
-  else if (pending) verdict = `PENDING (${pending} still running or queued)`;
-  // PASSING is the verdict a model merges on, so it needs every check read.
-  // A failure past the first page, or in check runs we could not read at all,
-  // would otherwise pass for green.
-  else if (runsError) verdict = 'UNKNOWN — every commit status passed, but check runs could not be read';
-  else if (runsTotal > runs.length || combined.total_count > statuses.length) {
-    verdict = `UNKNOWN — the first ${runs.length + statuses.length} checks passed, but `
-      + `${runsTotal - runs.length + combined.total_count - statuses.length} more were not read`;
-  } else verdict = 'PASSING';
+  // The legacy combined `state` is deliberately ignored: it reads "pending"
+  // when NO status has ever been posted, which is the Actions-only case.
+  // PASSING is the verdict a model (or a pipeline) merges on, so it needs
+  // every check read: a failure past the first page, or in check runs that
+  // could not be read at all, would otherwise pass for green.
+  const statusesTotal = combined.total_count ?? statuses.length;
+  const unread = Math.max(0, checkRunsTotal - checkRuns.length) + Math.max(0, statusesTotal - statuses.length);
+  let verdict: PullRequestChecks['verdict'];
+  if (!statuses.length && !checkRuns.length) verdict = checkRunsError ? 'unknown' : 'no_checks';
+  else if (failing) verdict = 'failing';
+  else if (pending) verdict = 'pending';
+  else if (checkRunsError || unread) verdict = 'unknown';
+  else verdict = 'passing';
 
+  return {
+    headSha: sha, verdict, failing, pending,
+    statuses, statusesTotal, checkRuns, checkRunsTotal, checkRunsError, unread,
+  };
+}
+
+const VERDICT_TEXT: Record<PullRequestChecks['verdict'], (c: PullRequestChecks) => string> = {
+  unknown: c => {
+    if (!c.statuses.length && !c.checkRuns.length) return 'UNKNOWN — no commit statuses, and check runs could not be read';
+    if (c.checkRunsError) return 'UNKNOWN — every commit status passed, but check runs could not be read';
+    return `UNKNOWN — the first ${c.checkRuns.length + c.statuses.length} checks passed, but ${c.unread} more were not read`;
+  },
+  no_checks: () => 'NO CHECKS have reported on this commit',
+  failing: c => `FAILING (${c.failing} failed)`,
+  pending: c => `PENDING (${c.pending} still running or queued)`,
+  passing: () => 'PASSING',
+};
+
+export async function opGetPullRequestStatus(client: GitHubClient, args: GetPullRequestStatusArgs): Promise<string> {
+  const c = await fetchPullRequestStatus(client, args);
   const lines = [
-    `Checks for #${args.pullNumber} in ${args.owner}/${args.repo} at head ${short(sha)}: ${verdict}`,
+    `Checks for #${args.pullNumber} in ${args.owner}/${args.repo} at head ${short(c.headSha)}: ${VERDICT_TEXT[c.verdict](c)}`,
     '',
   ];
-  if (runs.length) {
-    lines.push(`Check runs (${runsTotal}):`);
-    for (const r of runs) {
+  if (c.checkRuns.length) {
+    lines.push(`Check runs (${c.checkRunsTotal}):`);
+    for (const r of c.checkRuns) {
       const result = r.status === 'completed' ? (r.conclusion ?? 'completed') : r.status;
       lines.push(`  - ${r.name}${r.app?.name ? ` [${r.app.name}]` : ''}: ${result}${r.html_url ? ` — ${r.html_url}` : ''}`);
     }
-    if (runsTotal > runs.length) lines.push(`  (showing the first ${runs.length} of ${runsTotal})`);
-  } else if (runsError) {
-    lines.push(`Check runs: could not be read — ${runsError}`);
+    if (c.checkRunsTotal > c.checkRuns.length) lines.push(`  (showing the first ${c.checkRuns.length} of ${c.checkRunsTotal})`);
+  } else if (c.checkRunsError) {
+    lines.push(`Check runs: could not be read — ${c.checkRunsError}`);
   }
-  if (statuses.length) {
-    lines.push(`Commit statuses (${combined.total_count}):`);
-    for (const s of statuses) {
+  if (c.statuses.length) {
+    lines.push(`Commit statuses (${c.statusesTotal}):`);
+    for (const s of c.statuses) {
       lines.push(`  - ${s.context}: ${s.state}${s.description ? ` — ${s.description}` : ''}${s.target_url ? ` (${s.target_url})` : ''}`);
     }
   }
@@ -946,7 +1113,7 @@ export async function opUpdatePullRequestBranch(client: GitHubClient, args: Upda
 
 export async function opGetPullRequestComments(client: GitHubClient, args: GetPullRequestCommentsArgs): Promise<string> {
   const current = args.page ?? 1;
-  const { data, page } = await client.get<Array<{
+  const { data, page } = await runRead<Array<{
     id: number;
     user: GhUser | null;
     body: string;
@@ -956,7 +1123,7 @@ export async function opGetPullRequestComments(client: GitHubClient, args: GetPu
     in_reply_to_id?: number;
     created_at: string;
     html_url: string;
-  }>>(`${repoPath(args.owner, args.repo)}/pulls/${args.pullNumber}/comments`, { page: args.page, per_page: args.perPage });
+  }>>(client, READS.getPullRequestComments(args));
   if (!data.length) {
     return current > 1
       ? `Page ${current} of review comments on #${args.pullNumber} is empty — it is past the last page.`
@@ -976,14 +1143,14 @@ export async function opGetPullRequestComments(client: GitHubClient, args: GetPu
 
 export async function opGetPullRequestReviews(client: GitHubClient, args: GetPullRequestReviewsArgs): Promise<string> {
   const current = args.page ?? 1;
-  const { data, page } = await client.get<Array<{
+  const { data, page } = await runRead<Array<{
     id: number;
     user: GhUser | null;
     state: string;
     body: string | null;
     submitted_at?: string | null;
     html_url: string;
-  }>>(`${repoPath(args.owner, args.repo)}/pulls/${args.pullNumber}/reviews`, { page: args.page, per_page: args.perPage });
+  }>>(client, READS.getPullRequestReviews(args));
   if (!data.length) {
     return current > 1
       ? `Page ${current} of reviews on #${args.pullNumber} is empty — it is past the last page.`

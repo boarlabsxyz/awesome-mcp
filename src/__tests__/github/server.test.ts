@@ -61,8 +61,10 @@ const log = { info: () => {}, error: () => {}, warn: () => {}, debug: () => {} }
 const realFetch = globalThis.fetch;
 
 describe('github server registration', () => {
-  it('registers the 26 ported tools', () => {
+  it('registers the 26 ported tools plus the two shared REST tools', () => {
     for (const name of [...READS, ...WRITES]) assert.ok(toolMap.has(name), `${name} registered`);
+    assert.ok(toolMap.has('mintRestBearerForCurl'));
+    assert.ok(toolMap.has('listRestEndpoints'));
     assert.equal(READS.length + WRITES.length, 26);
   });
 

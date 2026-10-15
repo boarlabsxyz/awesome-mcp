@@ -326,6 +326,8 @@ import { validateRedmineToken, buildRedmineInstanceName } from '../redmine/conne
 import { validateBrowserbaseToken, buildBrowserbaseInstanceName, fetchBrowserbaseProject } from '../browserbase/connectToken.js';
 import { validateGitHubToken, buildGitHubInstanceName, fetchGitHubUser } from '../github/connectToken.js';
 import { exchangeGitHubOauthCode, GITHUB_TOKEN_URL } from '../github/oauthCallback.js';
+import { GITHUB_READ_ROUTES, GITHUB_WRITE_ROUTES, writeArgs as githubWriteArgs } from '../github/restRoutes.js';
+import type { GitHubClient } from '../github/apiHelpers.js';
 // Type-only: erased at compile time, so the REST handlers can still import the
 // clients dynamically and keep them out of the web server's startup graph.
 import type { ClickUpClient } from '../clickup/apiHelpers.js';
@@ -1273,6 +1275,10 @@ const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
   // branch of the page-image route. The task and list writes under
   // /api/v1/clickup carry markdown_content bodies for the same reason.
   '/api/v1/clickup',
+  // GitHub file writes: createOrUpdateFile carries a whole file and pushFiles
+  // up to 100 of them — committing generated content without routing it
+  // through a model is the reason those two endpoints exist.
+  '/api/v1/github/repos',
 ];
 
 /**
@@ -3983,6 +3989,13 @@ function registerRestApiRoutes(app: express.Express): void {
             // PASSES and every handler throws at call time.
             const { createBrowserbaseSession } = await import('../userSession.js');
             req.userSession = createBrowserbaseSession(user, connection);
+          } else if (connection.provider === 'github') {
+            // Same reason again: without it a GitHub connection falls through
+            // to the Google path, auth passes, and every handler then finds no
+            // githubAccessToken. It also carries the GitHub App refresh
+            // plumbing that githubRestClient spends before each call.
+            const { createGitHubSession } = await import('../userSession.js');
+            req.userSession = createGitHubSession(user, connection);
           } else {
             const mcp = await getMcpCatalog(connection.mcpSlug);
             const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
@@ -4016,6 +4029,7 @@ function registerRestApiRoutes(app: express.Express): void {
   const requireHubSpotApiKey = createServiceAuth('hubspot', 'hubspot');
   const requireRedmineApiKey = createServiceAuth('redmine', 'redmine');
   const requireBrowserbaseApiKey = createServiceAuth('browserbase', 'browserbase');
+  const requireGitHubApiKey = createServiceAuth('github', 'github');
   const requireOutlineApiKey = createServiceAuth('outline', 'outline');
 
   // JSON body parser already added above for auth routes
@@ -9483,6 +9497,82 @@ function registerRestApiRoutes(app: express.Express): void {
       await sendRedmineError(res, err, { fallback: 'Failed to save wiki page', permission: 'edit_wiki_pages', baseUrl: req.userSession?.redmineBaseUrl });
     }
   });
+
+  // === GitHub ===
+  // Both tables live in src/github/restRoutes.ts, where each descriptor maps a
+  // request onto the MCP tool's own schema and the same READS builder or
+  // perform* function the tool calls — so this file holds only the contract
+  // shared by every route: auth, validation, refresh, status and error mapping.
+  //
+  // WRITES were exposed with explicit sign-off (see the catalog notes): the
+  // permanent dashboard API key is accepted here, so it can now create issues
+  // and comments, commit files and merge pull requests on every repository the
+  // connected GitHub account can write to.
+
+  /**
+   * Refresh, then build a client — or answer 403 and return null. The refresh
+   * is mandatory, not defensive: a GitHub App user token expires in 8h and its
+   * refresh token rotates, so a client built from the stored token alone is a
+   * healthy-looking connection that 401s.
+   */
+  async function githubRestClient(req: ApiAuthenticatedRequest, res: Response): Promise<GitHubClient | null> {
+    const session = req.userSession;
+    if (!session?.githubAccessToken) {
+      res.status(403).json({ error: 'GitHub connection required for REST. Connect via the dashboard.' });
+      return null;
+    }
+    const { maybeRefreshGitHubToken, getGitHubClient } = await import('../github/apiHelpers.js');
+    await maybeRefreshGitHubToken(session, REST_PROVIDER_LOG);
+    return getGitHubClient(session);
+  }
+
+  /** Map through githubRestError: 429 for a rate limit, 502 for a dead stored credential. */
+  async function sendGitHubError(res: Response, err: unknown, fallback: string): Promise<void> {
+    const { githubRestError } = await import('../github/apiHelpers.js');
+    const mapped = githubRestError(err);
+    if (mapped.retryAfter) res.set('Retry-After', mapped.retryAfter);
+    res.status(mapped.status).json({ error: mapped.message || fallback });
+  }
+
+  for (const route of GITHUB_READ_ROUTES) {
+    app.get(route.path, requireGitHubApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const parsed = route.schema.safeParse(route.args(req));
+        if (!parsed.success) { sendInvalidQuery(res, parsed.error.flatten()); return; }
+        const client = await githubRestClient(req, res);
+        if (!client) return;
+        // Text is the MCP tool's own rendering, fetched instead of (never in
+        // addition to) the JSON, so ?format=text costs the same calls.
+        if (negotiateFormat(req) === 'text') {
+          res.type('text/plain; charset=utf-8').send(await route.text(client, parsed.data));
+          return;
+        }
+        res.json(await route.json(client, parsed.data));
+      } catch (err) {
+        console.error(`Error in GitHub ${route.tool}:`, err);
+        await sendGitHubError(res, err, route.fallback);
+      }
+    });
+  }
+
+  for (const route of GITHUB_WRITE_ROUTES) {
+    app.post(route.path, requireGitHubApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const parsed = route.schema.safeParse(githubWriteArgs(route, req));
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const client = await githubRestClient(req, res);
+        if (!client) return;
+        const result = await route.run(client, parsed.data);
+        res.status(result.status).json(result.body);
+      } catch (err) {
+        console.error(`Error in GitHub ${route.tool}:`, err);
+        await sendGitHubError(res, err, route.fallback);
+      }
+    });
+  }
 }
 
 

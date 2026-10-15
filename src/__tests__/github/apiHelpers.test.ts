@@ -10,6 +10,7 @@ import {
   parseLinkHeader,
   describeGitHubError,
   mapGitHubError,
+  githubRestError,
   maybeRefreshGitHubToken,
   withGitHubClient,
   slashPath,
@@ -247,5 +248,32 @@ describe('maybeRefreshGitHubToken', () => {
     await maybeRefreshGitHubToken(session, log);
     assert.equal(session.githubAccessToken, 'old');
     assert.equal(session.githubRefreshToken, 'old-refresh');
+  });
+});
+
+describe('githubRestError — the REST plane status for each failure', () => {
+  it('an op refusal with no status is 400; one standing for an upstream answer keeps it', () => {
+    assert.equal(githubRestError(new UserError('Nothing to update')).status, 400);
+    const missing: any = new UserError('Branch "x" does not exist');
+    missing.status = 404;
+    assert.deepEqual(githubRestError(missing), { status: 404, message: 'Branch "x" does not exist' });
+  });
+
+  it('a network failure and a GitHub 5xx are 502', () => {
+    assert.equal(githubRestError(new Error('fetch failed')).status, 502);
+    assert.equal(githubRestError(apiError(503, '')).status, 502);
+  });
+
+  it('a stored-credential 401 is 502, so the caller is not sent to re-mint a good bearer', () => {
+    assert.equal(githubRestError(apiError(401, { message: 'Bad credentials' })).status, 502);
+  });
+
+  it('a secondary limit is 429 with GitHub\'s own Retry-After', () => {
+    const mapped = githubRestError(apiError(403, { message: 'secondary rate limit' }, { 'retry-after': '42' }));
+    assert.deepEqual([mapped.status, mapped.retryAfter], [429, '42']);
+  });
+
+  it('other upstream statuses pass through', () => {
+    for (const status of [403, 404, 409, 422]) assert.equal(githubRestError(apiError(status, { message: 'x' })).status, status);
   });
 });

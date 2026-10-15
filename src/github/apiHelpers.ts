@@ -35,7 +35,7 @@ export type GitHubToolLog = {
   error: (msg: string) => void;
 };
 
-type QueryValue = string | number | boolean | null | undefined;
+export type QueryValue = string | number | boolean | null | undefined;
 
 /** Where a paginated list sits, read from GitHub's `Link` header. */
 export interface PageInfo {
@@ -388,6 +388,39 @@ export function describeGitHubError(error: any, ctx: GitHubErrorContext = {}): s
       }
       return `GitHub returned ${status}: ${message || error?.message || 'no details'}`;
   }
+}
+
+/**
+ * The HTTP status the REST plane answers a failed GitHub call with, and the
+ * sentence to put in `{ error }`.
+ *
+ * Not sendUpstreamError, for three reasons. It maps every 403 to "Permission
+ * denied", which is wrong for a rate limit — that is 429 here, with
+ * Retry-After, so a pipeline can back off instead of giving up. GitHub's 401
+ * means the STORED credential is dead, so it is answered 502: echoing 401 on
+ * this plane tells the caller their REST bearer is bad and sends them to
+ * re-mint one (the Redmine lesson). And an op that already turned GitHub's
+ * answer into a sentence raises a UserError that may carry the status it
+ * stands for (a missing branch is 404, a lost push race is 409); one with no
+ * status is a request the op refused before calling GitHub, which is a 400.
+ */
+export function githubRestError(error: any): { status: number; message: string; retryAfter?: string } {
+  const status: number | undefined = typeof error?.status === 'number' ? error.status : undefined;
+  if (error?.name === 'UserError') {
+    return { status: status ?? 400, message: error.message };
+  }
+  const message = describeGitHubError(error);
+  if (status === undefined) return { status: 502, message };
+  const remaining = errorHeader(error, 'x-ratelimit-remaining');
+  const retryAfter = errorHeader(error, 'retry-after') ?? undefined;
+  if ((status === 403 || status === 429) && (remaining === '0' || retryAfter)) {
+    const reset = Number(errorHeader(error, 'x-ratelimit-reset'));
+    const wait = retryAfter
+      ?? (Number.isFinite(reset) && reset > 0 ? String(Math.max(1, Math.ceil(reset - Date.now() / 1000))) : undefined);
+    return { status: 429, message, retryAfter: wait };
+  }
+  if (status === 401 || status >= 500) return { status: 502, message };
+  return { status, message };
 }
 
 /** Throw the described error as a UserError, logging only what is unexpected. */

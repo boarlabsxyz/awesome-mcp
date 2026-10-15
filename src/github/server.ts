@@ -24,6 +24,8 @@ import { FastMCP } from 'fastmcp';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 import { withGitHubClient } from './apiHelpers.js';
 import {
   searchRepositoriesSchema,
@@ -87,6 +89,12 @@ export const githubServer = new FastMCP<UserSession>({
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'github'),
 });
+
+// The REST plane is live for this service (/api/v1/github/*): without these an
+// MCP client could neither discover it nor mint the 5-minute bearer, leaving
+// only the permanent dashboard API key.
+registerMintRestBearerForCurl(githubServer);
+registerListRestEndpoints(githubServer);
 
 const repoName = (a: { owner: string; repo: string }) => `${a.owner}/${a.repo}`;
 const repoCtx = (a: { owner: string; repo: string }) => ({ resource: `repository ${repoName(a)}` });
