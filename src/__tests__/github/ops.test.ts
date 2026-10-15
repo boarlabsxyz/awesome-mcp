@@ -314,3 +314,185 @@ describe('repository and pull request writes map camelCase onto GitHub\'s fields
     assert.match(await ops.opForkRepository(client, { owner: 'octo', repo: 'app' }), /already existed.*Nothing new was created/s);
   });
 });
+
+describe('remaining reads render what GitHub returned, and say where the page is', () => {
+  const user = { login: 'ann' };
+
+  it('searchRepositories numbers across pages and flags an incomplete search', async () => {
+    const { client, calls } = stubClient([{ method: 'GET', path: '/search/repositories', page: { next: 3 }, reply: {
+      total_count: 1500, incomplete_results: true,
+      items: [{ full_name: 'a/b', description: 'd', private: true, html_url: 'u', stargazers_count: 5, language: 'Go', updated_at: '2026-01-02T00:00:00Z' }],
+    } }]);
+    const out = await ops.opSearchRepositories(client, { query: 'mcp', page: 2, perPage: 10 });
+    assert.equal(calls[0].query.per_page, 10);
+    assert.match(out, /^Found 1,500 repositories/);
+    assert.match(out, /INCOMPLETE/);
+    assert.match(out, /only ever returns the first 1,000/);
+    assert.match(out, /11\. a\/b — ★5 · Go · private/);
+    assert.match(out, /page=3/);
+  });
+
+  it('searchCode asks for text matches and shows fragments', async () => {
+    const { client } = stubClient([{ method: 'GET', path: '/search/code', reply: {
+      total_count: 1, incomplete_results: false,
+      items: [{ path: 'src/a.ts', html_url: 'u', repository: { full_name: 'o/r' }, text_matches: [{ fragment: 'const   x\n= 1' }] }],
+    } }]);
+    const out = await ops.opSearchCode(client, { query: 'x' });
+    assert.match(out, /o\/r — src\/a\.ts/);
+    assert.match(out, /> const x = 1/);
+  });
+
+  it('searchIssues names each result\'s repository; searchUsers marks organizations', async () => {
+    const { client } = stubClient([
+      { method: 'GET', path: '/search/issues', reply: { total_count: 1, incomplete_results: false, items: [
+        { number: 9, title: 'T', state: 'open', user, labels: ['bug'], comments: 0, created_at: '', updated_at: '2026-01-01', html_url: 'u', repository_url: 'https://api.github.com/repos/o/r', pull_request: {} },
+      ] } },
+      { method: 'GET', path: '/search/users', reply: { total_count: 2, incomplete_results: false, items: [{ login: 'ann', type: 'User', html_url: 'u1' }, { login: 'acme', type: 'Organization', html_url: 'u2' }] } },
+    ]);
+    assert.match(await ops.opSearchIssues(client, { query: 'x' }), /o\/r#9 \[PR\] \[open\] T .*labels: bug/);
+    const users = await ops.opSearchUsers(client, { query: 'x' });
+    assert.match(users, /- ann — u1/);
+    assert.match(users, /- acme \(Organization\)/);
+  });
+
+  it('listCommits maps filters and shows the first line of each message', async () => {
+    const { client, calls } = stubClient([{ method: 'GET', path: `${R}/commits`, reply: [
+      { sha: 'abcdef123456', html_url: 'u', author: null, commit: { message: 'fix: thing\n\nbody', author: { name: 'Ann', date: '2026-02-03T00:00:00Z' } } },
+    ] }]);
+    const out = await ops.opListCommits(client, { owner: 'octo', repo: 'app', sha: 'dev', path: 'src', author: 'ann' });
+    assert.deepEqual([calls[0].query.sha, calls[0].query.path, calls[0].query.author], ['dev', 'src', 'ann']);
+    assert.match(out, /- abcdef1 2026-02-03 Ann: fix: thing$/m);
+  });
+
+  it('empty lists say so, and an empty later page says it is past the end', async () => {
+    const empty = () => stubClient([
+      { method: 'GET', path: /.*/, reply: [] },
+    ]).client;
+    assert.match(await ops.opListCommits(empty(), { owner: 'octo', repo: 'app' }), /No commits found/);
+    assert.match(await ops.opListIssues(empty(), { owner: 'octo', repo: 'app', page: 3 }), /past the last page/);
+    assert.match(await ops.opListPullRequests(empty(), { owner: 'octo', repo: 'app' }), /No open pull requests/);
+    assert.match(await ops.opGetPullRequestFiles(empty(), { owner: 'octo', repo: 'app', pullNumber: 1, includePatch: true }), /changes no files/);
+    assert.match(await ops.opGetPullRequestComments(empty(), { owner: 'octo', repo: 'app', pullNumber: 1 }), /No inline review comments/);
+    assert.match(await ops.opGetPullRequestReviews(empty(), { owner: 'octo', repo: 'app', pullNumber: 1, page: 2 }), /past the last page/);
+  });
+
+  const pr = {
+    number: 4, title: 'Add', state: 'open', draft: true, user, mergeable: null,
+    head: { ref: 'f', sha: 'headsha', label: 'octo:f' }, base: { ref: 'main', sha: 'basesha123' },
+    html_url: 'u', body: 'desc', created_at: 'c', updated_at: 'u', labels: [], requested_reviewers: [user],
+  };
+
+  it('getPullRequest says when mergeability is still being computed', async () => {
+    const { client } = stubClient([{ method: 'GET', path: `${R}/pulls/4`, reply: pr }]);
+    const out = await ops.opGetPullRequest(client, { owner: 'octo', repo: 'app', pullNumber: 4 });
+    assert.match(out, /State: draft/);
+    assert.match(out, /not computed yet/);
+    assert.match(out, /Head: octo:f @ headsha/);
+    assert.match(out, /Requested reviewers: @ann/);
+  });
+
+  it('listPullRequests shows merged ones as merged', async () => {
+    const { client } = stubClient([{ method: 'GET', path: `${R}/pulls`, reply: [{ ...pr, state: 'closed', draft: false, merged_at: '2026-01-01' }] }]);
+    assert.match(await ops.opListPullRequests(client, { owner: 'octo', repo: 'app', state: 'all' }), /#4 \[merged\] Add/);
+  });
+
+  it('getPullRequestFiles caps a diff and explains a missing one', async () => {
+    const { client } = stubClient([{ method: 'GET', path: `${R}/pulls/4/files`, reply: [
+      { filename: 'big.ts', status: 'modified', additions: 1, deletions: 1, patch: 'x'.repeat(5000) },
+      { filename: 'img.png', status: 'added', additions: 0, deletions: 0 },
+      { filename: 'new.ts', previous_filename: 'old.ts', status: 'renamed', additions: 0, deletions: 0 },
+    ] }]);
+    const out = await ops.opGetPullRequestFiles(client, { owner: 'octo', repo: 'app', pullNumber: 4, includePatch: true });
+    assert.match(out, /diff truncated: showing 3,000 of 5,000/);
+    assert.match(out, /A img\.png[\s\S]*binary file, or too large/);
+    assert.match(out, /R old\.ts → new\.ts/);
+  });
+
+  it('review comments mark outdated lines and replies; reviews show verdicts', async () => {
+    const { client } = stubClient([
+      { method: 'GET', path: `${R}/pulls/4/comments`, reply: [{ id: 1, user, body: 'nit', path: 'a.ts', line: null, original_line: 7, in_reply_to_id: 99, created_at: '2026-01-01', html_url: 'u' }] },
+      { method: 'GET', path: `${R}/pulls/4/reviews`, reply: [{ id: 2, user, state: 'APPROVED', body: 'lgtm', submitted_at: '2026-01-02', html_url: 'u' }] },
+    ]);
+    assert.match(await ops.opGetPullRequestComments(client, { owner: 'octo', repo: 'app', pullNumber: 4 }), /a\.ts:7 \(outdated\).*reply to 99/);
+    assert.match(await ops.opGetPullRequestReviews(client, { owner: 'octo', repo: 'app', pullNumber: 4 }), /@ann: APPROVED · 2026-01-02\n  lgtm/);
+  });
+
+  it('getIssue points a pull request at getPullRequest and caps the body', async () => {
+    const { client } = stubClient([{ method: 'GET', path: `${R}/issues/4`, reply: {
+      number: 4, title: 'T', state: 'closed', state_reason: 'completed', user, labels: [], assignees: [], milestone: { number: 2, title: 'v1' },
+      comments: 3, created_at: 'c', updated_at: 'u', closed_at: 'x', html_url: 'u', body: 'b'.repeat(25_000), pull_request: {},
+    } }]);
+    const out = await ops.opGetIssue(client, { owner: 'octo', repo: 'app', issueNumber: 4 });
+    assert.match(out, /^Pull request #4/);
+    assert.match(out, /State: closed \(completed\)/);
+    assert.match(out, /Milestone: v1 \(#2\)/);
+    assert.match(out, /use getPullRequest/);
+    assert.match(out, /body truncated/);
+  });
+
+  it('getFileContents describes symlinks and submodules instead of reading them', async () => {
+    const { client } = stubClient([
+      { method: 'GET', path: `${R}/contents/l`, reply: { type: 'symlink', path: 'l', target: '../x', size: 0, sha: 's', name: 'l' } },
+      { method: 'GET', path: `${R}/contents/m`, reply: { type: 'submodule', path: 'm', submodule_git_url: 'git://x', size: 0, sha: 's', name: 'm' } },
+    ]);
+    assert.match(await ops.opGetFileContents(client, { owner: 'octo', repo: 'app', path: 'l' }), /symlink to \.\.\/x/);
+    assert.match(await ops.opGetFileContents(client, { owner: 'octo', repo: 'app', path: 'm' }), /submodule pointing at git:\/\/x/);
+  });
+});
+
+describe('remaining writes', () => {
+  it('createRepository without autoInit says the repo has no branch yet', async () => {
+    const { client } = stubClient([{ method: 'POST', path: '/user/repos', reply: { full_name: 'me/x', private: false, html_url: 'u' } }]);
+    assert.match(await ops.opCreateRepository(client, { name: 'x' }), /public[\s\S]*no commits yet/);
+  });
+
+  it('forkRepository reports a fresh fork as asynchronous, and passes the organization', async () => {
+    const { client, calls } = stubClient([{ method: 'POST', path: `${R}/forks`, reply: { full_name: 'acme/app', html_url: 'u', created_at: new Date().toISOString() } }]);
+    const out = await ops.opForkRepository(client, { owner: 'octo', repo: 'app', organization: 'acme' });
+    assert.deepEqual(calls[0].body, { organization: 'acme' });
+    assert.match(out, /Forked octo\/app to acme\/app[\s\S]*asynchronously/);
+  });
+
+  it('createPullRequest maps maintainerCanModify; addIssueComment returns the comment URL', async () => {
+    const { client, calls } = stubClient([
+      { method: 'POST', path: `${R}/pulls`, reply: { number: 8, title: 'T', draft: true, head: { ref: 'f', sha: 's', label: 'octo:f' }, base: { ref: 'main', sha: 'b' }, html_url: 'u', user: null, state: 'open', created_at: '', updated_at: '' } },
+      { method: 'POST', path: `${R}/issues/3/comments`, reply: { id: 1, html_url: 'https://c' } },
+    ]);
+    assert.match(await ops.opCreatePullRequest(client, { owner: 'octo', repo: 'app', title: 'T', head: 'f', base: 'main', draft: true, maintainerCanModify: false }), /Created draft pull request #8/);
+    assert.equal(calls[0].body.maintainer_can_modify, false);
+    assert.match(await ops.opAddIssueComment(client, { owner: 'octo', repo: 'app', issueNumber: 3, body: 'x' }), /https:\/\/c/);
+  });
+
+  it('createPullRequestReview submits inline comments in GitHub\'s field names', async () => {
+    const { client, calls } = stubClient([{ method: 'POST', path: `${R}/pulls/4/reviews`, reply: { id: 1, state: 'CHANGES_REQUESTED', html_url: 'u' } }]);
+    const out = await ops.opCreatePullRequestReview(client, { owner: 'octo', repo: 'app', pullNumber: 4, event: 'REQUEST_CHANGES', body: 'fix', commitId: 'c1', comments: [{ path: 'a', body: 'here', line: 3, side: 'RIGHT' }] });
+    assert.equal(calls[0].body.commit_id, 'c1');
+    assert.deepEqual(calls[0].body.comments, [{ path: 'a', body: 'here', line: 3, side: 'RIGHT', position: undefined }]);
+    assert.match(out, /CHANGES_REQUESTED with 1 inline comment/);
+  });
+
+  it('mergePullRequest reports a merge GitHub declined', async () => {
+    const { client } = stubClient([{ method: 'PUT', path: `${R}/pulls/4/merge`, reply: { merged: false, sha: '', message: 'Base branch was modified' } }]);
+    assert.match(await ops.opMergePullRequest(client, { owner: 'octo', repo: 'app', pullNumber: 4 }), /did NOT merge.*Base branch was modified/);
+  });
+
+  it('updatePullRequestBranch sends the head guard and says it is asynchronous', async () => {
+    const { client, calls } = stubClient([{ method: 'PUT', path: `${R}/pulls/4/update-branch`, reply: { message: 'Updating pull request branch.' } }]);
+    const out = await ops.opUpdatePullRequestBranch(client, { owner: 'octo', repo: 'app', pullNumber: 4, expectedHeadSha: 'h' });
+    assert.deepEqual(calls[0].body, { expected_head_sha: 'h' });
+    assert.match(out, /asynchronously/);
+  });
+
+  it('pushFiles notes paths whose old mode it could not see in a truncated tree', async () => {
+    const { client } = stubClient([
+      { method: 'GET', path: `${R}/git/ref/heads/main`, reply: { object: { sha: 'h' } } },
+      { method: 'GET', path: `${R}/git/commits/h`, reply: { tree: { sha: 't' } } },
+      { method: 'GET', path: `${R}/git/trees/t`, reply: { truncated: true, tree: [] } },
+      { method: 'POST', path: `${R}/git/trees`, reply: { sha: 't2' } },
+      { method: 'POST', path: `${R}/git/commits`, reply: { sha: 'c' } },
+      { method: 'PATCH', path: `${R}/git/refs/heads/main`, reply: {} },
+    ]);
+    const out = await ops.opPushFiles(client, { owner: 'octo', repo: 'app', branch: 'main', message: 'm', files: [{ path: 'deep/x.sh', content: '' }] });
+    assert.match(out, /too large for GitHub to list in full[\s\S]*deep\/x\.sh/);
+  });
+});
