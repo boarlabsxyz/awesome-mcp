@@ -326,9 +326,28 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `extract` | `POST /api/v1/browserbase/sessions/{sessionId}/extract` | live | Extract data or text from the current page — _Body: { instruction } - optional; omit it for the page text._ |
 | `forceEndBrowserSession` | `POST /api/v1/browserbase/sessions/{sessionId}/release` | live | Force a Browserbase session to close so it stops billing — _DESTRUCTIVE - anything in progress in that browser is lost, and there is no undo. Exposed with explicit user sign-off: a curl has no confirmation affordance and the permanent dashboard API key is accepted here. It is also the only way to stop a session whose id outlived the conversation that made it, which is why withholding it would cost more than it saves._ |
 
+### GitHub (`github`)
+
+| MCP tool | REST endpoint | Status | Summary |
+|---|---|---|---|
+| `searchRepositories` | `GET /api/v1/github/search/repositories` | planned | Search GitHub repositories |
+| `searchCode` | `GET /api/v1/github/search/code` | planned | Search code across GitHub repositories |
+| `searchIssues` | `GET /api/v1/github/search/issues` | planned | Search GitHub issues and pull requests |
+| `searchUsers` | `GET /api/v1/github/search/users` | planned | Search GitHub users |
+| `getFileContents` | `GET /api/v1/github/repos/{owner}/{repo}/contents/{path}` | planned | Read a file or list a directory |
+| `listCommits` | `GET /api/v1/github/repos/{owner}/{repo}/commits` | planned | List commits on a branch |
+| `listIssues` | `GET /api/v1/github/repos/{owner}/{repo}/issues` | planned | List issues in a repository — _GitHub includes pull requests in this list._ |
+| `getIssue` | `GET /api/v1/github/repos/{owner}/{repo}/issues/{issueNumber}` | planned | Get a single issue |
+| `listPullRequests` | `GET /api/v1/github/repos/{owner}/{repo}/pulls` | planned | List pull requests in a repository |
+| `getPullRequest` | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}` | planned | Get a single pull request |
+| `getPullRequestFiles` | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/files` | planned | List files changed in a pull request |
+| `getPullRequestStatus` | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/status` | planned | Get check runs and commit statuses for a pull request |
+| `getPullRequestComments` | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/comments` | planned | List inline review comments on a pull request |
+| `getPullRequestReviews` | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/reviews` | planned | List reviews on a pull request |
+
 ## Status legend
 
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 231 endpoints.
+Catalog size: 245 endpoints.

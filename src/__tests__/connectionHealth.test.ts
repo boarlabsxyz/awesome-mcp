@@ -144,7 +144,9 @@ describe('checkConnectionHealth — a refreshable connection is not a broken one
     providerTokens: { access_token: 'bad', baseUrl: 'https://x.test' },
   } as any);
 
-  for (const provider of ['outline', 'hubspot']) {
+  // github: a GitHub App user token expires in 8h and refreshes at call time,
+  // exactly like these; an OAuth App token or PAT stores no refresh token.
+  for (const provider of ['outline', 'hubspot', 'github']) {
     it(`${provider}: 401 with a refresh token stored is unknown, not reauth`, async () => {
       const health = await checkConnectionHealth(withRefresh(provider), NO_CREDS, {
         fetchImpl: respond(401, {}),
@@ -166,6 +168,26 @@ describe('checkConnectionHealth — a refreshable connection is not a broken one
       assert.equal(ok.state, 'healthy');
     });
   }
+
+  const respondWithHeaders = (status: number, headers: Record<string, string>) =>
+    (async () => ({ ok: false, status, headers: new Headers(headers), json: async () => ({}) })) as any;
+
+  it('github: a rate-limited 403 is unknown, not reauth — the token was never evaluated', async () => {
+    for (const headers of [{ 'x-ratelimit-remaining': '0' }, { 'retry-after': '60' }] as Record<string, string>[]) {
+      const health = await checkConnectionHealth(withoutRefresh('github'), NO_CREDS, {
+        fetchImpl: respondWithHeaders(403, headers),
+      });
+      assert.equal(health.state, 'unknown', JSON.stringify(headers));
+      assert.match((health as any).reason, /rate-limited/);
+    }
+  });
+
+  it('github: a 403 with quota left is still a rejection', async () => {
+    const health = await checkConnectionHealth(withoutRefresh('github'), NO_CREDS, {
+      fetchImpl: respondWithHeaders(403, { 'x-ratelimit-remaining': '4999' }),
+    });
+    assert.equal(health.state, 'reauth');
+  });
 
   it('peopleforce has no refresh token, so a rejection still prompts', async () => {
     const health = await checkConnectionHealth(withoutRefresh('peopleforce'), NO_CREDS, {

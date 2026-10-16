@@ -95,6 +95,7 @@ import { peopleForceV4Server } from '../peopleforce-v4/server.js';
 import { hubspotServer } from '../hubspot/server.js';
 import { browserbaseServer }   from '../browserbase/server.js';
 import { redmineServer } from '../redmine/server.js';
+import { githubServer } from '../github/server.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 
 // Global clients for stdio (single-user) mode
@@ -1371,6 +1372,7 @@ async function startServer() {
           "hubspot":         hubspotServer,
           "redmine":         redmineServer,
           "browserbase":     browserbaseServer,
+          "github":          githubServer,
         };
         const mcpToStart = MCP_SERVERS_BY_SLUG[MCP_SLUG] ?? server; // default: google-docs
 

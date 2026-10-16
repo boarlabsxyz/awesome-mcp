@@ -324,6 +324,8 @@ import { validatePeopleForceV4Token } from '../peopleforce-v4/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
 import { validateRedmineToken, buildRedmineInstanceName } from '../redmine/connectToken.js';
 import { validateBrowserbaseToken, buildBrowserbaseInstanceName, fetchBrowserbaseProject } from '../browserbase/connectToken.js';
+import { validateGitHubToken, buildGitHubInstanceName, fetchGitHubUser } from '../github/connectToken.js';
+import { exchangeGitHubOauthCode, GITHUB_TOKEN_URL } from '../github/oauthCallback.js';
 // Type-only: erased at compile time, so the REST handlers can still import the
 // clients dynamically and keep them out of the web server's startup graph.
 import type { ClickUpClient } from '../clickup/apiHelpers.js';
@@ -1202,6 +1204,34 @@ async function buildBrowserbasePasteConnection(input: PasteConnectionInput): Pro
 }
 
 /**
+ * Validate a pasted GitHub personal access token and shape the connection.
+ *
+ * A builder rather than connectPasteToken for the Browserbase reason: the
+ * account login is one cheap, best-effort read away, and "GitHub (octocat)" is
+ * what separates a work account from a personal one on the dashboard — people
+ * commonly connect both. No baseUrl: github.com only.
+ */
+async function buildGitHubPasteConnection(input: PasteConnectionInput): Promise<PasteConnectionBuildResult> {
+  const validate = await validateGitHubToken({ token: input.token });
+  if (!validate.ok) return validate;
+  const user = await fetchGitHubUser(input.token);
+  return {
+    ok: true,
+    connection: {
+      provider: 'github',
+      serviceLogName: user.login ? `GitHub (${user.login})` : 'GitHub',
+      name: buildGitHubInstanceName({
+        serviceName: input.serviceName,
+        providedInstanceName: input.instanceName,
+        login: user.login,
+      }),
+      providerTokens: { access_token: input.token },
+      providerEmail: user.email,
+    },
+  };
+}
+
+/**
  * Providers that validate their own credential and build their own connection
  * record. Everything else goes through the simpler connectPasteToken helper,
  * which stores only { access_token }.
@@ -1211,6 +1241,7 @@ const PASTE_CONNECTION_BUILDERS: Record<string, (input: PasteConnectionInput) =>
   outline: buildOutlinePasteConnection,
   redmine: buildRedminePasteConnection,
   browserbase: buildBrowserbasePasteConnection,
+  github: buildGitHubPasteConnection,
 };
 
 /**
@@ -2459,6 +2490,59 @@ function registerSharedRoutes(app: express.Express): void {
           'redmine', redmineProviderTokens, exchange.email
         );
         console.error(`User ${user.id} connected Redmine MCP: ${connection.instanceId}`);
+      } else if (provider === 'github') {
+        // GitHub OAuth (see src/github/oauthCallback.ts). An OAuth App token
+        // has no expiry and no refresh token; a GitHub App user token has both,
+        // and its refresh token rotates — so store whatever came back.
+        const exchange = await exchangeGitHubOauthCode({
+          tokenUrl: mcp.oauthTokenUrl || GITHUB_TOKEN_URL,
+          code,
+          clientId: client_id,
+          clientSecret: client_secret,
+          redirectUri,
+        });
+        if (!exchange.ok) {
+          console.error(`[MCP Connect] ${exchange.logMessage}`);
+          res.status(exchange.status).send(exchange.userMessage);
+          return;
+        }
+        console.error(`[MCP Connect] GitHub account: ${exchange.login ?? 'unknown'}`);
+
+        const githubProviderTokens = {
+          access_token: exchange.accessToken,
+          refresh_token: exchange.refreshToken ?? undefined,
+          expiry_date: exchange.expiresIn ? Date.now() + exchange.expiresIn * 1000 : undefined,
+        };
+        const githubInstanceName = buildGitHubInstanceName({
+          serviceName: mcp.name,
+          providedInstanceName: stateData.instanceName,
+          login: exchange.login,
+        });
+
+        if (stateData.reconnectInstanceId) {
+          const reconnected = await applyProviderReconnect(githubProviderTokens, 'GitHub');
+          if (!reconnected) return;
+          res.redirect(`/dashboard?reconnected=${encodeURIComponent(reconnected.instanceName || mcpSlug)}`);
+          return;
+        }
+
+        // The name is only an identity when it was built from a verified
+        // login. If the /user lookup failed, every grant falls back to the
+        // same bare "GitHub", and matching on that would refuse a second
+        // account as already connected.
+        const githubConnections = exchange.login ? await getUserConnectedMcps(user.id) : [];
+        const existingGitHub = githubConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === githubInstanceName);
+        if (existingGitHub) {
+          console.error(`User ${user.id} already has ${mcpSlug} for ${exchange.login}: ${existingGitHub.instanceId}`);
+          res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingGitHub.instanceName));
+          return;
+        }
+        const emptyGoogleTokensForGitHub = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        connection = await createMcpInstance(
+          user.id, mcpSlug, githubInstanceName, emptyGoogleTokensForGitHub, null,
+          'github', githubProviderTokens, exchange.email
+        );
+        console.error(`User ${user.id} connected GitHub MCP: ${connection.instanceId}`);
       } else {
         // Google OAuth (default)
         const oauthClient = new OAuth2Client(client_id, client_secret, redirectUri);
@@ -3643,6 +3727,11 @@ function registerSharedRoutes(app: express.Express): void {
       'Open the pricing page of https://example.com and give me the plans and prices as a table',
       'Go to our vendor portal, open the Invoices section and tell me which invoices are unpaid',
       'Close any browser sessions still running on my account',
+    ],
+    'github': [
+      'Which open pull requests in octocat/hello-world are failing CI, and why?',
+      'Review PR #42 in my-org/api: summarize the changed files and leave a comment review',
+      'Open an issue in my-org/api for the login timeout bug and label it "bug"',
     ],
   };
 

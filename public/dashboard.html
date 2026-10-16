@@ -1616,7 +1616,7 @@
       const pasteCapable =
         provider === 'slack-bot' || provider === 'outline' ||
         provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot' ||
-        provider === 'redmine' || provider === 'browserbase';
+        provider === 'redmine' || provider === 'browserbase' || provider === 'github';
       return pasteCapable && !mcp.oauthAuthorizationUrl;
     }
 
@@ -1696,7 +1696,7 @@
       const isTokenProvider =
         (provider === 'slack-bot' || provider === 'outline' || provider === 'peopleforce'
           || provider === 'peopleforce-v4' || provider === 'hubspot' || provider === 'redmine'
-          || provider === 'browserbase')
+          || provider === 'browserbase' || provider === 'github')
         && !selectedMcpType.oauthAuthorizationUrl;
 
       // For OAuth providers, skip naming step — name is auto-generated on the backend
@@ -1821,6 +1821,23 @@
         nameSection.style.display = 'none';
         nameInput.value = '';
         tokenInput.focus();
+      } else if (provider === 'github') {
+        tokenLabel.textContent = 'Personal Access Token';
+        tokenInput.placeholder = 'github_pat_\u2026 or ghp_\u2026';
+        tokenHint.innerHTML =
+          'In <span translate="no">GitHub</span>: <strong>Settings \u2192 Developer settings \u2192 Personal access tokens</strong> ' +
+          '(<a href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noopener">github.com/settings/personal-access-tokens</a>). ' +
+          'A <strong>fine-grained</strong> token is safest: pick the repositories, then grant <strong>Contents</strong>, ' +
+          '<strong>Issues</strong> and <strong>Pull requests</strong> (read for lookups, read and write to commit, file issues or merge), ' +
+          'plus <strong>Checks</strong> and <strong>Commit statuses</strong> (read) for CI results. ' +
+          'A classic token needs the <code translate="no">repo</code> scope for private repositories. ' +
+          'For an organization that uses SAML single sign-on, also authorize the token for that organization.';
+        // github.com only: one API host, so no URL field.
+        urlSection.style.display = 'none';
+        // No user-entered name — the backend names it after the GitHub login.
+        nameSection.style.display = 'none';
+        nameInput.value = '';
+        tokenInput.focus();
       } else {
         tokenLabel.textContent = 'Bot Token';
         tokenInput.placeholder = 'xoxb-…';
@@ -1866,7 +1883,7 @@
       // we can display.
       const isOutline = provider === 'outline';
       const isRedmine = provider === 'redmine';
-      const autoName = isOutline || isRedmine || provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot' || provider === 'browserbase';
+      const autoName = isOutline || isRedmine || provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot' || provider === 'browserbase' || provider === 'github';
       const name = autoName ? '' : document.getElementById('instanceNameInput').value.trim();
       if (!autoName && !name) { alert('Please enter a name for this instance'); return; }
       const token = document.getElementById('tokenInput').value.trim();
@@ -1878,6 +1895,7 @@
                   : provider === 'hubspot' ? 'Please enter your HubSpot access token'
                   : provider === 'redmine' ? 'Please enter your Redmine API access key'
                   : provider === 'browserbase' ? 'Please enter your Browserbase API key'
+                  : provider === 'github' ? 'Please enter your GitHub personal access token'
                   : 'Please enter a bot token';
         alert(msg);
         return;

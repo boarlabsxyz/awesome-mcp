@@ -22,10 +22,11 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [HubSpot](#hubspot) (23)
 - [Redmine](#redmine) (46)
 - [Browserbase](#browserbase) (9)
+- [GitHub](#github) (26)
 
 ## Shared (opt-in per server)
 
-Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 14 of 15 servers; not on PeopleForce v4).
+Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 14 of 16 servers; not on PeopleForce v4, GitHub).
 
 | Tool | Description | REST |
 |---|---|---|
@@ -488,6 +489,39 @@ Source: `src/browserbase/server.ts` — 9 tools.
 | `getBrowserSession` | Look up one Browserbase session: its status, region, when it expires, and a dashboard link to its live view and replay. Use it to check whether a sessionId is still live before spending browser calls on it. | `GET /api/v1/browserbase/sessions/{sessionId}` |
 | `forceEndBrowserSession` | Force a Browserbase session to close by id, through the REST API. Works even when no browser-control session holds it, which is the state a stranded session is in. Anything in progress in that browser is lost. | `POST /api/v1/browserbase/sessions/{sessionId}/release` |
 
+## GitHub
+
+Source: `src/github/server.ts` — 26 tools.
+
+| Tool | Description | REST |
+|---|---|---|
+| `searchRepositories` | Search for GitHub repositories. Uses GitHub search syntax (e.g. "language:go stars:>500", "org:github", "user:octocat") and returns at most the first 1,000 matches across pages. | — |
+| `createRepository` | Create a new GitHub repository in your account. Always created under the connected account, never an organization; public unless private is set. | — |
+| `forkRepository` | Fork a GitHub repository to your account or specified organization. GitHub forks asynchronously, and returns the existing fork if there already is one. | — |
+| `getFileContents` | Get the contents of a file or directory from a GitHub repository. Returns the file's blob SHA (needed to update it safely); files over 1 MB and binary files are described rather than returned, and long text is truncated at 100,000 characters. | — |
+| `createOrUpdateFile` | Create or update a single file in a GitHub repository, as one commit on an existing branch. Replaces the whole file. Pass the sha from getFileContents to fail instead of overwriting if the file changed; without it the current version is overwritten. | — |
+| `pushFiles` | Push multiple files to a GitHub repository in a single commit, on an existing branch. Never force-pushes: if the branch moves meanwhile, nothing is pushed. Keeps existing executable bits; cannot delete files or write .github/workflows/. | — |
+| `createBranch` | Create a new branch in a GitHub repository, from fromBranch or (by default) the repository's actual default branch. | — |
+| `listCommits` | Get list of commits of a branch in a GitHub repository, newest first, optionally only those touching a path or by an author. Paginated. | — |
+| `listIssues` | List issues in a GitHub repository with filtering options. GitHub includes pull requests in this list; they are marked [PR]. Paginated. | — |
+| `getIssue` | Get details of a specific issue in a GitHub repository: state, labels, assignees, milestone and body. The comment count is included, the comment text is not. | — |
+| `createIssue` | Create a new issue in a GitHub repository. Labels, assignees and milestone are only applied for accounts with push access — GitHub drops them silently otherwise, and the response says when that happened. | — |
+| `updateIssue` | Update an existing issue in a GitHub repository. labels and assignees REPLACE the current set (pass [] to clear); omitted fields are left alone. Also opens/closes, with a reason. | — |
+| `addIssueComment` | Add a comment to an existing issue. Works for pull requests too (it posts to the main conversation, not as an inline review comment). | — |
+| `searchCode` | Search for code across GitHub repositories, with matching fragments. Covers default branches only; GitHub limits code search to 10 requests a minute. | — |
+| `searchIssues` | Search for issues and pull requests across GitHub repositories, e.g. "repo:o/r is:pr is:open" or "is:issue assignee:@me". Returns at most the first 1,000 matches. | — |
+| `searchUsers` | Search for users on GitHub (and organizations, with type:org). | — |
+| `listPullRequests` | List and filter repository pull requests. Paginated. | — |
+| `getPullRequest` | Get details of a specific pull request: state, head/base and their SHAs, mergeability, size, reviewers and description. | — |
+| `createPullRequest` | Create a new pull request in a GitHub repository, from head into base. Both branches must already exist and differ. | — |
+| `createPullRequestReview` | Create a review on a pull request: APPROVE, REQUEST_CHANGES or COMMENT, optionally with inline comments. Submitted immediately; GitHub does not let you approve your own pull request. | — |
+| `mergePullRequest` | Merge a pull request. Pass expectedHeadSha (from getPullRequest) so the merge is refused if new commits were pushed after you looked. | — |
+| `getPullRequestFiles` | Get the list of files changed in a pull request, with each file's diff (capped per file) unless includePatch is false. Paginated. | — |
+| `getPullRequestStatus` | Get the combined status of all status checks for a pull request — both GitHub Actions/app check runs and legacy commit statuses — with an overall passing/failing/pending verdict. | — |
+| `updatePullRequestBranch` | Update a pull request branch with the latest changes from the base branch (a merge commit on the PR branch). Runs asynchronously on GitHub. | — |
+| `getPullRequestComments` | Get the review comments on a pull request — the inline comments on diff lines. The main conversation thread is not included. Paginated. | — |
+| `getPullRequestReviews` | Get the reviews on a pull request: each reviewer's verdict (approved, changes requested, commented) and summary. Paginated. | — |
+
 ---
 
-**Grand total: 353 tools across 16 sections.**
+**Grand total: 379 tools across 17 sections.**

@@ -1,7 +1,7 @@
 // src/mcpAuthenticate.ts
 // Shared authenticate handler for all MCP servers.
 import http from 'http';
-import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession, createSlackBotSession, createSlackUserSession, createOutlineSession, createPeopleForceSession, createPeopleForceV4Session, createHubSpotSession, createRedmineSession, createBrowserbaseSession } from './userSession.js';
+import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession, createSlackBotSession, createSlackUserSession, createOutlineSession, createPeopleForceSession, createPeopleForceV4Session, createHubSpotSession, createRedmineSession, createBrowserbaseSession, createGitHubSession } from './userSession.js';
 import { loadUsers, getUserByApiKey, getUserById } from './userStore.js';
 import { loadClientCredentials } from './auth.js';
 import { getMcpConnection, getMcpConnectionByInstanceId } from './mcpConnectionStore.js';
@@ -27,6 +27,7 @@ export interface AuthDeps {
   createHubSpotSession: (user: any, conn: any) => UserSession;
   createRedmineSession: (user: any, conn: any) => UserSession;
   createBrowserbaseSession: (user: any, conn: any) => UserSession;
+  createGitHubSession: (user: any, conn: any) => UserSession;
 }
 
 /** Default dependencies wired to real implementations. */
@@ -49,6 +50,7 @@ const defaultDeps: AuthDeps = {
   createHubSpotSession,
   createRedmineSession,
   createBrowserbaseSession,
+  createGitHubSession,
 };
 
 /** Create a session from a verified connection. */
@@ -79,6 +81,9 @@ async function sessionFromConnection(user: any, connection: any, deps: AuthDeps)
   }
   if (connection.provider === 'browserbase') {
     return deps.createBrowserbaseSession(user, connection);
+  }
+  if (connection.provider === 'github') {
+    return deps.createGitHubSession(user, connection);
   }
   const mcp = await deps.getMcpCatalog(connection.mcpSlug);
   const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret

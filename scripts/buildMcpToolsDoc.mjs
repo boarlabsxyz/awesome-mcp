@@ -43,6 +43,7 @@ const SERVICES = [
   ['src/hubspot/server.ts',               'HubSpot',               'hubspot'],
   ['src/redmine/server.ts',               'Redmine',               'redmine'],
   ['src/browserbase/server.ts',           'Browserbase',           'browserbase'],
+  ['src/github/server.ts',                'GitHub',                'github'],
 ];
 
 // ---------------------------------------------------------------------------

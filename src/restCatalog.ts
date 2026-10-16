@@ -25,7 +25,8 @@ export type RestService =
   | 'peopleforce'
   | 'hubspot'
   | 'redmine'
-  | 'browserbase';
+  | 'browserbase'
+  | 'github';
 
 /**
  * Which `src/<dir>/server.ts` implements each service's MCP tools.
@@ -52,6 +53,7 @@ export const SERVICE_SERVER_PATH: Record<RestService, string> = {
   hubspot: 'src/hubspot/server.ts',
   redmine: 'src/redmine/server.ts',
   browserbase: 'src/browserbase/server.ts',
+  github: 'src/github/server.ts',
 };
 
 export interface RestEndpoint {
@@ -400,6 +402,24 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'browserbase', method: 'POST', path: '/api/v1/browserbase/sessions/{sessionId}/observe', summary: 'Find actionable elements on the current page', mcpToolName: 'observe', openapiOperationId: 'observeBrowserPage', status: 'live', notes: 'Body: { instruction }.' },
   { service: 'browserbase', method: 'POST', path: '/api/v1/browserbase/sessions/{sessionId}/extract', summary: 'Extract data or text from the current page', mcpToolName: 'extract', openapiOperationId: 'extractFromBrowserPage', status: 'live', notes: 'Body: { instruction } - optional; omit it for the page text.' },
   { service: 'browserbase', method: 'POST', path: '/api/v1/browserbase/sessions/{sessionId}/release', summary: 'Force a Browserbase session to close so it stops billing', mcpToolName: 'forceEndBrowserSession', openapiOperationId: 'releaseBrowserSession', status: 'live', notes: 'DESTRUCTIVE - anything in progress in that browser is lost, and there is no undo. Exposed with explicit user sign-off: a curl has no confirmation affordance and the permanent dashboard API key is accepted here. It is also the only way to stop a session whose id outlived the conversation that made it, which is why withholding it would cost more than it saves.' },
+
+  // -------- GitHub --------
+  // Planned: the read tools that would earn a GET sibling. Wired (and flipped to
+  // live) in a separate pass, so no route is advertised before it exists.
+  { service: 'github', method: 'GET', path: '/api/v1/github/search/repositories', summary: 'Search GitHub repositories', mcpToolName: 'searchRepositories', openapiOperationId: 'searchGitHubRepositories', status: 'planned' },
+  { service: 'github', method: 'GET', path: '/api/v1/github/search/code', summary: 'Search code across GitHub repositories', mcpToolName: 'searchCode', openapiOperationId: 'searchGitHubCode', status: 'planned' },
+  { service: 'github', method: 'GET', path: '/api/v1/github/search/issues', summary: 'Search GitHub issues and pull requests', mcpToolName: 'searchIssues', openapiOperationId: 'searchGitHubIssues', status: 'planned' },
+  { service: 'github', method: 'GET', path: '/api/v1/github/search/users', summary: 'Search GitHub users', mcpToolName: 'searchUsers', openapiOperationId: 'searchGitHubUsers', status: 'planned' },
+  { service: 'github', method: 'GET', path: '/api/v1/github/repos/{owner}/{repo}/contents/{path}', summary: 'Read a file or list a directory', mcpToolName: 'getFileContents', openapiOperationId: 'getGitHubFileContents', status: 'planned' },
+  { service: 'github', method: 'GET', path: '/api/v1/github/repos/{owner}/{repo}/commits', summary: 'List commits on a branch', mcpToolName: 'listCommits', openapiOperationId: 'listGitHubCommits', status: 'planned' },
+  { service: 'github', method: 'GET', path: '/api/v1/github/repos/{owner}/{repo}/issues', summary: 'List issues in a repository', mcpToolName: 'listIssues', openapiOperationId: 'listGitHubIssues', status: 'planned', notes: 'GitHub includes pull requests in this list.' },
+  { service: 'github', method: 'GET', path: '/api/v1/github/repos/{owner}/{repo}/issues/{issueNumber}', summary: 'Get a single issue', mcpToolName: 'getIssue', openapiOperationId: 'getGitHubIssue', status: 'planned' },
+  { service: 'github', method: 'GET', path: '/api/v1/github/repos/{owner}/{repo}/pulls', summary: 'List pull requests in a repository', mcpToolName: 'listPullRequests', openapiOperationId: 'listGitHubPullRequests', status: 'planned' },
+  { service: 'github', method: 'GET', path: '/api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}', summary: 'Get a single pull request', mcpToolName: 'getPullRequest', openapiOperationId: 'getGitHubPullRequest', status: 'planned' },
+  { service: 'github', method: 'GET', path: '/api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/files', summary: 'List files changed in a pull request', mcpToolName: 'getPullRequestFiles', openapiOperationId: 'getGitHubPullRequestFiles', status: 'planned' },
+  { service: 'github', method: 'GET', path: '/api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/status', summary: 'Get check runs and commit statuses for a pull request', mcpToolName: 'getPullRequestStatus', openapiOperationId: 'getGitHubPullRequestStatus', status: 'planned' },
+  { service: 'github', method: 'GET', path: '/api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/comments', summary: 'List inline review comments on a pull request', mcpToolName: 'getPullRequestComments', openapiOperationId: 'getGitHubPullRequestComments', status: 'planned' },
+  { service: 'github', method: 'GET', path: '/api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/reviews', summary: 'List reviews on a pull request', mcpToolName: 'getPullRequestReviews', openapiOperationId: 'getGitHubPullRequestReviews', status: 'planned' },
 ];
 
 export function endpointsForTool(mcpToolName: string): RestEndpoint[] {

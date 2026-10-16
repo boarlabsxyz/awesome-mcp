@@ -17,6 +17,7 @@ const ROUTE_SCOPE_MAP: Record<string, string> = {
   hubspot: 'mcp:hubspot',
   redmine: 'mcp:redmine',
   browserbase: 'mcp:browserbase',
+  github: 'mcp:github',
 };
 
 /** All supported MCP scopes (single source of truth). */
@@ -39,6 +40,7 @@ const SLUG_SCOPE_MAP: Record<string, string> = {
   'hubspot': 'mcp:hubspot',
   'redmine': 'mcp:redmine',
   'browserbase': 'mcp:browserbase',
+  'github': 'mcp:github',
 };
 
 /** Return the scope for a given MCP_SLUG, or all scopes if unknown. */

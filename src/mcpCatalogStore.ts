@@ -3,6 +3,7 @@ import * as fs from 'fs/promises';
 import { stripTrailingSlashes } from './util/url.js';
 import * as path from 'path';
 import { isDatabaseAvailable, getPool } from './db.js';
+import { GITHUB_AUTHORIZE_URL, GITHUB_TOKEN_URL, GITHUB_OAUTH_SCOPES } from './github/oauthCallback.js';
 
 const DATA_DIR = process.env.DATA_DIR || './data';
 const CATALOG_FILE = path.join(DATA_DIR, 'mcp-catalog.json');
@@ -160,6 +161,12 @@ async function dbCreateMcpCatalog(
   const scopesJson = JSON.stringify(entry.scopes);
   const oauthScopesJson = JSON.stringify(entry.oauthScopes || []);
 
+  // The OAuth URLs go in as `?? null`, not `|| null`: an empty string is how an
+  // env-gated seed (Outline, Redmine, GitHub) says "OAuth is OFF now", and
+  // turning it into NULL let the COALESCE below keep the URL from the last boot
+  // that had credentials, so the dashboard went on offering "Connect with X"
+  // against an app the deployment no longer configures. Only `undefined`
+  // means "leave it as stored", matching the file backend above.
   const { rows } = await pool.query(
     `INSERT INTO mcp_catalog (slug, name, description, icon_url, mcp_url, scopes, google_client_id, google_client_secret, oauth_scopes, is_local, is_active, created_at, updated_at, provider, oauth_authorization_url, oauth_token_url)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, $13, $14, $15)
@@ -179,7 +186,7 @@ async function dbCreateMcpCatalog(
        oauth_authorization_url = COALESCE(EXCLUDED.oauth_authorization_url, mcp_catalog.oauth_authorization_url),
        oauth_token_url = COALESCE(EXCLUDED.oauth_token_url, mcp_catalog.oauth_token_url)
      RETURNING id, slug, name, description, icon_url, mcp_url, scopes, google_client_id, google_client_secret, oauth_scopes, is_local, is_active, created_at, updated_at, provider, oauth_authorization_url, oauth_token_url`,
-    [entry.slug, entry.name, entry.description, entry.iconUrl, entry.mcpUrl, scopesJson, entry.googleClientId || null, entry.googleClientSecret || null, oauthScopesJson, entry.isLocal, entry.isActive, now, entry.provider || 'google', entry.oauthAuthorizationUrl || null, entry.oauthTokenUrl || null]
+    [entry.slug, entry.name, entry.description, entry.iconUrl, entry.mcpUrl, scopesJson, entry.googleClientId || null, entry.googleClientSecret || null, oauthScopesJson, entry.isLocal, entry.isActive, now, entry.provider || 'google', entry.oauthAuthorizationUrl ?? null, entry.oauthTokenUrl ?? null]
   );
 
   return mapRowToEntry(rows[0]);
@@ -319,6 +326,50 @@ async function seedRedmineCatalog(normalizeUrl: NormalizeUrl): Promise<void> {
         ]
       : [],
     isLocal: !process.env.REDMINE_MCP_URL,
+    isActive: true,
+  });
+}
+
+/**
+ * Seed the GitHub catalog row.
+ *
+ * Env-gated dual mode, like Outline and Redmine, but simpler: github.com is
+ * one host, so one OAuth app (registered once, at github.com/settings/developers
+ * or as a GitHub App) serves every user and no base URL is involved.
+ *
+ *   OAuth flow    — GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET set, with the app's
+ *                   callback URL <BASE_URL>/connect/github/callback. Dashboard
+ *                   shows "Connect with GitHub". Works for an OAuth App
+ *                   (non-expiring token, `scope` honoured) and for a GitHub App
+ *                   (expiring token + rotating refresh token, `scope` ignored in
+ *                   favour of the app's configured permissions).
+ *   Paste-token   — otherwise. Each user pastes a classic or fine-grained
+ *                   personal access token, validated via GET /user.
+ *
+ * The client id/secret must be set on BOTH the web service (this seed and the
+ * /connect exchange) and the github MCP service (call-time refresh), or a
+ * GitHub App connection works for 8 hours and then 401s.
+ */
+async function seedGitHubCatalog(normalizeUrl: NormalizeUrl): Promise<void> {
+  const githubClientId     = process.env.GITHUB_CLIENT_ID || null;
+  const githubClientSecret = process.env.GITHUB_CLIENT_SECRET || null;
+  const githubOauthEnabled = !!(githubClientId && githubClientSecret);
+
+  await createMcpCatalog({
+    slug: 'github',
+    name: 'GitHub MCP Server',
+    description: 'Browse repositories, read and commit files, and manage issues and pull requests on GitHub',
+    iconUrl: 'https://github.com/favicon.ico',
+    mcpUrl: normalizeUrl(process.env.GITHUB_MCP_URL, '/github'),
+    provider: 'github',
+    scopes: [],
+    googleClientId: githubClientId,
+    googleClientSecret: githubClientSecret,
+    oauthAuthorizationUrl: githubOauthEnabled ? GITHUB_AUTHORIZE_URL : '',
+    oauthTokenUrl:         githubOauthEnabled ? GITHUB_TOKEN_URL     : '',
+    // See GITHUB_OAUTH_SCOPES for why this is `repo` alone (and why not `workflow`).
+    oauthScopes: githubOauthEnabled ? GITHUB_OAUTH_SCOPES : [],
+    isLocal: !process.env.GITHUB_MCP_URL,
     isActive: true,
   });
 }
@@ -762,6 +813,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
   });
 
   await seedRedmineCatalog(normalizeUrl);
+  await seedGitHubCatalog(normalizeUrl);
 
   console.error('Default MCP catalog entries seeded.');
 }
