@@ -107,11 +107,28 @@ export function slashPath(value: string): string {
   return value.split('/').filter(Boolean).map(seg).join('/');
 }
 
+export interface GitHubClientOptions {
+  fetchImpl?: typeof fetch;
+  baseUrl?: string;
+  /**
+   * Asked once per client when GitHub rejects the token (401): resolves to a
+   * different token to re-send THAT request with, or null to let the 401
+   * stand. The retry lives here, at the request boundary, and not around a
+   * whole tool callback: a 401 means GitHub ran that one request and nothing
+   * else, but the requests before it in the same op DID run, so replaying the
+   * callback would file a second issue or push a second commit.
+   */
+  onUnauthorized?: () => Promise<string | null>;
+}
+
 export class GitHubClient {
-  constructor(
-    private readonly token: string,
-    private readonly opts: { fetchImpl?: typeof fetch; baseUrl?: string } = {},
-  ) {}
+  private token: string;
+  /** Shared by concurrent 401s, so the store is read at most once per client. */
+  private reload: Promise<string | null> | null = null;
+
+  constructor(token: string, private readonly opts: GitHubClientOptions = {}) {
+    this.token = token;
+  }
 
   get baseUrl(): string {
     return this.opts.baseUrl ?? GITHUB_API_BASE_URL;
@@ -122,10 +139,29 @@ export class GitHubClient {
     path: string,
     options: { query?: Record<string, QueryValue>; body?: unknown; accept?: string } = {},
   ): Promise<GitHubResponse<T>> {
+    const sent = this.token;
+    try {
+      return await this.send<T>(sent, method, path, options);
+    } catch (error: any) {
+      if (error?.status !== 401 || !this.opts.onUnauthorized) throw error;
+      this.reload ??= this.opts.onUnauthorized();
+      const fresh = await this.reload;
+      if (!fresh || fresh === sent) throw error;
+      this.token = fresh;
+      return this.send<T>(fresh, method, path, options);
+    }
+  }
+
+  private async send<T>(
+    token: string,
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+    path: string,
+    options: { query?: Record<string, QueryValue>; body?: unknown; accept?: string },
+  ): Promise<GitHubResponse<T>> {
     const res = await jsonApiRequestWithMeta<T>({
       url: `${this.baseUrl}${path}${buildQuery(options.query)}`,
       method,
-      headers: githubHeaders(this.token, options.accept),
+      headers: githubHeaders(token, options.accept),
       body: options.body,
       timeoutMs: REQUEST_TIMEOUT_MS,
       serviceLabel: 'GitHub API',
@@ -135,7 +171,7 @@ export class GitHubClient {
       // what keeps an old owner/name working; jsonApiRequest refuses it for
       // writes (a replayed POST could duplicate), and mapGitHubError explains.
       followSameOriginRedirects: 3,
-      secrets: [this.token],
+      secrets: [token],
       fetchImpl: this.opts.fetchImpl,
     });
     return {
@@ -163,12 +199,17 @@ export class GitHubClient {
   }
 }
 
-export function getGitHubClient(session?: UserSession): GitHubClient {
+const SILENT_LOG: GitHubToolLog = { info: () => {}, error: () => {} };
+
+export function getGitHubClient(session?: UserSession, log: GitHubToolLog = SILENT_LOG): GitHubClient {
   if (!session?.githubAccessToken) {
     throw new UserError('GitHub not connected. Visit the dashboard to connect your GitHub account.');
   }
-  return new GitHubClient(session.githubAccessToken);
+  return new GitHubClient(session.githubAccessToken, {
+    onUnauthorized: async () => (await reloadStoredGitHubToken(session, log)) ? session.githubAccessToken ?? null : null,
+  });
 }
+
 
 // ---- Error mapping ----
 
@@ -449,18 +490,10 @@ export async function withGitHubClient<T>(
   ctx: GitHubErrorContext = {},
 ): Promise<T> {
   await maybeRefreshGitHubToken(session, log);
-  const client = getGitHubClient(session);
+  const client = getGitHubClient(session, log);
   try {
     return await fn(client);
   } catch (error: any) {
-    // A 401 means GitHub ran nothing, so one retry cannot duplicate a write.
-    if (error?.status === 401 && await reloadStoredGitHubToken(session, log)) {
-      try {
-        return await fn(getGitHubClient(session));
-      } catch (retryError: any) {
-        mapGitHubError(prefix, retryError, log, ctx);
-      }
-    }
     mapGitHubError(prefix, error, log, ctx);
   }
 }
@@ -473,6 +506,7 @@ export async function withGitHubClient<T>(
  * it would go on sending the revoked one and telling the user to reconnect,
  * which they just did. Re-reading on every call would cost a store round-trip
  * per tool call; on a 401 it costs one, and only when something is wrong.
+ * Wired into GitHubClient as `onUnauthorized` by getGitHubClient.
  *
  * Returns true only when the stored token differs from the one that failed, so
  * a genuinely dead credential is not retried. Never throws: a failed lookup
