@@ -359,6 +359,7 @@ describe('remaining reads render what GitHub returned, and say where the page is
     const out = await ops.opSearchCode(client, { query: 'x' });
     assert.match(out, /o\/r — src\/a\.ts/);
     assert.match(out, /> const x = 1/);
+    assert.equal(ops.READS.searchCode({ query: 'x' }).accept, 'application/vnd.github.text-match+json');
   });
 
   it('searchIssues names each result\'s repository; searchUsers marks organizations', async () => {

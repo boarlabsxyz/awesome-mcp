@@ -152,6 +152,24 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/outline/attachments/att-123/url',
   '/api/v1/browserbase/sessions',
   '/api/v1/browserbase/sessions/sess-123',
+  // GitHub (registered from GITHUB_READ_ROUTES). The contents route is listed
+  // with and without a path because the wildcard is optional — the bare form is
+  // the repository root.
+  '/api/v1/github/search/repositories?q=mcp',
+  '/api/v1/github/search/code?q=mcp',
+  '/api/v1/github/search/issues?q=mcp',
+  '/api/v1/github/search/users?q=mcp',
+  '/api/v1/github/repos/octo/app/contents',
+  '/api/v1/github/repos/octo/app/contents/src/index.ts',
+  '/api/v1/github/repos/octo/app/commits',
+  '/api/v1/github/repos/octo/app/issues',
+  '/api/v1/github/repos/octo/app/issues/12',
+  '/api/v1/github/repos/octo/app/pulls',
+  '/api/v1/github/repos/octo/app/pulls/7',
+  '/api/v1/github/repos/octo/app/pulls/7/files',
+  '/api/v1/github/repos/octo/app/pulls/7/status',
+  '/api/v1/github/repos/octo/app/pulls/7/comments',
+  '/api/v1/github/repos/octo/app/pulls/7/reviews',
 ];
 
 // POST endpoints — same auth gate, exercised with the right verb. Bodies are
@@ -159,6 +177,13 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
 // here proves the gate runs ahead of validation and an unauthenticated caller
 // can't probe the schema by watching 400s.
 const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
+  // GitHub writes (GITHUB_WRITE_ROUTES). /issues and /contents/... are in both
+  // arrays: the verb alone separates list from create and read from write.
+  '/api/v1/github/repos/octo/app/issues',
+  '/api/v1/github/repos/octo/app/issues/12/comments',
+  '/api/v1/github/repos/octo/app/push',
+  '/api/v1/github/repos/octo/app/contents/docs/a.md',
+  '/api/v1/github/repos/octo/app/pulls/7/merge',
   '/api/v1/peopleforce/leave-requests',
   '/api/v1/peopleforce/recruitment/candidates/cand-123/notes',
   '/api/v1/peopleforce/recruitment/vacancies/vac-123/applications/app-123/move',

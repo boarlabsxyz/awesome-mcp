@@ -37,6 +37,7 @@ const SERVICE_PREFIX = {
   'openapi-hubspot.json': 'HubSpot',
   'openapi-redmine.json': 'Redmine',
   'openapi-outline.json': 'Outline',
+  'openapi-github.json': 'GitHub',
 };
 
 const SHARED_SCHEMAS = new Set(['Error']);
