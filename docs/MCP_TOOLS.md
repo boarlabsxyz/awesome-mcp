@@ -23,10 +23,11 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Redmine](#redmine) (46)
 - [Browserbase](#browserbase) (9)
 - [GitHub](#github) (26)
+- [Pinecone](#pinecone) (9)
 
 ## Shared (opt-in per server)
 
-Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 15 of 16 servers; not on PeopleForce v4).
+Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 15 of 17 servers; not on PeopleForce v4, Pinecone).
 
 | Tool | Description | REST |
 |---|---|---|
@@ -522,6 +523,22 @@ Source: `src/github/server.ts` — 26 tools.
 | `getPullRequestComments` | Get the review comments on a pull request — the inline comments on diff lines. The main conversation thread is not included. Paginated. | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/comments` |
 | `getPullRequestReviews` | Get the reviews on a pull request: each reviewer's verdict (approved, changes requested, commented) and summary. Paginated. | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/reviews` |
 
+## Pinecone
+
+Source: `src/pinecone/server.ts` — 9 tools.
+
+| Tool | Description | REST |
+|---|---|---|
+| `list-indexes` | List the Pinecone indexes in this connection's project, with each index's configuration and readiness. Call this first to discover valid index names. An API key is scoped to one Pinecone project, so indexes in other projects are not listed. If this connection has index access rules, indexes they deny are hidden and the response says how many — hidden is not the same as nonexistent. | — |
+| `describe-index` | Describe one Pinecone index: its configuration, its embedding model, and the field name its embed.field_map points at — the field upsert-records must populate. Check status.ready to confirm the index can accept upserts and searches. The response also states which kind of index it is, because search-records and upsert-records only work against integrated-embedding indexes (the ones create-index-for-model makes). This is also the tool to call when an index is missing from list-indexes: it reports which access rule hides it. | — |
+| `describe-index-stats` | Report an index's record counts, broken down by namespace. This is how to discover which namespaces an index actually has — Pinecone has no separate list-namespaces here. The default namespace is the empty string "". Recently upserted records take a few seconds to appear. | — |
+| `search-records` | Search one index for records semantically similar to a query text, optionally filtered by metadata and reranked. Pinecone embeds the query automatically, so this works only against integrated-embedding indexes — call describe-index if unsure; against any other kind this tool says so rather than returning an upstream error. Returns each hit's _id, _score and stored fields. To search several indexes and get one combined ranking, use cascading-search instead. | — |
+| `cascading-search` | Search several indexes at once, deduplicate the hits by record id and rerank them into ONE combined ranking. Reranking is required — that fusion is the whole point. Works only against integrated-embedding indexes. To search a single index, use search-records. If this connection's access rules deny any of the named indexes or namespaces, the whole call is refused rather than silently searching the rest: dropping a source would change the order and scores of everything that remains, and a ranking cannot be honestly labelled partial. | — |
+| `rerank-documents` | Rerank a set of documents you supply against a query, using a dedicated reranking model. Use this for documents that did NOT come from a Pinecone search — externally sourced text, for example. To rerank the results of a single-index search, prefer the rerank parameter of search-records, which does it in one call. This tool reads no index, so index and namespace access rules do not apply to it. | — |
+| `search-docs` | Search the official Pinecone documentation. Use it before writing Pinecone code or explaining Pinecone behaviour, rather than relying on assumptions. This reaches a public Pinecone documentation service and does not use your API key or touch your indexes, so it works even when the connection itself is misconfigured. | — |
+| `create-index-for-model` | Create a Pinecone index with integrated embedding, which automatically embeds the text field named in embed.fieldMap. That field name is fixed at creation and every record you later upsert must carry it, so choose it deliberately. If an index with the same name already exists it is returned unchanged rather than erroring. The index may take a few seconds to become ready; the response says which. Refused when this connection is set to read-only. If an index allowlist is configured, add the new name to it on the dashboard FIRST — an allowlist entry for a name that does not exist yet denies nothing. | — |
+| `upsert-records` | Insert or update records in an integrated-embedding index. A record whose _id already exists is OVERWRITTEN. Every record needs an _id and the text field named by the index's embed.field_map — call describe-index first to confirm that field name; this tool checks it locally and sends nothing if any record is missing it. At most 1000 records per call: a larger batch is refused rather than split, because an upsert is not atomic across the body and a failure part-way through several chunks would leave some records written and some not. Embedding is asynchronous, so the records will not be searchable for a few seconds. Refused when this connection is set to read-only. | — |
+
 ---
 
-**Grand total: 379 tools across 17 sections.**
+**Grand total: 388 tools across 18 sections.**

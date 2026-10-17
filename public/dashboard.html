@@ -1119,6 +1119,37 @@
     </div>
   </div>
 
+  <div id="pineconeRulesModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="pineconeRulesModalTitle">
+    <div class="modal" style="max-width: 600px;">
+      <div class="modal-header">
+        <h3 id="pineconeRulesModalTitle">Access Rules</h3>
+        <button class="btn-close" type="button" onclick="closePineconeRules()" aria-label="Close dialog">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div style="margin-bottom: 10px;">
+        <button type="button" class="rules-help-toggle" onclick="document.getElementById('pineconeRulesHelp').classList.toggle('hidden')" aria-expanded="false" aria-controls="pineconeRulesHelp">&#9432; How Pinecone access rules work</button>
+        <div id="pineconeRulesHelp" class="rules-help-body hidden">
+          <ul>
+            <li><strong style="color: #6ee7b7;">Allowed</strong> &mdash; while a list is non-empty, only those indexes or namespaces may be used. Leave it empty to allow all of them.</li>
+            <li><strong style="color: #f87171;">Blocked</strong> &mdash; never used, even if also allowed.</li>
+            <li>Index names are matched <strong>exactly</strong> and are always lowercase. There are no wildcards &mdash; list the names.</li>
+            <li>Namespace rules apply <strong>across every allowed index</strong>. They are case-sensitive.</li>
+            <li>Pinecone&rsquo;s <strong>default namespace has no name</strong> &mdash; use the checkbox to include it, not a blank row.</li>
+            <li>A hidden index is still reported as hidden rather than missing, and <code>describe-index</code> names the rule that hides it.</li>
+            <li><strong>Read-only</strong> refuses <code>create-index-for-model</code> and <code>upsert-records</code>. These rules bind every tool in this connector; they do <strong>not</strong> limit the API key itself, which you can still use directly.</li>
+          </ul>
+        </div>
+      </div>
+      <div id="pineconeRulesContent" class="access-rules-content">
+        <p>Loading&hellip;</p>
+      </div>
+      <div style="margin-top: 12px;">
+        <button class="btn-connect-google" type="button" id="savePineconeRulesBtn" onclick="savePineconeRules()">Save Rules</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Login Overlay (shown when not authenticated) -->
   <div id="loginOverlay" class="login-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="loginOverlayTitle">
     <div class="login-card">
@@ -1174,7 +1205,7 @@
     }
 
     function getTopmostOpenModal() {
-      const candidates = ['accessRulesModal', 'domainRulesModal', 'addToolModal', 'loginOverlay'];
+      const candidates = ['accessRulesModal', 'domainRulesModal', 'pineconeRulesModal', 'addToolModal', 'loginOverlay'];
       for (const id of candidates) {
         const el = document.getElementById(id);
         if (el && !el.classList.contains('hidden')) return el;
@@ -1189,6 +1220,7 @@
       if (topmost.id === 'addToolModal') closeAddToolModal();
       else if (topmost.id === 'accessRulesModal') closeAccessRules();
       else if (topmost.id === 'domainRulesModal') closeDomainRules();
+      else if (topmost.id === 'pineconeRulesModal') closePineconeRules();
       // loginOverlay is not dismissible — sign-in required
     });
 
@@ -1213,6 +1245,7 @@
     attachFocusTrap('addToolModal');
     attachFocusTrap('accessRulesModal');
     attachFocusTrap('domainRulesModal');
+    attachFocusTrap('pineconeRulesModal');
     attachFocusTrap('loginOverlay');
 
     function announce(message) {
@@ -1582,6 +1615,7 @@
               : ''}
             ${instance.provider === 'slack' ? `<button class="btn-rename" type="button" data-action="access-rules">Access Rules</button>` : ''}
             ${instance.provider === 'browserbase' ? `<button class="btn-rename" type="button" data-action="domain-rules" title="Limit which sites this browser may navigate to. A guardrail, not a security boundary \u2014 see the note in the dialog.">Domain Rules</button>` : ''}
+            ${instance.provider === 'pinecone' ? `<button class="btn-rename" type="button" data-action="pinecone-rules" title="Limit which indexes and namespaces this connection may use, and switch it to read-only.">Access Rules</button>` : ''}
             <button class="btn-delete" type="button" data-action="delete">Delete</button>
           </div>
         </div>
@@ -1616,7 +1650,7 @@
       const pasteCapable =
         provider === 'slack-bot' || provider === 'outline' ||
         provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot' ||
-        provider === 'redmine' || provider === 'browserbase' || provider === 'github';
+        provider === 'redmine' || provider === 'browserbase' || provider === 'github' || provider === 'pinecone';
       return pasteCapable && !mcp.oauthAuthorizationUrl;
     }
 
@@ -1696,7 +1730,7 @@
       const isTokenProvider =
         (provider === 'slack-bot' || provider === 'outline' || provider === 'peopleforce'
           || provider === 'peopleforce-v4' || provider === 'hubspot' || provider === 'redmine'
-          || provider === 'browserbase' || provider === 'github')
+          || provider === 'browserbase' || provider === 'github' || provider === 'pinecone')
         && !selectedMcpType.oauthAuthorizationUrl;
 
       // For OAuth providers, skip naming step — name is auto-generated on the backend
@@ -1838,6 +1872,22 @@
         nameSection.style.display = 'none';
         nameInput.value = '';
         tokenInput.focus();
+      } else if (provider === 'pinecone') {
+        tokenLabel.textContent = 'API Key';
+        tokenInput.placeholder = 'pcsk_\u2026';
+        tokenHint.innerHTML =
+          'In <span translate="no">Pinecone</span>: <strong>Console \u2192 API Keys</strong> ' +
+          '(<a href="https://app.pinecone.io/organizations/-/keys" target="_blank" rel="noopener">app.pinecone.io</a>), ' +
+          'then copy the key and paste it here. A key is <strong>scoped to one project</strong>, so pick the project ' +
+          'holding the indexes you want to reach \u2014 indexes in other projects will not be visible.';
+        // SaaS: one control-plane host, so no URL field (unlike Outline and
+        // Redmine). The per-index data hosts come from Pinecone's own responses.
+        urlSection.style.display = 'none';
+        // No user-entered name \u2014 the backend names it after the indexes the
+        // key can see, since a Pinecone key names no project of its own.
+        nameSection.style.display = 'none';
+        nameInput.value = '';
+        tokenInput.focus();
       } else {
         tokenLabel.textContent = 'Bot Token';
         tokenInput.placeholder = 'xoxb-…';
@@ -1883,7 +1933,7 @@
       // we can display.
       const isOutline = provider === 'outline';
       const isRedmine = provider === 'redmine';
-      const autoName = isOutline || isRedmine || provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot' || provider === 'browserbase' || provider === 'github';
+      const autoName = isOutline || isRedmine || provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot' || provider === 'browserbase' || provider === 'github' || provider === 'pinecone';
       const name = autoName ? '' : document.getElementById('instanceNameInput').value.trim();
       if (!autoName && !name) { alert('Please enter a name for this instance'); return; }
       const token = document.getElementById('tokenInput').value.trim();
@@ -1896,6 +1946,7 @@
                   : provider === 'redmine' ? 'Please enter your Redmine API access key'
                   : provider === 'browserbase' ? 'Please enter your Browserbase API key'
                   : provider === 'github' ? 'Please enter your GitHub personal access token'
+                  : provider === 'pinecone' ? 'Please enter your Pinecone API key'
                   : 'Please enter a bot token';
         alert(msg);
         return;
@@ -2409,6 +2460,199 @@
       }
     }
 
+    // ---- Pinecone access rules ----
+    //
+    // A third self-contained flow, for the reason the Browserbase one is
+    // separate from Slack's: these share no field, no validation and no
+    // renderer with either.
+    //
+    // THE ONE THING TO BE CAREFUL WITH is the default namespace. Pinecone's
+    // default namespace is literally the empty string, so it cannot be a text
+    // row — an empty input is indistinguishable from one the user has not
+    // filled in yet. It is a checkbox here, and '' is stored in the list like
+    // any other entry. The server's toNamespaceList preserves it; the generic
+    // blank-dropping normaliser the domain rules use would delete it on save.
+    let pineconeRulesInstanceId = null;
+    let pineconeRulesState = {
+      allowedIndexes: [], blockedIndexes: [],
+      allowedNamespaces: [], blockedNamespaces: [], readOnly: false,
+    };
+
+    const PINECONE_LIST_KINDS = {
+      allowedIndexes:    { label: 'Allowed indexes',    color: '#6ee7b7', placeholder: 'company-docs', empty: 'Empty &mdash; every index may be used.' },
+      blockedIndexes:    { label: 'Blocked indexes',    color: '#f87171', placeholder: 'production-secrets', empty: 'Empty &mdash; no index is blocked.' },
+      allowedNamespaces: { label: 'Allowed namespaces', color: '#6ee7b7', placeholder: 'hr', empty: 'Empty &mdash; every namespace may be used.' },
+      blockedNamespaces: { label: 'Blocked namespaces', color: '#f87171', placeholder: 'scratch', empty: 'Empty &mdash; no namespace is blocked.' },
+    };
+
+    async function openPineconeRules(instanceId) {
+      pineconeRulesInstanceId = instanceId;
+      const modal = document.getElementById('pineconeRulesModal');
+      const helpToggle = modal.querySelector('.rules-help-toggle');
+      if (helpToggle) helpToggle.setAttribute('aria-expanded', 'false');
+      document.getElementById('pineconeRulesHelp').classList.add('hidden');
+      openModal(modal);
+      document.getElementById('pineconeRulesContent').innerHTML = '<p>Loading&hellip;</p>';
+
+      try {
+        const response = await fetch(`/api/instances/${instanceId}/pinecone-rules`, { credentials: 'include' });
+        if (!response.ok) throw new Error('Failed to load');
+        const data = await response.json();
+        const current = data.currentRules || {};
+        pineconeRulesState = {
+          allowedIndexes: current.allowedIndexes || [],
+          blockedIndexes: current.blockedIndexes || [],
+          allowedNamespaces: current.allowedNamespaces || [],
+          blockedNamespaces: current.blockedNamespaces || [],
+          readOnly: Boolean(current.readOnly),
+        };
+        renderPineconeRulesForm();
+      } catch (err) {
+        document.getElementById('pineconeRulesContent').innerHTML =
+          `<p style="color: #dc3545;" role="alert">Error: ${escapeHtml(err.message)}</p>`;
+      }
+    }
+
+    function pineconeListSection(kind) {
+      const meta = PINECONE_LIST_KINDS[kind];
+      return `
+        <div class="rules-section">
+          <label style="display:block; font-weight:600; color:${meta.color}; margin-bottom:6px;">${meta.label}</label>
+          <div style="display:flex; gap:6px;">
+            <input type="text" id="${kind}Input" placeholder="${meta.placeholder}" style="flex:1;"
+                   onkeydown="if(event.key==='Enter'){event.preventDefault();addPineconeEntry('${kind}');}" />
+            <button type="button" class="btn-rename" onclick="addPineconeEntry('${kind}')">Add</button>
+          </div>
+          <div id="${kind}Chips" style="margin-top:8px;"></div>
+        </div>`;
+    }
+
+    function renderPineconeRulesForm() {
+      const defaultNsChecked = pineconeRulesState.allowedNamespaces.includes('') ? ' checked' : '';
+      document.getElementById('pineconeRulesContent').innerHTML =
+        pineconeListSection('allowedIndexes') +
+        pineconeListSection('blockedIndexes') +
+        pineconeListSection('allowedNamespaces') +
+        `<div class="rules-section">
+           <label style="display:flex; align-items:center; gap:8px;">
+             <input type="checkbox" id="pineconeDefaultNs"${defaultNsChecked} onchange="togglePineconeDefaultNamespace(this.checked)" />
+             <span>Include the default namespace in the allowed list</span>
+           </label>
+           <div style="opacity:0.7; font-size:0.9em; margin-top:4px;">
+             Pinecone&rsquo;s default namespace has no name, so it cannot be typed into the list above.
+             This only matters while <em>Allowed namespaces</em> is non-empty.
+           </div>
+         </div>` +
+        pineconeListSection('blockedNamespaces') +
+        `<div class="rules-section">
+           <label style="display:flex; align-items:center; gap:8px;">
+             <input type="checkbox" id="pineconeReadOnly"${pineconeRulesState.readOnly ? ' checked' : ''} onchange="pineconeRulesState.readOnly = this.checked" />
+             <span><strong>Read-only</strong> &mdash; refuse create-index-for-model and upsert-records</span>
+           </label>
+         </div>`;
+      Object.keys(PINECONE_LIST_KINDS).forEach(renderPineconeChips);
+    }
+
+    /** The default namespace is '' in the stored list, and a checkbox in the UI. */
+    function togglePineconeDefaultNamespace(checked) {
+      const list = pineconeRulesState.allowedNamespaces;
+      const at = list.indexOf('');
+      if (checked && at === -1) list.push('');
+      if (!checked && at !== -1) list.splice(at, 1);
+      renderPineconeChips('allowedNamespaces');
+    }
+
+    function renderPineconeChips(kind) {
+      const list = pineconeRulesState[kind];
+      const container = document.getElementById(`${kind}Chips`);
+      if (!container) return;
+      if (!list.length) {
+        container.innerHTML = `<span style="opacity:0.7; font-size:0.9em;">${PINECONE_LIST_KINDS[kind].empty}</span>`;
+        return;
+      }
+      // Reuses the existing .chip / .chip-remove styles, so these read
+      // identically to the Slack and Browserbase rules chips.
+      container.innerHTML = list.map((entry, index) => {
+        // '' is a real entry, and rendering it as nothing would look like a
+        // broken chip — it gets the same label the tools print.
+        const shown = entry === '' ? '(default namespace)' : entry;
+        return `
+        <span class="chip">
+          ${escapeHtml(shown)}
+          <button type="button" class="chip-remove" data-action="remove-pinecone-entry" data-kind="${kind}" data-index="${index}" aria-label="Remove ${escapeAttr(shown)}">
+            <span aria-hidden="true">&times;</span>
+          </button>
+        </span>`;
+      }).join('');
+    }
+
+    function addPineconeEntry(kind) {
+      const input = document.getElementById(`${kind}Input`);
+      // Index names are lowercased (Pinecone stores them that way, so an
+      // uppercase rule could never match); namespaces are NOT, because they
+      // are opaque user strings where Prod and prod are different namespaces.
+      const raw = input.value.trim();
+      const value = kind.endsWith('Indexes') ? raw.toLowerCase() : raw;
+      if (!value) return;
+      const list = pineconeRulesState[kind];
+      if (!list.includes(value)) list.push(value);
+      input.value = '';
+      renderPineconeChips(kind);
+    }
+
+    // Bound once on the container rather than inside the render, same as
+    // handleDomainRulesClick — re-rendering would otherwise stack listeners.
+    function handlePineconeRulesClick(e) {
+      const btn = e.target.closest('button[data-action="remove-pinecone-entry"]');
+      if (!btn) return;
+      const kind = btn.dataset.kind;
+      pineconeRulesState[kind].splice(parseInt(btn.dataset.index, 10), 1);
+      renderPineconeChips(kind);
+      // The default-namespace checkbox mirrors a list entry, so removing that
+      // chip has to un-tick it or the two disagree until the modal reopens.
+      if (kind === 'allowedNamespaces') {
+        const box = document.getElementById('pineconeDefaultNs');
+        if (box) box.checked = pineconeRulesState.allowedNamespaces.includes('');
+      }
+    }
+
+    function closePineconeRules() {
+      closeModal(document.getElementById('pineconeRulesModal'));
+      pineconeRulesInstanceId = null;
+    }
+
+    async function savePineconeRules() {
+      if (!pineconeRulesInstanceId) {
+        alert('Error: no instance selected. Please close and reopen Access Rules.');
+        return;
+      }
+      const btn = document.getElementById('savePineconeRulesBtn');
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      try {
+        // Posts pineconeRulesState, NOT a re-read of the DOM: rebuilding a
+        // list from rendered chips drops anything that failed to render, and
+        // would also lose the empty-string entry entirely.
+        const response = await fetch(`/api/instances/${pineconeRulesInstanceId}/pinecone-rules`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ accessRules: pineconeRulesState }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'Failed to save access rules');
+        closePineconeRules();
+        await loadUserData();
+        renderInstances();
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    }
+
     function closeAccessRules() {
       closeModal(document.getElementById('accessRulesModal'));
       rulesInstanceId = null;
@@ -2679,6 +2923,7 @@
       }
     });
     document.getElementById('domainRulesModal').addEventListener('click', handleDomainRulesClick);
+    document.getElementById('pineconeRulesModal').addEventListener('click', handlePineconeRulesClick);
     document.getElementById('accessRulesModal').addEventListener('click', function(e) {
       if (e.target === this) {
         closeAccessRules();
@@ -2701,6 +2946,7 @@
         case 'copy':         copyUrl(id, btn); break;
         case 'access-rules': openAccessRules(id); break;
         case 'domain-rules': openDomainRules(id); break;
+        case 'pinecone-rules': openPineconeRules(id); break;
         case 'delete':       deleteInstance(id, row.dataset.instanceName); break;
       }
     });

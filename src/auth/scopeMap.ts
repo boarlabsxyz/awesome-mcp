@@ -18,6 +18,7 @@ const ROUTE_SCOPE_MAP: Record<string, string> = {
   redmine: 'mcp:redmine',
   browserbase: 'mcp:browserbase',
   github: 'mcp:github',
+  pinecone: 'mcp:pinecone',
 };
 
 /** All supported MCP scopes (single source of truth). */
@@ -41,6 +42,7 @@ const SLUG_SCOPE_MAP: Record<string, string> = {
   'redmine': 'mcp:redmine',
   'browserbase': 'mcp:browserbase',
   'github': 'mcp:github',
+  'pinecone': 'mcp:pinecone',
 };
 
 /** Return the scope for a given MCP_SLUG, or all scopes if unknown. */
