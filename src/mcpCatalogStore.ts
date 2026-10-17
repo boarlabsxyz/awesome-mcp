@@ -812,6 +812,41 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: browserbaseEnabled,
   });
 
+  // Pinecone MCP (API-key provider — no OAuth, user pastes a key).
+  //
+  // Same shape as the Browserbase row above, including why the OAuth URLs stay
+  // empty: the dashboard decides whether to show the paste-token form by
+  // checking that oauthAuthorizationUrl is unset.
+  //
+  // The key is never read from env. A Pinecone API key is scoped to ONE
+  // PROJECT, so a shared operator key would serve one tenant's vectors to
+  // another — the credential is per-connection, in providerTokens.
+  //
+  // Hidden by default like browserbase and peopleforce-v4: both catalog
+  // backends filter on is_active, so an inactive row drops out of
+  // /api/v1/catalogs and therefore out of the dashboard's Add Tool list and the
+  // public integrations page. PINECONE_ENABLED=true brings it back — the seed
+  // upserts on every boot, so that is a restart, not a deploy, and the
+  // comparison is strict so PINECONE_ENABLED=yes leaves it hidden. Seeded
+  // rather than skipped so flipping the flag back cannot orphan a connection.
+  const pineconeMcpUrl = normalizeUrl(process.env.PINECONE_MCP_URL, '/pinecone');
+  const pineconeEnabled = process.env.PINECONE_ENABLED === 'true';
+
+  await createMcpCatalog({
+    slug: 'pinecone',
+    name: 'Pinecone MCP',
+    description: 'Search, read and write records in your Pinecone vector indexes — semantic search over your own documents',
+    iconUrl: 'https://www.pinecone.io/favicon.ico',
+    mcpUrl: pineconeMcpUrl,
+    provider: 'pinecone',
+    scopes: [],
+    googleClientId: null,
+    googleClientSecret: null,
+    oauthScopes: [],
+    isLocal: !process.env.PINECONE_MCP_URL,
+    isActive: pineconeEnabled,
+  });
+
   await seedRedmineCatalog(normalizeUrl);
   await seedGitHubCatalog(normalizeUrl);
 

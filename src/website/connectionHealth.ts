@@ -30,6 +30,7 @@ import { validateHubSpotToken } from '../hubspot/connectToken.js';
 import { validateRedmineToken } from '../redmine/connectToken.js';
 import { validateBrowserbaseToken } from '../browserbase/connectToken.js';
 import { validateGitHubToken } from '../github/connectToken.js';
+import { validatePineconeToken } from '../pinecone/connectToken.js';
 import { resolveRedmineAuthMode } from '../redmine/authMode.js';
 
 /**
@@ -443,6 +444,16 @@ export async function checkConnectionHealth(
           return { state: 'unknown', reason: 'GitHub rate-limited the health check (403), so the token was not evaluated.' };
         }
         return fromValidateResult(result, !!providerTokens.refresh_token);
+      }
+
+      case 'pinecone': {
+        if (!accessToken) return { state: 'reauth', reason: 'No Pinecone API key stored.' };
+        // canSelfHeal hard-coded false, as for Browserbase: Pinecone has no
+        // OAuth at all, so nothing could ever renew this credential and a
+        // rejection is always conclusive.
+        return fromValidateResult(await validatePineconeToken({
+          token: accessToken, fetchImpl,
+        } as any), false);
       }
 
       default:

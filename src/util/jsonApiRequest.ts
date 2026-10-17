@@ -119,6 +119,29 @@ export interface JsonApiRequestConfig {
   headers: Record<string, string>;
   /** Serialised as JSON when present. `undefined` sends no body. */
   body?: unknown;
+  /**
+   * A body that is already encoded, sent verbatim with `contentType`.
+   *
+   * Exists for Pinecone's Records upsert, which takes `application/x-ndjson`
+   * (one JSON object per line) rather than a JSON array. Added here instead of
+   * giving that one connector its own request path, because everything else in
+   * this function — the redirect rule, the deadline, the `.status` tagging —
+   * is exactly what an NDJSON POST needs too, and a second copy would be the
+   * copy that misses the next fix.
+   *
+   * Mutually exclusive with `body`: passing both is a programming error with
+   * no sensible resolution, so it throws rather than picking one.
+   */
+  rawBody?: string;
+  /**
+   * Content-Type for `rawBody`. Required with it, ignored without it.
+   *
+   * Not defaulted: the whole reason `rawBody` exists is that the correct type
+   * is not `application/json`, and defaulting to the value the caller is
+   * trying to override would make a forgotten argument fail upstream as an
+   * opaque schema error.
+   */
+  contentType?: string;
   timeoutMs: number;
   /** Service name for error messages, e.g. "Browserbase API". */
   serviceLabel: string;
@@ -286,7 +309,14 @@ export async function jsonApiRequest<T>(config: JsonApiRequestConfig): Promise<T
  * (GitHub answers both "rate limited" and "forbidden" with 403).
  */
 export async function jsonApiRequestWithMeta<T>(config: JsonApiRequestConfig): Promise<JsonApiResponse<T>> {
-  const { method, headers, body, timeoutMs, serviceLabel } = config;
+  const { method, headers, body, rawBody, timeoutMs, serviceLabel } = config;
+  const bodyContentType = config.contentType;
+  if (body !== undefined && rawBody !== undefined) {
+    throw new Error(`${serviceLabel} ${config.target}: pass body or rawBody, not both.`);
+  }
+  if (rawBody !== undefined && !bodyContentType) {
+    throw new Error(`${serviceLabel} ${config.target}: rawBody requires an explicit contentType.`);
+  }
   const doFetch = config.fetchImpl ?? fetch;
   const redact = (text: string) => redactWith(config.secrets, text);
   // `target` prefixes EVERY message this function can throw — the redirect, the
@@ -325,8 +355,12 @@ export async function jsonApiRequestWithMeta<T>(config: JsonApiRequestConfig): P
       try {
         res = await doFetch(url, {
           method,
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...headers },
-          body: body !== undefined ? JSON.stringify(body) : undefined,
+          headers: {
+            'Content-Type': bodyContentType ?? 'application/json',
+            Accept: 'application/json',
+            ...headers,
+          },
+          body: rawBody !== undefined ? rawBody : body !== undefined ? JSON.stringify(body) : undefined,
           signal: controller.signal,
           // 'manual' rather than 'error': the credential must still never
           // follow a redirect, but refusing without reading the Location first

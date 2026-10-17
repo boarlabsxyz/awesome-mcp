@@ -328,6 +328,7 @@ import { validateGitHubToken, buildGitHubInstanceName, fetchGitHubUser } from '.
 import { exchangeGitHubOauthCode, GITHUB_TOKEN_URL } from '../github/oauthCallback.js';
 import { GITHUB_READ_ROUTES, GITHUB_WRITE_ROUTES, writeArgs as githubWriteArgs } from '../github/restRoutes.js';
 import type { GitHubClient } from '../github/apiHelpers.js';
+import { validatePineconeToken, buildPineconeInstanceName, fetchPineconeIndexSummary } from '../pinecone/connectToken.js';
 // Type-only: erased at compile time, so the REST handlers can still import the
 // clients dynamically and keep them out of the web server's startup graph.
 import type { ClickUpClient } from '../clickup/apiHelpers.js';
@@ -1234,6 +1235,45 @@ async function buildGitHubPasteConnection(input: PasteConnectionInput): Promise<
 }
 
 /**
+ * Validate a pasted Pinecone API key and shape the connection record.
+ *
+ * A builder rather than the two-line connectPasteToken helper for the same
+ * reason Browserbase has one: the GET /indexes probe the key is validated
+ * against already returns the indexes, so naming the connection after what it
+ * can actually see costs nothing — and a Pinecone key names no project of its
+ * own, so without that there is nothing to tell two connections apart on the
+ * dashboard.
+ *
+ * The index lookup is best-effort and separate from validation: the key has
+ * already passed its probe by then, so failing the connect over a display name
+ * would reject a credential that works.
+ */
+async function buildPineconePasteConnection(input: PasteConnectionInput): Promise<PasteConnectionBuildResult> {
+  const validate = await validatePineconeToken({ token: input.token });
+  if (!validate.ok) return validate;
+  const summary = await fetchPineconeIndexSummary(input.token);
+  return {
+    ok: true,
+    connection: {
+      provider: 'pinecone',
+      serviceLogName: 'Pinecone',
+      name: buildPineconeInstanceName({
+        serviceName: input.serviceName,
+        providedInstanceName: input.instanceName,
+        indexCount: summary.count,
+        firstIndexName: summary.firstName,
+      }),
+      // No baseUrl: Pinecone is SaaS with one control-plane host. accessRules
+      // is deliberately absent rather than seeded empty — absent means
+      // unrestricted, and an empty-defaults object here would be a non-empty
+      // value that survives every reconnect merge and resets the user's rules.
+      providerTokens: { access_token: input.token },
+      providerEmail: null,
+    },
+  };
+}
+
+/**
  * Providers that validate their own credential and build their own connection
  * record. Everything else goes through the simpler connectPasteToken helper,
  * which stores only { access_token }.
@@ -1244,6 +1284,7 @@ const PASTE_CONNECTION_BUILDERS: Record<string, (input: PasteConnectionInput) =>
   redmine: buildRedminePasteConnection,
   browserbase: buildBrowserbasePasteConnection,
   github: buildGitHubPasteConnection,
+  pinecone: buildPineconePasteConnection,
 };
 
 /**
@@ -3045,6 +3086,94 @@ function registerSharedRoutes(app: express.Express): void {
     }
   });
 
+  // ---- Pinecone access rules -------------------------------------------
+  //
+  // Modelled on the domain-rules pair above, with one difference that is easy
+  // to get wrong: namespace lists must PRESERVE the empty string. The default
+  // Pinecone namespace is literally "", so the `toList` used above — which
+  // drops blanks, correctly, for a hostname — would delete that entry on every
+  // save and the user would watch their own checkbox un-tick itself. Both
+  // normalisers come from the connector so this route cannot write its own.
+
+  app.get('/api/instances/:instanceId/pinecone-rules', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const owned = await ownedConnection(req, res, 'pinecone', 'Pinecone');
+      if (!owned) return;
+      const rules = (owned.connection.providerTokens as any)?.accessRules;
+      // Absent rules are reported as empty lists and readOnly false, and the
+      // UI says what empty means. They are NOT written back as defaults: a
+      // stored empty object is a non-empty value that survives every reconnect
+      // merge.
+      res.json({
+        currentRules: {
+          allowedIndexes: rules?.allowedIndexes || [],
+          blockedIndexes: rules?.blockedIndexes || [],
+          allowedNamespaces: rules?.allowedNamespaces || [],
+          blockedNamespaces: rules?.blockedNamespaces || [],
+          readOnly: Boolean(rules?.readOnly),
+        },
+      });
+    } catch (err) {
+      console.error('[pinecone-rules] error:', err);
+      res.status(500).json({ error: 'Failed to load Pinecone access rules' });
+    }
+  });
+
+  app.post('/api/instances/:instanceId/pinecone-rules', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
+    try {
+      const instanceId = req.params.instanceId as string;
+      const { accessRules } = req.body as { accessRules?: any };
+      if (!accessRules) {
+        res.status(400).json({ error: 'accessRules object is required' });
+        return;
+      }
+
+      // Validated and normalised with the connector's own helpers, not copies:
+      // a pattern the dashboard accepts but the matcher cannot match would
+      // read as a saved rule that silently does nothing.
+      const { toIndexList, toNamespaceList, validateIndexPattern, validateNamespacePattern } =
+        await import('../pinecone/accessRules.js');
+
+      const allowedIndexes = toIndexList(accessRules.allowedIndexes);
+      const blockedIndexes = toIndexList(accessRules.blockedIndexes);
+      const allowedNamespaces = toNamespaceList(accessRules.allowedNamespaces);
+      const blockedNamespaces = toNamespaceList(accessRules.blockedNamespaces);
+      const readOnly = Boolean(accessRules.readOnly);
+
+      for (const pattern of [...allowedIndexes, ...blockedIndexes]) {
+        const problem = validateIndexPattern(pattern);
+        if (problem) { res.status(400).json({ error: problem }); return; }
+      }
+      for (const pattern of [...allowedNamespaces, ...blockedNamespaces]) {
+        const problem = validateNamespacePattern(pattern);
+        if (problem) { res.status(400).json({ error: problem }); return; }
+      }
+
+      const owned = await ownedConnection(req, res, 'pinecone', 'Pinecone');
+      if (!owned) return;
+
+      const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+      // Spread, because updateMcpInstanceProviderTokens replaces the whole
+      // provider_tokens column — a bare { accessRules } would drop the API key.
+      const updatedTokens = {
+        ...(owned.connection.providerTokens as any),
+        accessRules: { allowedIndexes, blockedIndexes, allowedNamespaces, blockedNamespaces, readOnly },
+      };
+      await updateMcpInstanceProviderTokens(instanceId, updatedTokens);
+
+      // Mandatory, not hygiene: the tools re-read rules per call, but the
+      // SESSION is memoised by `${apiKey}:${instanceId}` with no TTL.
+      const { clearMcpSessionCache } = await import('../userSession.js');
+      clearMcpSessionCache(owned.user.apiKey, instanceId);
+
+      console.error(`User ${owned.user.id} updated Pinecone access rules for ${instanceId}: ${allowedIndexes.length} allowed indexes, ${blockedIndexes.length} blocked, ${allowedNamespaces.length} allowed namespaces, readOnly=${readOnly}`);
+      res.json({ success: true });
+    } catch (err) {
+      console.error('[pinecone-rules] error:', err);
+      res.status(500).json({ error: 'Failed to save Pinecone access rules' });
+    }
+  });
+
   // GET /api/instances/:instanceId/users/search - Search workspace users for blacklist
   const userListCache = new Map<string, { members: any[]; expiresAt: number }>();
 
@@ -3729,6 +3858,11 @@ function registerSharedRoutes(app: express.Express): void {
       'Log 3 hours against issue #1482 for today',
       'Show the wiki page "Release Process" in the platform project',
     ],
+    'pinecone': [
+      'List my Pinecone indexes and tell me which namespaces each one has and how many records',
+      'Search the company-docs index for records about the vacation policy and show me the top 5',
+      'Upsert these three documents into the company-docs index, namespace hr',
+    ],
     'browserbase': [
       'Open the pricing page of https://example.com and give me the plans and prices as a table',
       'Go to our vendor portal, open the Invoices section and tell me which invoices are unpaid',
@@ -3996,6 +4130,9 @@ function registerRestApiRoutes(app: express.Express): void {
             // plumbing that githubRestClient spends before each call.
             const { createGitHubSession } = await import('../userSession.js');
             req.userSession = createGitHubSession(user, connection);
+          } else if (connection.provider === 'pinecone') {
+            const { createPineconeSession } = await import('../userSession.js');
+            req.userSession = createPineconeSession(user, connection);
           } else {
             const mcp = await getMcpCatalog(connection.mcpSlug);
             const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
@@ -4030,6 +4167,8 @@ function registerRestApiRoutes(app: express.Express): void {
   const requireRedmineApiKey = createServiceAuth('redmine', 'redmine');
   const requireBrowserbaseApiKey = createServiceAuth('browserbase', 'browserbase');
   const requireGitHubApiKey = createServiceAuth('github', 'github');
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- used once the REST plane lands (PR2)
+  const requirePineconeApiKey = createServiceAuth('pinecone', 'pinecone');
   const requireOutlineApiKey = createServiceAuth('outline', 'outline');
 
   // JSON body parser already added above for auth routes
