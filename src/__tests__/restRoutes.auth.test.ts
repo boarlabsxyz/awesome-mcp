@@ -21,6 +21,11 @@ if (!process.env.GOOGLE_CREDENTIALS) {
 // They do not require any upstream Google/Slack/ClickUp mocking, so they
 // cover the routes' presence + auth gate cheaply.
 const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
+  // Pinecone reads. /indexes is in both arrays: GET lists, POST creates.
+  '/api/v1/pinecone/indexes',
+  '/api/v1/pinecone/indexes/company-docs',
+  '/api/v1/pinecone/indexes/company-docs/stats',
+  '/api/v1/pinecone/docs/search?q=namespaces',
   '/api/v1/docs',
   '/api/v1/docs/recent',
   '/api/v1/docs/doc-123',
@@ -177,6 +182,14 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
 // here proves the gate runs ahead of validation and an unauthenticated caller
 // can't probe the schema by watching 400s.
 const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
+  // Pinecone. The two searches and the rerank are READS served over POST (the
+  // body carries a filter and rerank options), so they are gated here by verb
+  // rather than in the GET array above.
+  '/api/v1/pinecone/indexes/company-docs/search',
+  '/api/v1/pinecone/search/cascading',
+  '/api/v1/pinecone/rerank',
+  '/api/v1/pinecone/indexes',
+  '/api/v1/pinecone/indexes/company-docs/upsert',
   // GitHub writes (GITHUB_WRITE_ROUTES). /issues and /contents/... are in both
   // arrays: the verb alone separates list from create and read from write.
   '/api/v1/github/repos/octo/app/issues',

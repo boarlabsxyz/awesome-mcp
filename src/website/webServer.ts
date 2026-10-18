@@ -327,7 +327,10 @@ import { validateBrowserbaseToken, buildBrowserbaseInstanceName, fetchBrowserbas
 import { validateGitHubToken, buildGitHubInstanceName, fetchGitHubUser } from '../github/connectToken.js';
 import { exchangeGitHubOauthCode, GITHUB_TOKEN_URL } from '../github/oauthCallback.js';
 import { GITHUB_READ_ROUTES, GITHUB_WRITE_ROUTES, writeArgs as githubWriteArgs } from '../github/restRoutes.js';
+import { PINECONE_READ_ROUTES, PINECONE_WRITE_ROUTES, writeArgs as pineconeWriteArgs } from '../pinecone/restRoutes.js';
 import type { GitHubClient } from '../github/apiHelpers.js';
+import type { PineconeRulesState } from '../pinecone/accessRules.js';
+import type { PineconeRestContext } from '../pinecone/restOps.js';
 import { validatePineconeToken, buildPineconeInstanceName, fetchPineconeIndexSummary } from '../pinecone/connectToken.js';
 // Type-only: erased at compile time, so the REST handlers can still import the
 // clients dynamically and keep them out of the web server's startup graph.
@@ -1300,6 +1303,7 @@ const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
   '/api/v1/hubspot/notes',    // createNote — free text
   '/api/v1/hubspot/calls',    // logCall — can be a whole transcript
   '/api/v1/hubspot/meetings', // logMeeting — can be full minutes
+  '/api/v1/pinecone/indexes', // upsert-records — a bulk record load, up to Pinecone's 2 MB body limit
   // Docs writes carry document-sized payloads: appended text, an import body,
   // a 50-operation batch, a base64 image.
   '/api/v1/docs',
@@ -4173,7 +4177,7 @@ function registerRestApiRoutes(app: express.Express): void {
   const requireRedmineApiKey = createServiceAuth('redmine', 'redmine');
   const requireBrowserbaseApiKey = createServiceAuth('browserbase', 'browserbase');
   const requireGitHubApiKey = createServiceAuth('github', 'github');
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- used once the REST plane lands (PR2)
+  const requirePineconeApiKey = createServiceAuth('pinecone', 'pinecone');
   const requireOutlineApiKey = createServiceAuth('outline', 'outline');
 
   // JSON body parser already added above for auth routes
@@ -9725,6 +9729,120 @@ function registerRestApiRoutes(app: express.Express): void {
       } catch (err) {
         console.error(`Error in GitHub ${route.tool}:`, err);
         await sendGitHubError(res, err, route.fallback);
+      }
+    });
+  }
+
+  // === Pinecone ===
+  //
+  // Reads plus two signed-off writes. The access rules configured on the
+  // connection are enforced here exactly as they are on the MCP tools — a REST
+  // plane that skipped them would make the rules a property of the transport
+  // rather than of the connection. The read-only switch matters most, since
+  // this plane accepts the PERMANENT dashboard API key.
+
+  /**
+   * Build the per-request context, or answer 403 and return null.
+   *
+   * No refresh step, unlike GitHub: a Pinecone API key does not expire and
+   * there is no OAuth to renew it with. The apiKey rides along because it
+   * scopes the index host/kind cache in indexCatalog.ts.
+   */
+  async function pineconeRestContext(req: ApiAuthenticatedRequest, res: Response): Promise<PineconeRestContext | null> {
+    const session = req.userSession;
+    if (!session?.pineconeAccessToken) {
+      res.status(403).json({ error: 'Pinecone connection required for REST. Connect via the dashboard.' });
+      return null;
+    }
+    const { PineconeClient } = await import('../pinecone/apiHelpers.js');
+    return {
+      client: new PineconeClient(session.pineconeAccessToken),
+      apiKey: session.pineconeAccessToken,
+      rules: await pineconeRestRules(req),
+    };
+  }
+
+  /**
+   * Read this connection's access rules, with the SAME split failure posture
+   * the MCP server uses: index and namespace rules fail open (the stored
+   * default is unrestricted), the write gate fails closed. Returning
+   * `unavailable` rather than swallowing the error is what preserves that —
+   * see src/pinecone/accessRules.ts.
+   */
+  async function pineconeRestRules(req: ApiAuthenticatedRequest): Promise<PineconeRulesState> {
+    const instanceId = req.userSession?.pineconeInstanceId;
+    if (!instanceId) return { status: 'loaded', rules: undefined };
+    try {
+      const connection = await getMcpConnectionByInstanceId(instanceId);
+      return { status: 'loaded', rules: (connection?.providerTokens as any)?.accessRules ?? undefined };
+    } catch (err: any) {
+      return { status: 'unavailable', detail: err?.message ?? 'the connection store could not be read' };
+    }
+  }
+
+  /**
+   * An access denial is 403, not 500 — it is the caller's request being
+   * refused by their own configuration, and the message names the rule.
+   * Everything else carries the upstream status through sendUpstreamError,
+   * which reads `.status` natively because PineconeClient goes through
+   * jsonApiRequest.
+   */
+  function sendPineconeError(res: Response, err: any, fallback: string): void {
+    if (err?.name === 'PineconeAccessDenied') {
+      res.status(403).json({ error: err.message });
+      return;
+    }
+    // A UserError with no numeric status is a refusal this connector decided
+    // (wrong index kind, a record missing its text field, a batch over the
+    // cap) — the caller's request is wrong, so 400 rather than a 500 that
+    // reads as "retry, it is us".
+    if (err?.name === 'UserError' && typeof err?.status !== 'number') {
+      res.status(400).json({ error: err.message || fallback });
+      return;
+    }
+    sendUpstreamError(res, err, { notFound: 'Pinecone index not found', fallback });
+  }
+
+  for (const route of PINECONE_READ_ROUTES) {
+    app[route.method](route.path, requirePineconeApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const parsed = route.schema.safeParse(route.args(req));
+        if (!parsed.success) {
+          if (route.method === 'get') { sendInvalidQuery(res, parsed.error.flatten()); return; }
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const ctx = await pineconeRestContext(req, res);
+        if (!ctx) return;
+        // Text is the MCP tool's own rendering, fetched instead of (never in
+        // addition to) the JSON, so ?format=text costs the same calls.
+        if (negotiateFormat(req) === 'text') {
+          res.type('text/plain; charset=utf-8').send(await route.text(ctx, parsed.data));
+          return;
+        }
+        res.json(await route.json(ctx, parsed.data));
+      } catch (err) {
+        console.error(`Error in Pinecone ${route.tool}:`, err);
+        sendPineconeError(res, err, route.fallback);
+      }
+    });
+  }
+
+  for (const route of PINECONE_WRITE_ROUTES) {
+    app.post(route.path, requirePineconeApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const parsed = route.schema.safeParse(pineconeWriteArgs(route, req));
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const ctx = await pineconeRestContext(req, res);
+        if (!ctx) return;
+        const result = await route.run(ctx, parsed.data);
+        res.status(result.status).json(result.body);
+      } catch (err) {
+        console.error(`Error in Pinecone ${route.tool}:`, err);
+        sendPineconeError(res, err, route.fallback);
       }
     });
   }
