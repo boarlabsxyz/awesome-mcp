@@ -133,11 +133,21 @@ grep -n "createWebApp\|startServer()" src/<provider>/server.ts
 
 A hit means the schemas and ops go in their own modules (`writeSchemas.ts`, `writeOps.ts`) that both surfaces import. `src/google-docs/server.ts` is the one today. When in doubt do it anyway — separate modules are never wrong here.
 
+**If the connector has per-connection access rules, THIS PLANE MUST ENFORCE THEM.** Slack, Browserbase and Pinecone all store rules under `providerTokens.accessRules` and assert them inside the MCP tool bodies. A REST handler that calls the upstream client directly bypasses every one of them — which makes the rules a property of the *transport* rather than of the connection, so swapping one client for another becomes a way to read what the dashboard says is denied. It is not a theoretical gap: this plane accepts the **permanent dashboard API key**, so a connection the user set read-only has to refuse a curl exactly as it refuses a tool call.
+
+Concretely, reuse the connector's own pure `assert*` functions rather than re-deriving the policy, and carry the rules into the handler the same way the MCP server does (re-read per call — a session-cached copy keeps serving rules the user has already changed). Two details worth copying from `src/pinecone/restOps.ts`:
+
+- A rules denial is **403 naming the rule**, not 500. It is the caller's own configuration refusing them.
+- A refusal the *connector* decided — wrong resource kind, a malformed record, a batch over a cap — is **400**. Only a genuine upstream failure goes through `sendUpstreamError`.
+
+Add a route-level test that a restricted connection gets 403 where an unrestricted one gets 200. The auth-gate array in step 5 cannot show this: it only proves the endpoint is gated at all.
+
 Placement rules:
 
 - Group with the service's other routes; don't append at the bottom of a 5000-line file.
 - **Static paths before parameterized ones.** `/api/v1/docs/recent` is registered before `/api/v1/docs/:documentId` or Express matches `recent` as a documentId. Same for any `/search`, `/trash`, `/archived` sibling.
 - Express uses `:param`; the catalog uses `{param}`. Keep the param names identical so the docs and the code read the same.
+- **An identifier that can legitimately be EMPTY cannot go in the path.** Pinecone's default namespace is the empty string, so `/namespaces/{namespace}/upsert` collapses to `/namespaces//upsert` — not a URL a client reliably constructs, and collapsing the empty segment silently retargets the call at a namespace literally named `upsert`. Put such a parameter in the body (and say why in a comment, or someone will "tidy" it into the path later). The general test: if the provider treats `""` as a real value for that identifier, the path cannot express it.
 
 ### 5. Add the auth-gate test
 
@@ -161,7 +171,7 @@ node scripts/buildRootOpenapi.mjs        # public/openapi.json (skips `planned`)
 node scripts/buildMcpToolsDoc.mjs        # docs/MCP_TOOLS.md — its REST column
 ```
 
-No npm scripts wrap these; run them directly. `buildRootOpenapi.mjs` merges `public/openapi-*.json` and then stub-fills any `live` catalog entry no per-service spec covers, so a new endpoint gets a usable (if schema-less) OpenAPI entry for free. **The stub has no `requestBody`** — for POST endpoints it advertises a body-less operation, which is worse than useless to a client. Write endpoints should get a real per-service spec entry via `/update-openapi <provider>` in the same change, not later.
+No npm scripts wrap these; run them directly. `buildRootOpenapi.mjs` merges `public/openapi-*.json` and then stub-fills any `live` catalog entry no per-service spec covers, so a new endpoint gets a usable (if schema-less) OpenAPI entry for free. **The stub has no `requestBody`** — for POST endpoints it advertises a body-less operation, which is worse than useless to a client. Write endpoints should get a real per-service spec entry via `/update-openapi <provider>` in the same change, not later. **Invoke that skill rather than hand-rolling a generator** — it already does the Zod → OpenAPI translation (`references/scaffold-rules.md`), and a throwaway script reproduces that work in a form nobody maintains. For a brand-new service with no `public/openapi-<slug>.json` yet, it is still the right tool: there is nothing to diff against, so it scaffolds the file.
 
 ### 7. Verify
 
@@ -348,7 +358,7 @@ Practicalities, in the order they bite:
   curl -s "https://sonarcloud.io/api/measures/component_tree?component=<key>&pullRequest=<n>&metricKeys=new_lines,new_duplicated_lines_density&qualifiers=FIL&ps=100"
   ```
 
-  Confirm **which commit was analysed** (`api/project_pull_requests/list`) — a reading taken a minute after pushing is still the previous commit's, and chasing a stale number is its own time sink.
+  Confirm **which commit was analysed** (`api/project_pull_requests/list`) — a reading taken a minute after pushing is still the previous commit's, and chasing a stale number is its own time sink. For the issue list, pass **`&resolved=false`**: `api/issues/search` returns fixed issues alongside open ones, so a pass that resolved 10 of 13 still reports 13 and reads as though nothing was fixed. The resolved ones come back with `line: null`, which is the only hint in the default output.
 - **The duplication gate can be mathematically unreachable, and the catalog is why.** `src/restCatalog.ts` measures ~97% duplicated new lines: 50 structurally identical one-line entries is precisely what copy-paste detection exists to flag. Do the arithmetic before grinding — at 1673 new lines a 3% threshold allows 50 duplicated lines, and the catalog alone was 75, so no handler refactor could pass. At that point the only honest options are a `sonar.cpd.exclusions` entry, a won't-fix, or an override; raise it as a decision rather than deforming a data table whose field order three build scripts parse with a regex. (Real handler duplication is still worth removing: injecting the ops module once instead of per table row took `webServer.ts` from 7.5% to 4.1% and removed 85 lines.)
 - **Tests that pass but never EXIT hang the whole suite, and it reads like anything but that.** With no local Redis, `oauthServer.ts`'s `getRedis()` leaves an `ioredis` client retrying, so `auth/exchangeAuthCode` and `auth/oauthProxy` print `ok` for every assertion and then hold the event loop open — `node --test` waits on them indefinitely. Two things disguise it: stdout is block-buffered when redirected, so a dead run sits at a plausible ~67 lines and looks like slow progress; and the giveaway is the parent at 0% CPU with **no child workers**. Before suspecting your change, reproduce on unmodified main (`git checkout --detach origin/main`) — if it reproduces there, it is the environment, not the diff. To get a verdict anyway, run each file separately with a hard timeout and treat a `not ok` line as the only failure signal.
 - **`data/*.json` grows without bound and widens the corruption race.** Every run appends to `data/mcp-connections.json` and nothing prunes it; at 1340 entries / 652 KB, ~120 concurrent test processes read-modify-writing it reliably interleave into `Unexpected non-whitespace character after JSON`, or hang. It is gitignored scratch — truncate to `[]` rather than debugging a handler.

@@ -86,9 +86,9 @@ Then update `src/__tests__/auth/scopeMap.test.ts` — the "should contain all N 
 
 **b. `src/google-docs/server.ts`** — two runtime modes to wire. The mcp-only dispatch is critical; the combined mode is only needed if that deployment mode is in use.
 
-**mcp-only mode** (`MCP_MODE=mcp`, one MCP per service): find the dispatch ternary around line 1852. Two edits:
+**mcp-only mode** (`MCP_MODE=mcp`, one MCP per service): find the `MCP_SERVERS_BY_SLUG` lookup table inside the `MCP_MODE === "mcp"` branch (it was a chained ternary once; grep for the constant rather than trusting a line number). Two edits:
 - Add `import { <slugCamel>Server } from '../<slug>/server.js';` near the other server imports at the top.
-- Add a branch to the ternary: `: MCP_SLUG === "<slug>" ? <slugCamel>Server`.
+- Add a row to the table: `"<slug>": <slugCamel>Server,`.
 
 Without this, the new server compiles but never runs — the symptom is the wrong MCP responding on the route.
 
@@ -251,6 +251,14 @@ Two failure modes get caught here that the typechecker won't:
 
 Don't reach for `as any` or `// @ts-ignore` if typecheck fails — the typechecker is catching the kind of cross-file slip this skill exists to prevent.
 
+**If `npm test` appears to hang rather than fail, do not assume it is your diff.** Two environmental failures look exactly like a broken scaffold, and both are documented in `../add-rest-endpoint/SKILL.md` under Failure modes: tests that pass every assertion and then never *exit* (no local Redis leaves an `ioredis` client retrying), and `data/*.json` scratch growing until ~120 concurrent processes corrupt it. The tell is the parent process at 0% CPU with **no child workers**. Reproduce on unmodified main before touching anything:
+
+```bash
+git worktree add /tmp/mainwt origin/main --detach   # then run the same file there
+```
+
+To get a verdict anyway, run each file separately with a hard timeout and treat a `not ok` *assertion* line as the only failure signal — a file-level `not ok` with `# fail 0` is the non-exit case, not a test failure.
+
 ### 9. Report and offer the next step
 
 End with a tight summary:
@@ -280,6 +288,42 @@ This is a soft chain (suggestion, not auto-execution) because the user often wan
 
 Finally, delete `/tmp/mcp-source-<slug>` if it exists.
 
+## When another connector lands first
+
+A scaffold touches ~20 files, and **almost every one of them is a list of connectors**. So two scaffolds in flight conflict in roughly every file either touched — a rebase of this change onto a `main` that gained a connector meanwhile produced **16 conflicts** in one observed pass. Nearly all are "both sides appended an entry", but three resolve into valid-looking broken code, and one resolves wrong with no conflict at all.
+
+**The one with no conflict marker: `ALL_SCOPES.length`.** Both branches bump the same number by one, so git merges `15 → 16` and `15 → 16` into a clean `16` when the truth is **17**. Nothing flags it: no marker, no typecheck error, and the assertion still *looks* deliberate. After any rebase that brought in another connector, recount:
+
+```bash
+# Authoritative — ALL_SCOPES derives from ROUTE_SCOPE_MAP, so evaluate it
+# rather than counting lines (SLUG_SCOPE_MAP carries extra google- aliases,
+# so grepping both maps over-counts).
+node --import tsx -e "import('./src/auth/scopeMap.js').then(m => console.log(m.ALL_SCOPES.length))"
+grep -n "ALL_SCOPES.length," src/__tests__/auth/scopeMap.test.ts
+```
+
+**The three that produce valid-but-wrong code** all come from resolving a hunk that spans a structural boundary by keeping both sides:
+
+| What happened | Why it passed the obvious check |
+|---|---|
+| A hunk straddling the end of `createXSession` kept both bodies, truncating the first and leaving its fields inside the second | `tsc` caught it only because the *field types* clashed; with two similar providers it would have compiled |
+| A `} else if (provider === 'x') {` branch in `dashboard.html` lost its three trailing statements to the next branch | The page still **parsed** — a JS syntax check is not enough |
+| A `case 'x':` in a switch absorbed the following case | Typecheck caught this one |
+
+So after resolving, diff each *pre-existing* definition against the branch you rebased onto and require them to be identical:
+
+```bash
+git show origin/main:src/userSession.ts > /tmp/base.ts   # then compare the function bodies
+```
+
+Prefer resolving these by hand over any mechanical keep-both pass. A regex that joins both sides of every hunk will do the right thing for list entries and silently mangle anything else.
+
+**Generated files are not worth resolving.** `docs/MCP_TOOLS.md`, `docs/REST_ENDPOINTS.md` and `public/openapi.json` conflict heavily and carry no information the sources don't. Take either side and regenerate:
+
+```bash
+git checkout --theirs docs/MCP_TOOLS.md && node scripts/buildMcpToolsDoc.mjs
+```
+
 ## Failure modes
 
 Each of these is here because we've seen the failure mode in the wild or it produces a subtle broken state that the user won't notice immediately.
@@ -292,7 +336,7 @@ Each of these is here because we've seen the failure mode in the wild or it prod
 - **More than ~30 tools in the source** — confirm with the user before generating. This is a big diff and worth pausing for.
 - **`scopeMap.test.ts` hard-codes the scope count** — `assert.equal(ALL_SCOPES.length, N)`. Adding a scope makes it `N+1` and CI turns red on `npm test`. Typecheck passes; only the test suite catches this. Always update the test in step 5a alongside `scopeMap.ts`.
 - **`data/mcp-catalog.json` is gitignored** — the catalog edit is local-only. Don't be surprised when it's absent from the PR diff. Prod catalog is seeded through a separate path — call this out in the final report.
-- **Web+mcp combined mode wiring is separate** — the dispatch ternary in `MCP_MODE=mcp` covers per-service deployment; the combined mode has its own port constants, `.start()` calls, `createWebApp` signature, and proxy routes in `webServer.ts`. If the user runs the combined mode and you only wired the ternary, `/<slug>` silently 404s.
+- **Web+mcp combined mode wiring is separate** — the `MCP_SERVERS_BY_SLUG` table in `MCP_MODE=mcp` covers per-service deployment; the combined mode has its own port constants, `.start()` calls, `createWebApp` signature, and proxy routes in `webServer.ts`. If the user runs the combined mode and you only wired the ternary, `/<slug>` silently 404s.
 - **REST catalog entries default to `planned`** — until the actual `/api/v1/<slug>/*` routes are wired in `webServer.ts`, marking anything `live` is a lie. The doc generator honors the status: `planned` entries show `—` in `docs/MCP_TOOLS.md`'s REST column, which is correct behavior.
 - **`CLAUDE.md` tool count drifts** — it's manually maintained. Don't try to keep it exact; `docs/MCP_TOOLS.md` is authoritative and auto-regenerates.
 - **Dashboard paste-token form is a separate allowlist** — `public/dashboard.html`'s `selectMcpType` hardcodes which providers show the token-input form (step 5f). A paste-token provider missing there routes to the OAuth `/connect/<slug>` flow, which 400s with `"<slug> uses direct token authentication. Please connect via the dashboard."` The catalog, session router, and `/api/connect-token` branch can all be correct and the user still can't connect. Symptom is a *runtime* error in the browser, not a build/test failure — the scaffold looks done.
