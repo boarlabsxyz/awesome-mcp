@@ -1,0 +1,1177 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Pinecone MCP REST API",
+    "description": "REST data plane for Pinecone vector indexes: list and describe indexes, read per-namespace record counts, semantic search, reranking, and the signed-off writes. Reads exist so a shell-capable client can curl | jq bulk payloads without them crossing the LLM context window; every read also accepts format=text for the same rendering the MCP tool returns. Every request is validated with the MCP tools own Zod schemas and calls the same operations, so the two surfaces cannot drift. The connection access rules (index and namespace allow-deny, plus a read-only switch) are enforced here exactly as on the tools, and a denial answers 403 naming the rule. Two shapes to know: search is a POST because the body carries a metadata filter and rerank options, and the namespace is always in the body rather than the path, because the default Pinecone namespace is the empty string and no path segment can express it.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/pinecone/indexes": {
+      "get": {
+        "operationId": "listPineconeIndexes",
+        "summary": "List the Pinecone indexes this connection can use",
+        "description": "An API key is scoped to one Pinecone project, so indexes in other projects are not listed. Indexes denied by this connection access rules are hidden and the response reports how many. Mirrors the MCP tool `list-indexes`.",
+        "tags": [
+          "pinecone"
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ]
+            },
+            "description": "text returns exactly what the MCP tool renders, instead of JSON."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or an index this connector cannot serve.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Pinecone connection, or the connection access rules deny this index or namespace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No index by that name in this key project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createPineconeIndex",
+        "summary": "Create an index with integrated embedding",
+        "description": "Exposed with explicit sign-off: the permanent dashboard API key can create a billable index. 201 when created, 200 with created false when an index of that name already existed and was returned unchanged. Refused when the connection is read-only. The embed field_map name is fixed at creation and every later upsert must carry it. Mirrors the MCP tool `create-index-for-model`.",
+        "tags": [
+          "pinecone"
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 45,
+                    "description": "A unique name for the new index. Lowercase letters, digits and hyphens."
+                  },
+                  "cloud": {
+                    "type": "string",
+                    "enum": [
+                      "aws",
+                      "gcp",
+                      "azure"
+                    ],
+                    "default": "aws",
+                    "description": "The cloud provider for the index. Defaults to aws."
+                  },
+                  "region": {
+                    "type": "string",
+                    "default": "us-east-1",
+                    "description": "The region for the index. Common regions: aws (us-east-1, us-west-2, eu-west-1), gcp (us-central1, europe-west1), azure (eastus, westeurope). Defaults to us-east-1."
+                  },
+                  "embed": {
+                    "type": "object",
+                    "properties": {
+                      "model": {
+                        "type": "string",
+                        "enum": [
+                          "multilingual-e5-large",
+                          "llama-text-embed-v2",
+                          "pinecone-sparse-english-v0"
+                        ],
+                        "description": "Choose an embedding model:\n- \"multilingual-e5-large\" is an efficient dense embedding model trained on a mixture of multilingual datasets. It works well on messy data and short queries expected to return medium-length passages of text (1-2 paragraphs).\n- \"llama-text-embed-v2\" is a high-performance dense embedding model optimized for text retrieval and ranking. It performs well on longer passages and structured documents.\n- \"pinecone-sparse-english-v0\" is a sparse embedding model for keyword or hybrid search, estimating the lexical importance of tokens from their context."
+                      },
+                      "fieldMap": {
+                        "type": "object",
+                        "properties": {
+                          "text": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "The name of the field in your records holding the text to embed. Every record you upsert must carry this field — pick the name you will actually use, because it cannot be changed later."
+                          }
+                        },
+                        "required": [
+                          "text"
+                        ],
+                        "description": "Which field of your records gets embedded."
+                      }
+                    },
+                    "required": [
+                      "model",
+                      "fieldMap"
+                    ],
+                    "description": "The embedding model that turns your text into vectors."
+                  }
+                },
+                "required": [
+                  "name",
+                  "embed"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Applied. For create, the index already existed and was returned unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, a batch over the 1000-record cap, or an index this connector cannot write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Pinecone connection, the connection is read-only, or the access rules deny this index or namespace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No index by that name in this key project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pinecone/docs/search": {
+      "get": {
+        "operationId": "searchPineconeDocs",
+        "summary": "Search the official Pinecone documentation",
+        "description": "Reaches a public Pinecone documentation service and sends no API key, so it answers even when the connection itself is misconfigured. Access rules do not apply - it touches no index. Also takes ?format=text. Mirrors the MCP tool `search-docs`.",
+        "tags": [
+          "pinecone"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "What to look up in the Pinecone documentation."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ]
+            },
+            "description": "text returns exactly what the MCP tool renders, instead of JSON."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or an index this connector cannot serve.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Pinecone connection, or the connection access rules deny this index or namespace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No index by that name in this key project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pinecone/indexes/{indexName}": {
+      "get": {
+        "operationId": "describePineconeIndex",
+        "summary": "Describe one Pinecone index and report which kind it is",
+        "description": "Reports the embed field_map field name that upserts must populate, and whether search and upsert can work against this index at all. Also names the access rule hiding an index that is missing from the list. Mirrors the MCP tool `describe-index`.",
+        "tags": [
+          "pinecone"
+        ],
+        "parameters": [
+          {
+            "name": "indexName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Pinecone index name. Run GET /api/v1/pinecone/indexes to discover valid names."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ]
+            },
+            "description": "text returns exactly what the MCP tool renders, instead of JSON."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or an index this connector cannot serve.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Pinecone connection, or the connection access rules deny this index or namespace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No index by that name in this key project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pinecone/indexes/{indexName}/stats": {
+      "get": {
+        "operationId": "describePineconeIndexStats",
+        "summary": "Record counts per namespace for one Pinecone index",
+        "description": "The default namespace is the empty string. Recently upserted records take a few seconds to appear. Mirrors the MCP tool `describe-index-stats`.",
+        "tags": [
+          "pinecone"
+        ],
+        "parameters": [
+          {
+            "name": "indexName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Pinecone index name. Run GET /api/v1/pinecone/indexes to discover valid names."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ]
+            },
+            "description": "text returns exactly what the MCP tool renders, instead of JSON."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or an index this connector cannot serve.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Pinecone connection, or the connection access rules deny this index or namespace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No index by that name in this key project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pinecone/indexes/{indexName}/search": {
+      "post": {
+        "operationId": "searchPineconeRecords",
+        "summary": "Semantic search over one Pinecone index",
+        "description": "A read despite the POST: the body carries the namespace, a metadata filter and rerank options that do not fit a query string. Pass namespace as an empty string for the default namespace. Works only against integrated-embedding indexes; any other kind is refused with the evidence rather than an upstream 400. Also takes ?format=text. Mirrors the MCP tool `search-records`.",
+        "tags": [
+          "pinecone"
+        ],
+        "parameters": [
+          {
+            "name": "indexName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Pinecone index name. Run GET /api/v1/pinecone/indexes to discover valid names."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ]
+            },
+            "description": "text returns exactly what the MCP tool renders, instead of JSON."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "namespace": {
+                    "type": "string",
+                    "description": "The namespace to use. Pass an empty string \"\" for the default namespace. describe-index-stats lists the namespaces an index actually has."
+                  },
+                  "query": {
+                    "type": "object",
+                    "properties": {
+                      "topK": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10000,
+                        "description": "The number of results to return. 10 is a reasonable default; use a larger value (e.g. 50) when reranking, so the reranker has more candidates to choose from. Very large values increase latency and response size."
+                      },
+                      "inputs": {
+                        "type": "object",
+                        "properties": {
+                          "text": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "The text to search for."
+                          }
+                        },
+                        "required": [
+                          "text"
+                        ]
+                      },
+                      "filter": {
+                        "type": "object",
+                        "additionalProperties": {},
+                        "description": "A filter to narrow the results, using the syntax of MongoDB query operators: $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists, $and, $or. The records must actually carry the fields you filter on — run a search without a filter first and look at the \"fields\" of the hits. Filtering on a field the records do not have returns nothing."
+                      }
+                    },
+                    "required": [
+                      "topK",
+                      "inputs"
+                    ],
+                    "description": "A query to search for records."
+                  },
+                  "rerank": {
+                    "type": "object",
+                    "properties": {
+                      "model": {
+                        "type": "string",
+                        "enum": [
+                          "cohere-rerank-3.5",
+                          "bge-reranker-v2-m3",
+                          "pinecone-rerank-v0"
+                        ],
+                        "description": "Choose a reranking model:\n- \"cohere-rerank-3.5\" is Cohere's leading reranking model, balancing performance and latency for a wide range of enterprise search applications.\n- \"bge-reranker-v2-m3\" is a high-performance, multilingual reranking model that works well on messy data and short queries expected to return medium-length passages of text (1-2 paragraphs).\n- \"pinecone-rerank-v0\" is a state of the art reranking model that out-performs competitors on widely accepted benchmarks. It can handle chunks up to 512 tokens (1-2 paragraphs)."
+                      },
+                      "topN": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "The number of results to return after reranking. Must be less than or equal to query.topK."
+                      },
+                      "rankFields": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "description": "The fields to rerank on. Include the field named by the index's embed.field_map (describe-index shows it). Every returned record must carry each listed field or Pinecone rejects the request. \"bge-reranker-v2-m3\" and \"pinecone-rerank-v0\" support only one field; \"cohere-rerank-3.5\" supports several."
+                      },
+                      "query": {
+                        "type": "string",
+                        "description": "An optional separate query to rerank against. Defaults to the search query text."
+                      }
+                    },
+                    "required": [
+                      "model",
+                      "rankFields"
+                    ],
+                    "description": "Optional reranking of the initial results. Use a query.topK larger than you need, then rerank down to topN — that is what makes reranking worth the extra call."
+                  }
+                },
+                "required": [
+                  "namespace",
+                  "query"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or an index this connector cannot serve.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Pinecone connection, or the connection access rules deny this index or namespace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No index by that name in this key project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pinecone/search/cascading": {
+      "post": {
+        "operationId": "cascadingPineconeSearch",
+        "summary": "Search several indexes and return one fused ranking",
+        "description": "A read despite the POST. Reranking is required - the fusion is the point. If the connection access rules deny ANY named index or namespace the whole call is refused with 403, because dropping one source silently changes the order and scores of the rest and a ranking cannot be labelled partial. An upstream failure is different: it is reported with partial true and the failures named. Also takes ?format=text. Mirrors the MCP tool `cascading-search`.",
+        "tags": [
+          "pinecone"
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ]
+            },
+            "description": "text returns exactly what the MCP tool renders, instead of JSON."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "indexes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "The index name. Run list-indexes first if you do not know it."
+                        },
+                        "namespace": {
+                          "type": "string",
+                          "description": "The namespace to use. Pass an empty string \"\" for the default namespace. describe-index-stats lists the namespaces an index actually has."
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "namespace"
+                      ]
+                    },
+                    "minItems": 1,
+                    "description": "The indexes to search across. Records in each should share a common schema so one ranking makes sense."
+                  },
+                  "query": {
+                    "type": "object",
+                    "properties": {
+                      "topK": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10000,
+                        "description": "The number of results to return. 10 is a reasonable default; use a larger value (e.g. 50) when reranking, so the reranker has more candidates to choose from. Very large values increase latency and response size."
+                      },
+                      "inputs": {
+                        "type": "object",
+                        "properties": {
+                          "text": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "The text to search for."
+                          }
+                        },
+                        "required": [
+                          "text"
+                        ]
+                      },
+                      "filter": {
+                        "type": "object",
+                        "additionalProperties": {},
+                        "description": "A filter to narrow the results, using the syntax of MongoDB query operators: $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists, $and, $or. The records must actually carry the fields you filter on — run a search without a filter first and look at the \"fields\" of the hits. Filtering on a field the records do not have returns nothing."
+                      }
+                    },
+                    "required": [
+                      "topK",
+                      "inputs"
+                    ],
+                    "description": "A query to search for records."
+                  },
+                  "rerank": {
+                    "type": "object",
+                    "properties": {
+                      "model": {
+                        "type": "string",
+                        "enum": [
+                          "cohere-rerank-3.5",
+                          "bge-reranker-v2-m3",
+                          "pinecone-rerank-v0"
+                        ],
+                        "description": "Choose a reranking model:\n- \"cohere-rerank-3.5\" is Cohere's leading reranking model, balancing performance and latency for a wide range of enterprise search applications.\n- \"bge-reranker-v2-m3\" is a high-performance, multilingual reranking model that works well on messy data and short queries expected to return medium-length passages of text (1-2 paragraphs).\n- \"pinecone-rerank-v0\" is a state of the art reranking model that out-performs competitors on widely accepted benchmarks. It can handle chunks up to 512 tokens (1-2 paragraphs)."
+                      },
+                      "topN": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "The number of results to return after reranking. Must be less than or equal to query.topK."
+                      },
+                      "rankFields": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "description": "The fields to rerank on. Include the field named by the index's embed.field_map (describe-index shows it). Every returned record must carry each listed field or Pinecone rejects the request. \"bge-reranker-v2-m3\" and \"pinecone-rerank-v0\" support only one field; \"cohere-rerank-3.5\" supports several."
+                      },
+                      "query": {
+                        "type": "string",
+                        "description": "An optional separate query to rerank against. Defaults to the search query text."
+                      }
+                    },
+                    "required": [
+                      "model",
+                      "rankFields"
+                    ],
+                    "description": "How to rerank the combined results. Required for this tool — the whole point is one fused ranking across the indexes."
+                  }
+                },
+                "required": [
+                  "indexes",
+                  "query",
+                  "rerank"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or an index this connector cannot serve.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Pinecone connection, or the connection access rules deny this index or namespace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No index by that name in this key project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pinecone/rerank": {
+      "post": {
+        "operationId": "rerankPineconeDocuments",
+        "summary": "Rerank documents you supply against a query",
+        "description": "A read despite the POST, and the large-body case: the caller supplies the documents. Touches no index, so index and namespace rules do not apply. Also takes ?format=text. Mirrors the MCP tool `rerank-documents`.",
+        "tags": [
+          "pinecone"
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ]
+            },
+            "description": "text returns exactly what the MCP tool renders, instead of JSON."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "enum": [
+                      "cohere-rerank-3.5",
+                      "bge-reranker-v2-m3",
+                      "pinecone-rerank-v0"
+                    ],
+                    "description": "Choose a reranking model:\n- \"cohere-rerank-3.5\" is Cohere's leading reranking model, balancing performance and latency for a wide range of enterprise search applications.\n- \"bge-reranker-v2-m3\" is a high-performance, multilingual reranking model that works well on messy data and short queries expected to return medium-length passages of text (1-2 paragraphs).\n- \"pinecone-rerank-v0\" is a state of the art reranking model that out-performs competitors on widely accepted benchmarks. It can handle chunks up to 512 tokens (1-2 paragraphs)."
+                  },
+                  "query": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The query to rerank the documents against."
+                  },
+                  "documents": {
+                    "type": "array",
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    },
+                    "minItems": 1,
+                    "description": "The documents to rerank: either plain strings, or records whose values are all strings. Use this for documents that did NOT come from a Pinecone search; to rerank a single index's own results, use the rerank parameter of search-records instead."
+                  },
+                  "options": {
+                    "type": "object",
+                    "properties": {
+                      "topN": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "How many results to return after reranking."
+                      },
+                      "rankFields": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Which fields to rank on. Only meaningful when the documents are records. \"bge-reranker-v2-m3\" and \"pinecone-rerank-v0\" support one field; \"cohere-rerank-3.5\" supports several."
+                      }
+                    },
+                    "description": "Optional reranking controls. Omit to return every document, ranked."
+                  }
+                },
+                "required": [
+                  "model",
+                  "query",
+                  "documents"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or an index this connector cannot serve.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Pinecone connection, or the connection access rules deny this index or namespace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No index by that name in this key project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pinecone/indexes/{indexName}/upsert": {
+      "post": {
+        "operationId": "upsertPineconeRecords",
+        "summary": "Insert or update records in an index",
+        "description": "DESTRUCTIVE - a record whose _id already exists is OVERWRITTEN and there is no undo. Exposed with explicit sign-off: a curl has no confirmation affordance and the permanent dashboard API key is accepted here. It is also the bulk-load path the data plane exists for, which is why withholding it would cost more than it saves. Body limit 5mb, at most 1000 records; a larger batch is refused rather than split, because an upsert is not atomic across the body. Pass namespace as an empty string for the default namespace. Answers accepted, not indexed - embedding is asynchronous. Mirrors the MCP tool `upsert-records`.",
+        "tags": [
+          "pinecone"
+        ],
+        "parameters": [
+          {
+            "name": "indexName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Pinecone index name. Run GET /api/v1/pinecone/indexes to discover valid names."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "namespace": {
+                    "type": "string",
+                    "description": "The namespace to use. Pass an empty string \"\" for the default namespace. describe-index-stats lists the namespaces an index actually has."
+                  },
+                  "records": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": {},
+                      "description": "A record to upsert. Must have an \"_id\" field and the text field named by the index's embed.field_map (describe-index shows it). All other fields are stored as metadata."
+                    },
+                    "minItems": 1,
+                    "maxItems": 1000,
+                    "description": "The records to upsert, at most 1000 per call. Use a consistent shape for every record in an index. A record whose \"_id\" already exists is overwritten."
+                  }
+                },
+                "required": [
+                  "namespace",
+                  "records"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Applied. For create, the index already existed and was returned unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, a batch over the 1000-record cap, or an index this connector cannot write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Pinecone connection, the connection is read-only, or the access rules deny this index or namespace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No index by that name in this key project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A 5-minute bearer from the mintRestBearerForCurl MCP tool, or the dashboard API key."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "issues": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      }
+    }
+  }
+}

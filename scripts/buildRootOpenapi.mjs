@@ -38,6 +38,7 @@ const SERVICE_PREFIX = {
   'openapi-redmine.json': 'Redmine',
   'openapi-outline.json': 'Outline',
   'openapi-github.json': 'GitHub',
+  'openapi-pinecone.json': 'Pinecone',
 };
 
 const SHARED_SCHEMAS = new Set(['Error']);

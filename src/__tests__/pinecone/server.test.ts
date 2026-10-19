@@ -35,11 +35,33 @@ const EXPECTED_TOOLS = [
   'upsert-records',
 ];
 
+/**
+ * The two shared tools every service with a `live` REST entry must register.
+ * Not Pinecone's own, so they are excluded from the nine-tool check and
+ * asserted separately.
+ */
+const SHARED_TOOLS = ['mintRestBearerForCurl', 'listRestEndpoints'];
+
+/** This connector's own tools, excluding the two shared REST helpers. */
+function pineconeTools(): Array<[string, any]> {
+  return [...toolMap.entries()].filter(([n]) => !SHARED_TOOLS.includes(n));
+}
+
 describe('pinecone server registration', () => {
   it('registers exactly the nine upstream tool names', () => {
     // Names match pinecone-io/pinecone-mcp so a model that has used one works
-    // with the other; a rename here silently breaks that.
-    assert.deepEqual([...toolMap.keys()].sort(), [...EXPECTED_TOOLS].sort());
+    // with the other; a rename here silently breaks that. Anything registered
+    // beyond these and the two shared tools is caught here too.
+    const own = [...toolMap.keys()].filter(n => !SHARED_TOOLS.includes(n));
+    assert.deepEqual(own.sort(), [...EXPECTED_TOOLS].sort());
+  });
+
+  it('registers the two shared REST tools, which live catalog entries require', () => {
+    // Without them a caller cannot mint a short-lived bearer or discover the
+    // endpoints, and is pushed onto the permanent dashboard API key instead.
+    for (const name of SHARED_TOOLS) {
+      assert.ok(toolMap.has(name), `${name} must be registered once a REST entry is live`);
+    }
   });
 
   it('marks the two write tools as writes and everything else as a read', () => {
@@ -57,7 +79,7 @@ describe('pinecone server registration', () => {
   it('does not port the upstream analytics parameters', () => {
     // llm_provider / llm_model attribute usage to a model vendor upstream and
     // would be prompt noise on every tool here.
-    for (const [name, tool] of toolMap) {
+    for (const [name, tool] of pineconeTools()) {
       const keys = Object.keys(tool.parameters?.shape ?? {});
       assert.ok(!keys.includes('llm_provider'), `${name} should not take llm_provider`);
       assert.ok(!keys.includes('llm_model'), `${name} should not take llm_model`);
@@ -65,13 +87,13 @@ describe('pinecone server registration', () => {
   });
 
   it('gives every tool a description', () => {
-    for (const [name, tool] of toolMap) {
+    for (const [name, tool] of pineconeTools()) {
       assert.ok(tool.description && tool.description.length > 40, `${name} needs a real description`);
     }
   });
 
   it('describes every parameter, so a model is never guessing', () => {
-    for (const [name, tool] of toolMap) {
+    for (const [name, tool] of pineconeTools()) {
       const shape = tool.parameters?.shape ?? {};
       for (const [field, schema] of Object.entries<any>(shape)) {
         // A .describe() may sit on the outer wrapper or on the inner type,

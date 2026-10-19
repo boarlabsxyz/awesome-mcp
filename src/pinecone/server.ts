@@ -29,6 +29,8 @@
 import { FastMCP } from 'fastmcp';
 
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import type { UserSession } from '../userSession.js';
 
 import { type PineconeRulesState } from './accessRules.js';
@@ -75,6 +77,13 @@ export const pineconeServer = new FastMCP<UserSession>({
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'pinecone'),
 });
+
+// Required once any of this service's REST catalog entries is `live`:
+// without them a caller has no way to mint a short-lived bearer or discover
+// the endpoints, and is pushed onto the permanent dashboard API key instead.
+// src/__tests__/sharedToolsRegistration.test.ts enforces this.
+registerMintRestBearerForCurl(pineconeServer);
+registerListRestEndpoints(pineconeServer);
 
 /**
  * Re-read access rules from the database on each call.
