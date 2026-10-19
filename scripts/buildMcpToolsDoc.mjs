@@ -44,6 +44,7 @@ const SERVICES = [
   ['src/redmine/server.ts',               'Redmine',               'redmine'],
   ['src/browserbase/server.ts',           'Browserbase',           'browserbase'],
   ['src/github/server.ts',                'GitHub',                'github'],
+  ['src/pinecone/server.ts',              'Pinecone',              'pinecone'],
 ];
 
 // ---------------------------------------------------------------------------

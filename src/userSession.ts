@@ -109,6 +109,16 @@ export interface UserSession {
   githubOauthClientSecret?: string;
   /** Connection instance id, so a refresh can persist the rotated tokens back to the store. */
   githubInstanceId?: string;
+  /**
+   * Pinecone API key. There is deliberately no pineconeBaseUrl — Pinecone is
+   * SaaS with one control-plane host, so a configurable base URL would only
+   * ever be a place to send someone else's credential. The per-index data
+   * plane hosts are different: they come from Pinecone's own responses and are
+   * validated in src/pinecone/apiHelpers.ts before a request is sent to one.
+   */
+  pineconeAccessToken?: string;
+  /** Connection instance id, so per-call access rules can be re-read from the store. */
+  pineconeInstanceId?: string;
 }
 
 // Cache sessions to avoid recreating clients per request
@@ -703,6 +713,52 @@ export function createGitHubSession(
     githubOauthClientSecret: process.env.GITHUB_CLIENT_SECRET || undefined,
     githubInstanceId: connection.instanceId,
     // Null placeholders for Google clients (GitHub MCP won't use them)
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
+  };
+
+  mcpSessionCache.set(cacheKey, session);
+  return session;
+}
+
+/**
+ * Create a user session for Pinecone connections.
+ *
+ * A pasted API key and nothing else: Pinecone has no OAuth and the key does
+ * not expire, so there is no refresh plumbing here — same shape as
+ * createBrowserbaseSession. The instance id is carried for the same reason it
+ * is there, with one extra consequence: one of Pinecone's access rules is a
+ * WRITE GATE, so a session-cached copy of the rules would mean a write the
+ * user thought they had switched off. src/pinecone/server.ts re-reads them per
+ * call rather than storing them here.
+ */
+export function createPineconeSession(
+  user: UserRecord,
+  connection: McpConnection,
+): UserSession {
+  const providerTokens = connection.providerTokens as { access_token?: string } | undefined;
+  const accessToken = providerTokens?.access_token;
+  if (!accessToken) {
+    throw new Error(`Pinecone API key missing for connection ${connection.instanceId}. Please reconnect.`);
+  }
+
+  const cacheKey = `${user.apiKey}:${connection.instanceId}`;
+  const cached = cachedSessionFor(cacheKey, accessToken, s => s.pineconeAccessToken);
+  if (cached) return cached;
+
+  const session: UserSession = {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: connection.mcpSlug,
+    pineconeAccessToken: accessToken,
+    pineconeInstanceId: connection.instanceId,
+    // Null placeholders for Google clients (Pinecone MCP won't use them)
     googleDocs: null as any,
     googleDrive: null as any,
     googleSheets: null as any,

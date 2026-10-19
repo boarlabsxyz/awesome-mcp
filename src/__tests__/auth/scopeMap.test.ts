@@ -104,6 +104,14 @@ describe('scopeMap', () => {
       assert.equal(getRequiredScope('/github-sse'), 'mcp:github');
     });
 
+    it('should return mcp:pinecone for /pinecone', () => {
+      assert.equal(getRequiredScope('/pinecone'), 'mcp:pinecone');
+    });
+
+    it('should return mcp:pinecone for /pinecone-sse', () => {
+      assert.equal(getRequiredScope('/pinecone-sse'), 'mcp:pinecone');
+    });
+
     it('should return null for unknown routes', () => {
       assert.equal(getRequiredScope('/health'), null);
       assert.equal(getRequiredScope('/api/config'), null);
@@ -117,8 +125,8 @@ describe('scopeMap', () => {
   });
 
   describe('ALL_SCOPES', () => {
-    it('should contain all 16 scopes', () => {
-      assert.equal(ALL_SCOPES.length, 16);
+    it('should contain all 17 scopes', () => {
+      assert.equal(ALL_SCOPES.length, 17);
       assert.ok(ALL_SCOPES.includes('mcp:docs'));
       assert.ok(ALL_SCOPES.includes('mcp:calendar'));
       assert.ok(ALL_SCOPES.includes('mcp:sheets'));
@@ -135,6 +143,7 @@ describe('scopeMap', () => {
       assert.ok(ALL_SCOPES.includes('mcp:redmine'));
       assert.ok(ALL_SCOPES.includes('mcp:browserbase'));
       assert.ok(ALL_SCOPES.includes('mcp:github'));
+      assert.ok(ALL_SCOPES.includes('mcp:pinecone'));
     });
   });
 
@@ -156,6 +165,7 @@ describe('scopeMap', () => {
       assert.deepEqual(getScopesForSlug('redmine'), ['mcp:redmine']);
       assert.deepEqual(getScopesForSlug('browserbase'), ['mcp:browserbase']);
       assert.deepEqual(getScopesForSlug('github'), ['mcp:github']);
+      assert.deepEqual(getScopesForSlug('pinecone'), ['mcp:pinecone']);
     });
 
     it('should return all scopes for unknown slugs', () => {

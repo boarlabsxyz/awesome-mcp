@@ -26,7 +26,8 @@ export type RestService =
   | 'hubspot'
   | 'redmine'
   | 'browserbase'
-  | 'github';
+  | 'github'
+  | 'pinecone';
 
 /**
  * Which `src/<dir>/server.ts` implements each service's MCP tools.
@@ -54,6 +55,7 @@ export const SERVICE_SERVER_PATH: Record<RestService, string> = {
   redmine: 'src/redmine/server.ts',
   browserbase: 'src/browserbase/server.ts',
   github: 'src/github/server.ts',
+  pinecone: 'src/pinecone/server.ts',
 };
 
 export interface RestEndpoint {
@@ -426,6 +428,17 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'github', method: 'POST', path: '/api/v1/github/repos/{owner}/{repo}/push', summary: 'Commit several files to a branch in one commit', mcpToolName: 'pushFiles', openapiOperationId: 'pushGitHubFiles', status: 'live', notes: 'Exposed with explicit sign-off: the permanent dashboard API key can commit code to any repository the account can write to. Body limit 5mb. Fast-forward only: 409 when the branch moved meanwhile, and nothing is pushed. 201 when committed, 200 with pushed false when nothing changed. Cannot write .github/workflows.' },
   { service: 'github', method: 'POST', path: '/api/v1/github/repos/{owner}/{repo}/contents/{path}', summary: 'Create or replace one file as a commit', mcpToolName: 'createOrUpdateFile', openapiOperationId: 'putGitHubFileContents', status: 'live', notes: 'Exposed with explicit sign-off: the permanent dashboard API key can commit code. Body limit 5mb. Pass sha (from the GET) to get 409 instead of overwriting a file that changed. 201 created, 200 updated.' },
   { service: 'github', method: 'POST', path: '/api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/merge', summary: 'Merge a pull request', mcpToolName: 'mergePullRequest', openapiOperationId: 'mergeGitHubPullRequest', status: 'live', notes: 'Exposed with explicit sign-off: effectively irreversible. Pass expectedHeadSha to refuse a merge of commits pushed after review. 200 when merged, 409 when GitHub answered merged false, 405 when not mergeable.' },
+  // Pinecone. Planned, not live: the handlers land in their own pull request,
+  // and a catalog entry marked live before its route exists advertises a 404.
+  //
+  // Reads only here. The writes - create-index-for-model and upsert-records -
+  // are left for that pass to weigh under its own gate, because this plane
+  // accepts the permanent dashboard API key and upsert-records overwrites a
+  // record whose id already exists.
+  { service: 'pinecone', method: 'GET', path: '/api/v1/pinecone/indexes', summary: 'List the Pinecone indexes this connection can use', mcpToolName: 'list-indexes', openapiOperationId: 'listPineconeIndexes', status: 'planned', notes: 'An API key is scoped to one Pinecone project, so indexes in other projects are not listed. Indexes denied by this connection access rules are hidden and the response reports how many.' },
+  { service: 'pinecone', method: 'GET', path: '/api/v1/pinecone/indexes/{indexName}', summary: 'Describe one Pinecone index and report which kind it is', mcpToolName: 'describe-index', openapiOperationId: 'describePineconeIndex', status: 'planned', notes: 'Reports the embed field_map field name that upserts must populate, and whether search and upsert can work against this index at all. Also names the access rule hiding an index that is missing from the list.' },
+  { service: 'pinecone', method: 'GET', path: '/api/v1/pinecone/indexes/{indexName}/stats', summary: 'Record counts per namespace for one Pinecone index', mcpToolName: 'describe-index-stats', openapiOperationId: 'describePineconeIndexStats', status: 'planned', notes: 'The default namespace is the empty string. Recently upserted records take a few seconds to appear.' },
+  { service: 'pinecone', method: 'POST', path: '/api/v1/pinecone/indexes/{indexName}/search', summary: 'Semantic search over one Pinecone index', mcpToolName: 'search-records', openapiOperationId: 'searchPineconeRecords', status: 'planned', notes: 'A read despite the POST: the query body carries a filter and rerank options that do not fit a query string. Works only against integrated-embedding indexes.' },
 ];
 
 export function endpointsForTool(mcpToolName: string): RestEndpoint[] {

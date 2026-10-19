@@ -350,9 +350,18 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `createOrUpdateFile` | `POST /api/v1/github/repos/{owner}/{repo}/contents/{path}` | live | Create or replace one file as a commit — _Exposed with explicit sign-off: the permanent dashboard API key can commit code. Body limit 5mb. Pass sha (from the GET) to get 409 instead of overwriting a file that changed. 201 created, 200 updated._ |
 | `mergePullRequest` | `POST /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/merge` | live | Merge a pull request — _Exposed with explicit sign-off: effectively irreversible. Pass expectedHeadSha to refuse a merge of commits pushed after review. 200 when merged, 409 when GitHub answered merged false, 405 when not mergeable._ |
 
+### Pinecone (`pinecone`)
+
+| MCP tool | REST endpoint | Status | Summary |
+|---|---|---|---|
+| `list-indexes` | `GET /api/v1/pinecone/indexes` | planned | List the Pinecone indexes this connection can use — _An API key is scoped to one Pinecone project, so indexes in other projects are not listed. Indexes denied by this connection access rules are hidden and the response reports how many._ |
+| `describe-index` | `GET /api/v1/pinecone/indexes/{indexName}` | planned | Describe one Pinecone index and report which kind it is — _Reports the embed field_map field name that upserts must populate, and whether search and upsert can work against this index at all. Also names the access rule hiding an index that is missing from the list._ |
+| `describe-index-stats` | `GET /api/v1/pinecone/indexes/{indexName}/stats` | planned | Record counts per namespace for one Pinecone index — _The default namespace is the empty string. Recently upserted records take a few seconds to appear._ |
+| `search-records` | `POST /api/v1/pinecone/indexes/{indexName}/search` | planned | Semantic search over one Pinecone index — _A read despite the POST: the query body carries a filter and rerank options that do not fit a query string. Works only against integrated-embedding indexes._ |
+
 ## Status legend
 
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 250 endpoints.
+Catalog size: 254 endpoints.
