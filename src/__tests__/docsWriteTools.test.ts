@@ -99,6 +99,9 @@ describe('google-docs server registers its write tools', () => {
       'insertTable', 'insertPageBreak', 'insertImageFromUrl', 'insertLocalImage', 'formatMatchingText',
       'findAndReplace', 'addComment', 'replyToComment', 'resolveComment', 'deleteComment',
       'importDocx', 'batchUpdateDoc', 'importToGoogleDoc', 'exportDocToPdf',
+      // The Docs-API comment and suggestion set.
+      'listComments', 'getComment', 'listSuggestions', 'reopenComment', 'assignComment',
+      'updateCommentPost', 'deleteCommentReply', 'acceptSuggestion', 'rejectSuggestion', 'deleteSuggestion',
     ]) {
       assert.ok(toolMap.has(name), `${name} was not registered`);
     }
@@ -107,6 +110,16 @@ describe('google-docs server registers its write tools', () => {
   it('keeps the destructive annotations that MCP clients prompt on', () => {
     assert.equal(toolMap.get('deleteRange')!.annotations.destructiveHint, true);
     assert.equal(toolMap.get('deleteComment')!.annotations.destructiveHint, true);
+    // Everything that discards text someone wrote: a reply, a post's previous
+    // wording, a resolved thread, a proposed edit.
+    for (const name of ['deleteCommentReply', 'updateCommentPost', 'resolveComment', 'rejectSuggestion', 'deleteSuggestion']) {
+      assert.equal(toolMap.get(name)!.annotations.destructiveHint, true, `${name} must be flagged destructive`);
+    }
+    // Reopening and reassigning change state but destroy nothing.
+    for (const name of ['reopenComment', 'assignComment', 'acceptSuggestion']) {
+      assert.equal(toolMap.get(name)!.annotations.destructiveHint, undefined, `${name} is not a delete`);
+      assert.equal(toolMap.get(name)!.annotations.readOnlyHint, false);
+    }
   });
 });
 
@@ -305,71 +318,250 @@ describe('docs image tools', () => {
   });
 });
 
-describe('docs comment tools', () => {
-  it('addComment returns the new comment id', async () => {
-    assert.match(
-      await call('addComment', { documentId: 'd1', startIndex: 7, endIndex: 12, commentText: 'Nice' }),
-      /Comment ID: cmt-9/,
-    );
-  });
+describe('docs comment and suggestion tools', () => {
+  /** Docs client whose batchUpdate answers `data` and records the request. */
+  const commentDocs = (data: any = { commentUpdateState: 'ALL_SAVED', replies: [{}] }) =>
+    mkDocs({ documents: { batchUpdate: mock.fn(async () => ({ data })) } });
 
-  it('addComment wraps a failure', async () => {
-    const drive = mkDrive({ comments: { create: mock.fn(async () => { throw mkErr(500); }) } });
-    await assert.rejects(
-      () => call('addComment', { documentId: 'd1', startIndex: 7, endIndex: 12, commentText: 'Nice' }, session(mkDocs(), drive)),
-      (err: any) => err instanceof UserError && /Failed to add comment/.test(err.message),
-    );
-  });
-
-  it('replyToComment returns the reply id', async () => {
-    assert.match(await call('replyToComment', { documentId: 'd1', commentId: 'c1', replyText: 'ok' }), /Reply ID: rep-9/);
-  });
-
-  it('replyToComment wraps a failure', async () => {
-    const drive = mkDrive();
-    drive.replies.create = mock.fn(async () => { throw mkErr(404); });
-    await assert.rejects(
-      () => call('replyToComment', { documentId: 'd1', commentId: 'c1', replyText: 'ok' }, session(mkDocs(), drive)),
-      (err: any) => err instanceof UserError && /Failed to add reply/.test(err.message),
-    );
-  });
-
-  it('resolveComment distinguishes a flag that stuck from one that did not', async () => {
-    assert.match(await call('resolveComment', { documentId: 'd1', commentId: 'c1' }), /has been marked as resolved/);
-
-    let n = 0;
-    const drive = mkDrive({
-      comments: {
-        get: mock.fn(async () => ({ data: n++ === 0 ? { content: 'Nice' } : { resolved: false } })),
-        update: mock.fn(async () => ({ data: {} })),
+  /** A document read carrying one comment thread and one suggestion. */
+  const threadsDocs = () => mkDocs({ documents: {
+    get: mock.fn(async () => ({
+      data: {
+        documentId: 'd1',
+        comments: [{
+          commentId: 'cmt-9',
+          anchorId: 'a-1',
+          status: 'OPEN',
+          plainTextQuote: 'brave',
+          headPost: { postId: 'p-1', content: 'Nice', author: { displayName: 'Ada' }, createTime: '2026-10-19T10:00:00Z' },
+          replies: [{ postId: 'p-2', content: 'Agreed', author: { displayName: 'Bob' }, createTime: '2026-10-19T11:00:00Z' }],
+        }],
+        suggestions: [{
+          suggestionId: 'sug-1',
+          status: 'OPEN',
+          summaryText: 'Insert "very"',
+          headPost: { postId: 'p-3', content: 'Suggest wording', author: { displayName: 'Cleo' } },
+        }],
+        tabs: [{ tabProperties: { tabId: 't.0' }, documentTab: { commentAnchors: { 'a-1': { ranges: [{ startIndex: 7, endIndex: 12 }] } } } }],
       },
+    })),
+  } });
+
+  describe('reads', () => {
+    it('listComments renders the range, status and replies', async () => {
+      const out = await call('listComments', { documentId: 'd1' }, session(threadsDocs()));
+      assert.match(out, /Found 1 comment thread \(1 open, 0 resolved\)/);
+      assert.match(out, /Anchored to: "brave"/);
+      assert.match(out, /Range: 7-12 \(tab t\.0\)/);
+      assert.match(out, /Comment ID: cmt-9/);
+      assert.match(out, /Agreed/);
     });
-    const out = await call('resolveComment', { documentId: 'd1', commentId: 'c1' }, session(mkDocs(), drive));
-    // The Drive API accepts this on a Google Doc and often does not persist it, so
-    // the tool must not claim success it did not observe.
-    assert.match(out, /may not persist/);
-  });
 
-  it('resolveComment surfaces the API error code when it fails', async () => {
-    const drive = mkDrive({
-      comments: { get: mock.fn(async () => { const e: any = new Error('nope'); e.response = { data: { error: { message: 'Insufficient permission', code: 403 } } }; throw e; }) },
+    it('listComments sends the three parameters Google requires together', async () => {
+      const docs = threadsDocs();
+      await call('listComments', { documentId: 'd1' }, session(docs));
+      const sent = docs.documents.get.mock.calls[0].arguments[0];
+      // Any one of these missing is a 400 or a silently comment-less read.
+      assert.equal(sent.commentsViewMode, 'COMMENTS_VIEW_MODE_INCLUDED');
+      assert.equal(sent.suggestionsViewMode, 'SUGGESTIONS_INLINE');
+      assert.equal(sent.includeTabsContent, true);
     });
-    await assert.rejects(
-      () => call('resolveComment', { documentId: 'd1', commentId: 'c1' }, session(mkDocs(), drive)),
-      (err: any) => err instanceof UserError && /Insufficient permission/.test(err.message) && /403/.test(err.message),
-    );
+
+    it('listComments reports an empty document as having none', async () => {
+      const docs = mkDocs({ documents: { get: mock.fn(async () => ({ data: { comments: [] } })) } });
+      assert.match(await call('listComments', { documentId: 'd1' }, session(docs)), /No comments found/);
+    });
+
+    it('getComment finds one thread by id', async () => {
+      const out = await call('getComment', { documentId: 'd1', commentId: 'cmt-9' }, session(threadsDocs()));
+      assert.match(out, /Comment ID: cmt-9/);
+      assert.match(out, /Ada/);
+    });
+
+    it('getComment reports a miss as a lookup, and warns about the Drive id space', async () => {
+      await assert.rejects(
+        () => call('getComment', { documentId: 'd1', commentId: 'nope' }, session(threadsDocs())),
+        (err: any) => {
+          assert.ok(err instanceof UserError);
+          assert.match(err.message, /No comment thread with ID nope/);
+          // The ids changed space in this migration, which is the first thing a
+          // caller with a cached id needs told.
+          assert.match(err.message, /Drive API are a different id space/);
+          return true;
+        },
+      );
+    });
+
+    it('listSuggestions renders the proposed change', async () => {
+      const out = await call('listSuggestions', { documentId: 'd1' }, session(threadsDocs()));
+      assert.match(out, /Found 1 suggestion/);
+      assert.match(out, /Insert "very"/);
+      assert.match(out, /Suggestion ID: sug-1/);
+    });
+
+    it('listComments wraps a failure', async () => {
+      const docs = mkDocs({ documents: { get: mock.fn(async () => { throw mkErr(404); }) } });
+      await assert.rejects(
+        () => call('listComments', { documentId: 'd1' }, session(docs)),
+        (err: any) => err instanceof UserError && /Failed to list comments/.test(err.message),
+      );
+    });
   });
 
-  it('deleteComment confirms the id it deleted', async () => {
-    assert.match(await call('deleteComment', { documentId: 'd1', commentId: 'c1' }), /c1 has been deleted/);
+  describe('writes', () => {
+    it('addComment reports the anchor it created', async () => {
+      const docs = commentDocs({
+        commentUpdateState: 'ALL_SAVED',
+        replies: [{ insertComment: { commentThread: { commentId: 'cmt-9', plainTextQuote: 'brave', status: 'OPEN', headPost: {} } } }],
+      });
+      const out = await call('addComment', { documentId: 'd1', startIndex: 7, endIndex: 12, commentText: 'Nice' }, session(docs));
+      assert.match(out, /Comment ID: cmt-9/);
+      assert.match(out, /anchored to 7-12/);
+      assert.match(out, /Anchored to: "brave"/);
+    });
+
+    it('addComment wraps a failure', async () => {
+      const docs = mkDocs({ documents: { batchUpdate: mock.fn(async () => { throw mkErr(500); }) } });
+      await assert.rejects(
+        () => call('addComment', { documentId: 'd1', startIndex: 7, endIndex: 12, commentText: 'Nice' }, session(docs)),
+        (err: any) => err instanceof UserError && /Failed to add comment/.test(err.message),
+      );
+    });
+
+    it('replyToComment reports the post id', async () => {
+      const docs = commentDocs({ commentUpdateState: 'ALL_SAVED', replies: [{ addCommentReply: { post: { postId: 'rep-9' } } }] });
+      assert.match(
+        await call('replyToComment', { documentId: 'd1', commentId: 'c1', replyText: 'ok' }, session(docs)),
+        /Post ID: rep-9/,
+      );
+    });
+
+    it('replyToComment wraps an unexpected failure', async () => {
+      const docs = mkDocs({ documents: { batchUpdate: mock.fn(async () => { throw mkErr(500); }) } });
+      await assert.rejects(
+        () => call('replyToComment', { documentId: 'd1', commentId: 'c1', replyText: 'ok' }, session(docs)),
+        (err: any) => err instanceof UserError && /Failed to add reply/.test(err.message),
+      );
+    });
+
+    it('lets a 404 keep Google own message instead of wrapping it generically', async () => {
+      const docs = mkDocs({ documents: { batchUpdate: mock.fn(async () => { throw mkErr(404); }) } });
+      await assert.rejects(
+        () => call('replyToComment', { documentId: 'd1', commentId: 'c1', replyText: 'ok' }, session(docs)),
+        // executeBatchUpdate already turns a 404 into a message naming the
+        // document; re-wrapping it as "Failed to add reply" would bury the cause.
+        (err: any) => err instanceof UserError && /Document not found/.test(err.message),
+      );
+    });
+
+    it('resolveComment separates a confirmed resolution from an unconfirmed one', async () => {
+      assert.match(
+        await call('resolveComment', { documentId: 'd1', commentId: 'c1' }, session(commentDocs())),
+        /c1 is resolved/,
+      );
+      // Google answers 200 either way, so an unconfirmed write must not render as
+      // success — this is the whole reason commentUpdateState is read.
+      const unconfirmed = await call('resolveComment', { documentId: 'd1', commentId: 'c1' }, session(commentDocs({ replies: [{}] })));
+      assert.match(unconfirmed, /did not confirm/);
+    });
+
+    it('resolveComment surfaces a reported failure rather than claiming success', async () => {
+      const docs = commentDocs({ commentUpdateState: 'ALL_FAILED_UNKNOWN_REASON', replies: [{}] });
+      await assert.rejects(
+        () => call('resolveComment', { documentId: 'd1', commentId: 'c1' }, session(docs)),
+        (err: any) => err instanceof UserError && /was NOT applied/.test(err.message),
+      );
+    });
+
+    it('reopenComment puts a thread back', async () => {
+      assert.match(
+        await call('reopenComment', { documentId: 'd1', commentId: 'c1' }, session(commentDocs())),
+        /c1 is open again/,
+      );
+    });
+
+    it('assignComment confirms the assignee', async () => {
+      assert.match(
+        await call('assignComment', { documentId: 'd1', commentId: 'c1', assigneeEmail: 'ada@example.com' }, session(commentDocs())),
+        /assigned to ada@example\.com/,
+      );
+    });
+
+    it('updateCommentPost echoes the new text, the caller only record of the edit', async () => {
+      assert.match(
+        await call('updateCommentPost', { documentId: 'd1', commentId: 'c1', postId: 'p-2', content: 'Reworded' }, session(commentDocs())),
+        /now reads: "Reworded"/,
+      );
+    });
+
+    it('deleteComment confirms the id it deleted', async () => {
+      assert.match(
+        await call('deleteComment', { documentId: 'd1', commentId: 'c1' }, session(commentDocs())),
+        /c1 and its replies have been deleted/,
+      );
+    });
+
+    it('deleteComment wraps an unexpected failure', async () => {
+      const docs = mkDocs({ documents: { batchUpdate: mock.fn(async () => { throw mkErr(500); }) } });
+      await assert.rejects(
+        () => call('deleteComment', { documentId: 'd1', commentId: 'c1' }, session(docs)),
+        (err: any) => err instanceof UserError && /Failed to delete comment/.test(err.message),
+      );
+    });
+
+    it('deleteCommentReply names the thread it left behind', async () => {
+      assert.match(
+        await call('deleteCommentReply', { documentId: 'd1', commentId: 'c1', postId: 'p-2' }, session(commentDocs())),
+        /Reply p-2 has been deleted from thread c1/,
+      );
+    });
   });
 
-  it('deleteComment wraps a failure', async () => {
-    const drive = mkDrive({ comments: { delete: mock.fn(async () => { throw mkErr(404); }) } });
-    await assert.rejects(
-      () => call('deleteComment', { documentId: 'd1', commentId: 'c1' }, session(mkDocs(), drive)),
-      (err: any) => err instanceof UserError && /Failed to delete comment/.test(err.message),
-    );
+  describe('suggestion verdicts', () => {
+    it('acceptSuggestion confirms from the ids Google reported', async () => {
+      const docs = commentDocs({ suggestionResponses: [{ acceptedSuggestionIds: ['sug-1'] }] });
+      assert.match(
+        await call('acceptSuggestion', { documentId: 'd1', suggestionId: 'sug-1' }, session(docs)),
+        /sug-1 has been accepted/,
+      );
+    });
+
+    it('reports an unconfirmed verdict as NOT confirmed, quoting what Google said', async () => {
+      const docs = commentDocs({ suggestionResponses: [{ acceptedSuggestionIds: ['other'] }] });
+      const out = await call('acceptSuggestion', { documentId: 'd1', suggestionId: 'sug-1' }, session(docs));
+      assert.match(out, /NOT confirmed/);
+      assert.match(out, /Google reported: other/);
+    });
+
+    it('rejectSuggestion and deleteSuggestion read their own id lists', async () => {
+      assert.match(
+        await call('rejectSuggestion', { documentId: 'd1', suggestionId: 's2' }, session(commentDocs({ suggestionResponses: [{ rejectedSuggestionIds: ['s2'] }] }))),
+        /s2 has been rejected/,
+      );
+      assert.match(
+        await call('deleteSuggestion', { documentId: 'd1', suggestionId: 's3' }, session(commentDocs({ suggestionResponses: [{ deletedSuggestionIds: ['s3'] }] }))),
+        /s3 has been deleted/,
+      );
+    });
+
+    it('acceptSuggestion wraps a failure', async () => {
+      const docs = mkDocs({ documents: { batchUpdate: mock.fn(async () => { throw mkErr(500); }) } });
+      await assert.rejects(
+        () => call('acceptSuggestion', { documentId: 'd1', suggestionId: 'sug-1' }, session(docs)),
+        (err: any) => err instanceof UserError && /Failed to accept suggestion/.test(err.message),
+      );
+    });
+  });
+
+  it('batchUpdateDoc says when a batch was filed as suggestions', async () => {
+    const docs = commentDocs();
+    const out = await call('batchUpdateDoc', {
+      documentId: 'd1', operations: [{ type: 'insert_text', index: 1, text: 'hi' }], suggestMode: true,
+    }, session(docs));
+    // A suggested batch leaves the document reading as it did, so saying
+    // "completed" would look like a no-op to whoever asked for it.
+    assert.match(out, /submitted as SUGGESTIONS/);
+    assert.match(out, /listSuggestions/);
   });
 });
 

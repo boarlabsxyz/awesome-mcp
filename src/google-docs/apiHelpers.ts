@@ -1,5 +1,5 @@
 // src/googleDocsApiHelpers.ts
-import { google, docs_v1 } from 'googleapis';
+import { docs_v1 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { UserError } from 'fastmcp';
 import { TextStyleArgs, ParagraphStyleArgs, hexToRgbColor, NotImplementedError, BatchOperation } from '../types.js';
@@ -32,7 +32,15 @@ function upstreamUserError(message: string, cause: any): UserError {
   return err;
 }
 
-export async function executeBatchUpdate(docs: Docs, documentId: string, requests: docs_v1.Schema$Request[]): Promise<docs_v1.Schema$BatchUpdateDocumentResponse> {
+export async function executeBatchUpdate(
+    docs: Docs,
+    documentId: string,
+    requests: docs_v1.Schema$Request[],
+    // SUGGEST turns every request in the batch into a tracked suggestion, and a
+    // revision id pins the write to the document the caller read. Optional so the
+    // 20-odd existing callers send the byte-identical body they always have.
+    writeControl?: docs_v1.Schema$WriteControl,
+): Promise<docs_v1.Schema$BatchUpdateDocumentResponse> {
 if (!requests || requests.length === 0) {
 // console.warn("executeBatchUpdate called with no requests.");
 return {}; // Nothing to do
@@ -46,7 +54,7 @@ return {}; // Nothing to do
     try {
         const response = await docs.documents.batchUpdate({
             documentId: documentId,
-            requestBody: { requests },
+            requestBody: { requests, ...(writeControl ? { writeControl } : {}) },
         });
         return response.data;
     } catch (error: any) {
@@ -63,8 +71,14 @@ return {}; // Nothing to do
         }
         if (error.code === 404) throw upstreamUserError(`Document not found (ID: ${documentId}). Check the ID.`, error);
         if (error.code === 403) throw upstreamUserError(`Permission denied for document (ID: ${documentId}). Ensure the authenticated user has edit access.`, error);
-        // Generic internal error for others
-        throw new Error(`Google API Error (${error.code}): ${error.message}`);
+        // Generic internal error for others. The status is carried on `.code` so a
+        // caller can still branch on it: the message has always named the status
+        // in prose, which nothing downstream can route on — the same defect the
+        // ClickUp symbol-tagged status note describes. Kept as a plain Error so
+        // the 20-odd existing callers see the type they always did.
+        const generic = new Error(`Google API Error (${error.code}): ${error.message}`);
+        if (typeof error.code === 'number') (generic as any).code = error.code;
+        throw generic;
     }
 
 }
@@ -462,34 +476,6 @@ endIndex?: number
 console.warn("detectAndFormatLists is not implemented.");
 throw new NotImplementedError("Automatic list detection and formatting is not yet implemented.");
 // return {};
-}
-
-export async function addCommentHelper(docs: Docs, documentId: string, text: string, startIndex: number, endIndex: number): Promise<void> {
-// NOTE: Adding comments typically requires the Google Drive API v3 and different scopes!
-// 'https://www.googleapis.com/auth/drive' or more specific comment scopes.
-// This helper is a placeholder assuming Drive API client (`drive`) is available and authorized.
-/*
-const drive = google.drive({version: 'v3', auth: authClient}); // Assuming authClient is available
-await drive.comments.create({
-fileId: documentId,
-requestBody: {
-content: text,
-anchor: JSON.stringify({ // Anchor format might need verification
-'type': 'workbook#textAnchor', // Or appropriate type for Docs
-'refs': [{
-'docRevisionId': 'head', // Or specific revision
-'range': {
-'start': startIndex,
-'end': endIndex,
-}
-}]
-})
-},
-fields: 'id'
-});
-*/
-console.warn("addCommentHelper requires Google Drive API and is not implemented.");
-throw new NotImplementedError("Adding comments requires Drive API setup and is not yet implemented.");
 }
 
 // --- Image Insertion Helpers ---

@@ -4371,83 +4371,72 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
-  // GET /api/v1/docs/:documentId/comments - List comments
+  // GET /api/v1/docs/:documentId/comments - List comment threads
+  //
+  // Reads through google-docs/commentReads.ts, the same module the MCP tools use.
+  // This handler used to build its own Drive client and project the Drive comment
+  // shape by hand — a second copy of the tool's logic, and one that could only
+  // ever report unanchored comments.
+  //
+  // The response KEYS are unchanged (id, content, quotedText, author,
+  // createdTime, resolved, replies[].id): clients parse them. What changed is
+  // that `id` is now a Docs commentId — the same field in a different id space,
+  // so an id cached from the Drive era will not resolve — and that anchorId,
+  // ranges, status and assigneeEmail are now present alongside.
   app.get('/api/v1/docs/:documentId/comments', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const documentId = req.params.documentId as string;
-      const drive = google.drive({ version: 'v3', auth: req.userSession!.oauthClient });
-
-      const response = await drive.comments.list({
-        fileId: documentId,
-        fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime))',
-        pageSize: 100,
-      });
-
-      const comments = response.data.comments || [];
-
+      const { fetchDocumentThreads, projectCommentThread } = await import('../google-docs/commentReads.js');
+      const threads = await fetchDocumentThreads(req.userSession!.googleDocs, documentId);
       res.json({
         documentId,
-        count: comments.length,
-        comments: comments.map((comment: any) => ({
-          id: comment.id,
-          content: comment.content,
-          quotedText: comment.quotedFileContent?.value || null,
-          author: comment.author?.displayName || 'Unknown',
-          createdTime: comment.createdTime,
-          resolved: comment.resolved || false,
-          replies: (comment.replies || []).map((reply: any) => ({
-            id: reply.id,
-            content: reply.content,
-            author: reply.author?.displayName || 'Unknown',
-            createdTime: reply.createdTime,
-          })),
-        })),
+        count: threads.comments.length,
+        comments: threads.comments.map(projectCommentThread),
       });
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error listing comments:', err);
-      if (err.code === 404) {
-        res.status(404).json({ error: 'Document not found' });
-      } else if (err.code === 403) {
-        res.status(403).json({ error: 'Permission denied' });
-      } else {
-        res.status(500).json({ error: err.message || 'Failed to list comments' });
-      }
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to list comments' });
     }
   });
 
-  // GET /api/v1/docs/:documentId/comments/:commentId - Get one comment + replies
-  // Same field mask and response shape as the list sibling above, so a caller
-  // can jq a single comment without special-casing the payload.
+  // GET /api/v1/docs/:documentId/suggestions - Suggested edits (tracked changes)
+  app.get('/api/v1/docs/:documentId/suggestions', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const documentId = req.params.documentId as string;
+      const { fetchDocumentThreads } = await import('../google-docs/commentReads.js');
+      const threads = await fetchDocumentThreads(req.userSession!.googleDocs, documentId);
+      res.json({ documentId, count: threads.suggestions.length, suggestions: threads.suggestions });
+    } catch (err) {
+      console.error('Error listing suggestions:', err);
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to list suggestions' });
+    }
+  });
+
+  // GET /api/v1/docs/:documentId/comments/:commentId - One thread + replies
+  //
+  // Same field selection and element shape as the list sibling above, so a caller
+  // can jq a single thread without special-casing the payload. The 404 is OURS,
+  // not Google's: the Docs API has no per-comment endpoint, so this is a find
+  // over the document's threads and a miss has to be reported as one.
   app.get('/api/v1/docs/:documentId/comments/:commentId', requireApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const documentId = req.params.documentId as string;
-      const drive = google.drive({ version: 'v3', auth: req.userSession!.oauthClient });
-
-      const response = await drive.comments.get({
-        fileId: documentId,
-        commentId: req.params.commentId as string,
-        fields: 'id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime)',
-      });
-
-      const comment = response.data as any;
-      res.json({
-        documentId,
-        id: comment.id,
-        content: comment.content,
-        quotedText: comment.quotedFileContent?.value || null,
-        author: comment.author?.displayName || 'Unknown',
-        createdTime: comment.createdTime,
-        resolved: comment.resolved || false,
-        replies: (comment.replies || []).map((reply: any) => ({
-          id: reply.id,
-          content: reply.content,
-          author: reply.author?.displayName || 'Unknown',
-          createdTime: reply.createdTime,
-        })),
-      });
+      const commentId = req.params.commentId as string;
+      const { fetchDocumentThreads, findCommentThread, projectCommentThread } = await import('../google-docs/commentReads.js');
+      const threads = await fetchDocumentThreads(req.userSession!.googleDocs, documentId);
+      const thread = findCommentThread(threads, commentId);
+      if (!thread) {
+        res.status(404).json({
+          error: 'Comment thread not found',
+          detail: `No thread with ID ${commentId} in this document (${threads.comments.length} thread(s) found). `
+            + 'Drive API comment IDs are a different id space and do not resolve here.',
+        });
+        return;
+      }
+      res.json({ documentId, ...projectCommentThread(thread) });
     } catch (err) {
       console.error('Error getting comment:', err);
-      sendUpstreamError(res, err, { notFound: 'Comment not found', fallback: 'Failed to get comment' });
+      sendUpstreamError(res, err, { notFound: 'Document not found', fallback: 'Failed to get comment' });
     }
   });
 
@@ -4679,7 +4668,10 @@ function registerRestApiRoutes(app: express.Express): void {
     {
       // Catalogued now, but the path and these response keys are unchanged from
       // the ChatGPT-compat route this replaces: clients parse them. What changed
-      // is the validation, which was three hand-rolled presence checks.
+      // is the validation (three hand-rolled presence checks before) and, in this
+      // pass, the API underneath: the comment is ANCHORED to the range now, where
+      // the Drive API filed it unanchored whatever anchor it was handed. `id` is
+      // therefore a Docs commentId — the same key in a different id space.
       path: '/api/v1/docs/:documentId/comments',
       status: 201,
       notFound: 'Document not found',
@@ -4687,48 +4679,123 @@ function registerRestApiRoutes(app: express.Express): void {
       project: (comment) => ({
         id: comment.id,
         content: comment.content,
-        quotedText: comment.quotedFileContent?.value || null,
-        author: comment.author?.displayName || 'Unknown',
+        quotedText: comment.quotedText,
+        author: comment.author,
         createdTime: comment.createdTime,
-        resolved: comment.resolved || false,
+        resolved: comment.resolved,
+        anchorId: comment.anchorId,
+        status: comment.status,
+        assigneeEmail: comment.assigneeEmail,
+        range: comment.requestedRange,
+        confirmed: comment.confirmed,
+        commentUpdateState: comment.commentUpdateState,
       }),
       load: async () => ({
         schema: (await docsSchemas()).addCommentSchema,
-        run: (session, args) => docsOps().then((m) => m.performAddComment(session.googleDocs, session.googleDrive, args)),
+        run: (session, args) => docsOps().then((m) => m.performAddComment(session.googleDocs, args)),
       }),
     },
     {
       path: '/api/v1/docs/:documentId/comments/:commentId/replies',
       status: 201,
-      notFound: 'Comment not found',
+      notFound: 'Comment thread not found',
       fallback: 'Failed to reply to comment',
       project: rawResult,
       load: async () => ({
         schema: (await docsSchemas()).replyToCommentSchema,
-        run: (session, args) => docsOps().then((m) => m.performReplyToComment(session.googleDrive, args)),
+        run: (session, args) => docsOps().then((m) => m.performReplyToComment(session.googleDocs, args)),
       }),
     },
     {
-      // `resolved` in the response is what Google reported on a re-read, not what
-      // was requested: the Drive API accepts this on a Google Doc and often does
-      // not persist it.
+      // Reply on a SUGGESTION thread. A separate path rather than a suggestionId
+      // body key on the route above, because path params are merged OVER the body
+      // and a request carrying both ids is refused — one path, one thread kind.
+      path: '/api/v1/docs/:documentId/suggestions/:suggestionId/replies',
+      status: 201,
+      notFound: 'Suggestion thread not found',
+      fallback: 'Failed to reply to suggestion',
+      project: rawResult,
+      load: async () => ({
+        schema: (await docsSchemas()).replyToCommentSchema,
+        run: (session, args) => docsOps().then((m) => m.performReplyToComment(session.googleDocs, args)),
+      }),
+    },
+    {
+      // `resolved` is what Google REPORTED, not what was requested: a batch that
+      // answers ALL_FAILED_UNKNOWN_REASON throws, and anything short of ALL_SAVED
+      // comes back confirmed:false rather than as a success.
       path: '/api/v1/docs/:documentId/comments/:commentId/resolve',
-      notFound: 'Comment not found',
+      notFound: 'Comment thread not found',
       fallback: 'Failed to resolve comment',
       load: async () => ({
         schema: (await docsSchemas()).resolveCommentSchema,
-        run: (session, args) => docsOps().then((m) => m.performResolveComment(session.googleDrive, args)),
+        run: (session, args) => docsOps().then((m) => m.performResolveComment(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/comments/:commentId/reopen',
+      notFound: 'Comment thread not found',
+      fallback: 'Failed to reopen comment',
+      load: async () => ({
+        schema: (await docsSchemas()).reopenCommentSchema,
+        run: (session, args) => docsOps().then((m) => m.performReopenComment(session.googleDocs, args)),
+      }),
+    },
+    {
+      // Reassignment only. Google refuses to put an assignee on a thread that was
+      // created without one, so the 400 is rewritten in the op to say so.
+      path: '/api/v1/docs/:documentId/comments/:commentId/assign',
+      notFound: 'Comment thread not found',
+      fallback: 'Failed to assign comment',
+      load: async () => ({
+        schema: (await docsSchemas()).assignCommentSchema,
+        run: (session, args) => docsOps().then((m) => m.performAssignComment(session.googleDocs, args)),
+      }),
+    },
+    {
+      // DESTRUCTIVE in effect, exposed with explicit sign-off: it overwrites a
+      // post's text and the previous version cannot be read back through the API.
+      path: '/api/v1/docs/:documentId/comments/:commentId/posts/:postId/update',
+      notFound: 'Comment post not found',
+      fallback: 'Failed to update comment post',
+      load: async () => ({
+        schema: (await docsSchemas()).updateCommentPostSchema,
+        run: (session, args) => docsOps().then((m) => m.performUpdateCommentPost(session.googleDocs, args)),
       }),
     },
     {
       // DESTRUCTIVE, exposed with explicit sign-off. POST to an action path rather
       // than DELETE on the resource.
       path: '/api/v1/docs/:documentId/comments/:commentId/delete',
-      notFound: 'Comment not found',
+      notFound: 'Comment thread not found',
       fallback: 'Failed to delete comment',
       load: async () => ({
         schema: (await docsSchemas()).deleteCommentSchema,
-        run: (session, args) => docsOps().then((m) => m.performDeleteComment(session.googleDrive, args)),
+        run: (session, args) => docsOps().then((m) => m.performDeleteComment(session.googleDocs, args)),
+      }),
+    },
+    {
+      // DESTRUCTIVE, exposed with explicit sign-off. Narrower than the thread
+      // delete above, which was already live: this removes one reply.
+      path: '/api/v1/docs/:documentId/comments/:commentId/posts/:postId/delete',
+      notFound: 'Comment post not found',
+      fallback: 'Failed to delete comment reply',
+      load: async () => ({
+        schema: (await docsSchemas()).deleteCommentReplySchema,
+        run: (session, args) => docsOps().then((m) => m.performDeleteCommentReply(session.googleDocs, args)),
+      }),
+    },
+    {
+      // Accepting applies the suggested edit. rejectSuggestion and
+      // deleteSuggestion are deliberately NOT here: both discard someone else's
+      // proposed text irrecoverably and neither has REST sign-off, so they stay
+      // MCP-only where the destructiveHint annotation is visible to the client.
+      path: '/api/v1/docs/:documentId/suggestions/:suggestionId/accept',
+      notFound: 'Suggestion not found',
+      fallback: 'Failed to accept suggestion',
+      load: async () => ({
+        schema: (await docsSchemas()).acceptSuggestionSchema,
+        run: (session, args) => docsOps().then((m) => m.performAcceptSuggestion(session.googleDocs, args)),
       }),
     },
   ];
