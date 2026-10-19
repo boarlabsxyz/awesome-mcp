@@ -305,6 +305,17 @@ export class PineconeClient {
   }
 }
 
+/** A hostname cannot exceed 253 octets. */
+const MAX_HOSTNAME_LENGTH = 253;
+
+/** The one refusal both guards in dataBaseUrl raise. */
+function unusableHost(host: unknown): UserError {
+  return new UserError(
+    `Pinecone returned an index host this connector will not call ("${String(host).slice(0, 80)}"). ` +
+      `Expected a plain hostname. Nothing was sent.`,
+  );
+}
+
 /**
  * Is this a plain, multi-label hostname?
  *
@@ -319,7 +330,7 @@ export class PineconeClient {
  * label and 253 overall.
  */
 function isPlainHostname(value: string): boolean {
-  if (!value || value.length > 253) return false;
+  if (!value || value.length > MAX_HOSTNAME_LENGTH) return false;
   const labels = value.split('.');
   // A single label is not an index host — Pinecone always returns an FQDN, and
   // accepting a bare word would let a payload redirect us to an internal name.
@@ -343,12 +354,26 @@ function isPlainHostname(value: string): boolean {
  * hostname does not parse, so there is no accidental safety here.
  */
 export function dataBaseUrl(host: string): string {
-  const raw = String(host ?? '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  const value = String(host ?? '').trim();
+  // Length FIRST, before any scanning. `/\/+$/` backtracks quadratically over a
+  // long run of slashes that does not end the string (80k slashes measured at
+  // ~2s), and stripping before the bound would do that work on an input we are
+  // about to reject anyway. A hostname cannot exceed 253 octets, so anything
+  // longer is refused unread.
+  if (!value || value.length > MAX_HOSTNAME_LENGTH + 'https://'.length + 1) {
+    throw unusableHost(host);
+  }
+  // Non-regex strips: a scheme prefix is a fixed string, and trailing slashes
+  // come off with a linear scan.
+  let raw = value;
+  const scheme = /^https?:\/\//i.exec(raw);
+  if (scheme) raw = raw.slice(scheme[0].length);
+  let end = raw.length;
+  while (end > 0 && raw[end - 1] === '/') end -= 1;
+  raw = raw.slice(0, end);
+
   if (!isPlainHostname(raw)) {
-    throw new UserError(
-      `Pinecone returned an index host this connector will not call ("${String(host).slice(0, 80)}"). ` +
-        `Expected a plain hostname. Nothing was sent.`,
-    );
+    throw unusableHost(host);
   }
   return `https://${raw}`;
 }

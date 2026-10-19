@@ -312,7 +312,7 @@ export async function opCascadingSearch(
   // hits with identical fields would also be indistinguishable. It does not
   // affect scoring: ranking reads only the caller's rankFields.
   const byId = new Map<string, Record<string, unknown>>();
-  for (const hit of hits) if (!byId.has(hit._id)) byId.set(hit._id, { _id: hit._id, ...(hit.fields ?? {}) });
+  for (const hit of hits) if (!byId.has(hit._id)) byId.set(hit._id, { _id: hit._id, ...hit.fields });
   const documents = [...byId.values()];
 
   if (!documents.length) {

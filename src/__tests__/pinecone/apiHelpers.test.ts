@@ -195,6 +195,16 @@ describe('dataBaseUrl', () => {
     assert.throws(() => dataBaseUrl('idx..pinecone.io'), UserError);
   });
 
+  it('refuses an absurdly long value WITHOUT scanning it', () => {
+    // The trailing-slash strip backtracks quadratically over a long run of
+    // slashes that does not end the string (80k slashes measured at ~2s), so
+    // the length bound has to come first.
+    const nasty = `a${'/'.repeat(200_000)}b`;
+    const started = Date.now();
+    assert.throws(() => dataBaseUrl(nasty), UserError);
+    assert.ok(Date.now() - started < 500, 'an over-long host must be refused unread');
+  });
+
   it('validates in linear time — no catastrophic backtracking', () => {
     // The natural one-regex form nests a quantifier inside a repeated group.
     // This pins the shape that replaced it.

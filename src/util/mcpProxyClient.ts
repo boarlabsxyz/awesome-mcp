@@ -196,7 +196,7 @@ export async function callProxyTool(
       // Both types: the server picks, and it may answer tools/call over SSE.
       accept: 'application/json, text/event-stream',
       'mcp-protocol-version': protocolVersion,
-      ...(target.headers?.() ?? {}),
+      ...target.headers?.(),
     };
     if (sessionId) headers['mcp-session-id'] = sessionId;
 
