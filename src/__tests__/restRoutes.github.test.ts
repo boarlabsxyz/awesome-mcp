@@ -1,9 +1,23 @@
 import assert from 'node:assert/strict';
 import { describe, it, before, after, beforeEach } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import request from 'supertest';
-import { createWebOnlyApp } from '../website/webServer.js';
-import { createOrUpdateUser, getUserByGoogleId, UserTokens } from '../userStore.js';
-import { createMcpInstance, GoogleTokens } from '../mcpConnectionStore.js';
+import type { UserTokens } from '../userStore.js';
+import type { GoogleTokens } from '../mcpConnectionStore.js';
+
+// A throwaway store, set before anything reads DATA_DIR. The shared on-disk
+// store keeps every connection earlier runs created, and REST auth resolves
+// the user's FIRST GitHub connection — so a test that puts access rules on the
+// one it just created would be testing a different connector.
+const dataDir = mkdtempSync(join(tmpdir(), 'rest-github-'));
+process.env.DATA_DIR = dataDir;
+delete process.env.DATABASE_URL;
+
+const { createWebOnlyApp } = await import('../website/webServer.js');
+const { createOrUpdateUser, getUserByGoogleId } = await import('../userStore.js');
+const { createMcpInstance, updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
 
 // Drives the /api/v1/github/* handler bodies end to end: real auth (a
 // file-store user plus a GitHub connection), real routing and validation, and
@@ -55,13 +69,14 @@ describe('REST data plane: GitHub handler bodies', () => {
   const app = createWebOnlyApp();
   let bearer: string;
   let otherBearer: string;
+  let githubInstanceId: string;
 
   before(async () => {
     const created = await createOrUpdateUser({ email: 'rest-github@example.com', googleId: 'google-rest-github', name: 'GH' }, tokens);
     bearer = created.apiKey;
     const user = await getUserByGoogleId('google-rest-github');
     if (user) (user as any).id = USER_ID;
-    await createMcpInstance(USER_ID, 'github', 'GitHub (octo)', googleTokens, null, 'github', { access_token: 'ghp_rest_test_token' }, null);
+    githubInstanceId = (await createMcpInstance(USER_ID, 'github', 'GitHub (octo)', googleTokens, null, 'github', { access_token: 'ghp_rest_test_token' }, null)).instanceId;
 
     // A user with no GitHub connection at all.
     const other = await createOrUpdateUser({ email: 'rest-github-none@example.com', googleId: 'google-rest-github-none', name: 'None' }, tokens);
@@ -72,10 +87,56 @@ describe('REST data plane: GitHub handler bodies', () => {
     stubFetch();
   });
 
-  after(() => { globalThis.fetch = realFetch; });
+  after(() => {
+    globalThis.fetch = realFetch;
+    rmSync(dataDir, { recursive: true, force: true });
+  });
   beforeEach(() => { calls = []; rules = []; });
 
   const auth = () => ({ Authorization: `Bearer ${bearer}` });
+
+  describe('access rules', () => {
+    // The API key reaches exactly what the MCP tools do: the rules are applied
+    // inside GitHubClient, which both surfaces share.
+    before(async () => {
+      await updateMcpInstanceProviderTokens(githubInstanceId, {
+        access_token: 'ghp_rest_test_token', accessRules: { allowedOwners: ['octo'] },
+      } as any);
+    });
+    after(async () => {
+      await updateMcpInstanceProviderTokens(githubInstanceId, { access_token: 'ghp_rest_test_token' } as any);
+    });
+
+    it('answers 403 for an excluded owner without calling GitHub', async () => {
+      const res = await request(app).get('/api/v1/github/repos/elsewhere/app/issues').set(auth());
+      assert.equal(res.status, 403);
+      assert.match(res.body.error, /do not allow "elsewhere"/);
+      assert.equal(calls.length, 0);
+    });
+
+    it('refuses a write into an excluded owner the same way', async () => {
+      const res = await request(app).post('/api/v1/github/repos/elsewhere/app/issues').set(auth()).send({ title: 't' });
+      assert.equal(res.status, 403);
+      assert.equal(calls.length, 0);
+    });
+
+    it('still serves an allowed owner', async () => {
+      when('GET', `${UP}/issues/1`, { json: { number: 1 } });
+      assert.equal((await request(app).get(`${G}/issues/1`).set(auth())).status, 200);
+    });
+
+    it('filters search hits and says how many it hid', async () => {
+      when('GET', '/search/issues', { json: { total_count: 2, incomplete_results: false, items: [
+        { number: 1, repository_url: 'https://api.github.com/repos/octo/app' },
+        { number: 2, repository_url: 'https://api.github.com/repos/elsewhere/app' },
+      ] } });
+      const res = await request(app).get('/api/v1/github/search/issues?q=bug').set(auth());
+      assert.equal(res.status, 200);
+      assert.deepEqual(res.body.items.map((i: any) => i.number), [1]);
+      assert.equal(res.body.hiddenByAccessRules, 1);
+      assert.equal(res.body.total_count, 2);
+    });
+  });
 
   describe('reads', () => {
     it('lists issues as {items, page}, mapping query params onto GitHub\'s and reading Link for the next page', async () => {

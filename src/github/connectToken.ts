@@ -98,3 +98,17 @@ export function buildGitHubInstanceName(input: {
   if (input.login) return `${serviceName} (${input.login})`;
   return buildSimpleInstanceName({ serviceName });
 }
+
+/**
+ * `base`, or `base 2`, `base 3`, … — the first name not already taken. One
+ * GitHub account may back several connectors (one per workspace, each with its
+ * own access rules), and every OAuth connect for that account derives the same
+ * "GitHub (login)", so without a suffix the dashboard would list identical rows.
+ */
+export function uniqueGitHubInstanceName(base: string, taken: Iterable<string>): string {
+  const names = new Set(taken);
+  if (!names.has(base)) return base;
+  let n = 2;
+  while (names.has(`${base} ${n}`)) n += 1;
+  return `${base} ${n}`;
+}

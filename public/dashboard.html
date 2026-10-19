@@ -1150,6 +1150,35 @@
     </div>
   </div>
 
+  <!-- GitHub Access Rules Modal -->
+  <div id="githubRulesModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="githubRulesModalTitle">
+    <div class="modal" style="max-width: 550px;">
+      <div class="modal-header">
+        <h3 id="githubRulesModalTitle">Access Rules</h3>
+        <button class="btn-close" type="button" onclick="closeGithubRules()" aria-label="Close dialog">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div style="margin-bottom: 10px;">
+        <button type="button" class="rules-help-toggle" onclick="this.setAttribute('aria-expanded', String(document.getElementById('githubRulesHelp').classList.toggle('hidden') === false))" aria-expanded="false" aria-controls="githubRulesHelp">&#9432; How access rules work</button>
+        <div id="githubRulesHelp" class="rules-help-body hidden">
+          <ul>
+            <li><strong>All organizations</strong> &mdash; no restriction: the connector reaches everything this <span translate="no">GitHub</span> account granted it. This is the default.</li>
+            <li><strong>Only the ticked ones</strong> &mdash; every tool and REST call into any other owner is refused, and search results from them are left out. Your own account is always included.</li>
+            <li>To use one <span translate="no">GitHub</span> account for several workspaces, add one connector per workspace and tick a different set on each.</li>
+            <li><strong>A guardrail, not a security boundary.</strong> The token itself can still reach every organization you granted; only this connector refuses. For a limit <span translate="no">GitHub</span> enforces, connect with a fine-grained token scoped to one organization instead.</li>
+          </ul>
+        </div>
+      </div>
+      <div id="githubRulesContent" class="access-rules-content">
+        <p>Loading&hellip;</p>
+      </div>
+      <div style="margin-top: 12px;">
+        <button class="btn-connect-google" type="button" id="saveGithubRulesBtn" onclick="saveGithubRules()">Save Rules</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Login Overlay (shown when not authenticated) -->
   <div id="loginOverlay" class="login-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="loginOverlayTitle">
     <div class="login-card">
@@ -1205,7 +1234,7 @@
     }
 
     function getTopmostOpenModal() {
-      const candidates = ['accessRulesModal', 'domainRulesModal', 'pineconeRulesModal', 'addToolModal', 'loginOverlay'];
+      const candidates = ['accessRulesModal', 'domainRulesModal', 'pineconeRulesModal', 'githubRulesModal', 'addToolModal', 'loginOverlay'];
       for (const id of candidates) {
         const el = document.getElementById(id);
         if (el && !el.classList.contains('hidden')) return el;
@@ -1221,6 +1250,7 @@
       else if (topmost.id === 'accessRulesModal') closeAccessRules();
       else if (topmost.id === 'domainRulesModal') closeDomainRules();
       else if (topmost.id === 'pineconeRulesModal') closePineconeRules();
+      else if (topmost.id === 'githubRulesModal') closeGithubRules();
       // loginOverlay is not dismissible — sign-in required
     });
 
@@ -1246,6 +1276,7 @@
     attachFocusTrap('accessRulesModal');
     attachFocusTrap('domainRulesModal');
     attachFocusTrap('pineconeRulesModal');
+    attachFocusTrap('githubRulesModal');
     attachFocusTrap('loginOverlay');
 
     function announce(message) {
@@ -1614,6 +1645,7 @@
               ? `<button class="${repairClass}" type="button" data-action="reenter-token" title="Paste a fresh API key or token for this connection. Replaces the credential in place, so the MCP URL you already configured keeps working.">Re-enter token</button>`
               : ''}
             ${instance.provider === 'slack' ? `<button class="btn-rename" type="button" data-action="access-rules">Access Rules</button>` : ''}
+            ${instance.provider === 'github' ? `<button class="btn-rename" type="button" data-action="github-access-rules" title="Limit which organizations this connector may reach. A guardrail, not a security boundary \u2014 see the note in the dialog.">Access Rules</button>` : ''}
             ${instance.provider === 'browserbase' ? `<button class="btn-rename" type="button" data-action="domain-rules" title="Limit which sites this browser may navigate to. A guardrail, not a security boundary \u2014 see the note in the dialog.">Domain Rules</button>` : ''}
             ${instance.provider === 'pinecone' ? `<button class="btn-rename" type="button" data-action="pinecone-rules" title="Limit which indexes and namespaces this connection may use, and switch it to read-only.">Access Rules</button>` : ''}
             <button class="btn-delete" type="button" data-action="delete">Delete</button>
@@ -2653,6 +2685,173 @@
       }
     }
 
+    // ---- GitHub Access Rules ----
+    // State lives in githubRules, never re-read from the DOM alone: rebuilding
+    // the allowlist from rendered checkboxes is how Slack's dialog once revoked
+    // an org nobody had unticked. The server returns every saved owner, so
+    // every saved owner has a row.
+    let githubRulesInstanceId = null;
+    let githubRules = { restricted: false, allowed: [], self: '', owners: [], truncated: false, notes: [] };
+    const GITHUB_LOGIN_RE = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
+
+    async function openGithubRules(instanceId) {
+      githubRulesInstanceId = instanceId;
+      const modal = document.getElementById('githubRulesModal');
+      document.getElementById('githubRulesHelp').classList.add('hidden');
+      openModal(modal);
+      document.getElementById('githubRulesContent').innerHTML = '<p>Loading organizations&hellip;</p>';
+      try {
+        const response = await fetch(`/api/instances/${instanceId}/github-access-rules`, { credentials: 'include' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'Failed to load');
+        const self = (data.self || '').toLowerCase();
+        githubRules = {
+          restricted: !!data.currentRules,
+          allowed: ((data.currentRules && data.currentRules.allowedOwners) || [])
+            .map(o => String(o).toLowerCase()).filter(o => o !== self),
+          self: data.self || '',
+          owners: data.owners || [],
+          truncated: !!data.truncated,
+          notes: data.notes || [],
+        };
+        renderGithubRulesForm();
+      } catch (err) {
+        document.getElementById('githubRulesContent').innerHTML =
+          `<p style="color: #dc3545;" role="alert">Error: ${escapeHtml(err.message)}</p>`;
+      }
+    }
+
+    function renderGithubRulesForm() {
+      const r = githubRules;
+      const disabled = r.restricted ? '' : 'disabled';
+      const ownerRows = r.owners.map(o => {
+        const key = o.login.toLowerCase();
+        const note = !o.discovered
+          ? (o.manual ? ' (added by name)' : ' (saved \u2014 not seen in this scan)')
+          : (o.type === 'User' ? ' (user)' : '');
+        // Unrestricted: every box shows ticked and disabled, because every
+        // owner IS reachable — an unticked box there would misstate it.
+        const checked = !r.restricted || r.allowed.includes(key) ? 'checked' : '';
+        return `
+          <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer;${r.restricted ? '' : ' opacity: 0.7;'}">
+            <input type="checkbox" data-gh-owner="${escapeAttr(key)}" ${checked} ${disabled} style="width: 16px; height: 16px; accent-color: #4f8df7;" />
+            <span translate="no">${escapeHtml(o.login)}</span><span style="color: #666; font-size: 11px;">${escapeHtml(note)}</span>
+          </label>`;
+      }).join('');
+      const warning = r.truncated
+        ? `<p role="status" style="color: #fbbf24; font-size: 11px; margin: 6px 0 0;">Some organizations may be missing from this list:<br />${r.notes.map(n => escapeHtml(n)).join('<br />')}</p>`
+        : '';
+      document.getElementById('githubRulesContent').innerHTML = `
+        <div class="rules-section">
+          <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer;">
+            <input type="radio" name="githubRulesMode" value="all" ${r.restricted ? '' : 'checked'} onchange="setGithubRulesMode(false)" />
+            <span>All organizations <span style="color: #666; font-size: 11px;">(no restriction)</span></span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer;">
+            <input type="radio" name="githubRulesMode" value="only" ${r.restricted ? 'checked' : ''} onchange="setGithubRulesMode(true)" />
+            <span>Only the ticked ones</span>
+          </label>
+        </div>
+        <div class="rules-section">
+          <div class="rules-section-label" style="color: #a78bfa;">Allowed Organisations</div>
+          <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; opacity: 0.7;">
+            <input type="checkbox" checked disabled style="width: 16px; height: 16px; accent-color: #4f8df7;" />
+            <span><span translate="no">${escapeHtml(r.self)}</span> <span style="color: #666; font-size: 11px;">(current)</span></span>
+          </label>
+          ${ownerRows || '<p style="opacity: 0.7; font-size: 0.9em; margin: 4px 0;">No organizations found for this account.</p>'}
+          ${warning}
+          <div style="display: flex; gap: 6px; margin-top: 8px;">
+            <input type="text" id="githubOwnerInput" placeholder="Or add an organization by name, e.g. acme-inc" autocomplete="off" spellcheck="false" class="rules-input" aria-label="Allow an organization by name"
+                   onkeydown="if(event.key==='Enter'){event.preventDefault();addGithubOwner();}" />
+            <button type="button" onclick="addGithubOwner()" class="rules-add-btn">Add</button>
+          </div>
+          <p id="githubOwnerError" role="alert" style="color: #f87171; font-size: 11px; margin: 4px 0 0; display: none;"></p>
+        </div>`;
+    }
+
+    /** Fold the ticked boxes into state before anything re-renders. */
+    function syncGithubRulesFromDom() {
+      if (!githubRules.restricted) return;
+      const boxes = document.querySelectorAll('#githubRulesContent input[data-gh-owner]');
+      const rendered = new Set();
+      const ticked = [];
+      boxes.forEach(box => {
+        rendered.add(box.dataset.ghOwner);
+        if (box.checked) ticked.push(box.dataset.ghOwner);
+      });
+      // Keep anything allowed that has no row, rather than dropping it.
+      githubRules.allowed = [...ticked, ...githubRules.allowed.filter(o => !rendered.has(o))];
+    }
+
+    function setGithubRulesMode(restricted) {
+      syncGithubRulesFromDom();
+      githubRules.restricted = restricted;
+      renderGithubRulesForm();
+    }
+
+    function addGithubOwner() {
+      const input = document.getElementById('githubOwnerInput');
+      const error = document.getElementById('githubOwnerError');
+      let value = input.value.trim();
+      const url = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/?#]+)/i.exec(value);
+      if (url) value = url[1];
+      value = value.replace(/^@/, '');
+      if (!GITHUB_LOGIN_RE.test(value)) {
+        error.textContent = 'Enter a GitHub organization or user name, e.g. acme-inc.';
+        error.style.display = '';
+        return;
+      }
+      error.style.display = 'none';
+      syncGithubRulesFromDom();
+      const key = value.toLowerCase();
+      if (key !== githubRules.self.toLowerCase()) {
+        if (!githubRules.owners.some(o => o.login.toLowerCase() === key)) {
+          githubRules.owners.push({ login: value, type: null, saved: false, discovered: false, manual: true });
+        }
+        if (!githubRules.allowed.includes(key)) githubRules.allowed.push(key);
+      }
+      // Adding a name only means something under a restriction.
+      githubRules.restricted = true;
+      input.value = '';
+      renderGithubRulesForm();
+    }
+
+    function closeGithubRules() {
+      closeModal(document.getElementById('githubRulesModal'));
+      githubRulesInstanceId = null;
+    }
+
+    async function saveGithubRules() {
+      if (!githubRulesInstanceId) return;
+      syncGithubRulesFromDom();
+      const btn = document.getElementById('saveGithubRulesBtn');
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      try {
+        const body = githubRules.restricted
+          ? { accessRules: { allowedOwners: [githubRules.self.toLowerCase(), ...githubRules.allowed] } }
+          : { accessRules: null };
+        const response = await fetch(`/api/instances/${githubRulesInstanceId}/github-access-rules`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(body),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'Failed to save access rules');
+        closeGithubRules();
+        await loadUserData();
+        renderInstances();
+      } catch (err) {
+        const error = document.getElementById('githubOwnerError');
+        if (error) { error.textContent = err.message; error.style.display = ''; }
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    }
+
     function closeAccessRules() {
       closeModal(document.getElementById('accessRulesModal'));
       rulesInstanceId = null;
@@ -2947,6 +3146,7 @@
         case 'access-rules': openAccessRules(id); break;
         case 'domain-rules': openDomainRules(id); break;
         case 'pinecone-rules': openPineconeRules(id); break;
+        case 'github-access-rules': openGithubRules(id); break;
         case 'delete':       deleteInstance(id, row.dataset.instanceName); break;
       }
     });

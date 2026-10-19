@@ -303,13 +303,24 @@ function statusError(message: string, status: number): UserError {
   return error;
 }
 
+/**
+ * Say how many search hits this connector's access rules removed. Without it
+ * a short or empty page reads as "GitHub found nothing" — and GitHub's
+ * total_count, which still counts them, would contradict the list.
+ */
+function hiddenNote(hidden: number | undefined): string[] {
+  return hidden
+    ? [`Note: ${hidden} result(s) on this page are in organizations this connector's access rules exclude, and were left out. total_count still counts them, so a page can come back short or empty while more allowed results follow.`]
+    : [];
+}
+
 // ---- Repositories ----
 
 export async function opSearchRepositories(client: GitHubClient, args: SearchRepositoriesArgs): Promise<string> {
   const current = args.page ?? 1;
-  const { data, page } = await runRead<GhSearch<GhRepo>>(client, READS.searchRepositories(args));
+  const { data, page, hiddenByAccessRules } = await runRead<GhSearch<GhRepo>>(client, READS.searchRepositories(args));
   const lines = searchHeader('repositories', args.query, data);
-  lines.push('');
+  lines.push(...hiddenNote(hiddenByAccessRules), '');
   data.items.forEach((r, i) => {
     const facts = [
       `★${r.stargazers_count ?? 0}`,
@@ -809,14 +820,14 @@ export async function opAddIssueComment(client: GitHubClient, args: AddIssueComm
 
 export async function opSearchCode(client: GitHubClient, args: SearchCodeArgs): Promise<string> {
   const current = args.page ?? 1;
-  const { data, page } = await runRead<GhSearch<{
+  const { data, page, hiddenByAccessRules } = await runRead<GhSearch<{
     path: string;
     html_url: string;
     repository: { full_name: string };
     text_matches?: Array<{ fragment: string }>;
   }>>(client, READS.searchCode(args));
   const lines = searchHeader('code results', args.query, data);
-  lines.push('Note: GitHub code search covers each repository\'s default branch only, and skips files over 384 KB.', '');
+  lines.push(...hiddenNote(hiddenByAccessRules), 'Note: GitHub code search covers each repository\'s default branch only, and skips files over 384 KB.', '');
   for (const item of data.items) {
     lines.push(`- ${item.repository.full_name} — ${item.path}`, `  ${item.html_url}`);
     for (const m of (item.text_matches ?? []).slice(0, 2)) {
@@ -829,9 +840,9 @@ export async function opSearchCode(client: GitHubClient, args: SearchCodeArgs): 
 
 export async function opSearchIssues(client: GitHubClient, args: SearchIssuesArgs): Promise<string> {
   const current = args.page ?? 1;
-  const { data, page } = await runRead<GhSearch<GhIssue>>(client, READS.searchIssues(args));
+  const { data, page, hiddenByAccessRules } = await runRead<GhSearch<GhIssue>>(client, READS.searchIssues(args));
   const lines = searchHeader('issues and pull requests', args.query, data);
-  lines.push('');
+  lines.push(...hiddenNote(hiddenByAccessRules), '');
   for (const issue of data.items) lines.push(`- ${issueLine(issue, repoFromUrl(issue.repository_url))}`, `  ${issue.html_url}`);
   lines.push('', pageFooter(page, current, data.items.length));
   return lines.join('\n');
