@@ -223,7 +223,7 @@ export async function performCascadingSearch(
   // record each row is. It does not affect scoring, which reads only the
   // caller's rankFields.
   const byId = new Map<string, Record<string, unknown>>();
-  for (const hit of hits) if (!byId.has(hit._id)) byId.set(hit._id, { _id: hit._id, ...(hit.fields ?? {}) });
+  for (const hit of hits) if (!byId.has(hit._id)) byId.set(hit._id, { _id: hit._id, ...hit.fields });
   const documents = [...byId.values()];
 
   const reranked = documents.length
