@@ -65,6 +65,11 @@ function withRulesNote(body: string, state: PineconeRulesState): string {
   return note ? `${body}\n\n${note}` : body;
 }
 
+/** One indented bullet per line, the shape every multi-item message here uses. */
+function bulleted(items: readonly string[]): string {
+  return items.map(item => `  - ${item}`).join('\n');
+}
+
 function json(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
@@ -171,8 +176,9 @@ export async function opDescribeIndexStats(
     .join('\n');
 
   const total = stats?.totalRecordCount ?? stats?.totalVectorCount;
+  const totalSuffix = total === undefined ? '' : ` — ${total} record(s) in total`;
   const lines = [
-    `Index "${args.name}"${total !== undefined ? ` — ${total} record(s) in total` : ''}:`,
+    `Index "${args.name}"${totalSuffix}:`,
     rows || '  (no namespaces visible)',
     note ?? null,
     FRESHNESS_NOTE,
@@ -292,14 +298,21 @@ export async function opCascadingSearch(
 
   if (!hits.length && failures.length) {
     throw new UserError(
-      `cascading-search reached none of the requested indexes:\n${failures.map(f => `  - ${f}`).join('\n')}`,
+      `cascading-search reached none of the requested indexes:\n${bulleted(failures)}`,
     );
   }
 
   // Deduplicate by record id, keeping the first occurrence. The reranker then
   // scores the union, which is the whole point of this tool over N searches.
+  //
+  // `_id` is carried INTO each document deliberately. Pinecone's rerank reply
+  // refers to its inputs by array position, and the caller never sees the
+  // array we built — so without the id the ranking cannot say which record
+  // each row is, which is the one question this tool exists to answer. Two
+  // hits with identical fields would also be indistinguishable. It does not
+  // affect scoring: ranking reads only the caller's rankFields.
   const byId = new Map<string, Record<string, unknown>>();
-  for (const hit of hits) if (!byId.has(hit._id)) byId.set(hit._id, (hit.fields ?? {}) as Record<string, unknown>);
+  for (const hit of hits) if (!byId.has(hit._id)) byId.set(hit._id, { _id: hit._id, ...(hit.fields ?? {}) });
   const documents = [...byId.values()];
 
   if (!documents.length) {
@@ -315,9 +328,8 @@ export async function opCascadingSearch(
   });
 
   const warning = failures.length
-    ? `PARTIAL RESULT — ${failures.length} of ${args.indexes.length} index(es) could not be searched, so this ranking is missing whatever they would have contributed:\n${failures
-        .map(f => `  - ${f}`)
-        .join('\n')}\n\n`
+    ? `PARTIAL RESULT — ${failures.length} of ${args.indexes.length} index(es) could not be searched, ` +
+      `so this ranking is missing whatever they would have contributed:\n${bulleted(failures)}\n\n`
     : '';
 
   const header = `${documents.length} unique record(s) from ${args.indexes.length} index(es), reranked with ${args.rerank.model}:`;

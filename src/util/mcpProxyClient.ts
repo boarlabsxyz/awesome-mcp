@@ -125,7 +125,7 @@ function truncate(s: string, n = 400): string {
  * parse error and blames the tool. Notifications get 202 with no body, hence
  * the undefined return.
  */
-export async function readRpcBody(res: Response, id: number): Promise<any | undefined> {
+export async function readRpcBody(res: Response, id: number): Promise<any> {
   if (res.status === 202) return undefined;
   const contentType = res.headers.get('content-type') ?? '';
   const raw = await res.text();
@@ -170,7 +170,27 @@ export async function callProxyTool(
   let protocolVersion = PREFERRED_PROTOCOL;
   let nextId = 1;
 
-  async function post(payload: unknown): Promise<Response> {
+  /**
+   * Run upstream text through the target's sanitiser before it reaches a
+   * message. Every error path below goes through this — a hook that is
+   * declared and never called is worse than no hook, because the caller
+   * (Browserbase passes `safeErrorText`) believes the redaction and the size
+   * cap are in force.
+   */
+  const clean = (text: string): string => (target.sanitizeText ? target.sanitizeText(text) : text);
+
+  /**
+   * One request, with the response BODY read inside the same deadline.
+   *
+   * The reader is a parameter rather than the response being returned,
+   * because `fetch` resolves as soon as the response HEADERS arrive: clearing
+   * the timer there would leave the body read — which for `tools/call` is an
+   * SSE stream the upstream can simply stall — with no limit at all, and
+   * `target.timeoutMs` would never be enforced. src/util/jsonApiRequest.ts
+   * documents the same rule for the same reason; this module had the bug
+   * because it predates that one.
+   */
+  async function post<T>(payload: unknown, read: (res: Response) => Promise<T>): Promise<T> {
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       // Both types: the server picks, and it may answer tools/call over SSE.
@@ -182,9 +202,8 @@ export async function callProxyTool(
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), target.timeoutMs);
-    let res: Response;
     try {
-      res = await doFetch(url, {
+      const res = await doFetch(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(payload),
@@ -198,6 +217,25 @@ export async function callProxyTool(
         // endpoint behaving in a way this client cannot reason about.
         redirect: 'error',
       });
+
+      if (res.status === 401 || res.status === 403) {
+        throw new McpProxyHttpError(
+          target.explainUnauthorized?.(res.status) ?? `${target.label} rejected the request (${res.status}).`,
+          res.status,
+        );
+      }
+      if (!res.ok) {
+        throw new McpProxyHttpError(
+          `${target.label} returned ${res.status} ${res.statusText}: ${truncate(clean(await res.text().catch(() => '')))}`,
+          res.status,
+        );
+      }
+
+      // Capture the transport session so the three requests of THIS call share
+      // one upstream transport. It is deliberately not persisted past the call.
+      const returned = res.headers.get('mcp-session-id');
+      if (returned) sessionId = returned;
+      return await read(res);
     } catch (err: any) {
       if (err?.name === 'AbortError') {
         throw new Error(`${target.label} '${name}' timed out after ${target.timeoutMs}ms`);
@@ -206,34 +244,19 @@ export async function callProxyTool(
     } finally {
       clearTimeout(timeout);
     }
-
-    if (res.status === 401 || res.status === 403) {
-      throw new McpProxyHttpError(
-        target.explainUnauthorized?.(res.status) ?? `${target.label} rejected the request (${res.status}).`,
-        res.status,
-      );
-    }
-    if (!res.ok) {
-      throw new McpProxyHttpError(
-        `${target.label} returned ${res.status} ${res.statusText}: ${truncate(await res.text().catch(() => ''))}`,
-        res.status,
-      );
-    }
-
-    // Capture the transport session so the three requests of THIS call share
-    // one upstream transport. It is deliberately not persisted past the call.
-    const returned = res.headers.get('mcp-session-id');
-    if (returned) sessionId = returned;
-    return res;
   }
 
   async function rpc(method: string, params?: unknown): Promise<any> {
     const id = nextId++;
-    const res = await post({ jsonrpc: '2.0', id, method, params });
-    const body = await readRpcBody(res, id);
+    const body = await post({ jsonrpc: '2.0', id, method, params }, res => readRpcBody(res, id));
     if (body?.error) {
-      const detail = body.error.data ? ` — ${JSON.stringify(body.error.data)}` : '';
-      throw new Error(`${target.label} ${method} failed (${body.error.code}): ${body.error.message}${detail}`);
+      // Both halves are sanitised AND capped. `error.data` had no size limit
+      // at all, which is the 214 KB failure sanitizeText exists for — and a
+      // caller that puts `err.message` straight into a UserError (Pinecone's
+      // search-docs) would hand all of it to the model.
+      const detail = body.error.data ? ` — ${truncate(clean(JSON.stringify(body.error.data)))}` : '';
+      const message = truncate(clean(String(body.error.message ?? '')));
+      throw new Error(`${target.label} ${method} failed (${body.error.code}): ${message}${detail}`);
     }
     return body?.result;
   }
@@ -246,7 +269,11 @@ export async function callProxyTool(
   // Use what the server negotiated, not what we asked for — sending a version
   // header the server did not agree to is rejected by spec-compliant hosts.
   if (typeof init?.protocolVersion === 'string') protocolVersion = init.protocolVersion;
-  await post({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  // A 202 carries no body, but an undrained one holds its socket in the pool.
+  // Cancelling is best-effort — a stub response in a test has no body.
+  await post({ jsonrpc: '2.0', method: 'notifications/initialized' }, async res => {
+    try { await res.body?.cancel(); } catch { /* nothing to drain */ }
+  });
 
   const result = await rpc('tools/call', { name, arguments: args });
   return { text: textOfResult(result), isError: result?.isError === true, raw: result };

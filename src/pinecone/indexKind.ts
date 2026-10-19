@@ -71,13 +71,85 @@ function fieldsOf(payload: any): Record<string, any> | null {
  * Records API can actually serve, and the ambiguity is recorded in `evidence`
  * so it shows up in a bug report rather than as a silent refusal.
  */
+type FieldEntry = [string, any];
+
+/**
+ * The legacy-integrated verdict, built from the `semantic_text` field.
+ *
+ * Split out of classifyIndex so the decision ORDER there stays readable at a
+ * glance — that order is the load-bearing part, and it was getting buried
+ * under the evidence-string construction.
+ */
+function legacyIntegratedVerdict(
+  payload: any,
+  semantic: FieldEntry,
+  embedding: FieldEntry[],
+): IndexKindVerdict {
+  const [semanticName, semanticCfg] = semantic;
+  // field_map is what the DATA PLANE actually reads, so it wins when the two
+  // disagree — but both names go into the evidence, because a disagreement
+  // here is the sort of thing that should surface in a bug report rather than
+  // be quietly resolved.
+  const mapped = payload?.embed?.field_map?.text ?? semanticCfg?.field_map?.text;
+  const textField = typeof mapped === 'string' && mapped ? mapped : semanticName;
+  const disagree = textField === semanticName ? '' : ` (field_map names "${textField}")`;
+  const ambiguity = embedding.length
+    ? `; it ALSO declares "${embedding[0][0]}" as a string field with an embed configuration, which is unusual — treated as legacy integrated because that is the API that can serve it`
+    : '';
+  const embedModel = payload?.embed?.model ?? semanticCfg?.model;
+  return {
+    kind: 'legacy-integrated',
+    evidence: `field "${semanticName}" has type semantic_text${disagree}${ambiguity}`,
+    textField,
+    embedModel: typeof embedModel === 'string' ? embedModel : undefined,
+  };
+}
+
+/** The document-index verdict, built from the string field carrying an embed config. */
+function documentVerdict([name, cfg]: FieldEntry): IndexKindVerdict {
+  const which = cfg?.embed ? 'embed' : 'sparse_embed';
+  const model = cfg?.[which]?.model;
+  return {
+    kind: 'document',
+    evidence: `field "${name}" has type string with an ${which} configuration, not semantic_text`,
+    embedModel: typeof model === 'string' ? model : undefined,
+  };
+}
+
+/**
+ * The verdict for a schema with no text field at all: a vectors index when the
+ * reserved names are present, otherwise unknown.
+ *
+ * Metadata fields alone do not make a document schema, so an index whose only
+ * vector fields are the reserved ones is a vectors index however many
+ * filterable metadata fields sit beside it.
+ */
+function vectorsOrUnknownVerdict(entries: FieldEntry[]): IndexKindVerdict {
+  const reserved = entries.map(([name]) => name).filter(n => RESERVED_VECTOR_FIELDS.has(n));
+  if (reserved.length) {
+    return {
+      kind: 'vectors',
+      evidence: `the schema declares only the reserved vector fields ${reserved.join(' and ')} and no text field`,
+    };
+  }
+
+  const nonReservedTyped = entries.filter(
+    ([name, cfg]) => !RESERVED_VECTOR_FIELDS.has(name) && cfg?.type && cfg.type !== 'string',
+  );
+  const sample = (nonReservedTyped.length ? nonReservedTyped : entries)
+    .slice(0, 4)
+    .map(([name, cfg]) => `${name}:${cfg?.type ?? 'untyped'}`)
+    .join(', ');
+  return { kind: 'unknown', evidence: `no recognised field types (saw: ${sample})` };
+}
+
 export function classifyIndex(payload: unknown): IndexKindVerdict {
   const fields = fieldsOf(payload);
   if (!fields) {
     return { kind: 'unknown', evidence: 'the describe response carried no readable schema.fields object' };
   }
 
-  const entries = Object.entries(fields);
+  const entries: FieldEntry[] = Object.entries(fields);
   if (!entries.length) {
     return { kind: 'unknown', evidence: 'schema.fields is present but empty' };
   }
@@ -87,58 +159,11 @@ export function classifyIndex(payload: unknown): IndexKindVerdict {
     ([name, cfg]) => cfg?.type === 'string' && !RESERVED_VECTOR_FIELDS.has(name) && (cfg?.embed || cfg?.sparse_embed),
   );
 
-  if (semantic.length) {
-    const [semanticName, semanticCfg] = semantic[0];
-    // field_map is what the DATA PLANE actually reads, so it wins when the two
-    // disagree — but both names go into the evidence, because a disagreement
-    // here is the sort of thing that should surface in a bug report rather
-    // than be quietly resolved.
-    const mapped = (payload as any)?.embed?.field_map?.text ?? semanticCfg?.field_map?.text;
-    const textField = typeof mapped === 'string' && mapped ? mapped : semanticName;
-    const disagree = textField !== semanticName ? ` (field_map names "${textField}")` : '';
-    const ambiguity = embedding.length
-      ? `; it ALSO declares "${embedding[0][0]}" as a string field with an embed configuration, which is unusual — treated as legacy integrated because that is the API that can serve it`
-      : '';
-    const embedModel = (payload as any)?.embed?.model ?? semanticCfg?.model;
-    return {
-      kind: 'legacy-integrated',
-      evidence: `field "${semanticName}" has type semantic_text${disagree}${ambiguity}`,
-      textField,
-      embedModel: typeof embedModel === 'string' ? embedModel : undefined,
-    };
-  }
-
-  if (embedding.length) {
-    const [name, cfg] = embedding[0];
-    const which = cfg?.embed ? 'embed' : 'sparse_embed';
-    const model = cfg?.[which]?.model;
-    return {
-      kind: 'document',
-      evidence: `field "${name}" has type string with an ${which} configuration, not semantic_text`,
-      embedModel: typeof model === 'string' ? model : undefined,
-    };
-  }
-
-  const names = entries.map(([name]) => name);
-  const hasReserved = names.some(n => RESERVED_VECTOR_FIELDS.has(n));
-  const nonReservedTyped = entries.filter(
-    ([name, cfg]) => !RESERVED_VECTOR_FIELDS.has(name) && cfg?.type && cfg.type !== 'string',
-  );
-  // Metadata fields alone do not make a document schema, so an index whose
-  // only vector fields are the reserved ones is a vectors index however many
-  // filterable metadata fields sit beside them.
-  if (hasReserved) {
-    return {
-      kind: 'vectors',
-      evidence: `the schema declares only the reserved vector fields ${names.filter(n => RESERVED_VECTOR_FIELDS.has(n)).join(' and ')} and no text field`,
-    };
-  }
-
-  const sample = (nonReservedTyped.length ? nonReservedTyped : entries)
-    .slice(0, 4)
-    .map(([name, cfg]) => `${name}:${cfg?.type ?? 'untyped'}`)
-    .join(', ');
-  return { kind: 'unknown', evidence: `no recognised field types (saw: ${sample})` };
+  // The order IS the decision. semantic_text first, so the one kind this
+  // connector supports can never be misclassified as one it refuses.
+  if (semantic.length) return legacyIntegratedVerdict(payload as any, semantic[0], embedding);
+  if (embedding.length) return documentVerdict(embedding[0]);
+  return vectorsOrUnknownVerdict(entries);
 }
 
 /**

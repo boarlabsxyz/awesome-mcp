@@ -250,6 +250,26 @@ describe('opCascadingSearch', () => {
     assert.match(out, /upstream exploded/);
   });
 
+  it('sends _id with each document, so the ranking can say WHICH record ranked', async () => {
+    // Pinecone's rerank reply refers to its inputs by array position, and the
+    // caller never sees the array built here — without the id the result
+    // cannot identify a single record, which is the one question this tool
+    // answers. Two hits with identical fields would also be indistinguishable.
+    let sent: any;
+    const client = stub(
+      {
+        rerank: async (input: any) => { sent = input; return { data: [] }; },
+        searchRecords: async () => ({ result: { hits: [{ _id: 'rec-7', fields: { chunk_text: 'hello' } }] } }),
+      },
+      { a: indexPayload('a'), b: indexPayload('b') },
+    );
+    await opCascadingSearch(client, KEY, loaded(), args, log);
+    assert.equal(sent.documents.length, 1);
+    assert.equal(sent.documents[0]._id, 'rec-7');
+    // The stored fields must still be there beside it.
+    assert.equal(sent.documents[0].chunk_text, 'hello');
+  });
+
   it('throws rather than returning an empty ranking when nothing could be reached', async () => {
     const client = stub(
       { searchRecords: async () => { throw new Error('down'); } },

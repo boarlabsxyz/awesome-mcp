@@ -178,7 +178,8 @@ pineconeServer.addTool({
   annotations: { readOnlyHint: true },
   description:
     'Search one index for records semantically similar to a query text, optionally filtered by metadata and reranked. ' +
-    'Pinecone embeds the query automatically, so this works only against integrated-embedding indexes — call describe-index if unsure; against any other kind this tool says so rather than returning an upstream error. ' +
+    'Pinecone embeds the query automatically, so this works only against integrated-embedding indexes — call describe-index if unsure. ' +
+    'A document or vectors index is refused by name rather than as a bare upstream error; a schema this connector cannot classify is attempted anyway and Pinecone decides. ' +
     'Returns each hit\'s _id, _score and stored fields. ' +
     'To search several indexes and get one combined ranking, use cascading-search instead.',
   parameters: searchRecordsSchema,
@@ -196,7 +197,7 @@ pineconeServer.addTool({
   annotations: { readOnlyHint: true },
   description:
     'Search several indexes at once, deduplicate the hits by record id and rerank them into ONE combined ranking. Reranking is required — that fusion is the whole point. ' +
-    'Works only against integrated-embedding indexes. To search a single index, use search-records. ' +
+    'Works only against integrated-embedding indexes: a document or vectors index is refused by name, while a schema this connector cannot classify is attempted anyway. To search a single index, use search-records. ' +
     'If this connection\'s access rules deny any of the named indexes or namespaces, the whole call is refused rather than silently searching the rest: dropping a source would change the order and scores of everything that remains, and a ranking cannot be honestly labelled partial.',
   parameters: cascadingSearchSchema,
   execute: async (args, { log, session }) => {

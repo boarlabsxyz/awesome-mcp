@@ -180,6 +180,38 @@ export interface JsonApiRequestConfig {
   fetchImpl?: typeof fetch;
 }
 
+/**
+ * Merge the caller's headers over the defaults, with one exception: when
+ * `rawBody` names a content type, that type WINS.
+ *
+ * The caller's headers are spread last everywhere else, which is right — a
+ * connector may need its own Accept or a vendor header. But `rawBody` exists
+ * precisely because the body is not JSON, so letting a stray
+ * `Content-Type: application/json` survive would send NDJSON labelled as JSON
+ * and earn a 400 that reads like a schema error, which is the exact confusion
+ * the explicit `contentType` was added to prevent.
+ *
+ * Header names are case-insensitive per the Fetch spec, so every casing
+ * variant is removed before ours is set — leaving `content-type` beside
+ * `Content-Type` would send two conflicting values.
+ */
+function buildHeaders(
+  callerHeaders: Record<string, string>,
+  bodyContentType: string | undefined,
+): Record<string, string> {
+  const merged: Record<string, string> = {
+    'Content-Type': bodyContentType ?? 'application/json',
+    Accept: 'application/json',
+    ...callerHeaders,
+  };
+  if (!bodyContentType) return merged;
+  for (const key of Object.keys(merged)) {
+    if (key.toLowerCase() === 'content-type') delete merged[key];
+  }
+  merged['Content-Type'] = bodyContentType;
+  return merged;
+}
+
 function safeUrl(raw: string, base?: string): URL | null {
   try {
     return new URL(raw, base);
@@ -347,6 +379,12 @@ export async function jsonApiRequestWithMeta<T>(config: JsonApiRequestConfig): P
   // a fresh one each time — otherwise three hops could take 3× the configured
   // timeout.
   try {
+    // Built once, outside the redirect loop: a nested ternary at the fetch
+    // call reads badly and recomputes on every hop.
+    let requestBody: string | undefined;
+    if (rawBody !== undefined) requestBody = rawBody;
+    else if (body !== undefined) requestBody = JSON.stringify(body);
+
     let url = config.url;
     let hopsFollowed = 0;
     let res: Response;
@@ -355,12 +393,8 @@ export async function jsonApiRequestWithMeta<T>(config: JsonApiRequestConfig): P
       try {
         res = await doFetch(url, {
           method,
-          headers: {
-            'Content-Type': bodyContentType ?? 'application/json',
-            Accept: 'application/json',
-            ...headers,
-          },
-          body: rawBody !== undefined ? rawBody : body !== undefined ? JSON.stringify(body) : undefined,
+          headers: buildHeaders(headers, bodyContentType),
+          body: requestBody,
           signal: controller.signal,
           // 'manual' rather than 'error': the credential must still never
           // follow a redirect, but refusing without reading the Location first

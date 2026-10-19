@@ -177,6 +177,32 @@ describe('dataBaseUrl', () => {
       assert.throws(() => dataBaseUrl(bad), UserError, `expected refusal for ${JSON.stringify(bad)}`);
     }
   });
+
+  it('refuses a single-label name, which could only be an internal host', () => {
+    assert.throws(() => dataBaseUrl('localhost'), UserError);
+    assert.throws(() => dataBaseUrl('metadata'), UserError);
+  });
+
+  it('enforces the label and total length limits', () => {
+    assert.throws(() => dataBaseUrl(`${'a'.repeat(64)}.pinecone.io`), UserError);
+    assert.throws(() => dataBaseUrl(`${'a'.repeat(60)}.`.repeat(5) + 'pinecone.io'), UserError);
+    assert.equal(dataBaseUrl(`${'a'.repeat(63)}.pinecone.io`), `https://${'a'.repeat(63)}.pinecone.io`);
+  });
+
+  it('refuses a label that starts or ends with a hyphen', () => {
+    assert.throws(() => dataBaseUrl('-idx.pinecone.io'), UserError);
+    assert.throws(() => dataBaseUrl('idx-.pinecone.io'), UserError);
+    assert.throws(() => dataBaseUrl('idx..pinecone.io'), UserError);
+  });
+
+  it('validates in linear time — no catastrophic backtracking', () => {
+    // The natural one-regex form nests a quantifier inside a repeated group.
+    // This pins the shape that replaced it.
+    const nasty = `${Array.from({ length: 40 }, () => 'aa-aa').join('.')}.!`;
+    const started = Date.now();
+    assert.throws(() => dataBaseUrl(nasty), UserError);
+    assert.ok(Date.now() - started < 1000, 'validation should be immediate');
+  });
 });
 
 describe('getPineconeClient', () => {

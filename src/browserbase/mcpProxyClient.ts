@@ -25,15 +25,13 @@ import {
   type ProxyCallOptions,
   type ProxyToolResult,
   callProxyTool,
-  readRpcBody,
-  textOfResult,
 } from '../util/mcpProxyClient.js';
 
 import { safeErrorText } from './responseSafety.js';
 
 // Re-exported rather than re-implemented: callers (and the existing tests)
 // import these from here, and they are the same functions.
-export { readRpcBody, textOfResult };
+export { readRpcBody, textOfResult } from '../util/mcpProxyClient.js';
 export type { ProxyToolResult };
 
 const HOSTED_MCP_URL = 'https://mcp.browserbase.com/mcp';

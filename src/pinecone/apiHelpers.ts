@@ -306,6 +306,34 @@ export class PineconeClient {
 }
 
 /**
+ * Is this a plain, multi-label hostname?
+ *
+ * Checked label by label rather than with one regex. The natural pattern for
+ * this — `^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.…)+$` — nests a quantifier inside a
+ * repeated group, which is the classic catastrophic-backtracking shape; V8
+ * happens to handle it, but a validator standing between a payload field and
+ * the host an API key is sent to is the wrong place to depend on that. Each
+ * check below is linear.
+ *
+ * It also enforces the two length limits the regex did not: 63 octets per
+ * label and 253 overall.
+ */
+function isPlainHostname(value: string): boolean {
+  if (!value || value.length > 253) return false;
+  const labels = value.split('.');
+  // A single label is not an index host — Pinecone always returns an FQDN, and
+  // accepting a bare word would let a payload redirect us to an internal name.
+  if (labels.length < 2) return false;
+  return labels.every(label =>
+    label.length >= 1 &&
+    label.length <= 63 &&
+    /^[a-z0-9-]+$/i.test(label) &&
+    !label.startsWith('-') &&
+    !label.endsWith('-'),
+  );
+}
+
+/**
  * Turn an index `host` from a describe payload into a base URL.
  *
  * Pinecone returns a bare hostname (`idx-abc123.svc.us-east1-gcp.pinecone.io`).
@@ -316,7 +344,7 @@ export class PineconeClient {
  */
 export function dataBaseUrl(host: string): string {
   const raw = String(host ?? '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
-  if (!raw || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(raw)) {
+  if (!isPlainHostname(raw)) {
     throw new UserError(
       `Pinecone returned an index host this connector will not call ("${String(host).slice(0, 80)}"). ` +
         `Expected a plain hostname. Nothing was sent.`,

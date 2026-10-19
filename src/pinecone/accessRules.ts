@@ -452,7 +452,7 @@ export function assertTargetsAllowed(
 
   const lines = denied.map(d => {
     const where = d.namespace === undefined ? `"${d.index}"` : `"${d.index}" / ${describeNamespace(d.namespace)}`;
-    return `  - ${where}: ${d.reason.replace(/-/g, ' ')}`;
+    return `  - ${where}: ${d.reason.replaceAll('-', ' ')}`;
   });
 
   throw new PineconeAccessDenied(

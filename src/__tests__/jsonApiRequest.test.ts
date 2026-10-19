@@ -65,6 +65,66 @@ describe('jsonApiRequest', () => {
     assert.equal(calls[0].init.headers.Accept, 'application/vnd.custom');
   });
 
+  describe('rawBody', () => {
+    it('sends the raw string verbatim with its own content type', async () => {
+      const { fetchImpl, calls } = stub(() => response({}));
+      await jsonApiRequest({
+        ...base, method: 'POST', rawBody: '{"_id":"a"}\n', contentType: 'application/x-ndjson', fetchImpl,
+      });
+      assert.equal(calls[0].init.body, '{"_id":"a"}\n');
+      assert.equal(calls[0].init.headers['Content-Type'], 'application/x-ndjson');
+    });
+
+    it("WINS over a caller's Content-Type, which the header spread would otherwise override", async () => {
+      // rawBody exists precisely because the body is not JSON. A surviving
+      // application/json would send NDJSON labelled as JSON and earn a 400
+      // that reads like a schema error.
+      const { fetchImpl, calls } = stub(() => response({}));
+      await jsonApiRequest({
+        ...base, method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        rawBody: 'a\n', contentType: 'application/x-ndjson', fetchImpl,
+      });
+      assert.equal(calls[0].init.headers['Content-Type'], 'application/x-ndjson');
+    });
+
+    it('removes a differently-cased content-type rather than sending two', async () => {
+      // Header names are case-insensitive, so leaving `content-type` beside
+      // `Content-Type` would send conflicting values.
+      const { fetchImpl, calls } = stub(() => response({}));
+      await jsonApiRequest({
+        ...base, method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        rawBody: 'a\n', contentType: 'application/x-ndjson', fetchImpl,
+      });
+      const names = Object.keys(calls[0].init.headers).filter(k => k.toLowerCase() === 'content-type');
+      assert.deepEqual(names, ['Content-Type']);
+      assert.equal(calls[0].init.headers['Content-Type'], 'application/x-ndjson');
+    });
+
+    it('still lets a caller override Content-Type when there is no rawBody', async () => {
+      const { fetchImpl, calls } = stub(() => response({}));
+      await jsonApiRequest({ ...base, headers: { 'Content-Type': 'application/custom' }, fetchImpl });
+      assert.equal(calls[0].init.headers['Content-Type'], 'application/custom');
+    });
+
+    it('refuses body and rawBody together rather than silently picking one', async () => {
+      const { fetchImpl } = stub(() => response({}));
+      await assert.rejects(
+        () => jsonApiRequest({ ...base, method: 'POST', body: { a: 1 }, rawBody: 'x', contentType: 'text/plain', fetchImpl }),
+        /pass body or rawBody, not both/,
+      );
+    });
+
+    it('refuses rawBody with no contentType, rather than defaulting to JSON', async () => {
+      const { fetchImpl } = stub(() => response({}));
+      await assert.rejects(
+        () => jsonApiRequest({ ...base, method: 'POST', rawBody: 'x', fetchImpl }),
+        /rawBody requires an explicit contentType/,
+      );
+    });
+  });
+
   it('never lets fetch follow a redirect itself', async () => {
     // Node's fetch strips Authorization across an origin change but KEEPS
     // custom headers, so letting IT follow one would hand an API-key header to

@@ -3128,6 +3128,15 @@ function registerSharedRoutes(app: express.Express): void {
         return;
       }
 
+      // Ownership BEFORE validation. Nothing is written either way, but
+      // validating first lets an authenticated caller probing someone else's
+      // instanceId tell a real connection from an absent one by the shape of
+      // the rejection (400 on a bad pattern vs 404) — the same reason
+      // ownedConnection answers one 404 for both "no such instance" and
+      // "not yours".
+      const owned = await ownedConnection(req, res, 'pinecone', 'Pinecone');
+      if (!owned) return;
+
       // Validated and normalised with the connector's own helpers, not copies:
       // a pattern the dashboard accepts but the matcher cannot match would
       // read as a saved rule that silently does nothing.
@@ -3148,9 +3157,6 @@ function registerSharedRoutes(app: express.Express): void {
         const problem = validateNamespacePattern(pattern);
         if (problem) { res.status(400).json({ error: problem }); return; }
       }
-
-      const owned = await ownedConnection(req, res, 'pinecone', 'Pinecone');
-      if (!owned) return;
 
       const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
       // Spread, because updateMcpInstanceProviderTokens replaces the whole
@@ -4168,7 +4174,6 @@ function registerRestApiRoutes(app: express.Express): void {
   const requireBrowserbaseApiKey = createServiceAuth('browserbase', 'browserbase');
   const requireGitHubApiKey = createServiceAuth('github', 'github');
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- used once the REST plane lands (PR2)
-  const requirePineconeApiKey = createServiceAuth('pinecone', 'pinecone');
   const requireOutlineApiKey = createServiceAuth('outline', 'outline');
 
   // JSON body parser already added above for auth routes
