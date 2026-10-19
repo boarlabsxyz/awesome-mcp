@@ -1166,6 +1166,7 @@
             <li><strong>All organizations</strong> &mdash; no restriction: the connector reaches everything this <span translate="no">GitHub</span> account granted it. This is the default.</li>
             <li><strong>Only the ticked ones</strong> &mdash; every tool and REST call into any other owner is refused, and search results from them are left out. Your own account is always included.</li>
             <li>To use one <span translate="no">GitHub</span> account for several workspaces, add one connector per workspace and tick a different set on each.</li>
+            <li><strong>REST (curl) calls do not pick a connector.</strong> Your API key and a minted bearer identify your account, not this connector, so every REST request uses your <em>oldest</em> <span translate="no">GitHub</span> connector and its rules &mdash; even a bearer minted from this one.</li>
             <li><strong>A guardrail, not a security boundary.</strong> The token itself can still reach every organization you granted; only this connector refuses. For a limit <span translate="no">GitHub</span> enforces, connect with a fine-grained token scoped to one organization instead.</li>
           </ul>
         </div>
