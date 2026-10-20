@@ -3022,15 +3022,17 @@
           credentials: 'same-origin',
         });
 
+        const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-          const data = await response.json();
           throw new Error(data.error || 'Failed to delete');
         }
 
         // Remove from local state
         instances = instances.filter(i => i.instanceId !== instanceId);
         renderInstances();
-        showSuccess('Instance deleted successfully');
+        // A GitHub delete also says what happened on GitHub's side: whether the
+        // next connect will ask for consent (and organizations) again.
+        showSuccess(data.githubRevoke ? `Instance deleted. ${data.githubRevoke.message}` : 'Instance deleted successfully');
       } catch (err) {
         showError('Failed to delete instance: ' + err.message);
       }

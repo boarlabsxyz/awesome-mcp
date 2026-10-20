@@ -1882,6 +1882,24 @@ function registerSharedRoutes(app: express.Express): void {
 
   // GET /connect/:mcpSlug - Start OAuth for specific MCP (legacy single-instance)
   // GET /connect/:mcpSlug/new?name=... - Start OAuth for new instance
+  /**
+   * Revoke a GitHub connector's authorization before its Reconnect, so GitHub
+   * shows the consent screen (and its organization panel) again. Only for the
+   * caller's own connector; best-effort, because the reconnect itself replaces
+   * the token either way.
+   */
+  async function revokeGitHubBeforeReconnect(instanceId: string, userId: number): Promise<void> {
+    try {
+      const existing = await getMcpConnectionByInstanceId(instanceId);
+      if (!existing || existing.userId !== userId || existing.provider !== 'github') return;
+      const { revokeGitHubConnection } = await import('../github/revoke.js');
+      const result = await revokeGitHubConnection(existing, await getUserConnectedMcps(userId));
+      console.error(`[github-revoke] reconnect ${instanceId}: ${result.outcome}`);
+    } catch (err: any) {
+      console.error(`[github-revoke] reconnect ${instanceId} failed: ${err?.message ?? err}`);
+    }
+  }
+
   app.get('/connect/:mcpSlug', async (req: AuthenticatedRequest, res) => {
     const mcpSlug = req.params.mcpSlug as string;
     const instanceName = req.query.name as string | undefined;
@@ -1980,7 +1998,16 @@ function registerSharedRoutes(app: express.Express): void {
         // Fallback to memory (not recommended for production)
         (global as any).__mcpConnectStates = (global as any).__mcpConnectStates || new Map();
         (global as any).__mcpConnectStates.set(state, stateData);
-        setTimeout(() => (global as any).__mcpConnectStates?.delete(state), 600_000);
+        // unref: a timer that only tidies this map must not keep the process
+        // alive (a test run that hit /connect otherwise hung for 10 minutes).
+        setTimeout(() => (global as any).__mcpConnectStates?.delete(state), 600_000).unref();
+      }
+
+      // A GitHub Reconnect first forgets the app on GitHub's side, or GitHub
+      // re-approves the app it remembers and skips the consent screen — the
+      // one place a user can change which organizations it may access.
+      if (mcp.provider === 'github' && reconnectInstanceId) {
+        await revokeGitHubBeforeReconnect(reconnectInstanceId, connectingUser.id);
       }
 
       // Branch on provider for authorization URL
@@ -3690,6 +3717,16 @@ function registerSharedRoutes(app: express.Express): void {
         return;
       }
 
+      // Revoke on GitHub before the token is thrown away — afterwards there is
+      // nothing left to revoke with. Best-effort: a failure is reported, and
+      // never blocks the delete the user asked for.
+      let githubRevoke: { outcome: string; message: string } | undefined;
+      if (connection.provider === 'github') {
+        const { revokeGitHubConnection } = await import('../github/revoke.js');
+        githubRevoke = await revokeGitHubConnection(connection, await getUserConnectedMcps(user.id));
+        console.error(`[github-revoke] delete ${instanceId}: ${githubRevoke.outcome}`);
+      }
+
       const deleted = await disconnectMcpInstance(instanceId);
       if (!deleted) {
         res.status(404).json({ error: 'Instance not found' });
@@ -3697,7 +3734,7 @@ function registerSharedRoutes(app: express.Express): void {
       }
 
       console.error(`User ${user.id} deleted instance ${instanceId}`);
-      res.json({ success: true });
+      res.json({ success: true, ...(githubRevoke ? { githubRevoke } : {}) });
     } catch (err: any) {
       console.error('Error deleting instance:', err);
       res.status(500).json({ error: 'Failed to delete instance' });
