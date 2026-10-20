@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import { UserError } from 'fastmcp';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
-import { REST_CATALOG } from '../restCatalog.js';
+import { REST_CATALOG, REST_SERVICE_NOTES } from '../restCatalog.js';
 
 interface CapturedTool {
   name: string;
@@ -59,6 +59,16 @@ describe('sharedTools.mintRestBearerForCurl', () => {
 });
 
 describe('sharedTools.listRestEndpoints', () => {
+  it('carries a service-wide note once, only for the services it returns', async () => {
+    const stub = makeStubServer();
+    registerListRestEndpoints(stub as any);
+    const github = JSON.parse(await stub.tools[0].execute({ service: 'github' }, { session: { userId: 1 } }));
+    assert.deepEqual(github.serviceNotes, { github: REST_SERVICE_NOTES.github });
+    assert.match(github.serviceNotes.github, /OLDEST one on the account/);
+    const docs = JSON.parse(await stub.tools[0].execute({ service: 'docs' }, { session: { userId: 1 } }));
+    assert.equal(docs.serviceNotes, undefined);
+  });
+
   it('registers a tool named listRestEndpoints', () => {
     const stub = makeStubServer();
     registerListRestEndpoints(stub as any);

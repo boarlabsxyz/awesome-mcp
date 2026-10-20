@@ -28,6 +28,14 @@ if (!arrayMatch) {
 }
 const body = arrayMatch[1];
 
+// One note per service, said once rather than on every entry (see the comment
+// on REST_SERVICE_NOTES). Optional: a catalog without the block has no notes.
+const serviceNotes = {};
+const notesMatch = src.match(/REST_SERVICE_NOTES[\s\S]*?=\s*\{([\s\S]*?)\n\};/);
+for (const n of (notesMatch?.[1] ?? '').matchAll(/^\s*'?([a-z][a-z-]*)'?:\s*'([^']+)',?\s*$/gm)) {
+  serviceNotes[n[1]] = n[2];
+}
+
 const entries = [];
 const entryRe = /\{\s*service:\s*'([^']+)',\s*method:\s*'([^']+)',\s*path:\s*'([^']+)',\s*summary:\s*'([^']+)',\s*mcpToolName:\s*'([^']+)',\s*openapiOperationId:\s*'([^']+)',\s*status:\s*'([^']+)'(?:,\s*notes:\s*'([^']+)')?\s*\}/g;
 let m;
@@ -108,6 +116,7 @@ for (const svc of SERVICE_ORDER) {
   if (!list || list.length === 0) continue;
   lines.push(`### ${SERVICE_TITLE[svc] ?? svc} (\`${svc}\`)`);
   lines.push('');
+  if (serviceNotes[svc]) lines.push(`> ${serviceNotes[svc]}`, '');
   lines.push('| MCP tool | REST endpoint | Status | Summary |');
   lines.push('|---|---|---|---|');
   for (const e of list) {

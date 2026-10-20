@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import { z } from 'zod';
 import {
   REST_CATALOG,
+  REST_SERVICE_NOTES,
   endpointsForTool,
   endpointsForService,
   restHintForTool,
@@ -10,6 +11,13 @@ import {
 import { SERVICE_VALUES } from '../sharedTools/listRestEndpoints.js';
 
 describe('restCatalog', () => {
+  it('service notes obey the doc generator parse rules (known service, no apostrophe)', () => {
+    for (const [service, note] of Object.entries(REST_SERVICE_NOTES)) {
+      assert.ok((SERVICE_VALUES as string[]).includes(service), service);
+      assert.ok(note && !note.includes("'"), `${service}: an apostrophe truncates the note in docs/REST_ENDPOINTS.md`);
+    }
+  });
+
   describe('REST_CATALOG shape', () => {
     it('is non-empty', () => {
       assert.ok(REST_CATALOG.length > 0);

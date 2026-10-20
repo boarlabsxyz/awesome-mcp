@@ -3215,6 +3215,30 @@ function registerSharedRoutes(app: express.Express): void {
     }
   });
 
+  /**
+   * The rules with the connected account added (see includeConnectedAccount).
+   * Answers 502 itself and returns undefined when GitHub cannot say who the
+   * account is: saving without it would store the incoherent policy this
+   * exists to prevent.
+   */
+  async function githubRulesWithConnectedAccount(
+    owned: { user: any; connection: any },
+    rules: { allowedOwners: string[] },
+    res: express.Response,
+  ): Promise<{ allowedOwners: string[] } | undefined> {
+    const { createGitHubSession } = await import('../userSession.js');
+    const { maybeRefreshGitHubToken, getGitHubClient, describeGitHubError } = await import('../github/apiHelpers.js');
+    const { includeConnectedAccount } = await import('../github/accessRules.js');
+    try {
+      const session = createGitHubSession(owned.user, owned.connection);
+      await maybeRefreshGitHubToken(session, REST_PROVIDER_LOG);
+      return await includeConnectedAccount(rules, getGitHubClient(session));
+    } catch (err) {
+      res.status(502).json({ error: `Rules not saved: could not confirm the connected GitHub account. ${describeGitHubError(err)}` });
+      return undefined;
+    }
+  }
+
   app.post('/api/instances/:instanceId/github-access-rules', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
     try {
       const { parseGitHubAccessRulesBody } = await import('../github/accessRules.js');
@@ -3223,6 +3247,8 @@ function registerSharedRoutes(app: express.Express): void {
 
       const owned = await ownedConnection(req, res, 'github', 'GitHub');
       if (!owned) return;
+      const rules = parsed.rules && await githubRulesWithConnectedAccount(owned, parsed.rules, res);
+      if (rules === undefined) return;
       const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
       // Spread, because the store replaces provider_tokens whole. Removing the
       // restriction deletes the key rather than storing an empty object: the
@@ -3231,13 +3257,13 @@ function registerSharedRoutes(app: express.Express): void {
       const instanceId = owned.connection.instanceId;
       const rest = { ...(owned.connection.providerTokens as any) };
       delete rest.accessRules;
-      await updateMcpInstanceProviderTokens(instanceId, parsed.rules ? { ...rest, accessRules: parsed.rules } : rest);
+      await updateMcpInstanceProviderTokens(instanceId, rules ? { ...rest, accessRules: rules } : rest);
 
-      const change = parsed.rules
-        ? 'limited GitHub ' + instanceId + ' to ' + parsed.rules.allowedOwners.length + ' owner(s)'
+      const change = rules
+        ? 'limited GitHub ' + instanceId + ' to ' + rules.allowedOwners.length + ' owner(s)'
         : 'removed GitHub access rules for ' + instanceId;
       console.error(`User ${owned.user.id} ${change}`);
-      res.json({ success: true, accessRules: parsed.rules });
+      res.json({ success: true, accessRules: rules });
     } catch (err) {
       console.error('[github-access-rules] error:', err);
       res.status(500).json({ error: 'Failed to save GitHub access rules' });

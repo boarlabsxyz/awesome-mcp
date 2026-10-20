@@ -118,6 +118,25 @@ export function parseGitHubAccessRulesBody(
   return { ok: true, rules: { allowedOwners } };
 }
 
+/**
+ * Put the connected account itself into a rule set before it is stored. The
+ * dashboard always ticks it, but the route is reachable without the dashboard,
+ * and a policy without it is incoherent rather than stricter: GitHub sends an
+ * organization-less fork and `POST /user/repos` to that account regardless (no
+ * owner in the path or body to check), while an explicit read of the same
+ * account's repositories would be refused. Done once at save time, not per
+ * call, so enforcement costs no extra `/user` request.
+ */
+export async function includeConnectedAccount(
+  rules: GitHubAccessRules,
+  client: { get<T>(path: string): Promise<{ data: T }> },
+): Promise<GitHubAccessRules> {
+  const { data } = await client.get<{ login?: unknown }>('/user');
+  const self = normalizeOwner(data?.login);
+  if (!self) throw new Error('GitHub did not return the connected account login');
+  return rules.allowedOwners.includes(self) ? rules : { allowedOwners: [self, ...rules.allowedOwners] };
+}
+
 export function assertOwnerAllowed(owner: string, policy: OwnerPolicy): void {
   if (policy && !ownerAllowed(owner, policy)) throw new GitHubAccessDenied(owner, policy);
 }

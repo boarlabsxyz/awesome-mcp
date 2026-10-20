@@ -93,6 +93,27 @@ describe('GitHub Access Rules dashboard routes', () => {
     assert.deepEqual((await get(instanceId)).body.currentRules, { allowedOwners: ['me', 'acme'] });
   });
 
+  it('adds the connected account at save time even when a direct POST omits it', async () => {
+    const res = await post(instanceId, { allowedOwners: ['acme'] });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.accessRules, { allowedOwners: ['me', 'acme'] });
+    assert.deepEqual((await stored(instanceId)).accessRules, { allowedOwners: ['me', 'acme'] });
+  });
+
+  it('refuses to save, writing nothing, when GitHub cannot confirm the account', async () => {
+    const before = await stored(instanceId);
+    const working = globalThis.fetch;
+    globalThis.fetch = (async () => json(401, { message: 'Bad credentials' })) as typeof fetch;
+    try {
+      const res = await post(instanceId, { allowedOwners: ['acme'] });
+      assert.equal(res.status, 502);
+      assert.match(res.body.error, /Rules not saved/);
+    } finally {
+      globalThis.fetch = working;
+    }
+    assert.deepEqual(await stored(instanceId), before);
+  });
+
   it('marks a saved owner the scan no longer sees, so Save cannot silently revoke it', async () => {
     await post(instanceId, { allowedOwners: ['me', 'vanished-org'] });
     const row = (await get(instanceId)).body.owners.find((o: any) => o.login === 'vanished-org');

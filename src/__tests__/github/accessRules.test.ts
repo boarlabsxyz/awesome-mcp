@@ -38,6 +38,19 @@ function stub(handler: (method: string, path: string, url: URL, init: any) => Re
 
 const policy = (...owners: string[]) => new Set(owners);
 
+describe('includeConnectedAccount', () => {
+  const clientFor = (login: unknown) => ({ get: async () => ({ data: { login } }) }) as any;
+
+  it('adds the connected account first, and only once', async () => {
+    assert.deepEqual(await rules.includeConnectedAccount({ allowedOwners: ['acme'] }, clientFor('Me')), { allowedOwners: ['me', 'acme'] });
+    assert.deepEqual(await rules.includeConnectedAccount({ allowedOwners: ['acme', 'me'] }, clientFor('me')), { allowedOwners: ['acme', 'me'] });
+  });
+
+  it('throws rather than store rules when GitHub names no account', async () => {
+    await assert.rejects(rules.includeConnectedAccount({ allowedOwners: ['acme'] }, clientFor(undefined)), /did not return/);
+  });
+});
+
 describe('owner parsing', () => {
   it('accepts a login, @login or a github.com URL, lower-cased', () => {
     assert.equal(rules.normalizeOwner('Acme-Inc'), 'acme-inc');
