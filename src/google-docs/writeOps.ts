@@ -548,7 +548,10 @@ export interface AddCommentResult {
   // Added by the migration. `ranges` is what the Drive path could never give.
   anchorId: string | null;
   status: string | null;
+  /** What Google recorded. Null when it echoed none back, even if one was asked for. */
   assigneeEmail: string | null;
+  /** What the caller asked for, so an unechoed assignment is visible but not claimed. */
+  requestedAssigneeEmail: string | null;
   requestedRange: { startIndex: number; endIndex: number; tabId?: string; segmentId?: string };
   confirmed: boolean;
   commentUpdateState: string | null;
@@ -595,7 +598,12 @@ export async function performAddComment(docs: Docs, args: AddCommentArgs): Promi
     resolved: reply?.status === 'RESOLVED',
     anchorId: reply?.anchorId ?? null,
     status: reply?.status ?? null,
-    assigneeEmail: head?.assigneeEmail ?? args.assigneeEmail ?? null,
+    // ONLY what Google recorded. Falling back to args.assigneeEmail here would
+    // make the response claim an assignment that may not have been applied,
+    // which is the same lie as reporting an unconfirmed write as success. The
+    // requested value is reported separately, like requestedRange.
+    assigneeEmail: head?.assigneeEmail ?? null,
+    requestedAssigneeEmail: args.assigneeEmail ?? null,
     requestedRange: {
       startIndex: args.startIndex,
       endIndex: args.endIndex,

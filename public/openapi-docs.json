@@ -310,7 +310,13 @@
                     },
                     "assigneeEmail": {
                       "type": "string",
-                      "nullable": true
+                      "nullable": true,
+                      "description": "What Google RECORDED. Null when it echoed none back, even if one was requested."
+                    },
+                    "requestedAssigneeEmail": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "What the caller asked for. Present so an unechoed assignment is visible without being claimed as applied."
                     },
                     "range": {
                       "$ref": "#/components/schemas/Range"
@@ -2140,18 +2146,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string"
-                    },
-                    "content": {
-                      "type": "string"
-                    },
-                    "createdTime": {
-                      "type": "string"
-                    }
-                  }
+                  "$ref": "#/components/schemas/CommentReplyResult"
                 }
               }
             }
@@ -3116,35 +3111,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "postId": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "content": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "createdTime": {
-                      "type": "string",
-                      "format": "date-time",
-                      "nullable": true
-                    },
-                    "confirmed": {
-                      "type": "boolean",
-                      "description": "Google's commentUpdateState verdict. false means the write was NOT acknowledged - re-read before relying on it. A state of ALL_FAILED_UNKNOWN_REASON is returned as an error instead, with nothing written."
-                    },
-                    "commentUpdateState": {
-                      "type": "string",
-                      "nullable": true,
-                      "description": "Google's raw verdict: ALL_SAVED, NO_UPDATES_REQUESTED, or absent."
-                    }
-                  }
+                  "$ref": "#/components/schemas/CommentReplyResult"
                 }
               }
             }
@@ -3536,6 +3503,62 @@
             "items": {
               "$ref": "#/components/schemas/Post"
             }
+          }
+        }
+      },
+      "CommentReplyResult": {
+        "type": "object",
+        "description": "A reply post as performReplyToComment returns it, for a comment or a suggestion thread.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "nullable": true,
+            "description": "Same value as postId. Kept because the pre-existing response published this key."
+          },
+          "postId": {
+            "type": "string",
+            "nullable": true
+          },
+          "content": {
+            "type": "string",
+            "nullable": true
+          },
+          "author": {
+            "type": "object",
+            "description": "An object, not a string: the pre-existing shape was author.displayName.",
+            "properties": {
+              "displayName": {
+                "type": "string",
+                "description": "Display name, or Anonymous. Google sends no email address for a post author."
+              },
+              "isMe": {
+                "type": "boolean"
+              }
+            }
+          },
+          "createdTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "action": {
+            "type": "string",
+            "nullable": true,
+            "description": "RESOLVE or REOPEN when the reply carried an action rather than only text."
+          },
+          "assigneeEmail": {
+            "type": "string",
+            "nullable": true,
+            "description": "Set only when the reply assigned the thread."
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "Google's commentUpdateState verdict. false means the reply was NOT acknowledged - re-read before relying on it."
+          },
+          "commentUpdateState": {
+            "type": "string",
+            "nullable": true,
+            "description": "Google's raw verdict: ALL_SAVED, NO_UPDATES_REQUESTED, or absent."
           }
         }
       }

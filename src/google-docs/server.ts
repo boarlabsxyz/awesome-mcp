@@ -1059,7 +1059,15 @@ server.addTool({
       const docs = await getDocsClient(session);
       const result = await performAddComment(docs, args);
       const quoted = result.quotedText ? ` Anchored to: "${result.quotedText}".` : '';
-      const assigned = result.assigneeEmail ? ` Assigned to ${result.assigneeEmail}.` : '';
+      // Google's recorded assignee, or — when it echoed none back — the request,
+      // said as a request. Printing the asked-for address as though it stuck is
+      // the same overclaim `confirmed` exists to prevent.
+      let assigned = '';
+      if (result.assigneeEmail) assigned = ` Assigned to ${result.assigneeEmail}.`;
+      else if (result.requestedAssigneeEmail) {
+        assigned = ` Assignment to ${result.requestedAssigneeEmail} was requested, but Google echoed no assignee back —`
+          + ' check the thread with getComment.';
+      }
       const note = result.confirmed ? '' : unconfirmedNote(result.commentUpdateState);
       return `Comment added and anchored to ${args.startIndex}-${args.endIndex}. Comment ID: ${result.id}.${quoted}${assigned}${note}`;
     } catch (error: any) {
@@ -1207,7 +1215,11 @@ server.addTool({
 
 /** Shared by the three suggestion verdicts: the id list Google reported back. */
 const suggestionVerdict = (
+  /** Past tense, for the confirmed sentence: "has been accepted". */
   verb: string,
+  /** Base verb, for the unconfirmed one: "Request to accept". Passed rather than
+   * derived — stripping `ed` turns "deleted" into "delet". */
+  action: string,
   suggestionId: string,
   confirmed: boolean,
   reportedIds: string[] | null,
@@ -1217,7 +1229,7 @@ const suggestionVerdict = (
   // request went through and did not touch this suggestion — reporting it as
   // done would be the silent no-op this readback exists to catch.
   const reported = reportedIds === null ? 'Google reported no ids' : `Google reported: ${reportedIds.join(', ') || 'none'}`;
-  return `Request to ${verb.replace(/ed$/, '')} suggestion ${suggestionId} was sent, but it was NOT confirmed `
+  return `Request to ${action} suggestion ${suggestionId} was sent, but it was NOT confirmed `
     + `(${reported}). Check with listSuggestions before relying on it.`;
 };
 
@@ -1231,7 +1243,7 @@ server.addTool({
     try {
       const docs = await getDocsClient(session);
       const { confirmed, reportedIds } = await performAcceptSuggestion(docs, args);
-      return suggestionVerdict('accepted', args.suggestionId, confirmed, reportedIds);
+      return suggestionVerdict('accepted', 'accept', args.suggestionId, confirmed, reportedIds);
     } catch (error: any) {
       log.error(`Error accepting suggestion: ${error.message || error}`);
       commentFailure(error, 'accept suggestion');
@@ -1249,7 +1261,7 @@ server.addTool({
     try {
       const docs = await getDocsClient(session);
       const { confirmed, reportedIds } = await performRejectSuggestion(docs, args);
-      return suggestionVerdict('rejected', args.suggestionId, confirmed, reportedIds);
+      return suggestionVerdict('rejected', 'reject', args.suggestionId, confirmed, reportedIds);
     } catch (error: any) {
       log.error(`Error rejecting suggestion: ${error.message || error}`);
       commentFailure(error, 'reject suggestion');
@@ -1267,7 +1279,7 @@ server.addTool({
     try {
       const docs = await getDocsClient(session);
       const { confirmed, reportedIds } = await performDeleteSuggestion(docs, args);
-      return suggestionVerdict('deleted', args.suggestionId, confirmed, reportedIds);
+      return suggestionVerdict('deleted', 'delete', args.suggestionId, confirmed, reportedIds);
     } catch (error: any) {
       log.error(`Error deleting suggestion: ${error.message || error}`);
       commentFailure(error, 'delete suggestion');

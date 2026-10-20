@@ -713,6 +713,31 @@ describe('docs comment ops', () => {
       });
     });
 
+    it('reports ONLY the assignee Google recorded, with the request kept separate', async () => {
+      // Google echoing no assignee back does not mean the assignment applied.
+      // Reporting args.assigneeEmail as `assigneeEmail` would claim it did.
+      const docs = mkCommentDocs({
+        commentUpdateState: 'ALL_SAVED',
+        replies: [{ insertComment: { commentThread: { commentId: 'cmt-1', headPost: { postId: 'p-1' } } } }],
+      });
+      const out = await performAddComment(docs, {
+        documentId: 'd1', startIndex: 1, endIndex: 2, commentText: 'x', assigneeEmail: 'ada@example.com',
+      } as any);
+      assert.equal(out.assigneeEmail, null);
+      assert.equal(out.requestedAssigneeEmail, 'ada@example.com');
+    });
+
+    it('reports the recorded assignee when Google does echo one', async () => {
+      const docs = mkCommentDocs({
+        commentUpdateState: 'ALL_SAVED',
+        replies: [{ insertComment: { commentThread: { commentId: 'cmt-1', headPost: { postId: 'p-1', assigneeEmail: 'bob@example.com' } } } }],
+      });
+      const out = await performAddComment(docs, {
+        documentId: 'd1', startIndex: 1, endIndex: 2, commentText: 'x', assigneeEmail: 'ada@example.com',
+      } as any);
+      assert.equal(out.assigneeEmail, 'bob@example.com', 'what Google stored wins over what was asked for');
+    });
+
     it('refuses a body over the 2048-BYTE cap, counting UTF-8 rather than length', async () => {
       const docs = mkCommentDocs();
       // 600 four-byte emoji = 2400 UTF-8 bytes but only 1200 UTF-16 units, so a

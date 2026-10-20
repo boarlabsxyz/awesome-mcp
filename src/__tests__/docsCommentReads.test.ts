@@ -103,6 +103,40 @@ describe('fetchDocumentThreads', () => {
     tabs: [{ tabProperties: { tabId: 't.0' }, documentTab: { commentAnchors: { 'a-1': { ranges: [{ startIndex: 7, endIndex: 12 }] } } } }],
   };
 
+  it('asks for childTabs, because a fields mask cannot recurse', async () => {
+    const docs = mkDocs(payload);
+    await fetchDocumentThreads(docs, 'd1');
+    const { fields } = docs.documents.get.mock.calls[0].arguments[0];
+    // Without this the response omits tabs[].childTabs entirely, the recursive
+    // walk has nothing to walk, and every comment in a nested tab reads as
+    // having no anchored range. Google documents 3 nesting levels.
+    assert.match(fields, /childTabs\(/);
+    assert.ok(
+      fields.split('childTabs(').length - 1 >= 3,
+      'the mask must spell out at least Google 3 documented nesting levels',
+    );
+  });
+
+  it('resolves an anchor in a NESTED tab through the real read path', async () => {
+    // The sibling collectCommentAnchors test walks a hand-built tab tree. This
+    // one goes through fetchDocumentThreads, so it also covers the projection
+    // actually finding the range for a thread anchored deep in the tree.
+    const docs = mkDocs({
+      comments: [{ commentId: 'cmt-deep', anchorId: 'a-deep', status: 'OPEN', headPost: head() }],
+      tabs: [{
+        tabProperties: { tabId: 't.0' },
+        documentTab: { commentAnchors: {} },
+        childTabs: [{
+          tabProperties: { tabId: 't.0.1' },
+          documentTab: { commentAnchors: { 'a-deep': { ranges: [{ startIndex: 4, endIndex: 9 }] } } },
+        }],
+      }],
+    });
+    const threads = await fetchDocumentThreads(docs, 'd1');
+    assert.deepEqual(threads.comments[0].ranges, [{ startIndex: 4, endIndex: 9, segmentId: null, tabId: 't.0.1' }]);
+    assert.match(renderCommentThread(threads.comments[0]), /Range: 4-9 \(tab t\.0\.1\)/);
+  });
+
   it('sends the three parameters that only work together', async () => {
     const docs = mkDocs(payload);
     await fetchDocumentThreads(docs, 'd1');
@@ -113,8 +147,10 @@ describe('fetchDocumentThreads', () => {
     assert.equal(sent.commentsViewMode, 'COMMENTS_VIEW_MODE_INCLUDED');
     assert.equal(sent.suggestionsViewMode, 'SUGGESTIONS_INLINE');
     assert.equal(sent.includeTabsContent, true);
-    // And it asks for the anchor map without the document body.
-    assert.match(sent.fields, /tabs\/documentTab\/commentAnchors/);
+    // And it asks for the anchor map without the document body. The mask is in
+    // Google's grouped form — tabs(...) — because the nesting below needs it.
+    assert.match(sent.fields, /tabs\(/);
+    assert.match(sent.fields, /documentTab\/commentAnchors/);
     assert.ok(!/body/.test(sent.fields), 'the body is not needed to read comments');
   });
 

@@ -4685,7 +4685,10 @@ function registerRestApiRoutes(app: express.Express): void {
         resolved: comment.resolved,
         anchorId: comment.anchorId,
         status: comment.status,
+        // What Google recorded, and separately what was asked for: an assignment
+        // it did not echo back must be visible without being reported as applied.
         assigneeEmail: comment.assigneeEmail,
+        requestedAssigneeEmail: comment.requestedAssigneeEmail,
         range: comment.requestedRange,
         confirmed: comment.confirmed,
         commentUpdateState: comment.commentUpdateState,

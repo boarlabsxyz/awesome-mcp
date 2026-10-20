@@ -420,6 +420,29 @@ describe('docs comment and suggestion tools', () => {
       assert.match(out, /Anchored to: "brave"/);
     });
 
+    it('does not claim an assignment Google echoed no assignee for', async () => {
+      const docs = commentDocs({
+        commentUpdateState: 'ALL_SAVED',
+        replies: [{ insertComment: { commentThread: { commentId: 'cmt-9', status: 'OPEN', headPost: {} } } }],
+      });
+      const out = await call('addComment', {
+        documentId: 'd1', startIndex: 7, endIndex: 12, commentText: 'Nice', assigneeEmail: 'ada@example.com',
+      }, session(docs));
+      assert.match(out, /Assignment to ada@example\.com was requested, but Google echoed no assignee back/);
+      assert.ok(!/ Assigned to /.test(out), 'must not read as a completed assignment');
+    });
+
+    it('reports a recorded assignment plainly', async () => {
+      const docs = commentDocs({
+        commentUpdateState: 'ALL_SAVED',
+        replies: [{ insertComment: { commentThread: { commentId: 'cmt-9', status: 'OPEN', headPost: { assigneeEmail: 'ada@example.com' } } } }],
+      });
+      const out = await call('addComment', {
+        documentId: 'd1', startIndex: 7, endIndex: 12, commentText: 'Nice', assigneeEmail: 'ada@example.com',
+      }, session(docs));
+      assert.match(out, /Assigned to ada@example\.com\./);
+    });
+
     it('addComment wraps a failure', async () => {
       const docs = mkDocs({ documents: { batchUpdate: mock.fn(async () => { throw mkErr(500); }) } });
       await assert.rejects(
@@ -531,6 +554,24 @@ describe('docs comment and suggestion tools', () => {
       const out = await call('acceptSuggestion', { documentId: 'd1', suggestionId: 'sug-1' }, session(docs));
       assert.match(out, /NOT confirmed/);
       assert.match(out, /Google reported: other/);
+    });
+
+    it('says "delete", not "delet", in the unconfirmed message', async () => {
+      // The base verb is passed, not derived: stripping `ed` off "deleted"
+      // produced "Request to delet suggestion ...".
+      const out = await call('deleteSuggestion', { documentId: 'd1', suggestionId: 's9' },
+        session(commentDocs({ suggestionResponses: [{ deletedSuggestionIds: [] }] })));
+      assert.match(out, /Request to delete suggestion s9/);
+      assert.ok(!/delet /.test(out), 'no truncated verb');
+    });
+
+    it('uses the right base verb for accept and reject too', async () => {
+      const accept = await call('acceptSuggestion', { documentId: 'd1', suggestionId: 's1' },
+        session(commentDocs({ suggestionResponses: [{ acceptedSuggestionIds: [] }] })));
+      assert.match(accept, /Request to accept suggestion s1/);
+      const reject = await call('rejectSuggestion', { documentId: 'd1', suggestionId: 's2' },
+        session(commentDocs({ suggestionResponses: [{ rejectedSuggestionIds: [] }] })));
+      assert.match(reject, /Request to reject suggestion s2/);
     });
 
     it('rejectSuggestion and deleteSuggestion read their own id lists', async () => {

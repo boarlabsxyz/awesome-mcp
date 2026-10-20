@@ -96,6 +96,25 @@ export const COMMENT_READ_PARAMS = {
 } as const;
 
 /**
+ * Google documents a limit of 3 nesting levels for tabs, so the mask spells out
+ * one extra level: cheap, and it means a raised limit degrades to a reported
+ * missing range rather than a silently unanchored comment.
+ */
+const TAB_NESTING_DEPTH = 4;
+
+/**
+ * A partial-response mask CANNOT recurse: `tabs/documentTab/commentAnchors`
+ * selects that sub-path and nothing else, so `tabs[].childTabs` comes back
+ * ABSENT and the recursive walk below has nothing to walk. Every comment in a
+ * nested tab then reads as having no range — the exact failure this module
+ * exists to prevent — so each level is written out explicitly.
+ */
+function tabAnchorFields(depth: number): string {
+  const own = 'tabProperties/tabId,documentTab/commentAnchors';
+  return depth <= 0 ? own : `${own},childTabs(${tabAnchorFields(depth - 1)})`;
+}
+
+/**
  * Keeps a comment read from dragging the whole document body along: one thread
  * can otherwise cost a megabyte of paragraphs nobody asked for. Only the anchor
  * map is taken from the tabs, which is all the ranges need.
@@ -106,10 +125,10 @@ const COMMENT_READ_FIELDS = [
   'revisionId',
   'comments',
   'suggestions',
-  'tabs/tabProperties/tabId',
-  'tabs/documentTab/commentAnchors',
+  `tabs(${tabAnchorFields(TAB_NESTING_DEPTH)})`,
 ].join(',');
 
+/** One Google Post flattened to the shape both surfaces render. Null in, null out. */
 function postView(post?: docs_v1.Schema$Post | null): PostView | null {
   if (!post) return null;
   return {
@@ -164,6 +183,7 @@ export function collectCommentAnchors(tabs?: docs_v1.Schema$Tab[] | null): Map<s
   return anchors;
 }
 
+/** A comment thread plus the range its anchorId resolves to, if that tab came back. */
 function commentThreadView(
   thread: docs_v1.Schema$CommentThread,
   anchors: Map<string, AnchoredRange[]>,
@@ -187,6 +207,7 @@ function commentThreadView(
   };
 }
 
+/** A suggestion thread. No anchor lookup: suggestions carry their own summary text. */
 function suggestionThreadView(thread: docs_v1.Schema$SuggestionThread): SuggestionThreadView {
   const head = postView(thread.headPost);
   return {
@@ -266,6 +287,7 @@ export function projectCommentThread(thread: CommentThreadView) {
 
 // === Rendering, for the MCP tools ===
 
+/** `7-12 (tab t.0)`, comma-joined. Empty string for no ranges, so the caller can omit the line. */
 function renderRanges(ranges: AnchoredRange[]): string {
   if (ranges.length === 0) return '';
   return ranges
@@ -273,6 +295,7 @@ function renderRanges(ranges: AnchoredRange[]): string {
     .join(', ');
 }
 
+/** One numbered reply, marked when it was edited, deleted, or carried a RESOLVE/REOPEN action. */
 function renderPost(post: PostView, index: number): string {
   const when = post.createdTime ? new Date(post.createdTime).toLocaleString() : 'Unknown date';
   const edited = post.updatedTime && post.updatedTime !== post.createdTime ? ' [edited]' : '';
@@ -299,6 +322,7 @@ export function renderCommentThread(thread: CommentThreadView): string {
   return lines.join('\n');
 }
 
+/** Every thread, headed by the open/resolved split a reader is usually scanning for. */
 export function renderCommentThreadList(threads: DocumentThreads): string {
   if (threads.comments.length === 0) {
     // Said in full because an empty list from a successful read is a real answer,
@@ -312,6 +336,7 @@ export function renderCommentThreadList(threads: DocumentThreads): string {
   return [header, ...threads.comments.map((t, i) => `\n${i + 1}. ${renderCommentThread(t)}`)].join('\n');
 }
 
+/** One suggestion: its proposed change, status and discussion. */
 export function renderSuggestionThread(thread: SuggestionThreadView): string {
   const when = thread.createdTime ? new Date(thread.createdTime).toLocaleString() : 'Unknown date';
   const lines = [`**${thread.author}** (${when}) [${thread.status || 'UNKNOWN'}]`];
@@ -324,6 +349,7 @@ export function renderSuggestionThread(thread: SuggestionThreadView): string {
   return lines.join('\n');
 }
 
+/** Every suggestion, or a plain statement that the document has none. */
 export function renderSuggestionThreadList(threads: DocumentThreads): string {
   if (threads.suggestions.length === 0) {
     return 'No suggestions found in this document.';
