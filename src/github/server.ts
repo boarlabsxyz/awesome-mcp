@@ -400,7 +400,7 @@ githubServer.addTool({
 githubServer.addTool({
   name: 'mergePullRequest',
   annotations: { readOnlyHint: false },
-  description: 'Merge a pull request. Pass expectedHeadSha (from getPullRequest) so the merge is refused if new commits were pushed after you looked.',
+  description: 'Merge a pull request. Pass expectedHeadSha (from getPullRequest) so the merge is refused if new commits were pushed after you looked. An already-merged pull request is reported as such (with its merge commit) and nothing is merged; a closed, unmerged one is refused.',
   parameters: mergePullRequestSchema,
   // Adapted from https://github.com/modelcontextprotocol/servers-archived@9be4674d src/github/operations/pulls.ts:234
   execute: async (args, { log, session }) => {

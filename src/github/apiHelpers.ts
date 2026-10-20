@@ -87,6 +87,10 @@ export function parseLinkHeader(header: string | null | undefined): PageInfo {
     if (rels.includes('next')) info.next = page;
     if (rels.includes('last')) info.last = page;
   }
+  // GitHub can send a `next` past its own `last` (seen live on /commits when
+  // the results exactly fill the page: next=2, last=1, and page 2 is empty).
+  // `last` is the bound, so a `next` beyond it is not a next page.
+  if (info.next !== null && info.last !== null && info.next > info.last) info.next = null;
   return info;
 }
 

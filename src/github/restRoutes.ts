@@ -219,7 +219,9 @@ export const GITHUB_WRITE_ROUTES: ReadonlyArray<GitHubWriteRoute> = [
       const result = await ops.performMergePullRequest(c, a);
       // A 200 that says merged:false did not do what was asked; a pipeline
       // checking only the status must not read it as merged.
-      return { status: result.merged ? 200 : 409, body: result };
+      // alreadyMerged is 200: the pull request IS merged, which is what the
+      // caller wanted; the body says this call did not do it.
+      return { status: result.merged || result.alreadyMerged ? 200 : 409, body: result };
     },
     fallback: 'Failed to merge pull request',
   },

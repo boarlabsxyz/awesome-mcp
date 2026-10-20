@@ -110,6 +110,7 @@ interface GhPull {
   merged?: boolean;
   merged_at?: string | null;
   merged_by?: GhUser | null;
+  merge_commit_sha?: string | null;
   mergeable?: boolean | null;
   mergeable_state?: string;
   user: GhUser | null;
@@ -216,6 +217,24 @@ export function normalizeRepoPath(raw: string): string {
     throw new UserError(`"${raw}" is not a clean repository path (empty, "." or ".." segment).`);
   }
   return path;
+}
+
+/**
+ * Refuse writes under `.github/workflows/` before anything is sent. This
+ * connector deliberately does not request the `workflow` scope (a model that
+ * can rewrite CI can exfiltrate repository secrets), and GitHub then refuses
+ * such a push — but with a 404 at the ref update, which reads as "repository
+ * not found" and sends the caller after the wrong cause (seen live).
+ */
+export function assertNoWorkflowPaths(paths: string[]): void {
+  const blocked = paths.filter(p => p.startsWith('.github/workflows/'));
+  if (!blocked.length) return;
+  throw statusError(
+    `${blocked.map(p => `"${p}"`).join(', ')} ${blocked.length === 1 ? 'is a GitHub Actions workflow file' : 'are GitHub Actions workflow files'}, `
+    + 'which this connector cannot write: it deliberately does not request the `workflow` scope, so that a model cannot rewrite CI. '
+    + 'Nothing was written. Edit workflow files on GitHub directly.',
+    403,
+  );
 }
 
 // ---- Read requests (shared with the REST plane) ----
@@ -458,6 +477,7 @@ export interface FileWriteResult {
 
 export async function performCreateOrUpdateFile(client: GitHubClient, args: CreateOrUpdateFileArgs): Promise<FileWriteResult> {
   const path = normalizeRepoPath(args.path);
+  assertNoWorkflowPaths([path]);
   const rp = repoPath(args.owner, args.repo);
   const contentUrl = `${rp}/contents/${slashPath(path)}`;
 
@@ -543,6 +563,7 @@ export interface PushResult {
 
 export async function performPushFiles(client: GitHubClient, args: PushFilesArgs): Promise<PushResult> {
   const files = args.files.map(f => ({ path: normalizeRepoPath(f.path), content: f.content }));
+  assertNoWorkflowPaths(files.map(f => f.path));
   const seen = new Set<string>();
   for (const f of files) {
     if (seen.has(f.path)) throw new UserError(`"${f.path}" appears more than once in files; each path can be written once per commit.`);
@@ -995,7 +1016,37 @@ export async function opCreatePullRequestReview(client: GitHubClient, args: Crea
   ].join('\n');
 }
 
-export async function performMergePullRequest(client: GitHubClient, args: MergePullRequestArgs): Promise<{ merged: boolean; sha: string; message: string }> {
+export interface MergeResult {
+  /** True only when THIS call merged the pull request. */
+  merged: boolean;
+  /** It was merged before this call; nothing was done. */
+  alreadyMerged?: boolean;
+  sha: string;
+  message: string;
+}
+
+/**
+ * Read the pull request first. GitHub answers a merge of an ALREADY-merged
+ * pull request with success and the original merge commit (verified live:
+ * a squash-merged #2 came back as "Merged #2 (merge)"), so without this a
+ * repeated call reports a merge that did not happen, under a method that was
+ * never used. A closed, unmerged one is refused here too: merging it is not
+ * possible, and GitHub's own answer does not say why.
+ */
+export async function performMergePullRequest(client: GitHubClient, args: MergePullRequestArgs): Promise<MergeResult> {
+  const { data: pr } = await client.get<GhPull>(pullPath(args));
+  if (pr.merged || pr.merged_at) {
+    const by = pr.merged_by?.login ? ` by @${pr.merged_by.login}` : '';
+    return {
+      merged: false,
+      alreadyMerged: true,
+      sha: pr.merge_commit_sha ?? '',
+      message: `#${args.pullNumber} was already merged${by}${pr.merged_at ? ` on ${day(pr.merged_at)}` : ''}; nothing was merged by this call.`,
+    };
+  }
+  if (pr.state === 'closed') {
+    throw statusError(`#${args.pullNumber} in ${args.owner}/${args.repo} is closed without being merged; reopen it before merging. Nothing was changed.`, 409);
+  }
   const { data } = await client.put<{ merged: boolean; sha: string; message: string }>(
     `${pullPath(args)}/merge`,
     {
@@ -1010,6 +1061,9 @@ export async function performMergePullRequest(client: GitHubClient, args: MergeP
 
 export async function opMergePullRequest(client: GitHubClient, args: MergePullRequestArgs): Promise<string> {
   const data = await performMergePullRequest(client, args);
+  if (data.alreadyMerged) {
+    return `${data.message}${data.sha ? ` Merge commit: ${data.sha}` : ''}`;
+  }
   if (!data.merged) {
     return `GitHub did NOT merge #${args.pullNumber} in ${args.owner}/${args.repo}: ${data.message}`;
   }
