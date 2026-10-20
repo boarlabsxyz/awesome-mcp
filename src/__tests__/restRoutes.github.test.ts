@@ -293,20 +293,40 @@ describe('REST data plane: GitHub handler bodies', () => {
     });
 
     it('merges (200), answers 409 for merged:false, and passes GitHub\'s 405 through', async () => {
+      const open = () => when('GET', `${UP}/pulls/7`, { json: { number: 7, state: 'open', merged: false } });
+      open();
       when('PUT', `${UP}/pulls/7/merge`, { json: { merged: true, sha: 'm1', message: 'ok' } });
       const ok = await request(app).post(`${G}/pulls/7/merge`).set(auth()).send({ expectedHeadSha: 'h1' });
       assert.equal(ok.status, 200);
-      assert.equal(calls[0].body.sha, 'h1');
+      assert.equal(calls.find(c => c.method === 'PUT')!.body.sha, 'h1');
 
       rules = [];
+      open();
       when('PUT', `${UP}/pulls/7/merge`, { json: { merged: false, sha: '', message: 'nope' } });
       assert.equal((await request(app).post(`${G}/pulls/7/merge`).set(auth()).send({})).status, 409);
 
+      rules = []; calls = [];
+      when('GET', `${UP}/pulls/7`, { json: { number: 7, state: 'closed', merged: true, merge_commit_sha: 'sq1' } });
+      const again = await request(app).post(`${G}/pulls/7/merge`).set(auth()).send({});
+      assert.equal(again.status, 200, 'the PR is merged — what the caller wanted');
+      assert.equal(again.body.merged, false, 'but this call did not merge it');
+      assert.equal(again.body.alreadyMerged, true);
+      assert.equal(again.body.sha, 'sq1');
+      assert.ok(!calls.some(c => c.method === 'PUT'));
+
       rules = [];
+      open();
       when('PUT', `${UP}/pulls/7/merge`, { status: 405, json: { message: 'Pull Request is not mergeable' } });
       const refused = await request(app).post(`${G}/pulls/7/merge`).set(auth()).send({});
       assert.equal(refused.status, 405);
       assert.match(refused.body.error, /not mergeable/);
+    });
+
+    it('refuses a workflow push with 403 and its real reason, before any call', async () => {
+      const res = await request(app).post(`${G}/push`).set(auth()).send({ branch: 'main', message: 'm', files: [{ path: '.github/workflows/ci.yml', content: 'x' }] });
+      assert.equal(res.status, 403);
+      assert.match(res.body.error, /workflow file/);
+      assert.equal(calls.length, 0);
     });
 
     it('rejects a body the tool\'s schema rejects, and a refusal the op makes, before any write', async () => {

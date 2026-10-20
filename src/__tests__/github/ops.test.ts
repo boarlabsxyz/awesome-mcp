@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { UserError } from 'fastmcp';
 
 import type { GitHubClient, PageInfo } from '../../github/apiHelpers.js';
+import { parseLinkHeader } from '../../github/apiHelpers.js';
 import * as ops from '../../github/ops.js';
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH';
@@ -44,6 +45,12 @@ function stubClient(routes: Route[]): { client: GitHubClient; calls: Call[] } {
 const R = '/repos/octo/app';
 
 describe('pageFooter', () => {
+  it('never offers a next page past GitHub\'s own last (seen live: next=2, last=1, page 2 empty)', () => {
+    const info = parseLinkHeader('<https://api.github.com/repos/o/r/commits?per_page=2&page=2>; rel="next", <https://api.github.com/repos/o/r/commits?per_page=2&page=1>; rel="last"');
+    assert.deepEqual(info, { next: null, last: 1 });
+    assert.equal(ops.pageFooter(info, 1, 2), 'These are all the results.');
+  });
+
   it('only says "all the results" when GitHub sent no next link', () => {
     assert.equal(ops.pageFooter({ next: null, last: null }, 1, 30), 'These are all the results.');
     assert.match(ops.pageFooter({ next: 3, last: 7 }, 2, 30), /Page 2 of 7\. More results exist: call again with page=3/);
@@ -314,9 +321,9 @@ describe('repository and pull request writes map camelCase onto GitHub\'s fields
   });
 
   it('mergePullRequest forwards expectedHeadSha as GitHub\'s sha guard', async () => {
-    const { client, calls } = stubClient([{ method: 'PUT', path: `${R}/pulls/4/merge`, reply: { merged: true, sha: 'm1', message: 'ok' } }]);
+    const { client, calls } = stubClient([{ method: 'GET', path: `${R}/pulls/4`, reply: { number: 4, state: 'open', merged: false } }, { method: 'PUT', path: `${R}/pulls/4/merge`, reply: { merged: true, sha: 'm1', message: 'ok' } }]);
     await ops.opMergePullRequest(client, { owner: 'octo', repo: 'app', pullNumber: 4, mergeMethod: 'squash', expectedHeadSha: 'h1' });
-    assert.deepEqual(calls[0].body, { merge_method: 'squash', commit_title: undefined, commit_message: undefined, sha: 'h1' });
+    assert.deepEqual(calls.find(c => c.method === 'PUT')!.body, { merge_method: 'squash', commit_title: undefined, commit_message: undefined, sha: 'h1' });
   });
 
   it('createPullRequestReview validates before submitting anything', async () => {
@@ -492,8 +499,44 @@ describe('remaining writes', () => {
   });
 
   it('mergePullRequest reports a merge GitHub declined', async () => {
-    const { client } = stubClient([{ method: 'PUT', path: `${R}/pulls/4/merge`, reply: { merged: false, sha: '', message: 'Base branch was modified' } }]);
+    const { client } = stubClient([{ method: 'GET', path: `${R}/pulls/4`, reply: { number: 4, state: 'open', merged: false } }, { method: 'PUT', path: `${R}/pulls/4/merge`, reply: { merged: false, sha: '', message: 'Base branch was modified' } }]);
     assert.match(await ops.opMergePullRequest(client, { owner: 'octo', repo: 'app', pullNumber: 4 }), /did NOT merge.*Base branch was modified/);
+  });
+
+  it('mergePullRequest on an ALREADY-merged PR says so and merges nothing (GitHub would answer success)', async () => {
+    const { client, calls } = stubClient([{ method: 'GET', path: `${R}/pulls/2`, reply: {
+      number: 2, state: 'closed', merged: true, merged_at: '2026-10-20T10:00:00Z', merged_by: { login: 'ann' }, merge_commit_sha: 'sq1',
+    } }]);
+    const out = await ops.opMergePullRequest(client, { owner: 'octo', repo: 'app', pullNumber: 2, mergeMethod: 'merge' });
+    assert.match(out, /^#2 was already merged by @ann on 2026-10-20; nothing was merged by this call\. Merge commit: sq1$/);
+    assert.doesNotMatch(out, /\(merge\)/, 'no merge method is claimed for a merge this call did not make');
+    assert.deepEqual(calls.map(c => c.method), ['GET']);
+  });
+
+  it('mergePullRequest refuses a closed, unmerged PR with 409 before calling merge', async () => {
+    const { client, calls } = stubClient([{ method: 'GET', path: `${R}/pulls/5`, reply: { number: 5, state: 'closed', merged: false } }]);
+    await assert.rejects(ops.opMergePullRequest(client, { owner: 'octo', repo: 'app', pullNumber: 5 }), (e: any) => {
+      assert.match(e.message, /closed without being merged; reopen it/);
+      assert.equal(e.status, 409);
+      return true;
+    });
+    assert.deepEqual(calls.map(c => c.method), ['GET']);
+  });
+
+  it('refuses .github/workflows/ writes up front, naming the real reason instead of GitHub\'s 404', async () => {
+    const { client, calls } = stubClient([]);
+    await assert.rejects(ops.opPushFiles(client, { owner: 'octo', repo: 'app', branch: 'main', message: 'm', files: [
+      { path: 'README.md', content: 'x' }, { path: '.github/workflows/ci.yml', content: 'y' },
+    ] }), (e: any) => {
+      assert.match(e.message, /"\.github\/workflows\/ci\.yml" is a GitHub Actions workflow file/);
+      assert.match(e.message, /does not request the `workflow` scope/);
+      assert.equal(e.status, 403);
+      return true;
+    });
+    await assert.rejects(ops.opCreateOrUpdateFile(client, { owner: 'octo', repo: 'app', path: './.github/workflows/x.yml', content: 'y', message: 'm', branch: 'main' } as any), /workflow file/);
+    assert.equal(calls.length, 0, 'nothing reached GitHub — not even a blob');
+    // Only the workflows directory: other .github files are ordinary.
+    ops.assertNoWorkflowPaths(['.github/CODEOWNERS', '.github/dependabot.yml', 'docs/.github/workflows/x.yml']);
   });
 
   it('updatePullRequestBranch sends the head guard and says it is asynchronous', async () => {

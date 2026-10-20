@@ -12000,7 +12000,7 @@
       "post": {
         "operationId": "mergeGitHubPullRequest",
         "summary": "Merge a pull request",
-        "description": "Exposed with explicit sign-off: effectively irreversible. Pass expectedHeadSha to refuse a merge of commits pushed after review. 200 when merged, 409 when GitHub answered merged false, 405 when not mergeable. Mirrors the MCP tool `mergePullRequest`.",
+        "description": "Exposed with explicit sign-off: effectively irreversible. Pass expectedHeadSha to refuse a merge of commits pushed after review. 200 when merged; 200 with alreadyMerged true and merged false when it was merged before this call (nothing is merged twice); 409 when closed unmerged or when GitHub answered merged false; 405 when not mergeable. Mirrors the MCP tool `mergePullRequest`.",
         "tags": [
           "github"
         ],
