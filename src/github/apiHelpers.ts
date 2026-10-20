@@ -30,6 +30,7 @@ import {
 } from './accessRules.js';
 import { GITHUB_API_BASE_URL, githubHeaders } from './constants.js';
 import { GITHUB_TOKEN_URL, refreshGitHubToken } from './oauthCallback.js';
+import { oauthAppApprovalUrl } from './ownerDiscovery.js';
 
 export { GITHUB_API_BASE_URL } from './constants.js';
 
@@ -152,6 +153,11 @@ export class GitHubClient {
 
   get baseUrl(): string {
     return this.opts.baseUrl ?? GITHUB_API_BASE_URL;
+  }
+
+  /** This connection's owner allowlist, or null when unrestricted. */
+  get allowedOwners(): OwnerPolicy {
+    return this.opts.allowedOwners ?? null;
   }
 
   async request<T>(
@@ -399,6 +405,14 @@ function forbiddenMessage(error: any, message: string): string {
   }
   if (/workflow/i.test(message)) {
     return `${message} — this connector deliberately does not request the \`workflow\` scope, so files under .github/workflows/ cannot be written through it; edit them on GitHub directly.`;
+  }
+  if (/OAuth App access restrictions/i.test(message)) {
+    // The organization has not approved this app. No setting on our side —
+    // access rules, scopes, a reconnect — changes that; only an owner can.
+    const org = /the [`'"]?([^`'"\s]+)[`'"]? organization/i.exec(message)?.[1];
+    const approval = oauthAppApprovalUrl();
+    return `${org ? `The ${org} organization` : 'This organization'} restricts OAuth Apps and has not approved this one, so GitHub hides its resources from this connection. `
+      + `${approval ? `Request approval (an owner can grant it directly) at ${approval}` : 'An organization owner must approve the app'}; until then nothing in this connector's settings can reach it.`;
   }
   const scopes = missingScopeNote(error);
   if (scopes) return scopes;

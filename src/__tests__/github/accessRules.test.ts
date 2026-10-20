@@ -268,6 +268,70 @@ describe('owner discovery for the dashboard', () => {
   });
 });
 
+describe('organization membership and visibility', () => {
+  /** Routes: /user, /user/repos (one page), then whatever `orgs` answers. */
+  const github = (orgs: (path: string) => Response) => stub((_m, path) => {
+    if (path === '/user') return json(200, { login: 'me' });
+    if (path === '/user/repos') return json(200, [
+      { owner: { login: 'me', type: 'User' } },
+      { owner: { login: 'acme', type: 'Organization' } },
+      { owner: { login: 'acme', type: 'Organization' } },
+    ]);
+    return orgs(path);
+  });
+
+  it('with read:org, lists every membership and counts the repositories each exposes', async () => {
+    const { fetchImpl } = github(() => json(200, [{ login: 'acme' }, { login: 'locked-org' }], { 'x-oauth-scopes': 'repo, read:org' }));
+    const r = await discoverGitHubOwners(new GitHubClient('t', { fetchImpl }));
+    assert.equal(r.membership, 'full');
+    assert.equal(r.selfRepos, 1);
+    assert.deepEqual(r.owners.map(o => [o.login, o.member, o.repos]), [['acme', true, 2], ['locked-org', true, 0]]);
+    assert.deepEqual(r.notes, []);
+  });
+
+  it('without read:org, falls back to PUBLIC memberships and says private ones are missing', async () => {
+    const { fetchImpl, seen } = github(path => path === '/user/orgs'
+      ? json(403, { message: 'You need at least read:org scope' })
+      : json(200, [{ login: 'public-org' }]));
+    const r = await discoverGitHubOwners(new GitHubClient('t', { fetchImpl }));
+    assert.ok(seen.includes('GET /users/me/orgs'));
+    assert.equal(r.membership, 'public-only');
+    assert.deepEqual(r.owners.map(o => [o.login, o.member]), [['acme', false], ['public-org', true]]);
+    assert.match(r.notes[0], /Reconnect it from the dashboard/);
+  });
+
+  it('recognises a fine-grained token: 200, no scope header, no organizations', async () => {
+    const { fetchImpl } = github(() => json(200, []));
+    const r = await discoverGitHubOwners(new GitHubClient('t', { fetchImpl }));
+    assert.equal(r.membership, 'fine-grained');
+    assert.match(r.notes[0], /fine-grained token belongs to a single owner/);
+  });
+
+  it('listOrganizations flags a member organization with nothing visible, and shows the rules', async () => {
+    const saved = process.env.GITHUB_CLIENT_ID;
+    process.env.GITHUB_CLIENT_ID = 'Ov23abc';
+    try {
+      const { fetchImpl } = github(() => json(200, [{ login: 'acme' }, { login: 'locked-org' }], { 'x-oauth-scopes': 'repo, read:org' }));
+      const out = await ops.opListOrganizations(new GitHubClient('t', { fetchImpl, allowedOwners: policy('me', 'acme') }));
+      assert.match(out, /^GitHub account: me \(1 repositories of its own\)/);
+      assert.match(out, /Access rules: only acme, me/);
+      assert.match(out, /- acme — member · 2 repositories visible · allowed/);
+      assert.match(out, /- locked-org — member · 0 repositories visible · EXCLUDED by access rules/);
+      assert.match(out, /locked-org: you are a member but no repository is visible/);
+      assert.match(out, /settings\/connections\/applications\/Ov23abc/);
+    } finally {
+      if (saved === undefined) delete process.env.GITHUB_CLIENT_ID; else process.env.GITHUB_CLIENT_ID = saved;
+    }
+  });
+
+  it('listOrganizations without rules says everything is reachable', async () => {
+    const { fetchImpl } = github(() => json(200, [{ login: 'acme' }], { 'x-oauth-scopes': 'repo, read:org' }));
+    const out = await ops.opListOrganizations(new GitHubClient('t', { fetchImpl }));
+    assert.match(out, /Access rules: none/);
+    assert.doesNotMatch(out, /no repository is visible/);
+  });
+});
+
 describe('uniqueGitHubInstanceName', () => {
   it('suffixes a repeat connect for the same account instead of refusing it', () => {
     assert.equal(uniqueGitHubInstanceName('GitHub (me)', []), 'GitHub (me)');

@@ -114,8 +114,9 @@ describe('refreshGitHubToken', () => {
 });
 
 describe('GITHUB_OAUTH_SCOPES', () => {
-  it('does not request `workflow` (CI rewrite) or anything no tool uses', () => {
-    assert.deepEqual(GITHUB_OAUTH_SCOPES, ['repo']);
+  it('requests repo + read-only read:org, and never `workflow` (CI rewrite)', () => {
+    assert.deepEqual(GITHUB_OAUTH_SCOPES, ['repo', 'read:org']);
+    assert.ok(!GITHUB_OAUTH_SCOPES.includes('workflow'));
   });
 });
 
