@@ -98,6 +98,21 @@ describe('GitHubClient.request', () => {
 });
 
 describe('describeGitHubError — one status, several causes', () => {
+  it('names an organization that restricts OAuth Apps, and where to request approval', () => {
+    const saved = process.env.GITHUB_CLIENT_ID;
+    process.env.GITHUB_CLIENT_ID = 'Ov23abc';
+    try {
+      const message = describeGitHubError(apiError(403, {
+        message: 'Although you appear to have the correct authorization credentials, the `speed-and-function` organization has enabled OAuth App access restrictions, meaning that data access to third-parties is limited.',
+      }));
+      assert.match(message, /The speed-and-function organization restricts OAuth Apps and has not approved this one/);
+      assert.match(message, /https:\/\/github\.com\/settings\/connections\/applications\/Ov23abc/);
+      assert.match(message, /nothing in this connector's settings can reach it/);
+    } finally {
+      if (saved === undefined) delete process.env.GITHUB_CLIENT_ID; else process.env.GITHUB_CLIENT_ID = saved;
+    }
+  });
+
   it('a 403 with no remaining quota is a rate limit, not a permission problem', () => {
     const reset = Math.floor(Date.now() / 1000) + 600;
     const msg = describeGitHubError(apiError(403, { message: 'API rate limit exceeded' }, {

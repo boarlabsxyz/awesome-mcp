@@ -1897,7 +1897,7 @@
           'A <strong>fine-grained</strong> token is safest: pick the repositories, then grant <strong>Contents</strong>, ' +
           '<strong>Issues</strong> and <strong>Pull requests</strong> (read for lookups, read and write to commit, file issues or merge), ' +
           'plus <strong>Checks</strong> and <strong>Commit statuses</strong> (read) for CI results. ' +
-          'A classic token needs the <code translate="no">repo</code> scope for private repositories. ' +
+          'A classic token needs the <code translate="no">repo</code> scope for private repositories, and <code translate="no">read:org</code> to list your organizations. ' +
           'For an organization that uses SAML single sign-on, also authorize the token for that organization.';
         // github.com only: one API host, so no URL field.
         urlSection.style.display = 'none';
@@ -2692,7 +2692,7 @@
     // an org nobody had unticked. The server returns every saved owner, so
     // every saved owner has a row.
     let githubRulesInstanceId = null;
-    let githubRules = { restricted: false, allowed: [], self: '', owners: [], truncated: false, notes: [] };
+    let githubRules = { restricted: false, allowed: [], self: '', owners: [], truncated: false, notes: [], approvalUrl: null };
     const GITHUB_LOGIN_RE = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
 
     async function openGithubRules(instanceId) {
@@ -2714,6 +2714,7 @@
           owners: data.owners || [],
           truncated: !!data.truncated,
           notes: data.notes || [],
+          approvalUrl: data.approvalUrl || null,
         };
         renderGithubRulesForm();
       } catch (err) {
@@ -2727,9 +2728,13 @@
       const disabled = r.restricted ? '' : 'disabled';
       const ownerRows = r.owners.map(o => {
         const key = o.login.toLowerCase();
+        // A member org with no visible repository is the signature of an org
+        // that restricts OAuth Apps: ticking it here cannot make it reachable.
         const note = !o.discovered
-          ? (o.manual ? ' (added by name)' : ' (saved \u2014 not seen in this scan)')
-          : (o.type === 'User' ? ' (user)' : '');
+          ? (o.manual ? ' (added by name \u2014 not seen in this scan)' : ' (saved \u2014 not seen in this scan)')
+          : o.member && !o.repos
+            ? ' (member \u2014 no repositories visible; may need approval)'
+            : ` (${o.repos} ${o.repos === 1 ? 'repository' : 'repositories'}${o.type === 'User' ? ', user' : ''})`;
         // Unrestricted: every box shows ticked and disabled, because every
         // owner IS reachable — an unticked box there would misstate it.
         const checked = !r.restricted || r.allowed.includes(key) ? 'checked' : '';
@@ -2739,8 +2744,15 @@
             <span translate="no">${escapeHtml(o.login)}</span><span style="color: #666; font-size: 11px;">${escapeHtml(note)}</span>
           </label>`;
       }).join('');
-      const warning = r.truncated
+      // Every note is shown, not only on a truncated scan: "private memberships
+      // are not listed" is exactly what explains an organization missing here.
+      const warning = r.notes.length
         ? `<p role="status" style="color: #fbbf24; font-size: 11px; margin: 6px 0 0;">Some organizations may be missing from this list:<br />${r.notes.map(n => escapeHtml(n)).join('<br />')}</p>`
+        : '';
+      const needsApproval = r.owners.some(o => (o.member && !o.repos) || !o.discovered);
+      const approval = needsApproval
+        ? `<p style="color: #9ca3af; font-size: 11px; margin: 6px 0 0;">An organization that restricts OAuth Apps stays unreachable until an owner approves this app &mdash; allowing it here is not enough.${
+            r.approvalUrl ? ` <a href="${escapeAttr(r.approvalUrl)}" target="_blank" rel="noopener">Request approval on GitHub</a> (owners can grant it there directly).` : ''}</p>`
         : '';
       document.getElementById('githubRulesContent').innerHTML = `
         <div class="rules-section">
@@ -2761,12 +2773,14 @@
           </label>
           ${ownerRows || '<p style="opacity: 0.7; font-size: 0.9em; margin: 4px 0;">No organizations found for this account.</p>'}
           ${warning}
+          ${approval}
           <div style="display: flex; gap: 6px; margin-top: 8px;">
             <input type="text" id="githubOwnerInput" placeholder="Or add an organization by name, e.g. acme-inc" autocomplete="off" spellcheck="false" class="rules-input" aria-label="Allow an organization by name"
                    onkeydown="if(event.key==='Enter'){event.preventDefault();addGithubOwner();}" />
             <button type="button" onclick="addGithubOwner()" class="rules-add-btn">Add</button>
           </div>
           <p id="githubOwnerError" role="alert" style="color: #f87171; font-size: 11px; margin: 4px 0 0; display: none;"></p>
+          <p id="githubOwnerStatus" role="status" style="color: #6ee7b7; font-size: 11px; margin: 4px 0 0; display: none;"></p>
         </div>`;
     }
 
@@ -2784,9 +2798,22 @@
       githubRules.allowed = [...ticked, ...githubRules.allowed.filter(o => !rendered.has(o))];
     }
 
+    /**
+     * Enter "Only the ticked ones" from "All organizations" with every owner
+     * that was reachable a moment ago still ticked. Starting from an empty
+     * list instead meant adding a second organization by name unticked the
+     * first, and Save then cut the connector off from it.
+     */
+    function restrictGithubRules() {
+      if (githubRules.restricted) return;
+      githubRules.allowed = githubRules.owners.map(o => o.login.toLowerCase());
+      githubRules.restricted = true;
+    }
+
     function setGithubRulesMode(restricted) {
       syncGithubRulesFromDom();
-      githubRules.restricted = restricted;
+      if (restricted) restrictGithubRules();
+      else githubRules.restricted = false;
       renderGithubRulesForm();
     }
 
@@ -2804,6 +2831,8 @@
       }
       error.style.display = 'none';
       syncGithubRulesFromDom();
+      // Adding a name only means something under a restriction.
+      restrictGithubRules();
       const key = value.toLowerCase();
       if (key !== githubRules.self.toLowerCase()) {
         if (!githubRules.owners.some(o => o.login.toLowerCase() === key)) {
@@ -2811,10 +2840,13 @@
         }
         if (!githubRules.allowed.includes(key)) githubRules.allowed.push(key);
       }
-      // Adding a name only means something under a restriction.
-      githubRules.restricted = true;
       input.value = '';
       renderGithubRulesForm();
+      // Say what happened, and what it does NOT do: the list switched to
+      // "Only the ticked ones" and nothing is stored until Save.
+      const status = document.getElementById('githubOwnerStatus');
+      status.textContent = `Added ${value}. Only ticked organizations are reachable now \u2014 untick any you want excluded, then Save Rules.`;
+      status.style.display = '';
     }
 
     function closeGithubRules() {

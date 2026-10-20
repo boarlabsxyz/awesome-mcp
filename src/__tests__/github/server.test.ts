@@ -21,6 +21,8 @@ const READS = [
   'searchIssues', 'searchUsers', 'listPullRequests', 'getPullRequest', 'getPullRequestFiles',
   'getPullRequestStatus', 'getPullRequestComments', 'getPullRequestReviews',
 ];
+/** Added on top of the 26 ported tools. */
+const ADDED_READS = ['listOrganizations'];
 const WRITES = [
   'createRepository', 'forkRepository', 'createOrUpdateFile', 'pushFiles', 'createBranch', 'createIssue',
   'updateIssue', 'addIssueComment', 'createPullRequest', 'createPullRequestReview', 'mergePullRequest',
@@ -33,6 +35,7 @@ const ARGS: Record<string, Record<string, unknown>> = {
   searchCode: { query: 'x' },
   searchIssues: { query: 'x' },
   searchUsers: { query: 'x' },
+  listOrganizations: {},
   createRepository: { name: 'r' },
   forkRepository: { owner: 'o', repo: 'r' },
   getFileContents: { owner: 'o', repo: 'r', path: 'a.md' },
@@ -61,15 +64,15 @@ const log = { info: () => {}, error: () => {}, warn: () => {}, debug: () => {} }
 const realFetch = globalThis.fetch;
 
 describe('github server registration', () => {
-  it('registers the 26 ported tools plus the two shared REST tools', () => {
-    for (const name of [...READS, ...WRITES]) assert.ok(toolMap.has(name), `${name} registered`);
+  it('registers the 26 ported tools, listOrganizations, and the two shared REST tools', () => {
+    for (const name of [...READS, ...ADDED_READS, ...WRITES]) assert.ok(toolMap.has(name), `${name} registered`);
     assert.ok(toolMap.has('mintRestBearerForCurl'));
     assert.ok(toolMap.has('listRestEndpoints'));
     assert.equal(READS.length + WRITES.length, 26);
   });
 
   it('annotates reads read-only and writes as writes, with no destructive hint (nothing here deletes)', () => {
-    for (const name of READS) assert.equal(toolMap.get(name).annotations.readOnlyHint, true, name);
+    for (const name of [...READS, ...ADDED_READS]) assert.equal(toolMap.get(name).annotations.readOnlyHint, true, name);
     for (const name of WRITES) {
       assert.equal(toolMap.get(name).annotations.readOnlyHint, false, name);
       assert.notEqual(toolMap.get(name).annotations.destructiveHint, true, name);
@@ -77,7 +80,7 @@ describe('github server registration', () => {
   });
 
   it('every parameter carries a description, so the model knows how to fill it', () => {
-    for (const name of [...READS, ...WRITES]) {
+    for (const name of [...READS, ...ADDED_READS, ...WRITES]) {
       for (const [field, schema] of Object.entries<any>(toolMap.get(name).parameters.shape)) {
         assert.ok(schema.description, `${name}.${field} has no .describe()`);
       }
@@ -96,7 +99,7 @@ describe('github server registration', () => {
     });
     after(() => { globalThis.fetch = realFetch; });
 
-    for (const name of [...READS, ...WRITES]) {
+    for (const name of [...READS, ...ADDED_READS, ...WRITES]) {
       it(name, async () => {
         const tool = toolMap.get(name);
         const args = tool.parameters.parse(ARGS[name]);

@@ -46,14 +46,19 @@ const TOKEN_EXCHANGE_TIMEOUT_MS = 15_000;
  * fails with GitHub's own "without `workflow` scope" message, which
  * mapGitHubError explains.
  *
- * Nothing else is requested because nothing else is used: no tool reads org
- * membership or teams (`read:org`), and `GET /user` — the only account read,
- * for naming the connection — needs no scope at all.
+ * `read:org` is read-only and is there for ONE reason: listing the
+ * organizations the account belongs to (`GET /user/orgs`), which answers 403
+ * without it. Access Rules and `listOrganizations` need that list, and the
+ * fallbacks without it are partial — public memberships (`/users/{login}/orgs`)
+ * miss every private one, and repository owners miss an organization in which
+ * the account can see no repository. It grants no access to organization DATA:
+ * repositories stay governed by `repo` and by each organization's OAuth App
+ * policy. `GET /user` — for naming the connection — needs no scope at all.
  *
  * Note GitHub tokens are frozen at the scopes they were minted with, so adding
  * a scope here only reaches existing connections after they reconnect.
  */
-export const GITHUB_OAUTH_SCOPES = ['repo'];
+export const GITHUB_OAUTH_SCOPES = ['repo', 'read:org'];
 
 export type FetchImpl = typeof fetch;
 

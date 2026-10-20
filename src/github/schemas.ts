@@ -151,6 +151,9 @@ export const searchIssuesSchema = z.object({
   perPage,
 });
 
+/** No parameters: it reports on the connected account. */
+export const listOrganizationsSchema = z.object({});
+
 export const searchUsersSchema = z.object({
   query: z.string().min(1).describe('User search query, e.g. "tom location:berlin" or "type:org mcp".'),
   sort: z.enum(['followers', 'repositories', 'joined']).optional().describe('Sort field. Omit for best match.'),
@@ -246,6 +249,7 @@ export type AddIssueCommentArgs = z.infer<typeof addIssueCommentSchema>;
 export type SearchCodeArgs = z.infer<typeof searchCodeSchema>;
 export type SearchIssuesArgs = z.infer<typeof searchIssuesSchema>;
 export type SearchUsersArgs = z.infer<typeof searchUsersSchema>;
+export type ListOrganizationsArgs = z.infer<typeof listOrganizationsSchema>;
 export type ListPullRequestsArgs = z.infer<typeof listPullRequestsSchema>;
 export type GetPullRequestArgs = z.infer<typeof getPullRequestSchema>;
 export type CreatePullRequestArgs = z.infer<typeof createPullRequestSchema>;

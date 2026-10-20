@@ -31,8 +31,10 @@
 import { UserError } from 'fastmcp';
 
 import { sliceSafe } from '../google-docs/textSafety.js';
+import { discoverGitHubOwners, oauthAppApprovalUrl } from './ownerDiscovery.js';
 import { describeGitHubError, repoPath, slashPath, seg, type GitHubClient, type GitHubResponse, type PageInfo, type QueryValue } from './apiHelpers.js';
 import type {
+  ListOrganizationsArgs,
   AddIssueCommentArgs,
   CreateBranchArgs,
   CreateIssueArgs,
@@ -855,6 +857,49 @@ export async function opSearchUsers(client: GitHubClient, args: SearchUsersArgs)
   lines.push('');
   for (const u of data.items) lines.push(`- ${u.login}${u.type && u.type !== 'User' ? ` (${u.type})` : ''} — ${u.html_url ?? ''}`);
   lines.push('', pageFooter(page, current, data.items.length));
+  return lines.join('\n');
+}
+
+// ---- Organizations ----
+
+/**
+ * Which organizations the connected account belongs to, which of them this
+ * connection can actually read, and which its access rules allow. The answer
+ * to "why can I not see organization X", which otherwise has three different
+ * causes that look identical from a failing call: the org restricts OAuth
+ * Apps (GitHub hides it), the connection lacks read:org (it is merely
+ * unlisted), or this connector's own rules exclude it.
+ */
+export async function opListOrganizations(client: GitHubClient, _args: ListOrganizationsArgs = {}): Promise<string> {
+  const policy = client.allowedOwners;
+  const found = await discoverGitHubOwners(client, { savedOwners: policy ? [...policy] : [] });
+  const allowed = (login: string) => !policy || policy.has(login.toLowerCase());
+  const blockedLooking = found.owners.filter(o => o.member && o.repos === 0);
+
+  const lines = [
+    `GitHub account: ${found.self} (${found.selfRepos} repositories of its own)`,
+    policy
+      ? `Access rules: only ${[...policy].sort((a, b) => a.localeCompare(b)).join(', ')} — calls into any other owner are refused by this connector.`
+      : 'Access rules: none — this connector may reach every organization below.',
+    '',
+  ];
+  if (!found.owners.length) lines.push('No organizations found.');
+  for (const o of found.owners) {
+    const facts = [
+      o.member ? 'member' : (o.type === 'User' ? 'user (collaborator)' : null),
+      o.discovered ? `${o.repos}${found.truncated ? '+' : ''} repositories visible` : 'not seen in this scan (in the access rules only)',
+      allowed(o.login) ? 'allowed' : 'EXCLUDED by access rules',
+    ].filter(Boolean).join(' · ');
+    lines.push(`- ${o.login} — ${facts}`);
+  }
+  if (blockedLooking.length) {
+    const approval = oauthAppApprovalUrl();
+    lines.push('', `${blockedLooking.map(o => o.login).join(', ')}: you are a member but no repository is visible to this connection. `
+      + 'That usually means the organization restricts OAuth Apps and has not approved this one — GitHub then hides its private resources, '
+      + `whatever the access rules say. ${approval ? `Request approval (owners can grant it directly) at ${approval}.` : 'An owner must approve the app.'} `
+      + 'It can also simply be an organization with no repositories you can read.');
+  }
+  if (found.notes.length) lines.push('', ...found.notes.map(n => `Note: ${n}`));
   return lines.join('\n');
 }
 

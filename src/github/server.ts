@@ -44,6 +44,7 @@ import {
   searchCodeSchema,
   searchIssuesSchema,
   searchUsersSchema,
+  listOrganizationsSchema,
   listPullRequestsSchema,
   getPullRequestSchema,
   createPullRequestSchema,
@@ -72,6 +73,7 @@ import {
   opSearchCode,
   opSearchIssues,
   opSearchUsers,
+  opListOrganizations,
   opListPullRequests,
   opGetPullRequest,
   opCreatePullRequest,
@@ -318,6 +320,22 @@ githubServer.addTool({
   execute: async (args, { log, session }) => {
     log.info(`searchUsers: ${args.query}`);
     return withGitHubClient('Failed to search users', session, log, c => opSearchUsers(c, args));
+  },
+});
+
+// ---- Organizations ----
+
+githubServer.addTool({
+  name: 'listOrganizations',
+  annotations: { readOnlyHint: true },
+  description:
+    'List the organizations the connected GitHub account belongs to, how many repositories of each this connection can read, '
+    + 'and whether this connector\'s access rules allow each. Use it when an organization seems missing: an organization you are '
+    + 'a member of with no visible repositories usually restricts OAuth Apps and has not approved this app, and the output says how to request approval.',
+  parameters: listOrganizationsSchema,
+  execute: async (args, { log, session }) => {
+    log.info('listOrganizations');
+    return withGitHubClient('Failed to list organizations', session, log, c => opListOrganizations(c, args));
   },
 });
 

@@ -367,7 +367,7 @@ async function seedGitHubCatalog(normalizeUrl: NormalizeUrl): Promise<void> {
     googleClientSecret: githubClientSecret,
     oauthAuthorizationUrl: githubOauthEnabled ? GITHUB_AUTHORIZE_URL : '',
     oauthTokenUrl:         githubOauthEnabled ? GITHUB_TOKEN_URL     : '',
-    // See GITHUB_OAUTH_SCOPES for why this is `repo` alone (and why not `workflow`).
+    // See GITHUB_OAUTH_SCOPES for why this is `repo` + `read:org` (and why not `workflow`).
     oauthScopes: githubOauthEnabled ? GITHUB_OAUTH_SCOPES : [],
     isLocal: !process.env.GITHUB_MCP_URL,
     isActive: true,

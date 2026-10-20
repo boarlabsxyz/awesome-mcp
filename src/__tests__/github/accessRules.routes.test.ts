@@ -117,7 +117,7 @@ describe('GitHub Access Rules dashboard routes', () => {
   it('marks a saved owner the scan no longer sees, so Save cannot silently revoke it', async () => {
     await post(instanceId, { allowedOwners: ['me', 'vanished-org'] });
     const row = (await get(instanceId)).body.owners.find((o: any) => o.login === 'vanished-org');
-    assert.deepEqual(row, { login: 'vanished-org', type: null, saved: true, discovered: false });
+    assert.deepEqual(row, { login: 'vanished-org', type: null, saved: true, discovered: false, member: false, repos: 0 });
   });
 
   it('refuses a name that cannot be a GitHub owner, and an empty list, with nothing written', async () => {

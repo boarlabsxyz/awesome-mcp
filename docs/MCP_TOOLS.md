@@ -22,7 +22,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [HubSpot](#hubspot) (23)
 - [Redmine](#redmine) (46)
 - [Browserbase](#browserbase) (9)
-- [GitHub](#github) (26)
+- [GitHub](#github) (27)
 - [Pinecone](#pinecone) (9)
 
 ## Shared (opt-in per server)
@@ -500,7 +500,7 @@ Source: `src/browserbase/server.ts` — 9 tools.
 
 ## GitHub
 
-Source: `src/github/server.ts` — 26 tools.
+Source: `src/github/server.ts` — 27 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -520,6 +520,7 @@ Source: `src/github/server.ts` — 26 tools.
 | `searchCode` | Search for code across GitHub repositories, with matching fragments. Covers default branches only; GitHub limits code search to 10 requests a minute. | `GET /api/v1/github/search/code?q={query}` |
 | `searchIssues` | Search for issues and pull requests across GitHub repositories, e.g. "repo:o/r is:pr is:open" or "is:issue assignee:@me". Returns at most the first 1,000 matches. | `GET /api/v1/github/search/issues?q={query}` |
 | `searchUsers` | Search for users on GitHub (and organizations, with type:org). | `GET /api/v1/github/search/users?q={query}` |
+| `listOrganizations` | List the organizations the connected GitHub account belongs to, how many repositories of each this connection can read, and whether this connector's access rules allow each. Use it when an organization seems missing: an organization you are a member of with no visible repositories usually restricts OAuth Apps and has not approved this app, and the output says how to request approval. | — |
 | `listPullRequests` | List and filter repository pull requests. Paginated. | `GET /api/v1/github/repos/{owner}/{repo}/pulls` |
 | `getPullRequest` | Get details of a specific pull request: state, head/base and their SHAs, mergeability, size, reviewers and description. | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}` |
 | `createPullRequest` | Create a new pull request in a GitHub repository, from head into base. Both branches must already exist and differ. | — |
@@ -549,4 +550,4 @@ Source: `src/pinecone/server.ts` — 9 tools.
 
 ---
 
-**Grand total: 396 tools across 18 sections.**
+**Grand total: 397 tools across 18 sections.**

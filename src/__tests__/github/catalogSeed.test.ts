@@ -27,7 +27,7 @@ describe('seedDefaultCatalogs — github row', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('with OAuth credentials, advertises GitHub\'s OAuth endpoints and asks for `repo` only', async () => {
+  it('with OAuth credentials, advertises GitHub\'s OAuth endpoints and asks for `repo` + `read:org`', async () => {
     process.env.GITHUB_CLIENT_ID = 'cid';
     process.env.GITHUB_CLIENT_SECRET = 'csecret';
     await store.seedDefaultCatalogs();
@@ -36,7 +36,7 @@ describe('seedDefaultCatalogs — github row', () => {
     assert.equal(row.provider, 'github');
     assert.equal(row.oauthAuthorizationUrl, GITHUB_AUTHORIZE_URL);
     assert.equal(row.oauthTokenUrl, GITHUB_TOKEN_URL);
-    assert.deepEqual(row.oauthScopes, ['repo']);
+    assert.deepEqual(row.oauthScopes, ['repo', 'read:org']);
     assert.equal(row.googleClientId, 'cid');
     assert.equal(row.mcpUrl, '/github');
     assert.equal(row.isActive, true);

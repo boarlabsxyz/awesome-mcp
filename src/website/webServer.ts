@@ -3194,7 +3194,7 @@ function registerSharedRoutes(app: express.Express): void {
       const rules = (owned.connection.providerTokens as any)?.accessRules;
       const { createGitHubSession } = await import('../userSession.js');
       const { maybeRefreshGitHubToken, getGitHubClient, describeGitHubError } = await import('../github/apiHelpers.js');
-      const { discoverGitHubOwners } = await import('../github/ownerDiscovery.js');
+      const { discoverGitHubOwners, oauthAppApprovalUrl } = await import('../github/ownerDiscovery.js');
       const session = createGitHubSession(owned.user, owned.connection);
       await maybeRefreshGitHubToken(session, REST_PROVIDER_LOG);
       let discovery;
@@ -3208,7 +3208,13 @@ function registerSharedRoutes(app: express.Express): void {
       }
       // currentRules null means "no restriction" and is reported as such, not
       // as an empty list — an empty list would read as "reaches nothing".
-      res.json({ ...discovery, currentRules: rules ? { allowedOwners: rules.allowedOwners || [] } : null });
+      res.json({
+        ...discovery,
+        currentRules: rules ? { allowedOwners: rules.allowedOwners || [] } : null,
+        // Null without an OAuth App configured. A connection made by pasting a
+        // token is not governed by the app, which the dialog wording allows for.
+        approvalUrl: oauthAppApprovalUrl(),
+      });
     } catch (err) {
       console.error('[github-access-rules] error:', err);
       res.status(500).json({ error: 'Failed to load GitHub access rules' });
