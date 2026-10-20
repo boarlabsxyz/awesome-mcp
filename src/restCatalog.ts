@@ -456,6 +456,17 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'pinecone', method: 'POST', path: '/api/v1/pinecone/indexes/{indexName}/upsert', summary: 'Insert or update records in an index', mcpToolName: 'upsert-records', openapiOperationId: 'upsertPineconeRecords', status: 'live', notes: 'DESTRUCTIVE - a record whose _id already exists is OVERWRITTEN and there is no undo. Exposed with explicit sign-off: a curl has no confirmation affordance and the permanent dashboard API key is accepted here. It is also the bulk-load path the data plane exists for, which is why withholding it would cost more than it saves. Body limit 5mb, at most 1000 records; a larger batch is refused rather than split, because an upsert is not atomic across the body. Pass namespace as an empty string for the default namespace. Answers accepted, not indexed - embedding is asynchronous.' },
 ];
 
+/**
+ * What applies to EVERY endpoint of a service, said once. Kept out of the
+ * per-entry `notes` deliberately: one sentence repeated on every catalog line
+ * reads the same to a person and is counted as duplicated new code by the
+ * Sonar gate. Same parsing rules as the catalog (scripts/buildRestEndpointsDoc
+ * reads it with a regex): one line per service, single quotes, no apostrophes.
+ */
+export const REST_SERVICE_NOTES: Partial<Record<RestService, string>> = {
+  github: 'Connector selection: the API key and a minted bearer both identify the account, not a connector, so with several GitHub connectors every request uses the OLDEST one on the account (by connection date) with its token and access rules, even when the bearer was minted from a different connector.',
+};
+
 export function endpointsForTool(mcpToolName: string): RestEndpoint[] {
   return REST_CATALOG.filter(e => e.mcpToolName === mcpToolName);
 }

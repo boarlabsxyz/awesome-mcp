@@ -7,7 +7,7 @@
 import { FastMCP } from 'fastmcp';
 import { z } from 'zod';
 import type { UserSession } from '../userSession.js';
-import { REST_CATALOG, RestService } from '../restCatalog.js';
+import { REST_CATALOG, REST_SERVICE_NOTES, RestService } from '../restCatalog.js';
 import { stripTrailingSlashes } from '../util/url.js';
 
 const BASE_URL = stripTrailingSlashes(process.env.BASE_URL || 'http://localhost:8080');
@@ -41,10 +41,14 @@ export function registerListRestEndpoints(server: FastMCP<UserSession>): void {
       const entries = args.service
         ? REST_CATALOG.filter(e => e.service === args.service)
         : REST_CATALOG;
+      const serviceNotes = Object.fromEntries(
+        Object.entries(REST_SERVICE_NOTES).filter(([svc]) => entries.some(e => e.service === svc)),
+      );
       return JSON.stringify(
         {
           baseUrl: `${BASE_URL}/api/v1`,
           count: entries.length,
+          ...(Object.keys(serviceNotes).length ? { serviceNotes } : {}),
           auth: 'Authorization: Bearer <token from mintRestBearerForCurl>',
           endpoints: entries.map(e => ({
             service: e.service,

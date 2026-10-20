@@ -324,7 +324,7 @@ import { validatePeopleForceV4Token } from '../peopleforce-v4/connectToken.js';
 import { validateHubSpotToken } from '../hubspot/connectToken.js';
 import { validateRedmineToken, buildRedmineInstanceName } from '../redmine/connectToken.js';
 import { validateBrowserbaseToken, buildBrowserbaseInstanceName, fetchBrowserbaseProject } from '../browserbase/connectToken.js';
-import { validateGitHubToken, buildGitHubInstanceName, fetchGitHubUser } from '../github/connectToken.js';
+import { validateGitHubToken, buildGitHubInstanceName, fetchGitHubUser, uniqueGitHubInstanceName } from '../github/connectToken.js';
 import { exchangeGitHubOauthCode, GITHUB_TOKEN_URL } from '../github/oauthCallback.js';
 import { GITHUB_READ_ROUTES, GITHUB_WRITE_ROUTES, writeArgs as githubWriteArgs } from '../github/restRoutes.js';
 import { PINECONE_READ_ROUTES, PINECONE_WRITE_ROUTES, writeArgs as pineconeWriteArgs } from '../pinecone/restRoutes.js';
@@ -2577,20 +2577,17 @@ function registerSharedRoutes(app: express.Express): void {
           return;
         }
 
-        // The name is only an identity when it was built from a verified
-        // login. If the /user lookup failed, every grant falls back to the
-        // same bare "GitHub", and matching on that would refuse a second
-        // account as already connected.
-        const githubConnections = exchange.login ? await getUserConnectedMcps(user.id) : [];
-        const existingGitHub = githubConnections.find(c => c.mcpSlug === mcpSlug && c.instanceName === githubInstanceName);
-        if (existingGitHub) {
-          console.error(`User ${user.id} already has ${mcpSlug} for ${exchange.login}: ${existingGitHub.instanceId}`);
-          res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingGitHub.instanceName));
-          return;
-        }
+        // A second connect for the same GitHub account is a NEW connector, not
+        // a duplicate: several connectors per account, each limited by its own
+        // access rules to one workspace's organizations, is the supported setup.
+        // Re-authorizing an existing connector goes through Reconnect above.
+        const takenGitHubNames = (await getUserConnectedMcps(user.id))
+          .filter(c => c.mcpSlug === mcpSlug)
+          .map(c => c.instanceName);
+        const githubConnectorName = uniqueGitHubInstanceName(githubInstanceName, takenGitHubNames);
         const emptyGoogleTokensForGitHub = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
         connection = await createMcpInstance(
-          user.id, mcpSlug, githubInstanceName, emptyGoogleTokensForGitHub, null,
+          user.id, mcpSlug, githubConnectorName, emptyGoogleTokensForGitHub, null,
           'github', githubProviderTokens, exchange.email
         );
         console.error(`User ${user.id} connected GitHub MCP: ${connection.instanceId}`);
@@ -3181,6 +3178,95 @@ function registerSharedRoutes(app: express.Express): void {
     } catch (err) {
       console.error('[pinecone-rules] error:', err);
       res.status(500).json({ error: 'Failed to save Pinecone access rules' });
+    }
+  });
+
+  // GitHub Access Rules: which owners (organizations or users) one GitHub
+  // connector may reach. Its own route pair for the same reason as the domain
+  // rules above — the rule model shares nothing with Slack's but the write.
+  // Enforcement is in src/github/accessRules.ts; it re-reads the stored rules
+  // on every call, so nothing here needs to invalidate a session.
+
+  app.get('/api/instances/:instanceId/github-access-rules', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const owned = await ownedConnection(req, res, 'github', 'GitHub');
+      if (!owned) return;
+      const rules = (owned.connection.providerTokens as any)?.accessRules;
+      const { createGitHubSession } = await import('../userSession.js');
+      const { maybeRefreshGitHubToken, getGitHubClient, describeGitHubError } = await import('../github/apiHelpers.js');
+      const { discoverGitHubOwners } = await import('../github/ownerDiscovery.js');
+      const session = createGitHubSession(owned.user, owned.connection);
+      await maybeRefreshGitHubToken(session, REST_PROVIDER_LOG);
+      let discovery;
+      try {
+        // Unrestricted on purpose: the list must show what the rules could
+        // allow, not only what they already do.
+        discovery = await discoverGitHubOwners(getGitHubClient(session), { savedOwners: rules?.allowedOwners });
+      } catch (err) {
+        res.status(502).json({ error: `Could not list this account's organizations: ${describeGitHubError(err)}` });
+        return;
+      }
+      // currentRules null means "no restriction" and is reported as such, not
+      // as an empty list — an empty list would read as "reaches nothing".
+      res.json({ ...discovery, currentRules: rules ? { allowedOwners: rules.allowedOwners || [] } : null });
+    } catch (err) {
+      console.error('[github-access-rules] error:', err);
+      res.status(500).json({ error: 'Failed to load GitHub access rules' });
+    }
+  });
+
+  /**
+   * The rules with the connected account added (see includeConnectedAccount).
+   * Answers 502 itself and returns undefined when GitHub cannot say who the
+   * account is: saving without it would store the incoherent policy this
+   * exists to prevent.
+   */
+  async function githubRulesWithConnectedAccount(
+    owned: { user: any; connection: any },
+    rules: { allowedOwners: string[] },
+    res: express.Response,
+  ): Promise<{ allowedOwners: string[] } | undefined> {
+    const { createGitHubSession } = await import('../userSession.js');
+    const { maybeRefreshGitHubToken, getGitHubClient, describeGitHubError } = await import('../github/apiHelpers.js');
+    const { includeConnectedAccount } = await import('../github/accessRules.js');
+    try {
+      const session = createGitHubSession(owned.user, owned.connection);
+      await maybeRefreshGitHubToken(session, REST_PROVIDER_LOG);
+      return await includeConnectedAccount(rules, getGitHubClient(session));
+    } catch (err) {
+      res.status(502).json({ error: `Rules not saved: could not confirm the connected GitHub account. ${describeGitHubError(err)}` });
+      return undefined;
+    }
+  }
+
+  app.post('/api/instances/:instanceId/github-access-rules', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
+    try {
+      const { parseGitHubAccessRulesBody } = await import('../github/accessRules.js');
+      const parsed = parseGitHubAccessRulesBody((req.body as { accessRules?: unknown }).accessRules);
+      if (!parsed.ok) { res.status(400).json({ error: parsed.error }); return; }
+
+      const owned = await ownedConnection(req, res, 'github', 'GitHub');
+      if (!owned) return;
+      const rules = parsed.rules && await githubRulesWithConnectedAccount(owned, parsed.rules, res);
+      if (rules === undefined) return;
+      const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+      // Spread, because the store replaces provider_tokens whole. Removing the
+      // restriction deletes the key rather than storing an empty object: the
+      // reconnect merge keeps any non-empty accessRules, so `{}` would survive
+      // and mean "allow nothing" on the next refresh.
+      const instanceId = owned.connection.instanceId;
+      const rest = { ...(owned.connection.providerTokens as any) };
+      delete rest.accessRules;
+      await updateMcpInstanceProviderTokens(instanceId, rules ? { ...rest, accessRules: rules } : rest);
+
+      const change = rules
+        ? 'limited GitHub ' + instanceId + ' to ' + rules.allowedOwners.length + ' owner(s)'
+        : 'removed GitHub access rules for ' + instanceId;
+      console.error(`User ${owned.user.id} ${change}`);
+      res.json({ success: true, accessRules: rules });
+    } catch (err) {
+      console.error('[github-access-rules] error:', err);
+      res.status(500).json({ error: 'Failed to save GitHub access rules' });
     }
   });
 
@@ -9750,9 +9836,11 @@ function registerRestApiRoutes(app: express.Express): void {
       res.status(403).json({ error: 'GitHub connection required for REST. Connect via the dashboard.' });
       return null;
     }
-    const { maybeRefreshGitHubToken, getGitHubClient } = await import('../github/apiHelpers.js');
+    const { maybeRefreshGitHubToken, getRuledGitHubClient } = await import('../github/apiHelpers.js');
     await maybeRefreshGitHubToken(session, REST_PROVIDER_LOG);
-    return getGitHubClient(session);
+    // With the connector's access rules: the API key reaches exactly what the
+    // MCP tools do, and a denied owner answers 403.
+    return getRuledGitHubClient(session, REST_PROVIDER_LOG);
   }
 
   /** Map through githubRestError: 429 for a rate limit, 502 for a dead stored credential. */

@@ -335,6 +335,8 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 
 ### GitHub (`github`)
 
+> Connector selection: the API key and a minted bearer both identify the account, not a connector, so with several GitHub connectors every request uses the OLDEST one on the account (by connection date) with its token and access rules, even when the bearer was minted from a different connector.
+
 | MCP tool | REST endpoint | Status | Summary |
 |---|---|---|---|
 | `searchRepositories` | `GET /api/v1/github/search/repositories?q={query}` | live | Search GitHub repositories — _Answers {total_count, incomplete_results, items, page}. GitHub search returns at most 1000 results and has its own small rate budget; a used-up limit answers 429 with Retry-After._ |

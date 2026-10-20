@@ -20,6 +20,14 @@ import { UserError } from 'fastmcp';
 
 import type { UserSession } from '../userSession.js';
 import { jsonApiRequestWithMeta, RedirectRefusedError } from '../util/jsonApiRequest.js';
+import {
+  assertOwnerAllowed,
+  loadGitHubOwnerPolicy,
+  ownerAllowed,
+  ownerFromPath,
+  searchItemOwner,
+  type OwnerPolicy,
+} from './accessRules.js';
 import { GITHUB_API_BASE_URL, githubHeaders } from './constants.js';
 import { GITHUB_TOKEN_URL, refreshGitHubToken } from './oauthCallback.js';
 
@@ -50,6 +58,8 @@ export interface GitHubResponse<T> {
   status: number;
   page: PageInfo;
   headers: Headers;
+  /** Search results this connector's access rules removed from `data.items`. */
+  hiddenByAccessRules?: number;
 }
 
 /**
@@ -119,7 +129,17 @@ export interface GitHubClientOptions {
    * callback would file a second issue or push a second commit.
    */
   onUnauthorized?: () => Promise<string | null>;
+  /**
+   * This connection's owner allowlist (see ./accessRules); null or absent is
+   * unrestricted. Enforced HERE, at the one place every request passes, so the
+   * MCP tools, the REST routes and any op added later are all covered without
+   * each remembering to check.
+   */
+  allowedOwners?: OwnerPolicy;
 }
+
+/** The search endpoints whose results belong to a repository, and so to an owner. */
+const OWNED_SEARCH = /^\/search\/(?:repositories|code|issues)$/;
 
 export class GitHubClient {
   private token: string;
@@ -139,17 +159,53 @@ export class GitHubClient {
     path: string,
     options: { query?: Record<string, QueryValue>; body?: unknown; accept?: string } = {},
   ): Promise<GitHubResponse<T>> {
+    this.enforceAccessRules(method, path, options.body);
     const sent = this.token;
+    let res: GitHubResponse<T>;
     try {
-      return await this.send<T>(sent, method, path, options);
+      res = await this.send<T>(sent, method, path, options);
     } catch (error: any) {
       if (error?.status !== 401 || !this.opts.onUnauthorized) throw error;
       this.reload ??= this.opts.onUnauthorized();
       const fresh = await this.reload;
       if (!fresh || fresh === sent) throw error;
       this.token = fresh;
-      return this.send<T>(fresh, method, path, options);
+      res = await this.send<T>(fresh, method, path, options);
     }
+    return this.filterSearchResults(path, res);
+  }
+
+  /** Refuse, before anything is sent, a request into an owner the rules exclude. */
+  private enforceAccessRules(method: string, path: string, body: unknown): void {
+    const policy = this.opts.allowedOwners;
+    if (!policy) return;
+    const owner = ownerFromPath(path);
+    if (owner) assertOwnerAllowed(owner, policy);
+    // A fork's destination is in the BODY: forking an allowed repository into
+    // an excluded organization would write there.
+    const organization = (body as { organization?: unknown } | undefined)?.organization;
+    if (method === 'POST' && path.endsWith('/forks') && typeof organization === 'string' && organization) {
+      assertOwnerAllowed(organization, policy);
+    }
+  }
+
+  /**
+   * Drop search hits from excluded owners. Search spans everything the token
+   * can see, and GitHub's query language has no "not these orgs" — so results
+   * are filtered after the fact and the count is reported, because a silent
+   * drop reads as "GitHub found nothing" (the Slack search lesson). An item
+   * whose owner cannot be determined is dropped too: unknown is not allowed.
+   */
+  private filterSearchResults<T>(path: string, res: GitHubResponse<T>): GitHubResponse<T> {
+    const policy = this.opts.allowedOwners;
+    const items = (res.data as { items?: unknown[] } | null)?.items;
+    if (!policy || !OWNED_SEARCH.test(path) || !Array.isArray(items)) return res;
+    const kept = items.filter(item => ownerAllowed(searchItemOwner(item), policy));
+    return {
+      ...res,
+      data: { ...(res.data as object), items: kept } as T,
+      hiddenByAccessRules: items.length - kept.length,
+    };
   }
 
   private async send<T>(
@@ -170,7 +226,11 @@ export class GitHubClient {
       // 301 to /repositories/<id>/..., same origin. Following it on reads is
       // what keeps an old owner/name working; jsonApiRequest refuses it for
       // writes (a replayed POST could duplicate), and mapGitHubError explains.
-      followSameOriginRedirects: 3,
+      // NOT followed under access rules: /repositories/<id> names no owner, so
+      // a repository transferred OUT of an allowed organization would be read
+      // through its old name. The refusal tells the caller to use the new one,
+      // which is then checked like any other.
+      followSameOriginRedirects: this.opts.allowedOwners ? 0 : 3,
       secrets: [token],
       fetchImpl: this.opts.fetchImpl,
     });
@@ -201,13 +261,28 @@ export class GitHubClient {
 
 const SILENT_LOG: GitHubToolLog = { info: () => {}, error: () => {} };
 
-export function getGitHubClient(session?: UserSession, log: GitHubToolLog = SILENT_LOG): GitHubClient {
+export function getGitHubClient(
+  session?: UserSession,
+  log: GitHubToolLog = SILENT_LOG,
+  allowedOwners: OwnerPolicy = null,
+): GitHubClient {
   if (!session?.githubAccessToken) {
     throw new UserError('GitHub not connected. Visit the dashboard to connect your GitHub account.');
   }
   return new GitHubClient(session.githubAccessToken, {
     onUnauthorized: async () => (await reloadStoredGitHubToken(session, log)) ? session.githubAccessToken ?? null : null,
+    allowedOwners,
   });
+}
+
+/**
+ * The client every caller should use: this connection's access rules, read
+ * fresh, applied. The rules are loaded after the connection check so a
+ * missing connection still reads "GitHub not connected".
+ */
+export async function getRuledGitHubClient(session: UserSession | undefined, log: GitHubToolLog = SILENT_LOG): Promise<GitHubClient> {
+  if (!session?.githubAccessToken) return getGitHubClient(session, log); // throws "not connected"
+  return getGitHubClient(session, log, await loadGitHubOwnerPolicy(session));
 }
 
 
@@ -406,7 +481,10 @@ export function describeGitHubError(error: any, ctx: GitHubErrorContext = {}): s
  */
 export function githubRestError(error: any): { status: number; message: string; retryAfter?: string } {
   const status: number | undefined = typeof error?.status === 'number' ? error.status : undefined;
-  if (error?.name === 'UserError') {
+  // instanceof, not `name === 'UserError'`: FastMCP names an error after its
+  // class, so a subclass (GitHubAccessDenied) would otherwise be re-described
+  // as GitHub's own 403 and lose the message that names the access rule.
+  if (error instanceof UserError || error?.name === 'UserError') {
     return { status: status ?? 400, message: error.message };
   }
   const message = describeGitHubError(error);
@@ -498,9 +576,14 @@ async function performGitHubRefresh(session: UserSession, log: GitHubToolLog): P
   const instanceId = session.githubInstanceId;
   if (!instanceId) return;
   try {
-    const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
-    // The store REPLACES provider_tokens, so this is the whole record.
+    const { getMcpConnectionByInstanceId, updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+    // The store REPLACES provider_tokens, so the stored record is read and
+    // only the token fields are swapped. Writing just the three token fields
+    // would drop accessRules on every refresh — every 8 hours, silently
+    // widening a restricted connector back to every organization.
+    const stored = (await getMcpConnectionByInstanceId(instanceId))?.providerTokens as Record<string, unknown> | undefined;
     await updateMcpInstanceProviderTokens(instanceId, {
+      ...stored,
       access_token: result.accessToken,
       refresh_token: newRefresh,
       expiry_date: newExpiry,
@@ -523,7 +606,7 @@ export async function withGitHubClient<T>(
   ctx: GitHubErrorContext = {},
 ): Promise<T> {
   await maybeRefreshGitHubToken(session, log);
-  const client = getGitHubClient(session, log);
+  const client = await getRuledGitHubClient(session, log);
   try {
     return await fn(client);
   } catch (error: any) {

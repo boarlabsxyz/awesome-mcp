@@ -69,8 +69,13 @@ async function listJson(client: GitHubClient, read: ops.GitHubRead) {
 }
 
 async function searchJson(client: GitHubClient, read: ops.GitHubRead) {
-  const { data, page } = await ops.runRead<{ total_count: number; incomplete_results: boolean; items: unknown[] }>(client, read);
-  return { total_count: data.total_count, incomplete_results: data.incomplete_results, items: data.items, page };
+  const { data, page, hiddenByAccessRules } = await ops.runRead<{ total_count: number; incomplete_results: boolean; items: unknown[] }>(client, read);
+  // hiddenByAccessRules appears only when the connector's rules removed hits;
+  // total_count is GitHub's and still counts them.
+  return {
+    total_count: data.total_count, incomplete_results: data.incomplete_results, items: data.items, page,
+    ...(hiddenByAccessRules ? { hiddenByAccessRules } : {}),
+  };
 }
 
 async function rawJson(client: GitHubClient, read: ops.GitHubRead) {
