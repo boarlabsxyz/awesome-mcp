@@ -2,13 +2,17 @@ import assert from 'node:assert/strict';
 import { describe, it, mock } from 'node:test';
 import { UserError } from 'fastmcp';
 import {
+  performAcceptSuggestion,
   performAddComment,
   performAppendToGoogleDoc,
+  performAssignComment,
   performApplyParagraphStyle,
   performApplyTextStyle,
   performBatchUpdateDoc,
   performDeleteComment,
+  performDeleteCommentReply,
   performDeleteRange,
+  performDeleteSuggestion,
   performFindAndReplace,
   performFormatMatchingText,
   performImportDocx,
@@ -18,8 +22,11 @@ import {
   performInsertPageBreak,
   performInsertTable,
   performInsertText,
+  performRejectSuggestion,
+  performReopenComment,
   performReplyToComment,
   performResolveComment,
+  performUpdateCommentPost,
 } from '../google-docs/writeOps.js';
 
 // These ops were the bodies of the Google Docs write tools, moved out so the MCP
@@ -657,66 +664,284 @@ describe('docs image ops', () => {
 });
 
 describe('docs comment ops', () => {
-  it('performAddComment quotes exactly the requested range', async () => {
-    const docs = mkDocs();
-    const drive = mkDrive();
-    // "Hello brave new world" — indices 7..12 are "brave".
-    const out = await performAddComment(docs, drive, {
-      documentId: 'd1', startIndex: 7, endIndex: 12, commentText: 'Nice',
-    } as any);
-    const sent = drive.comments.create.mock.calls[0].arguments[0];
-    assert.equal(sent.requestBody.quotedFileContent.value, 'brave');
-    assert.equal(out.quotedText, 'brave');
-    assert.equal(out.id, 'cmt-1');
+  /** A batchUpdate stub that records the request and answers with `data`. */
+  function mkCommentDocs(data: any = { commentUpdateState: 'ALL_SAVED', replies: [{}] }): any {
+    return mkDocs({ documents: { batchUpdate: mock.fn(async () => ({ data })) } });
+  }
+  const sentRequest = (docs: any) => docs.documents.batchUpdate.mock.calls[0].arguments[0].requestBody.requests[0];
+
+  describe('performAddComment', () => {
+    const thread = {
+      commentId: 'cmt-1',
+      anchorId: 'anchor-1',
+      status: 'OPEN',
+      plainTextQuote: 'brave',
+      headPost: { postId: 'post-1', content: 'Nice', author: { displayName: 'Ada' }, createTime: '2026-10-19T10:00:00Z' },
+    };
+
+    it('anchors the comment to the requested range', async () => {
+      const docs = mkCommentDocs({ commentUpdateState: 'ALL_SAVED', replies: [{ insertComment: { commentThread: thread } }] });
+      const out = await performAddComment(docs, {
+        documentId: 'd1', startIndex: 7, endIndex: 12, commentText: 'Nice',
+      } as any);
+
+      // The RANGE is the point of the migration: the Drive API took an anchor and
+      // filed the comment unanchored regardless.
+      assert.deepEqual(sentRequest(docs).insertComment, {
+        content: 'Nice',
+        range: { startIndex: 7, endIndex: 12 },
+      });
+      assert.equal(out.id, 'cmt-1');
+      assert.equal(out.anchorId, 'anchor-1');
+      assert.equal(out.quotedText, 'brave');
+      assert.equal(out.author, 'Ada');
+      assert.equal(out.confirmed, true);
+      // No document read any more: Google records the quote itself.
+      assert.equal(docs.documents.get.mock.calls.length, 0);
+    });
+
+    it('passes the tab, segment and assignee only when given', async () => {
+      const docs = mkCommentDocs({ commentUpdateState: 'ALL_SAVED', replies: [{ insertComment: { commentThread: thread } }] });
+      await performAddComment(docs, {
+        documentId: 'd1', startIndex: 7, endIndex: 12, commentText: 'Nice',
+        tabId: 't.0', segmentId: 'h.1', assigneeEmail: 'ada@example.com',
+      } as any);
+      assert.deepEqual(sentRequest(docs).insertComment, {
+        content: 'Nice',
+        assigneeEmailAddress: 'ada@example.com',
+        range: { startIndex: 7, endIndex: 12, tabId: 't.0', segmentId: 'h.1' },
+      });
+    });
+
+    it('reports ONLY the assignee Google recorded, with the request kept separate', async () => {
+      // Google echoing no assignee back does not mean the assignment applied.
+      // Reporting args.assigneeEmail as `assigneeEmail` would claim it did.
+      const docs = mkCommentDocs({
+        commentUpdateState: 'ALL_SAVED',
+        replies: [{ insertComment: { commentThread: { commentId: 'cmt-1', headPost: { postId: 'p-1' } } } }],
+      });
+      const out = await performAddComment(docs, {
+        documentId: 'd1', startIndex: 1, endIndex: 2, commentText: 'x', assigneeEmail: 'ada@example.com',
+      } as any);
+      assert.equal(out.assigneeEmail, null);
+      assert.equal(out.requestedAssigneeEmail, 'ada@example.com');
+    });
+
+    it('reports the recorded assignee when Google does echo one', async () => {
+      const docs = mkCommentDocs({
+        commentUpdateState: 'ALL_SAVED',
+        replies: [{ insertComment: { commentThread: { commentId: 'cmt-1', headPost: { postId: 'p-1', assigneeEmail: 'bob@example.com' } } } }],
+      });
+      const out = await performAddComment(docs, {
+        documentId: 'd1', startIndex: 1, endIndex: 2, commentText: 'x', assigneeEmail: 'ada@example.com',
+      } as any);
+      assert.equal(out.assigneeEmail, 'bob@example.com', 'what Google stored wins over what was asked for');
+    });
+
+    it('refuses a body over the 2048-BYTE cap, counting UTF-8 rather than length', async () => {
+      const docs = mkCommentDocs();
+      // 600 four-byte emoji = 2400 UTF-8 bytes but only 1200 UTF-16 units, so a
+      // String.length check would send a body Google rejects.
+      const emoji = '\u{1F600}'.repeat(600);
+      assert.ok(emoji.length < 2048, 'the test case has to be short by String.length to be meaningful');
+      await assert.rejects(
+        () => performAddComment(docs, { documentId: 'd1', startIndex: 1, endIndex: 2, commentText: emoji } as any),
+        (err: any) => err instanceof UserError && /2400 UTF-8 bytes/.test(err.message),
+      );
+      assert.equal(docs.documents.batchUpdate.mock.calls.length, 0, 'nothing is written on a refusal');
+    });
+
+    it('throws when Google answers 200 and reports the comment was NOT applied', async () => {
+      const docs = mkCommentDocs({ commentUpdateState: 'ALL_FAILED_UNKNOWN_REASON', replies: [{}] });
+      await assert.rejects(
+        () => performAddComment(docs, { documentId: 'd1', startIndex: 1, endIndex: 2, commentText: 'x' } as any),
+        (err: any) => err instanceof UserError && /was NOT applied/.test(err.message),
+      );
+    });
+
+    it('reports confirmed false, not success, when Google states no verdict', async () => {
+      const docs = mkCommentDocs({ replies: [{ insertComment: { commentThread: thread } }] });
+      const out = await performAddComment(docs, { documentId: 'd1', startIndex: 1, endIndex: 2, commentText: 'x' } as any);
+      assert.equal(out.confirmed, false);
+      assert.equal(out.commentUpdateState, null);
+    });
   });
 
-  it('performAddComment quotes across the whole range when it spans the paragraph', async () => {
-    const drive = mkDrive();
-    await performAddComment(mkDocs(), drive, {
-      documentId: 'd1', startIndex: 1, endIndex: 6, commentText: 'Nice',
-    } as any);
-    assert.equal(drive.comments.create.mock.calls[0].arguments[0].requestBody.quotedFileContent.value, 'Hello');
+  describe('thread targeting', () => {
+    it('refuses both ids at once, with nothing written', async () => {
+      const docs = mkCommentDocs();
+      await assert.rejects(
+        () => performReplyToComment(docs, { documentId: 'd1', commentId: 'c1', suggestionId: 's1', replyText: 'hi' } as any),
+        (err: any) => err instanceof UserError && /not both/.test(err.message),
+      );
+      assert.equal(docs.documents.batchUpdate.mock.calls.length, 0);
+    });
+
+    it('refuses neither id, naming both parameters', async () => {
+      await assert.rejects(
+        () => performReplyToComment(mkCommentDocs(), { documentId: 'd1', replyText: 'hi' } as any),
+        (err: any) => err instanceof UserError && /commentId or suggestionId/.test(err.message),
+      );
+    });
+
+    it('posts on a suggestion thread when that is the id given', async () => {
+      const docs = mkCommentDocs({ commentUpdateState: 'ALL_SAVED', replies: [{ addCommentReply: { post: { postId: 'p-9' } } }] });
+      const out = await performReplyToComment(docs, { documentId: 'd1', suggestionId: 'sug-1', replyText: 'ok' } as any);
+      assert.deepEqual(sentRequest(docs).addCommentReply, { suggestionId: 'sug-1', post: { content: 'ok' } });
+      assert.equal(out.postId, 'p-9');
+      assert.equal(out.id, 'p-9', 'the pre-existing response key is kept alongside postId');
+    });
   });
 
-  it('performReplyToComment posts the reply under the comment', async () => {
-    const drive = mkDrive();
-    const out = await performReplyToComment(drive, { documentId: 'd1', commentId: 'cmt-1', replyText: 'Agreed' } as any);
-    const sent = drive.replies.create.mock.calls[0].arguments[0];
-    assert.equal(sent.commentId, 'cmt-1');
-    assert.equal(sent.requestBody.content, 'Agreed');
-    assert.equal(out.id, 'rep-1');
-  });
-
-  describe('performResolveComment', () => {
-    it('echoes the existing content back, which the API requires', async () => {
-      const drive = mkDrive();
-      const out = await performResolveComment(drive, { documentId: 'd1', commentId: 'cmt-1' } as any);
-      const sent = drive.comments.update.mock.calls[0].arguments[0];
-      assert.equal(sent.requestBody.content, 'Nice');
-      assert.equal(sent.requestBody.resolved, true);
+  describe('resolve and reopen', () => {
+    it('resolves with a reply ACTION, since there is no thread-status field', async () => {
+      const docs = mkCommentDocs();
+      const out = await performResolveComment(docs, { documentId: 'd1', commentId: 'cmt-1' } as any);
+      assert.deepEqual(sentRequest(docs).addCommentReply, {
+        commentId: 'cmt-1',
+        post: { commentAction: 'RESOLVE' },
+      });
       assert.equal(out.resolved, true);
     });
 
-    it('reports resolved false when Google did not persist it', async () => {
-      // The documented failure mode on Google Docs: the update is accepted and
-      // the flag does not stick. Reporting the request as the outcome would lie.
-      let call = 0;
-      const drive = mkDrive({
-        comments: {
-          get: mock.fn(async () => ({ data: (call++ === 0 ? { content: 'Nice' } : { resolved: false }) })),
-          update: mock.fn(async () => ({ data: {} })),
-        },
-      });
-      const out = await performResolveComment(drive, { documentId: 'd1', commentId: 'cmt-1' } as any);
+    it('carries a closing note when one is given', async () => {
+      const docs = mkCommentDocs();
+      await performResolveComment(docs, { documentId: 'd1', commentId: 'cmt-1', replyText: 'Fixed in v2' } as any);
+      assert.equal(sentRequest(docs).addCommentReply.post.content, 'Fixed in v2');
+    });
+
+    it('reports resolved false when Google did not confirm it', async () => {
+      const docs = mkCommentDocs({ replies: [{}] });
+      const out = await performResolveComment(docs, { documentId: 'd1', commentId: 'cmt-1' } as any);
       assert.equal(out.resolved, false);
+      assert.equal(out.confirmed, false);
+    });
+
+    it('reopens with REOPEN', async () => {
+      const docs = mkCommentDocs();
+      const out = await performReopenComment(docs, { documentId: 'd1', commentId: 'cmt-1' } as any);
+      assert.equal(sentRequest(docs).addCommentReply.post.commentAction, 'REOPEN');
+      assert.equal(out.reopened, true);
     });
   });
 
-  it('performDeleteComment deletes and reports the id', async () => {
-    const drive = mkDrive();
-    const out = await performDeleteComment(drive, { documentId: 'd1', commentId: 'cmt-1' } as any);
-    assert.deepEqual(out, { commentId: 'cmt-1', deleted: true });
-    assert.equal(drive.comments.delete.mock.calls[0].arguments[0].commentId, 'cmt-1');
+  describe('performAssignComment', () => {
+    it('sends the assignee as a post on the thread', async () => {
+      const docs = mkCommentDocs();
+      const out = await performAssignComment(docs, {
+        documentId: 'd1', commentId: 'cmt-1', assigneeEmail: 'ada@example.com',
+      } as any);
+      assert.deepEqual(sentRequest(docs).addCommentReply, {
+        commentId: 'cmt-1',
+        post: { assigneeEmail: 'ada@example.com' },
+      });
+      assert.equal(out.assigned, true);
+    });
+
+    it('rewrites Google 400 to name every documented cause rather than guessing one', async () => {
+      const docs = mkDocs({ documents: {
+        batchUpdate: mock.fn(async () => {
+          const err: any = new Error('Invalid requests[0].addCommentReply');
+          err.code = 400;
+          throw err;
+        }),
+      } });
+      await assert.rejects(
+        () => performAssignComment(docs, { documentId: 'd1', commentId: 'cmt-1', assigneeEmail: 'ada@example.com' } as any),
+        (err: any) => {
+          assert.ok(err instanceof UserError);
+          // An unassigned thread can never be assigned, and the response does not
+          // say that is what happened — so all the causes are listed.
+          assert.match(err.message, /WITHOUT an assignee/);
+          assert.match(err.message, /suggestion thread/);
+          return true;
+        },
+      );
+    });
+  });
+
+  describe('edits and deletions', () => {
+    it('performUpdateCommentPost rewrites one post', async () => {
+      const docs = mkCommentDocs();
+      const out = await performUpdateCommentPost(docs, {
+        documentId: 'd1', commentId: 'cmt-1', postId: 'post-2', content: 'Reworded',
+      } as any);
+      assert.deepEqual(sentRequest(docs).updateCommentPost, {
+        commentId: 'cmt-1', postId: 'post-2', content: 'Reworded',
+      });
+      assert.equal(out.updated, true);
+      assert.equal(out.threadId, 'cmt-1');
+    });
+
+    it('performDeleteComment takes the whole thread', async () => {
+      const docs = mkCommentDocs();
+      const out = await performDeleteComment(docs, { documentId: 'd1', commentId: 'cmt-1' } as any);
+      assert.deepEqual(sentRequest(docs).deleteComment, { commentId: 'cmt-1' });
+      assert.equal(out.deleted, true);
+    });
+
+    it('performDeleteCommentReply takes one reply and leaves the thread', async () => {
+      const docs = mkCommentDocs();
+      const out = await performDeleteCommentReply(docs, {
+        documentId: 'd1', commentId: 'cmt-1', postId: 'post-3',
+      } as any);
+      assert.deepEqual(sentRequest(docs).deleteCommentReply, { commentId: 'cmt-1', postId: 'post-3' });
+      assert.equal(out.deleted, true);
+    });
+  });
+
+  describe('suggestion verdicts', () => {
+    // Suggestions report through suggestionResponses, NOT commentUpdateState:
+    // confirmation is the id turning up in the matching list.
+    it('confirms an accept from acceptedSuggestionIds', async () => {
+      const docs = mkCommentDocs({ suggestionResponses: [{ acceptedSuggestionIds: ['sug-1'] }] });
+      const out = await performAcceptSuggestion(docs, { documentId: 'd1', suggestionId: 'sug-1' } as any);
+      assert.deepEqual(sentRequest(docs).acceptSuggestion, { suggestionId: 'sug-1' });
+      assert.equal(out.confirmed, true);
+    });
+
+    it('does NOT confirm when the id is absent from the list Google reports', async () => {
+      const docs = mkCommentDocs({ suggestionResponses: [{ acceptedSuggestionIds: ['other'] }] });
+      const out = await performAcceptSuggestion(docs, { documentId: 'd1', suggestionId: 'sug-1' } as any);
+      assert.equal(out.confirmed, false);
+      assert.deepEqual(out.reportedIds, ['other']);
+    });
+
+    it('reads the rejected and deleted lists, not the accepted one', async () => {
+      const rejectDocs = mkCommentDocs({ suggestionResponses: [{ rejectedSuggestionIds: ['sug-2'] }] });
+      assert.equal((await performRejectSuggestion(rejectDocs, { documentId: 'd1', suggestionId: 'sug-2' } as any)).confirmed, true);
+      assert.equal(sentRequest(rejectDocs).rejectSuggestion.suggestionId, 'sug-2');
+
+      const deleteDocs = mkCommentDocs({ suggestionResponses: [{ deletedSuggestionIds: ['sug-3'] }] });
+      assert.equal((await performDeleteSuggestion(deleteDocs, { documentId: 'd1', suggestionId: 'sug-3' } as any)).confirmed, true);
+      assert.equal(sentRequest(deleteDocs).deleteSuggestion.suggestionId, 'sug-3');
+    });
+
+    it('reports an absent suggestionResponses as unconfirmed, never as failure', async () => {
+      const docs = mkCommentDocs({ replies: [{}] });
+      const out = await performAcceptSuggestion(docs, { documentId: 'd1', suggestionId: 'sug-1' } as any);
+      assert.equal(out.confirmed, false);
+      assert.equal(out.reportedIds, null);
+    });
+  });
+
+  describe('suggest mode on batchUpdateDoc', () => {
+    const op = { type: 'insert_text', index: 1, text: 'hi' };
+
+    it('sends writeControl SUGGEST when asked', async () => {
+      const docs = mkCommentDocs();
+      const out = await performBatchUpdateDoc(docs, { documentId: 'd1', operations: [op], suggestMode: true } as any);
+      assert.deepEqual(docs.documents.batchUpdate.mock.calls[0].arguments[0].requestBody.writeControl, { writeMode: 'SUGGEST' });
+      assert.equal(out.suggested, true);
+    });
+
+    it('omits writeControl entirely otherwise, so existing callers send what they always did', async () => {
+      const docs = mkCommentDocs();
+      const out = await performBatchUpdateDoc(docs, { documentId: 'd1', operations: [op] } as any);
+      const body = docs.documents.batchUpdate.mock.calls[0].arguments[0].requestBody;
+      assert.ok(!('writeControl' in body), 'an absent writeControl is not the same as an empty one');
+      assert.equal(out.suggested, false);
+    });
   });
 });
 

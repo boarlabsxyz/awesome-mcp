@@ -7,7 +7,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 ## Index
 
 - [Shared (opt-in per server)](#shared-opt-in-per-server-) (2)
-- [Google Docs](#google-docs) (30)
+- [Google Docs](#google-docs) (38)
 - [Google Sheets](#google-sheets) (12)
 - [Google Calendar](#google-calendar) (6)
 - [Google Drive](#google-drive) (15)
@@ -36,7 +36,7 @@ Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEnd
 
 ## Google Docs
 
-Source: `src/google-docs/server.ts` — 30 tools.
+Source: `src/google-docs/server.ts` — 38 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -57,18 +57,26 @@ Source: `src/google-docs/server.ts` — 30 tools.
 | `insertImageFromUrl` | Inserts an inline image into a Google Document from a publicly accessible URL. | `POST /api/v1/docs/{documentId}/images/from-url` |
 | `insertLocalImage` | Inserts an image into a Google Document. Provide one of: (1) imageUrl — a public HTTP(S) URL to fetch, (2) driveFileId — ID of an image already in Google Drive, (3) localImagePath — absolute path for local/stdio deployments, or (4) imageBase64 + fileName — base64-encoded content for small images. | `POST /api/v1/docs/{documentId}/images` |
 | `fixListFormatting` | EXPERIMENTAL: Attempts to detect paragraphs that look like lists (e.g., starting with -, *, 1.) and convert them to proper Google Docs bulleted or numbered lists. Best used on specific sections. | — |
-| `listComments` | Lists all comments in a Google Document. | `GET /api/v1/docs/{documentId}/comments` |
-| `getComment` | Gets a specific comment with its full thread of replies. | `GET /api/v1/docs/{documentId}/comments/{commentId}` |
-| `addComment` | Adds a comment to a Google Document with quoted text context. NOTE: Due to Google Drive API limitations, comments cannot be anchored to specific text positions in Google Docs. The comment will appear in the Comments panel with the quoted text displayed, but won't highlight text in the document body. | `POST /api/v1/docs/{documentId}/comments` |
-| `replyToComment` | Adds a reply to an existing comment. | `POST /api/v1/docs/{documentId}/comments/{commentId}/replies` |
-| `resolveComment` | Marks a comment as resolved. NOTE: Due to Google API limitations, the Drive API does not support resolving comments on Google Docs files. This operation will attempt to update the comment but the resolved status may not persist in the UI. Comments can be resolved manually in the Google Docs interface. | `POST /api/v1/docs/{documentId}/comments/{commentId}/resolve` |
-| `deleteComment` | Deletes a comment from the document. | `POST /api/v1/docs/{documentId}/comments/{commentId}/delete` |
+| `listComments` | Lists every comment thread in a Google Doc with its anchored text range, status, assignee and replies. | `GET /api/v1/docs/{documentId}/comments` |
+| `getComment` | Gets one comment thread with its full reply chain, anchored range and assignee. | `GET /api/v1/docs/{documentId}/comments/{commentId}` |
+| `listSuggestions` | Lists suggested edits (tracked changes) in a Google Doc with their status and discussion. | `GET /api/v1/docs/{documentId}/suggestions` |
+| `addComment` | Adds a comment anchored to a text range in a Google Doc. The range is highlighted in the document body. | `POST /api/v1/docs/{documentId}/comments` |
+| `replyToComment` | Adds a reply to an existing comment thread, or to a suggestion thread. | `POST /api/v1/docs/{documentId}/comments/{commentId}/replies` |
+| `resolveComment` | Marks a comment thread resolved, optionally with a closing note. Reversible with reopenComment. | `POST /api/v1/docs/{documentId}/comments/{commentId}/resolve` |
+| `reopenComment` | Reopens a resolved comment thread, putting it back in the open discussion. | `POST /api/v1/docs/{documentId}/comments/{commentId}/reopen` |
+| `assignComment` | Reassigns an already-assigned comment thread. A thread created with no assignee can never be assigned — use addComment with assigneeEmail. | `POST /api/v1/docs/{documentId}/comments/{commentId}/assign` |
+| `updateCommentPost` | Rewrites the text of a comment or one of its replies. Only the original author can, and the previous text is not recoverable. | `POST /api/v1/docs/{documentId}/comments/{commentId}/posts/{postId}/update` |
+| `deleteComment` | Deletes a comment thread and all of its replies. Not recoverable. | `POST /api/v1/docs/{documentId}/comments/{commentId}/delete` |
+| `deleteCommentReply` | Deletes a single reply from a comment or suggestion thread, leaving the thread itself in place. | `POST /api/v1/docs/{documentId}/comments/{commentId}/posts/{postId}/delete` |
+| `acceptSuggestion` | Accepts a suggested edit, applying its change to the document. | `POST /api/v1/docs/{documentId}/suggestions/{suggestionId}/accept` |
+| `rejectSuggestion` | Rejects a suggested edit, discarding the proposed change. | — |
+| `deleteSuggestion` | Deletes a suggestion thread outright, without accepting or rejecting its change. | — |
 | `findElement` | NOT IMPLEMENTED — always throws. For text search use findAndReplace or formatMatchingText; for structure exploration use inspectDocStructure. | — |
 | `formatMatchingText` | Finds specific text within a Google Document and applies character formatting (bold, italics, color, etc.) to the specified instance. | `POST /api/v1/docs/{documentId}/format-matching-text` |
 | `findAndReplace` | Finds all occurrences of a text string in a Google Doc and replaces them. Returns the number of replacements made. | `POST /api/v1/docs/{documentId}/find-replace` |
 | `inspectDocStructure` | Analyzes and returns the structure of a Google Doc: paragraph/table/section counts, headers/footers presence, tab hierarchy. Use detailed mode for element-by-element listing. | `GET /api/v1/docs/{documentId}/structure` |
 | `importDocx` | Converts a .docx file already in Google Drive into a Google Doc. Drive auto-converts the format. Returns the new Google Doc ID and link. | `POST /api/v1/docs/import/docx` |
-| `batchUpdateDoc` | Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Index-based operations are automatically sorted in descending order to prevent index shifting. | `POST /api/v1/docs/{documentId}/batchUpdate` |
+| `batchUpdateDoc` | Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Index-based operations are automatically sorted in descending order to prevent index shifting. Set suggestMode to propose the whole batch as tracked suggestions instead of editing directly. | `POST /api/v1/docs/{documentId}/batchUpdate` |
 | `importToGoogleDoc` | Import content (text, HTML, or markdown) into a new Google Doc. Google Drive auto-converts the content to Google Docs format. | `POST /api/v1/docs/import` |
 
 ## Google Sheets
@@ -541,4 +549,4 @@ Source: `src/pinecone/server.ts` — 9 tools.
 
 ---
 
-**Grand total: 388 tools across 18 sections.**
+**Grand total: 396 tools across 18 sections.**

@@ -31,6 +31,7 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/docs/doc-123',
   '/api/v1/docs/doc-123/tabs',
   '/api/v1/docs/doc-123/comments/comment-123',
+  '/api/v1/docs/doc-123/suggestions',
   '/api/v1/docs/doc-123/structure',
   '/api/v1/drive/shared-drives',
   '/api/v1/drive/folders/folder-123',
@@ -234,7 +235,13 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/docs/doc-123/comments',
   '/api/v1/docs/doc-123/comments/cmt-1/replies',
   '/api/v1/docs/doc-123/comments/cmt-1/resolve',
+  '/api/v1/docs/doc-123/comments/cmt-1/reopen',
+  '/api/v1/docs/doc-123/comments/cmt-1/assign',
+  '/api/v1/docs/doc-123/comments/cmt-1/posts/post-1/update',
   '/api/v1/docs/doc-123/comments/cmt-1/delete',
+  '/api/v1/docs/doc-123/comments/cmt-1/posts/post-1/delete',
+  '/api/v1/docs/doc-123/suggestions/sug-1/replies',
+  '/api/v1/docs/doc-123/suggestions/sug-1/accept',
   // Google Sheets writes. '/api/v1/sheets' is in BOTH arrays — the GET lists
   // spreadsheets, the POST creates one.
   '/api/v1/sheets',

@@ -27,13 +27,17 @@ import * as GDocsHelpers from './apiHelpers.js';
 // import them: this file is the application entry point (it imports createWebApp),
 // so webServer.ts cannot import it back.
 import {
+  acceptSuggestionSchema,
   addCommentSchema,
   appendToGoogleDocSchema,
   applyParagraphStyleSchema,
   applyTextStyleSchema,
   batchUpdateDocSchema,
+  assignCommentSchema,
+  deleteCommentReplySchema,
   deleteCommentSchema,
   deleteRangeSchema,
+  deleteSuggestionSchema,
   findAndReplaceSchema,
   formatMatchingTextSchema,
   importDocxSchema,
@@ -43,17 +47,24 @@ import {
   insertPageBreakSchema,
   insertTableSchema,
   insertTextSchema,
+  rejectSuggestionSchema,
+  reopenCommentSchema,
   replyToCommentSchema,
   resolveCommentSchema,
+  updateCommentPostSchema,
 } from './writeSchemas.js';
 import {
+  performAcceptSuggestion,
   performAddComment,
   performAppendToGoogleDoc,
+  performAssignComment,
   performApplyParagraphStyle,
   performApplyTextStyle,
   performBatchUpdateDoc,
   performDeleteComment,
+  performDeleteCommentReply,
   performDeleteRange,
+  performDeleteSuggestion,
   performFindAndReplace,
   performFormatMatchingText,
   performImportDocx,
@@ -63,9 +74,19 @@ import {
   performInsertPageBreak,
   performInsertTable,
   performInsertText,
+  performRejectSuggestion,
+  performReopenComment,
   performReplyToComment,
   performResolveComment,
+  performUpdateCommentPost,
 } from './writeOps.js';
+import {
+  fetchDocumentThreads,
+  findCommentThread,
+  renderCommentThread,
+  renderCommentThreadList,
+  renderSuggestionThreadList,
+} from './commentReads.js';
 import { handleDriveError } from '../google-drive/driveHelpers.js';
 import {
   handleListGoogleDocs,
@@ -942,129 +963,116 @@ throw new UserError(`Failed to fix list formatting: ${error.message || 'Unknown 
 }
 });
 
-// === COMMENT TOOLS ===
+// === COMMENT AND SUGGESTION TOOLS ===
+//
+// All of these run on the Docs API's own comment requests (GA 2026-09-30), not
+// on drive.comments.*. What that buys, and why the ids here are NOT the ids the
+// Drive API hands out, is in writeSchemas.ts and writeOps.ts.
+//
+// Reading one thread and reading all of them are the same request: the Docs API
+// has no per-comment GET, so getComment is listComments plus a find. Both go
+// through commentReads.ts, which the REST routes import as well.
+
+/** Shared tail for the comment tools' catch blocks. */
+function commentFailure(error: any, what: string): never {
+  if (error instanceof UserError) throw error;
+  throw new UserError(`Failed to ${what}: ${error.message || 'Unknown error'}`);
+}
+
+/** Appended when Google did not confirm the write, so a maybe never reads as a yes. */
+const unconfirmedNote = (state: string | null): string =>
+  ` Google did not confirm the change (commentUpdateState: ${state ?? 'absent'}), so read the thread back with `
+  + 'getComment before relying on it.';
 
 server.addTool({
   name: 'listComments',
   annotations: { readOnlyHint: true },
-  description: 'Lists all comments in a Google Document.',
+  description: 'Lists every comment thread in a Google Doc with its anchored text range, status, assignee and replies.',
   parameters: DocumentIdParameter,
   execute: async (args, { log, session }) => {
     log.info(`Listing comments for document ${args.documentId}`);
-    const docsClient = await getDocsClient(session);
-    const driveClient = await getDriveClient(session);
-
+    const docs = await getDocsClient(session);
     try {
-      // First get the document to have context
-      const doc = await docsClient.documents.get({ documentId: args.documentId });
-
-      // Use Drive API v3 with proper fields to get quoted content
-      const drive = await getDriveClient(session);
-      const response = await drive.comments.list({
-        fileId: args.documentId,
-        fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved)',
-        pageSize: 100
-      });
-
-      const comments = response.data.comments || [];
-
-      if (comments.length === 0) {
-        return 'No comments found in this document.';
-      }
-
-      // Format comments for display
-      const formattedComments = comments.map((comment: any, index: number) => {
-        const replies = comment.replies?.length || 0;
-        const status = comment.resolved ? ' [RESOLVED]' : '';
-        const author = comment.author?.displayName || 'Unknown';
-        const date = comment.createdTime ? new Date(comment.createdTime).toLocaleDateString() : 'Unknown date';
-
-        // Get the actual quoted text content
-        const quotedText = comment.quotedFileContent?.value || 'No quoted text';
-        const anchor = quotedText !== 'No quoted text' ? ` (anchored to: "${quotedText.substring(0, 100)}${quotedText.length > 100 ? '...' : ''}")` : '';
-
-        let result = `\n${index + 1}. **${author}** (${date})${status}${anchor}\n   ${comment.content}`;
-
-        if (replies > 0) {
-          result += `\n   └─ ${replies} ${replies === 1 ? 'reply' : 'replies'}`;
-        }
-
-        result += `\n   Comment ID: ${comment.id}`;
-
-        return result;
-      }).join('\n');
-
-      return `Found ${comments.length} comment${comments.length === 1 ? '' : 's'}:\n${formattedComments}`;
-
+      return renderCommentThreadList(await fetchDocumentThreads(docs, args.documentId));
     } catch (error: any) {
       log.error(`Error listing comments: ${error.message || error}`);
-      throw new UserError(`Failed to list comments: ${error.message || 'Unknown error'}`);
+      commentFailure(error, 'list comments');
     }
-  }
+  },
 });
 
 server.addTool({
   name: 'getComment',
   annotations: { readOnlyHint: true },
-  description: 'Gets a specific comment with its full thread of replies.',
+  description: 'Gets one comment thread with its full reply chain, anchored range and assignee.',
   parameters: DocumentIdParameter.extend({
-    commentId: z.string().describe('The ID of the comment to retrieve')
+    commentId: z.string().describe('The ID of the comment thread to retrieve (from listComments).'),
   }),
   execute: async (args, { log, session }) => {
     log.info(`Getting comment ${args.commentId} from document ${args.documentId}`);
-
+    const docs = await getDocsClient(session);
     try {
-      const drive = await getDriveClient(session);
-      const response = await drive.comments.get({
-        fileId: args.documentId,
-        commentId: args.commentId,
-        fields: 'id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime)'
-      });
-
-      const comment = response.data;
-      const author = comment.author?.displayName || 'Unknown';
-      const date = comment.createdTime ? new Date(comment.createdTime).toLocaleDateString() : 'Unknown date';
-      const status = comment.resolved ? ' [RESOLVED]' : '';
-      const quotedText = comment.quotedFileContent?.value || 'No quoted text';
-      const anchor = quotedText !== 'No quoted text' ? `\nAnchored to: "${quotedText}"` : '';
-
-      let result = `**${author}** (${date})${status}${anchor}\n${comment.content}`;
-
-      // Add replies if any
-      if (comment.replies && comment.replies.length > 0) {
-        result += '\n\n**Replies:**';
-        comment.replies.forEach((reply: any, index: number) => {
-          const replyAuthor = reply.author?.displayName || 'Unknown';
-          const replyDate = reply.createdTime ? new Date(reply.createdTime).toLocaleDateString() : 'Unknown date';
-          result += `\n${index + 1}. **${replyAuthor}** (${replyDate})\n   ${reply.content}`;
-        });
+      const threads = await fetchDocumentThreads(docs, args.documentId);
+      const thread = findCommentThread(threads, args.commentId);
+      if (!thread) {
+        // Named as a lookup over the threads that DO exist, because the Docs API
+        // has no per-comment endpoint to 404 on its behalf and a bare "not found"
+        // would read as the document being unreadable.
+        throw new UserError(
+          `No comment thread with ID ${args.commentId} in this document (${threads.comments.length} thread(s) found). `
+          + 'Note comment IDs from the Drive API are a different id space and will not resolve here.',
+        );
       }
-
-      return result;
-
+      return renderCommentThread(thread);
     } catch (error: any) {
       log.error(`Error getting comment: ${error.message || error}`);
-      throw new UserError(`Failed to get comment: ${error.message || 'Unknown error'}`);
+      commentFailure(error, 'get comment');
     }
-  }
+  },
+});
+
+server.addTool({
+  name: 'listSuggestions',
+  annotations: { readOnlyHint: true },
+  description: 'Lists suggested edits (tracked changes) in a Google Doc with their status and discussion.',
+  parameters: DocumentIdParameter,
+  execute: async (args, { log, session }) => {
+    log.info(`Listing suggestions for document ${args.documentId}`);
+    const docs = await getDocsClient(session);
+    try {
+      return renderSuggestionThreadList(await fetchDocumentThreads(docs, args.documentId));
+    } catch (error: any) {
+      log.error(`Error listing suggestions: ${error.message || error}`);
+      commentFailure(error, 'list suggestions');
+    }
+  },
 });
 
 server.addTool({
   name: 'addComment',
   annotations: { readOnlyHint: false },
-  description: 'Adds a comment to a Google Document with quoted text context. NOTE: Due to Google Drive API limitations, comments cannot be anchored to specific text positions in Google Docs. The comment will appear in the Comments panel with the quoted text displayed, but won\'t highlight text in the document body.',
+  description: 'Adds a comment anchored to a text range in a Google Doc. The range is highlighted in the document body.',
   parameters: addCommentSchema,
   execute: async (args, { log, session }) => {
     log.info(`Adding comment to range ${args.startIndex}-${args.endIndex} in doc ${args.documentId}`);
     try {
-      const docsClient = await getDocsClient(session);
-      const drive = await getDriveClient(session);
-      const comment = await performAddComment(docsClient, drive, args);
-      return `Comment added successfully. Comment ID: ${comment.id}`;
+      const docs = await getDocsClient(session);
+      const result = await performAddComment(docs, args);
+      const quoted = result.quotedText ? ` Anchored to: "${result.quotedText}".` : '';
+      // Google's recorded assignee, or — when it echoed none back — the request,
+      // said as a request. Printing the asked-for address as though it stuck is
+      // the same overclaim `confirmed` exists to prevent.
+      let assigned = '';
+      if (result.assigneeEmail) assigned = ` Assigned to ${result.assigneeEmail}.`;
+      else if (result.requestedAssigneeEmail) {
+        assigned = ` Assignment to ${result.requestedAssigneeEmail} was requested, but Google echoed no assignee back —`
+          + ' check the thread with getComment.';
+      }
+      const note = result.confirmed ? '' : unconfirmedNote(result.commentUpdateState);
+      return `Comment added and anchored to ${args.startIndex}-${args.endIndex}. Comment ID: ${result.id}.${quoted}${assigned}${note}`;
     } catch (error: any) {
       log.error(`Error adding comment: ${error.message || error}`);
-      if (error instanceof UserError) throw error;
-      throw new UserError(`Failed to add comment: ${error.message || 'Unknown error'}`);
+      commentFailure(error, 'add comment');
     }
   },
 });
@@ -1072,42 +1080,97 @@ server.addTool({
 server.addTool({
   name: 'replyToComment',
   annotations: { readOnlyHint: false },
-  description: 'Adds a reply to an existing comment.',
+  description: 'Adds a reply to an existing comment thread, or to a suggestion thread.',
   parameters: replyToCommentSchema,
   execute: async (args, { log, session }) => {
-    log.info(`Adding reply to comment ${args.commentId} in doc ${args.documentId}`);
+    log.info(`Replying to ${args.commentId || args.suggestionId} in doc ${args.documentId}`);
     try {
-      const drive = await getDriveClient(session);
-      const reply = await performReplyToComment(drive, args);
-      return `Reply added successfully. Reply ID: ${reply.id}`;
+      const docs = await getDocsClient(session);
+      const reply = await performReplyToComment(docs, args);
+      const note = reply.confirmed ? '' : unconfirmedNote(reply.commentUpdateState);
+      return `Reply added. Post ID: ${reply.postId}.${note}`;
     } catch (error: any) {
       log.error(`Error adding reply: ${error.message || error}`);
-      if (error instanceof UserError) throw error;
-      throw new UserError(`Failed to add reply: ${error.message || 'Unknown error'}`);
+      commentFailure(error, 'add reply');
     }
   },
 });
 
 server.addTool({
   name: 'resolveComment',
-  annotations: { readOnlyHint: false },
-  description: 'Marks a comment as resolved. NOTE: Due to Google API limitations, the Drive API does not support resolving comments on Google Docs files. This operation will attempt to update the comment but the resolved status may not persist in the UI. Comments can be resolved manually in the Google Docs interface.',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Marks a comment thread resolved, optionally with a closing note. Reversible with reopenComment.',
   parameters: resolveCommentSchema,
   execute: async (args, { log, session }) => {
     log.info(`Resolving comment ${args.commentId} in doc ${args.documentId}`);
     try {
-      const drive = await getDriveClient(session);
-      const { resolved } = await performResolveComment(drive, args);
-      if (resolved) {
-        return `Comment ${args.commentId} has been marked as resolved.`;
-      }
-      return `Attempted to resolve comment ${args.commentId}, but the resolved status may not persist in the Google Docs UI due to API limitations. The comment can be resolved manually in the Google Docs interface.`;
+      const docs = await getDocsClient(session);
+      const { resolved, commentUpdateState } = await performResolveComment(docs, args);
+      if (resolved) return `Comment ${args.commentId} is resolved.`;
+      return `Resolve request for comment ${args.commentId} was sent.${unconfirmedNote(commentUpdateState)}`;
     } catch (error: any) {
       log.error(`Error resolving comment: ${error.message || error}`);
-      if (error instanceof UserError) throw error;
-      const errorDetails = error.response?.data?.error?.message || error.message || 'Unknown error';
-      const errorCode = error.response?.data?.error?.code;
-      throw new UserError(`Failed to resolve comment: ${errorDetails}${errorCode ? ` (Code: ${errorCode})` : ''}`);
+      commentFailure(error, 'resolve comment');
+    }
+  },
+});
+
+server.addTool({
+  name: 'reopenComment',
+  annotations: { readOnlyHint: false },
+  description: 'Reopens a resolved comment thread, putting it back in the open discussion.',
+  parameters: reopenCommentSchema,
+  execute: async (args, { log, session }) => {
+    log.info(`Reopening comment ${args.commentId} in doc ${args.documentId}`);
+    try {
+      const docs = await getDocsClient(session);
+      const { reopened, commentUpdateState } = await performReopenComment(docs, args);
+      if (reopened) return `Comment ${args.commentId} is open again.`;
+      return `Reopen request for comment ${args.commentId} was sent.${unconfirmedNote(commentUpdateState)}`;
+    } catch (error: any) {
+      log.error(`Error reopening comment: ${error.message || error}`);
+      commentFailure(error, 'reopen comment');
+    }
+  },
+});
+
+server.addTool({
+  name: 'assignComment',
+  annotations: { readOnlyHint: false },
+  description: 'Reassigns an already-assigned comment thread. A thread created with no assignee can never be assigned — use addComment with assigneeEmail.',
+  parameters: assignCommentSchema,
+  execute: async (args, { log, session }) => {
+    log.info(`Assigning comment ${args.commentId} to ${args.assigneeEmail} in doc ${args.documentId}`);
+    try {
+      const docs = await getDocsClient(session);
+      const { assigned, commentUpdateState } = await performAssignComment(docs, args);
+      if (assigned) return `Comment ${args.commentId} is assigned to ${args.assigneeEmail}.`;
+      return `Assignment of comment ${args.commentId} to ${args.assigneeEmail} was sent.${unconfirmedNote(commentUpdateState)}`;
+    } catch (error: any) {
+      log.error(`Error assigning comment: ${error.message || error}`);
+      commentFailure(error, 'assign comment');
+    }
+  },
+});
+
+server.addTool({
+  name: 'updateCommentPost',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Rewrites the text of a comment or one of its replies. Only the original author can, and the previous text is not recoverable.',
+  parameters: updateCommentPostSchema,
+  execute: async (args, { log, session }) => {
+    log.info(`Updating post ${args.postId} in doc ${args.documentId}`);
+    try {
+      const docs = await getDocsClient(session);
+      const result = await performUpdateCommentPost(docs, args);
+      const note = result.updated ? '' : unconfirmedNote(result.commentUpdateState);
+      // Echoes the new text because it is the caller's only record: the API
+      // offers no way to read the previous version back, so an edit that hit the
+      // wrong postId is otherwise indistinguishable from a correct one.
+      return `Post ${args.postId} now reads: "${args.content}".${note}`;
+    } catch (error: any) {
+      log.error(`Error updating post: ${error.message || error}`);
+      commentFailure(error, 'update comment post');
     }
   },
 });
@@ -1115,18 +1178,111 @@ server.addTool({
 server.addTool({
   name: 'deleteComment',
   annotations: { readOnlyHint: false, destructiveHint: true },
-  description: 'Deletes a comment from the document.',
+  description: 'Deletes a comment thread and all of its replies. Not recoverable.',
   parameters: deleteCommentSchema,
   execute: async (args, { log, session }) => {
     log.info(`Deleting comment ${args.commentId} from doc ${args.documentId}`);
     try {
-      const drive = await getDriveClient(session);
-      await performDeleteComment(drive, args);
-      return `Comment ${args.commentId} has been deleted.`;
+      const docs = await getDocsClient(session);
+      const { deleted, commentUpdateState } = await performDeleteComment(docs, args);
+      if (deleted) return `Comment ${args.commentId} and its replies have been deleted.`;
+      return `Delete request for comment ${args.commentId} was sent.${unconfirmedNote(commentUpdateState)}`;
     } catch (error: any) {
       log.error(`Error deleting comment: ${error.message || error}`);
-      if (error instanceof UserError) throw error;
-      throw new UserError(`Failed to delete comment: ${error.message || 'Unknown error'}`);
+      commentFailure(error, 'delete comment');
+    }
+  },
+});
+
+server.addTool({
+  name: 'deleteCommentReply',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Deletes a single reply from a comment or suggestion thread, leaving the thread itself in place.',
+  parameters: deleteCommentReplySchema,
+  execute: async (args, { log, session }) => {
+    log.info(`Deleting reply ${args.postId} in doc ${args.documentId}`);
+    try {
+      const docs = await getDocsClient(session);
+      const { deleted, threadId, commentUpdateState } = await performDeleteCommentReply(docs, args);
+      if (deleted) return `Reply ${args.postId} has been deleted from thread ${threadId}.`;
+      return `Delete request for reply ${args.postId} was sent.${unconfirmedNote(commentUpdateState)}`;
+    } catch (error: any) {
+      log.error(`Error deleting reply: ${error.message || error}`);
+      commentFailure(error, 'delete comment reply');
+    }
+  },
+});
+
+/** Shared by the three suggestion verdicts: the id list Google reported back. */
+const suggestionVerdict = (
+  /** Past tense, for the confirmed sentence: "has been accepted". */
+  verb: string,
+  /** Base verb, for the unconfirmed one: "Request to accept". Passed rather than
+   * derived — stripping `ed` turns "deleted" into "delet". */
+  action: string,
+  suggestionId: string,
+  confirmed: boolean,
+  reportedIds: string[] | null,
+): string => {
+  if (confirmed) return `Suggestion ${suggestionId} has been ${verb}.`;
+  // Google reports the ids it acted on. An id missing from that list means the
+  // request went through and did not touch this suggestion — reporting it as
+  // done would be the silent no-op this readback exists to catch.
+  const reported = reportedIds === null ? 'Google reported no ids' : `Google reported: ${reportedIds.join(', ') || 'none'}`;
+  return `Request to ${action} suggestion ${suggestionId} was sent, but it was NOT confirmed `
+    + `(${reported}). Check with listSuggestions before relying on it.`;
+};
+
+server.addTool({
+  name: 'acceptSuggestion',
+  annotations: { readOnlyHint: false },
+  description: 'Accepts a suggested edit, applying its change to the document.',
+  parameters: acceptSuggestionSchema,
+  execute: async (args, { log, session }) => {
+    log.info(`Accepting suggestion ${args.suggestionId} in doc ${args.documentId}`);
+    try {
+      const docs = await getDocsClient(session);
+      const { confirmed, reportedIds } = await performAcceptSuggestion(docs, args);
+      return suggestionVerdict('accepted', 'accept', args.suggestionId, confirmed, reportedIds);
+    } catch (error: any) {
+      log.error(`Error accepting suggestion: ${error.message || error}`);
+      commentFailure(error, 'accept suggestion');
+    }
+  },
+});
+
+server.addTool({
+  name: 'rejectSuggestion',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Rejects a suggested edit, discarding the proposed change.',
+  parameters: rejectSuggestionSchema,
+  execute: async (args, { log, session }) => {
+    log.info(`Rejecting suggestion ${args.suggestionId} in doc ${args.documentId}`);
+    try {
+      const docs = await getDocsClient(session);
+      const { confirmed, reportedIds } = await performRejectSuggestion(docs, args);
+      return suggestionVerdict('rejected', 'reject', args.suggestionId, confirmed, reportedIds);
+    } catch (error: any) {
+      log.error(`Error rejecting suggestion: ${error.message || error}`);
+      commentFailure(error, 'reject suggestion');
+    }
+  },
+});
+
+server.addTool({
+  name: 'deleteSuggestion',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Deletes a suggestion thread outright, without accepting or rejecting its change.',
+  parameters: deleteSuggestionSchema,
+  execute: async (args, { log, session }) => {
+    log.info(`Deleting suggestion ${args.suggestionId} in doc ${args.documentId}`);
+    try {
+      const docs = await getDocsClient(session);
+      const { confirmed, reportedIds } = await performDeleteSuggestion(docs, args);
+      return suggestionVerdict('deleted', 'delete', args.suggestionId, confirmed, reportedIds);
+    } catch (error: any) {
+      log.error(`Error deleting suggestion: ${error.message || error}`);
+      commentFailure(error, 'delete suggestion');
     }
   },
 });
@@ -1259,14 +1415,20 @@ server.addTool({
 server.addTool({
   name: 'batchUpdateDoc',
   annotations: { readOnlyHint: false },
-  description: 'Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Index-based operations are automatically sorted in descending order to prevent index shifting.',
+  description: 'Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Index-based operations are automatically sorted in descending order to prevent index shifting. Set suggestMode to propose the whole batch as tracked suggestions instead of editing directly.',
   parameters: batchUpdateDocSchema,
   execute: async (args, { log, session }) => {
     const docs = await getDocsClient(session);
-    log.info(`Batch update on doc ${args.documentId}: ${args.operations.length} operation(s)`);
-    const { executed, typeCounts } = await performBatchUpdateDoc(docs, args);
+    log.info(`Batch update on doc ${args.documentId}: ${args.operations.length} operation(s)${args.suggestMode ? ' as suggestions' : ''}`);
+    const { executed, typeCounts, suggested } = await performBatchUpdateDoc(docs, args);
     if (executed === 0) return 'No valid operations to execute.';
     const summary = Object.entries(typeCounts).map(([type, count]) => `${count}x ${type}`).join(', ');
+    // Says which mode ran, because a suggested batch leaves the document reading
+    // exactly as it did before and would otherwise look like a no-op.
+    if (suggested) {
+      return `Batch update submitted as SUGGESTIONS: ${args.operations.length} operation(s) proposed (${summary}). `
+        + 'The document is unchanged until someone accepts them — list them with listSuggestions.';
+    }
     return `Batch update completed: ${args.operations.length} operation(s) executed (${summary}).`;
   },
 });

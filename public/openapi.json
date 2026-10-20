@@ -5448,8 +5448,8 @@
     "/api/v1/docs/{documentId}/comments": {
       "get": {
         "operationId": "listComments",
-        "summary": "List all comments in a document",
-        "description": "Returns all comments in a Google Document, including replies.",
+        "summary": "List comment threads in a document",
+        "description": "Returns every comment thread with its anchored range, status, assignee and replies. Runs on the Docs API: `id` is a Docs commentId, and IDs cached from the older Drive-backed response will not resolve.",
         "parameters": [
           {
             "name": "documentId",
@@ -5522,8 +5522,8 @@
       },
       "post": {
         "operationId": "addComment",
-        "summary": "Add a comment to a document",
-        "description": "Adds a comment quoting the given range. The Drive API ignores anchors on Google Docs, so the quoted text is the only record of which range the comment refers to — it is read out of the document here. endIndex must be greater than startIndex.",
+        "summary": "Add a comment anchored to a text range",
+        "description": "Adds a comment ANCHORED to the given range, so Google Docs highlights that text in the document body. endIndex must be greater than startIndex. Optional assigneeEmail assigns the thread, and creation is the ONLY time a thread can be assigned - Google refuses to add an assignee to a thread created without one.",
         "parameters": [
           {
             "name": "documentId",
@@ -5560,7 +5560,20 @@
                   "commentText": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "The content of the comment"
+                    "description": "The comment text, as plain text. Maximum 2048 UTF-8 bytes; a longer body is refused before the call."
+                  },
+                  "assigneeEmail": {
+                    "type": "string",
+                    "format": "email",
+                    "description": "Assign the new thread to this person. Cannot be done later."
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab the range lives in. Defaults to the first tab."
+                  },
+                  "segmentId": {
+                    "type": "string",
+                    "description": "Optional header/footer/footnote ID. Omit for the document body."
                   }
                 }
               }
@@ -5569,17 +5582,73 @@
         },
         "responses": {
           "201": {
-            "description": "Comment created successfully",
+            "description": "Comment created and anchored",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DocsComment"
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "The Docs commentId of the new thread."
+                    },
+                    "content": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "quotedText": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "author": {
+                      "type": "string"
+                    },
+                    "createdTime": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
+                    },
+                    "resolved": {
+                      "type": "boolean"
+                    },
+                    "anchorId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "status": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "assigneeEmail": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "What Google RECORDED. Null when it echoed none back, even if one was requested."
+                    },
+                    "requestedAssigneeEmail": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "What the caller asked for. Present so an unechoed assignment is visible without being claimed as applied."
+                    },
+                    "range": {
+                      "$ref": "#/components/schemas/Range"
+                    },
+                    "confirmed": {
+                      "type": "boolean",
+                      "description": "Google's commentUpdateState verdict. false means the write was NOT acknowledged - re-read before relying on it. A state of ALL_FAILED_UNKNOWN_REASON is returned as an error instead, with nothing written."
+                    },
+                    "commentUpdateState": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Google's raw verdict: ALL_SAVED, NO_UPDATES_REQUESTED, or absent."
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Bad request - invalid parameters",
+            "description": "Invalid request body",
             "content": {
               "application/json": {
                 "schema": {
@@ -5609,7 +5678,7 @@
             }
           },
           "404": {
-            "description": "Document not found",
+            "description": "Not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -6088,6 +6157,10 @@
                       },
                       "additionalProperties": true
                     }
+                  },
+                  "suggestMode": {
+                    "type": "boolean",
+                    "description": "If true the whole batch is applied as tracked SUGGESTIONS for a human to accept or reject, and the document itself is unchanged until someone does."
                   }
                 },
                 "required": [
@@ -7339,7 +7412,7 @@
       "post": {
         "operationId": "replyToDocComment",
         "summary": "Reply to a comment",
-        "description": "Adds a reply under an existing comment thread.",
+        "description": "Adds a reply to the comment thread. `confirmed` is Google's own commentUpdateState verdict: false means the reply was not acknowledged, not that it failed.",
         "parameters": [
           {
             "name": "documentId",
@@ -7385,18 +7458,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string"
-                    },
-                    "content": {
-                      "type": "string"
-                    },
-                    "createdTime": {
-                      "type": "string"
-                    }
-                  }
+                  "$ref": "#/components/schemas/CommentReplyResult"
                 }
               }
             }
@@ -7448,7 +7510,7 @@
       "post": {
         "operationId": "resolveDocComment",
         "summary": "Mark a comment resolved",
-        "description": "The `resolved` field in the response is what Google reported on a RE-READ, not what was requested: the Drive API accepts resolving a Google Docs comment and frequently does not persist it. A false value means the call succeeded and the flag did not stick.",
+        "description": "Resolving is a reply carrying commentAction RESOLVE - the Docs API has no thread-status field - so an optional replyText is posted as the closing note. `resolved` reports Google's verdict: a state of ALL_FAILED_UNKNOWN_REASON comes back as an error with nothing written, and anything short of ALL_SAVED answers confirmed false rather than claiming success. Reversible with the reopen endpoint.",
         "parameters": [
           {
             "name": "documentId",
@@ -7475,7 +7537,12 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "properties": {}
+                "properties": {
+                  "replyText": {
+                    "type": "string",
+                    "description": "Optional closing note posted with the resolution. Maximum 2048 UTF-8 bytes."
+                  }
+                }
               }
             }
           }
@@ -7496,6 +7563,15 @@
                     },
                     "resolved": {
                       "type": "boolean"
+                    },
+                    "confirmed": {
+                      "type": "boolean",
+                      "description": "Google's commentUpdateState verdict. false means the write was NOT acknowledged - re-read before relying on it. A state of ALL_FAILED_UNKNOWN_REASON is returned as an error instead, with nothing written."
+                    },
+                    "commentUpdateState": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Google's raw verdict: ALL_SAVED, NO_UPDATES_REQUESTED, or absent."
                     }
                   }
                 }
@@ -7503,7 +7579,7 @@
             }
           },
           "400": {
-            "description": "Invalid request body. The response carries Zod issues keyed by field.",
+            "description": "Invalid request body",
             "content": {
               "application/json": {
                 "schema": {
@@ -7513,7 +7589,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid bearer token",
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
@@ -7523,7 +7599,7 @@
             }
           },
           "403": {
-            "description": "Permission denied by Google",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -7533,7 +7609,7 @@
             }
           },
           "404": {
-            "description": "Comment not found",
+            "description": "Not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -7549,7 +7625,7 @@
       "post": {
         "operationId": "deleteDocComment",
         "summary": "Delete a comment thread",
-        "description": "DESTRUCTIVE. A POST to an action path rather than a DELETE on the resource.",
+        "description": "DESTRUCTIVE. Deletes the thread and every reply on it; not recoverable. POST to an action path rather than DELETE on the resource. Exposed on this plane with explicit sign-off.",
         "parameters": [
           {
             "name": "documentId",
@@ -7635,6 +7711,864 @@
           },
           "404": {
             "description": "Comment not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/comments/{commentId}": {
+      "get": {
+        "operationId": "getDocsComment",
+        "summary": "Get one comment thread with its replies",
+        "description": "The Docs API has no per-comment endpoint, so this reads the document and finds the thread. A 404 means no thread in this document carries that id - including a comment ID from the Drive API, which is a different id space.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          },
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The comment thread ID (from listComments)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Comment thread retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/DocsComment"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "documentId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No thread with that id in this document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/suggestions": {
+      "get": {
+        "operationId": "listDocSuggestions",
+        "summary": "List suggested edits on a document",
+        "description": "Returns the document's suggested edits (tracked changes) with their status, summary text and discussion.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Suggestions retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "suggestions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Suggestion"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/comments/{commentId}/reopen": {
+      "post": {
+        "operationId": "reopenDocComment",
+        "summary": "Reopen a resolved comment thread",
+        "description": "The inverse of resolve, also posted as a reply action (commentAction REOPEN).",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          },
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The comment thread ID (from listComments)."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "replyText": {
+                    "type": "string",
+                    "description": "Optional note posted alongside the action. Maximum 2048 UTF-8 bytes."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reopen attempted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "commentId": {
+                      "type": "string"
+                    },
+                    "reopened": {
+                      "type": "boolean"
+                    },
+                    "confirmed": {
+                      "type": "boolean",
+                      "description": "Google's commentUpdateState verdict. false means the write was NOT acknowledged - re-read before relying on it. A state of ALL_FAILED_UNKNOWN_REASON is returned as an error instead, with nothing written."
+                    },
+                    "commentUpdateState": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Google's raw verdict: ALL_SAVED, NO_UPDATES_REQUESTED, or absent."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/comments/{commentId}/assign": {
+      "post": {
+        "operationId": "assignDocComment",
+        "summary": "Reassign a comment thread",
+        "description": "REASSIGNMENT ONLY. Google answers 400 when the thread was created without an assignee, and an unassigned thread can never be assigned - create it with POST /comments and assigneeEmail instead. The 400 is rewritten to list every documented cause, because Google's response names none of them.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          },
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The comment thread ID (from listComments)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "assigneeEmail": {
+                    "type": "string",
+                    "format": "email",
+                    "description": "The person to assign the thread to."
+                  },
+                  "replyText": {
+                    "type": "string",
+                    "description": "Optional note posted alongside the action. Maximum 2048 UTF-8 bytes."
+                  }
+                },
+                "required": [
+                  "assigneeEmail"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Assignment attempted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "commentId": {
+                      "type": "string"
+                    },
+                    "assigneeEmail": {
+                      "type": "string"
+                    },
+                    "assigned": {
+                      "type": "boolean"
+                    },
+                    "confirmed": {
+                      "type": "boolean",
+                      "description": "Google's commentUpdateState verdict. false means the write was NOT acknowledged - re-read before relying on it. A state of ALL_FAILED_UNKNOWN_REASON is returned as an error instead, with nothing written."
+                    },
+                    "commentUpdateState": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Google's raw verdict: ALL_SAVED, NO_UPDATES_REQUESTED, or absent."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/comments/{commentId}/posts/{postId}/update": {
+      "post": {
+        "operationId": "updateDocCommentPost",
+        "summary": "Rewrite the text of a comment or reply",
+        "description": "DESTRUCTIVE in effect: it overwrites the post's text and the previous version cannot be read back through any API. Only the original author may update a post. Exposed on this plane with explicit sign-off.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          },
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The comment thread ID (from listComments)."
+          },
+          {
+            "name": "postId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The ID of the post - the comment itself or one of its replies."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "description": "The replacement text, as plain text. Maximum 2048 UTF-8 bytes."
+                  }
+                },
+                "required": [
+                  "content"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Edit attempted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "postId": {
+                      "type": "string"
+                    },
+                    "threadId": {
+                      "type": "string"
+                    },
+                    "content": {
+                      "type": "string"
+                    },
+                    "updated": {
+                      "type": "boolean"
+                    },
+                    "confirmed": {
+                      "type": "boolean",
+                      "description": "Google's commentUpdateState verdict. false means the write was NOT acknowledged - re-read before relying on it. A state of ALL_FAILED_UNKNOWN_REASON is returned as an error instead, with nothing written."
+                    },
+                    "commentUpdateState": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Google's raw verdict: ALL_SAVED, NO_UPDATES_REQUESTED, or absent."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/comments/{commentId}/posts/{postId}/delete": {
+      "post": {
+        "operationId": "deleteDocCommentReply",
+        "summary": "Delete one reply from a comment thread",
+        "description": "DESTRUCTIVE and not recoverable. Narrower than the thread delete: the thread survives and one reply is removed. Exposed on this plane with explicit sign-off.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          },
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The comment thread ID (from listComments)."
+          },
+          {
+            "name": "postId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The ID of the post - the comment itself or one of its replies."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Delete attempted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "postId": {
+                      "type": "string"
+                    },
+                    "threadId": {
+                      "type": "string"
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    },
+                    "confirmed": {
+                      "type": "boolean",
+                      "description": "Google's commentUpdateState verdict. false means the write was NOT acknowledged - re-read before relying on it. A state of ALL_FAILED_UNKNOWN_REASON is returned as an error instead, with nothing written."
+                    },
+                    "commentUpdateState": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Google's raw verdict: ALL_SAVED, NO_UPDATES_REQUESTED, or absent."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/suggestions/{suggestionId}/replies": {
+      "post": {
+        "operationId": "replyToDocSuggestion",
+        "summary": "Reply to a suggestion thread",
+        "description": "Posts a reply on a suggested edit rather than on a comment thread. A separate path from the comment reply because a request naming both a comment and a suggestion thread is refused.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          },
+          {
+            "name": "suggestionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The suggestion ID (from listSuggestions)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "replyText": {
+                    "type": "string",
+                    "description": "The reply text. Maximum 2048 UTF-8 bytes."
+                  }
+                },
+                "required": [
+                  "replyText"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Reply created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentReplyResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/suggestions/{suggestionId}/accept": {
+      "post": {
+        "operationId": "acceptDocSuggestion",
+        "summary": "Accept a suggested edit",
+        "description": "Applies the suggested change to the document. `confirmed` comes from the acceptedSuggestionIds Google reports back, so a request that touched nothing is not reported as applied. Rejecting and deleting a suggestion are deliberately NOT on this plane: both discard proposed text irrecoverably and neither has REST sign-off - use the MCP tools, where the destructive annotation is visible to the client.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          },
+          {
+            "name": "suggestionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The suggestion ID (from listSuggestions)."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Accept attempted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "suggestionId": {
+                      "type": "string"
+                    },
+                    "confirmed": {
+                      "type": "boolean"
+                    },
+                    "reportedIds": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "The ids Google said it accepted. Null when it reported none, which is unconfirmed rather than failed."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -25354,30 +26288,6 @@
         }
       }
     },
-    "/api/v1/docs/{documentId}/comments/{commentId}": {
-      "get": {
-        "operationId": "getDocsComment",
-        "summary": "Get a single comment with its replies",
-        "description": "Get a single comment with its replies. Mirrors the MCP tool `getComment`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "docs"
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
     "/api/v1/docs/{documentId}/structure": {
       "get": {
         "operationId": "inspectDocStructure",
@@ -26544,7 +27454,7 @@
           "quotedText": {
             "type": "string",
             "nullable": true,
-            "description": "The text that the comment is anchored to"
+            "description": "Google's plain-text record of the anchored text, captured when the comment was created."
           },
           "author": {
             "type": "string",
@@ -26565,8 +27475,34 @@
               "$ref": "#/components/schemas/Reply"
             },
             "description": "Replies to this comment"
+          },
+          "anchorId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The anchor this thread is tied to. Several threads may share one anchor."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "RESOLVED"
+            ],
+            "nullable": true
+          },
+          "ranges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Range"
+            },
+            "description": "The highlighted range(s). EMPTY when the anchor could not be resolved, which is not the same as the thread being unanchored - check anchorId."
+          },
+          "assigneeEmail": {
+            "type": "string",
+            "nullable": true,
+            "description": "Only set if the thread was created with an assignee."
           }
-        }
+        },
+        "description": "A comment thread. Backed by the Docs API, so `id` is a Docs commentId - comment IDs from the Drive API are a different id space and do not resolve against these endpoints."
       },
       "Reply": {
         "type": "object",
@@ -26587,6 +27523,195 @@
             "type": "string",
             "format": "date-time",
             "description": "When the reply was created"
+          },
+          "postId": {
+            "type": "string",
+            "description": "The Docs API name for this identifier. `id` carries the same value."
+          },
+          "updatedTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "action": {
+            "type": "string",
+            "nullable": true,
+            "description": "RESOLVE or REOPEN when the reply was an action rather than a message."
+          },
+          "deleted": {
+            "type": "boolean",
+            "description": "A deleted post keeps its id and loses its content and author."
+          }
+        }
+      },
+      "Range": {
+        "type": "object",
+        "description": "A range in the document a comment is anchored to.",
+        "properties": {
+          "startIndex": {
+            "type": "integer",
+            "nullable": true
+          },
+          "endIndex": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Exclusive."
+          },
+          "segmentId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Header, footer or footnote ID. Null or empty means the document body."
+          },
+          "tabId": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "Post": {
+        "type": "object",
+        "properties": {
+          "postId": {
+            "type": "string",
+            "nullable": true
+          },
+          "content": {
+            "type": "string",
+            "nullable": true
+          },
+          "author": {
+            "type": "string",
+            "description": "Display name, or Anonymous. Google sends no email address for a post author."
+          },
+          "authorUser": {
+            "type": "string",
+            "nullable": true,
+            "description": "People API resource name (users/{id})."
+          },
+          "authorIsMe": {
+            "type": "boolean"
+          },
+          "createdTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "updatedTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "action": {
+            "type": "string",
+            "nullable": true
+          },
+          "assigneeEmail": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "Suggestion": {
+        "type": "object",
+        "description": "A suggested edit (tracked change) and its discussion.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "ACCEPTED",
+              "REJECTED"
+            ],
+            "nullable": true
+          },
+          "summaryText": {
+            "type": "string",
+            "nullable": true,
+            "description": "Plain-text summary of the proposed change. May be empty."
+          },
+          "content": {
+            "type": "string",
+            "nullable": true
+          },
+          "author": {
+            "type": "string"
+          },
+          "createdTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "headPost": {
+            "$ref": "#/components/schemas/Post"
+          },
+          "replies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Post"
+            }
+          }
+        }
+      },
+      "CommentReplyResult": {
+        "type": "object",
+        "description": "A reply post as performReplyToComment returns it, for a comment or a suggestion thread.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "nullable": true,
+            "description": "Same value as postId. Kept because the pre-existing response published this key."
+          },
+          "postId": {
+            "type": "string",
+            "nullable": true
+          },
+          "content": {
+            "type": "string",
+            "nullable": true
+          },
+          "author": {
+            "type": "object",
+            "description": "An object, not a string: the pre-existing shape was author.displayName.",
+            "properties": {
+              "displayName": {
+                "type": "string",
+                "description": "Display name, or Anonymous. Google sends no email address for a post author."
+              },
+              "isMe": {
+                "type": "boolean"
+              }
+            }
+          },
+          "createdTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "action": {
+            "type": "string",
+            "nullable": true,
+            "description": "RESOLVE or REOPEN when the reply carried an action rather than only text."
+          },
+          "assigneeEmail": {
+            "type": "string",
+            "nullable": true,
+            "description": "Set only when the reply assigned the thread."
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "Google's commentUpdateState verdict. false means the reply was NOT acknowledged - re-read before relying on it."
+          },
+          "commentUpdateState": {
+            "type": "string",
+            "nullable": true,
+            "description": "Google's raw verdict: ALL_SAVED, NO_UPDATES_REQUESTED, or absent."
           }
         }
       },

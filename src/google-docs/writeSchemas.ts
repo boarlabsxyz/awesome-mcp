@@ -110,6 +110,9 @@ export const insertPageBreakSchema = DocumentIdParameter.extend({
 export const batchUpdateDocSchema = z.object({
   documentId: z.string().describe('The ID of the Google Document.'),
   operations: z.array(BatchOperationSchema).min(1).max(50).describe('Array of operations to execute (1-50).'),
+  suggestMode: z.boolean().optional()
+    .describe('If true, every operation in the batch is applied as a tracked SUGGESTION for a human to accept or reject, '
+      + 'instead of editing the document directly. Use for proposed edits; the document is unchanged until someone accepts.'),
 });
 
 // === Images ===
@@ -153,28 +156,102 @@ export const insertImageRestSchema = insertLocalImageSchema.refine(
   },
 );
 
-// === Comments ===
+// === Comments and suggestions ===
+//
+// These moved off the Drive API (`drive.comments.*`) onto the Docs API's own
+// `documents.batchUpdate` request types, GA since 2026-09-30. The difference is
+// not cosmetic: Drive comments on a Google Doc are UNANCHORED — Google's own
+// guide says the editors "treat these comments as unanchored comments", and
+// setting Drive's `anchor` field makes Docs render the thread as "Original
+// content deleted" — so a range could be quoted but never highlighted. The Docs
+// API takes the range as a first-class field and highlights it.
+//
+// Two consequences for these schemas. Resolving is not a field but a reply
+// ACTION (`commentAction: RESOLVE`), so resolve/reopen are posts rather than
+// updates. And every thread-scoped request accepts EITHER a commentId or a
+// suggestionId — Google requires exactly one, and that refusal lives in the op
+// rather than here, because a Zod rejection surfaces as FastMCP's generic
+// InvalidParams, which says nothing about which of the two to send.
+
+/** Which tab and which segment (body, header, footer, footnote) a range is in. */
+const commentRangeTarget = {
+  tabId: z.string().optional()
+    .describe('Optional tab ID. Defaults to the first tab. Get IDs from listDocumentTabs.'),
+  segmentId: z.string().optional()
+    .describe('Optional header/footer/footnote ID the range lives in. Omit for the document body.'),
+};
+
+/**
+ * commentId vs suggestionId: both optional at the schema level so the op can
+ * refuse the ambiguous cases by name. A REST route supplies whichever one its
+ * path names, so over HTTP exactly one is always set.
+ */
+const threadTarget = {
+  commentId: z.string().optional()
+    .describe('The ID of the comment thread. Give either this or suggestionId, not both.'),
+  suggestionId: z.string().optional()
+    .describe('The ID of the suggestion thread, to post on a suggested edit. Give either this or commentId, not both.'),
+};
 
 export const addCommentSchema = DocumentIdParameter.extend({
-  startIndex: z.number().int().min(1).describe('The starting index of the text range (inclusive, starts from 1).'),
+  startIndex: z.number().int().min(1).describe('The starting index of the text range to anchor the comment to (inclusive, starts from 1).'),
   endIndex: z.number().int().min(1).describe('The ending index of the text range (exclusive).'),
-  commentText: z.string().min(1).describe('The content of the comment.'),
+  commentText: z.string().min(1).describe('The content of the comment, as plain text. Max 2048 UTF-8 bytes.'),
+  assigneeEmail: z.string().email().optional()
+    .describe('Optional: assign the thread to this person on creation. This is the ONLY way to assign a thread — '
+      + 'Google refuses to add an assignee to a thread that was created without one.'),
+  ...commentRangeTarget,
 }).refine((data) => data.endIndex > data.startIndex, {
   message: 'endIndex must be greater than startIndex',
   path: ['endIndex'],
 });
 
 export const replyToCommentSchema = DocumentIdParameter.extend({
-  commentId: z.string().describe('The ID of the comment to reply to.'),
-  replyText: z.string().min(1).describe('The content of the reply.'),
+  ...threadTarget,
+  replyText: z.string().min(1).describe('The content of the reply, as plain text. Max 2048 UTF-8 bytes.'),
 });
 
 export const resolveCommentSchema = DocumentIdParameter.extend({
-  commentId: z.string().describe('The ID of the comment to resolve.'),
+  commentId: z.string().describe('The ID of the comment thread to resolve.'),
+  replyText: z.string().optional().describe('Optional closing note to post with the resolution.'),
+});
+
+export const reopenCommentSchema = DocumentIdParameter.extend({
+  commentId: z.string().describe('The ID of the resolved comment thread to reopen.'),
+  replyText: z.string().optional().describe('Optional note to post with the reopening.'),
+});
+
+export const assignCommentSchema = DocumentIdParameter.extend({
+  commentId: z.string().describe('The ID of the comment thread to reassign.'),
+  assigneeEmail: z.string().email().describe('The email address of the person to assign the thread to.'),
+  replyText: z.string().optional().describe('Optional note to post with the reassignment.'),
+});
+
+export const updateCommentPostSchema = DocumentIdParameter.extend({
+  ...threadTarget,
+  postId: z.string().describe('The ID of the post (the comment itself or one of its replies) to rewrite.'),
+  content: z.string().min(1).describe('The replacement text, as plain text. Max 2048 UTF-8 bytes. The previous text is not recoverable.'),
 });
 
 export const deleteCommentSchema = DocumentIdParameter.extend({
-  commentId: z.string().describe('The ID of the comment to delete.'),
+  commentId: z.string().describe('The ID of the comment thread to delete, with all of its replies.'),
+});
+
+export const deleteCommentReplySchema = DocumentIdParameter.extend({
+  ...threadTarget,
+  postId: z.string().describe('The ID of the reply post to delete. Use deleteComment to remove a whole thread.'),
+});
+
+export const acceptSuggestionSchema = DocumentIdParameter.extend({
+  suggestionId: z.string().describe('The ID of the suggestion to accept, applying its edit to the document.'),
+});
+
+export const rejectSuggestionSchema = DocumentIdParameter.extend({
+  suggestionId: z.string().describe('The ID of the suggestion to reject, discarding its edit.'),
+});
+
+export const deleteSuggestionSchema = DocumentIdParameter.extend({
+  suggestionId: z.string().describe('The ID of the suggestion thread to delete outright, without accepting or rejecting it.'),
 });
 
 // === Import / export ===
@@ -211,7 +288,14 @@ export type InsertLocalImageArgs = z.infer<typeof insertLocalImageSchema>;
 export type AddCommentArgs = z.infer<typeof addCommentSchema>;
 export type ReplyToCommentArgs = z.infer<typeof replyToCommentSchema>;
 export type ResolveCommentArgs = z.infer<typeof resolveCommentSchema>;
+export type ReopenCommentArgs = z.infer<typeof reopenCommentSchema>;
+export type AssignCommentArgs = z.infer<typeof assignCommentSchema>;
+export type UpdateCommentPostArgs = z.infer<typeof updateCommentPostSchema>;
 export type DeleteCommentArgs = z.infer<typeof deleteCommentSchema>;
+export type DeleteCommentReplyArgs = z.infer<typeof deleteCommentReplySchema>;
+export type AcceptSuggestionArgs = z.infer<typeof acceptSuggestionSchema>;
+export type RejectSuggestionArgs = z.infer<typeof rejectSuggestionSchema>;
+export type DeleteSuggestionArgs = z.infer<typeof deleteSuggestionSchema>;
 export type ExportDocToPdfArgs = z.infer<typeof exportDocToPdfSchema>;
 export type ImportDocxArgs = z.infer<typeof importDocxSchema>;
 export type ImportToGoogleDocArgs = z.infer<typeof importToGoogleDocSchema>;

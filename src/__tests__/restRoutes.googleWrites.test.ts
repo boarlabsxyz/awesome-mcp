@@ -183,6 +183,20 @@ describe('REST data plane: Google Sheets and Calendar write validation', () => {
 
     it('rejects an empty reply', async () => {
       await expectInvalid('/api/v1/docs/doc-123/comments/cmt-1/replies', { replyText: '' }, 'replyText');
+      await expectInvalid('/api/v1/docs/doc-123/suggestions/sug-1/replies', { replyText: '' }, 'replyText');
+    });
+
+    it('rejects an assignment to something that is not an email address', async () => {
+      await expectInvalid('/api/v1/docs/doc-123/comments/cmt-1/assign', { assigneeEmail: 'ada' }, 'assigneeEmail');
+      await expectInvalid('/api/v1/docs/doc-123/comments', { startIndex: 1, endIndex: 5, commentText: 'hi', assigneeEmail: 'ada' }, 'assigneeEmail');
+    });
+
+    it('rejects a post edit with no replacement text', async () => {
+      await expectInvalid('/api/v1/docs/doc-123/comments/cmt-1/posts/p-1/update', { content: '' }, 'content');
+    });
+
+    it('rejects a suggestMode batch that is otherwise invalid, so the flag cannot smuggle a bad body through', async () => {
+      await expectInvalid('/api/v1/docs/doc-123/batchUpdate', { operations: [], suggestMode: true }, 'operations');
     });
 
     it('rejects an import with no title', async () => {
