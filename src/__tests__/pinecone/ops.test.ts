@@ -12,6 +12,7 @@ import {
   opListIndexes,
   opSearchRecords,
   opUpsertRecords,
+  formatScore,
 } from '../../pinecone/ops.js';
 
 const KEY = 'pcsk_test';
@@ -466,5 +467,315 @@ describe('opUpsertRecords', () => {
     const client = stub({}, { m: mystery });
     const out = await opUpsertRecords(client, KEY, loaded(), { ...args, name: 'm', records: [{ _id: 'a' }] }, log);
     assert.match(out, /Accepted 1 record\(s\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The reported cascading-search bug and its neighbours.
+//
+// The report: one cascading call returned 4 records, all from ns-a, and said
+// "from 2 of 2 target(s)" while ns-b — which held 3 records and returned all
+// of them when searched alone — contributed nothing. It did not reproduce.
+// Four things come out of that, each tested below: an unreadable sub-search
+// must not be counted as an empty one, an empty one must be visible, a missing
+// index must be named, and a score that rounds to 0.0000 must not hide the
+// ordering.
+// ---------------------------------------------------------------------------
+
+describe('cascading-search: a sub-search that contributed nothing', () => {
+  const args = {
+    indexes: [{ name: 'a', namespace: 'ns-a' }, { name: 'b', namespace: 'ns-b' }],
+    query: { topK: 5, inputs: { text: 'q' } },
+    rerank: { model: 'cohere-rerank-3.5', rankFields: ['chunk_text'] },
+  } as any;
+
+  /** Hits for `a`, nothing for `b` — the exact shape of the report. */
+  function lopsided(extra: Record<string, any> = {}) {
+    return stub(
+      {
+        searchRecords: async (_host: string, namespace: string) =>
+          namespace === 'ns-a'
+            ? { result: { hits: [{ _id: 'a1', fields: { chunk_text: 'x' } }] } }
+            : { result: { hits: [] } },
+        rerank: async (input: any) => ({
+          data: input.documents.map((d: any, i: number) => ({ index: i, score: 1 - i * 0.1, document: d })),
+        }),
+        ...extra,
+      },
+      { a: indexPayload('a'), b: indexPayload('b') },
+    );
+  }
+
+  it('reports what EACH target contributed, not just how many were searched', async () => {
+    // "from 2 of 2 target(s)" was true and useless: both were searched, one
+    // gave nothing, and the output read as covering both.
+    const out = await opCascadingSearch(lopsided(), KEY, loaded(), args, log);
+    assert.match(out, /Per-target contribution:/);
+    assert.match(out, /- "a" \/ "ns-a": 1 record\(s\)/);
+    assert.match(out, /- "b" \/ "ns-b": 0 record\(s\) — searched, nothing matched/);
+  });
+
+  it('names the empty target and says how it was counted', async () => {
+    const out = await opCascadingSearch(lopsided(), KEY, loaded(), args, log);
+    assert.match(out, /returned NO records: "b" \/ "ns-b"/);
+    assert.match(out, /count as searched rather than failed/);
+    // And it points at the one call that settles whether that is real.
+    assert.match(out, /run search-records against that one target/);
+  });
+
+  it('does not emit the empty-target note when EVERY target was empty', async () => {
+    // The "no matching records" line already says it; per-target repetition
+    // would be noise.
+    const client = stub(
+      { searchRecords: async () => ({ result: { hits: [] } }) },
+      { a: indexPayload('a'), b: indexPayload('b') },
+    );
+    const out = await opCascadingSearch(client, KEY, loaded(), args, log);
+    assert.match(out, /No matching records across 2 of 2 target\(s\)/);
+    assert.doesNotMatch(out, /returned NO records:/);
+    // The per-target block still goes out: "both empty" and "one empty, one
+    // unreachable" are different situations.
+    assert.match(out, /Per-target contribution:/);
+  });
+
+  it('treats an UNREADABLE sub-search as a failure, never as zero hits', async () => {
+    // The root cause. jsonApiRequest resolves to undefined for a 204 and for
+    // any non-JSON 2xx, and `res?.result?.hits ?? []` turned that into a
+    // legitimate empty search — which is how a target counted as searched
+    // while silently contributing nothing.
+    const client = stub(
+      {
+        searchRecords: async (_host: string, namespace: string) =>
+          namespace === 'ns-a'
+            ? { result: { hits: [{ _id: 'a1', fields: { chunk_text: 'x' } }] } }
+            : undefined,
+        rerank: async (input: any) => ({
+          data: input.documents.map((d: any, i: number) => ({ index: i, score: 0.5, document: d })),
+        }),
+      },
+      { a: indexPayload('a'), b: indexPayload('b') },
+    );
+    const out = await opCascadingSearch(client, KEY, loaded(), args, log);
+    assert.match(out, /PARTIAL RESULT/);
+    assert.match(out, /from 1 of 2 target\(s\)/);
+    assert.match(out, /- "b" \/ "ns-b": NOT SEARCHED — see the PARTIAL RESULT note above/);
+    // The reason is in the banner, printed ONCE — these messages are several
+    // sentences long and repeating each one buries the contribution column.
+    assert.match(out, /no readable JSON body/);
+    assert.equal(out.split('no readable JSON body').length - 1, 1);
+    // The thing that must NOT happen: being rendered as a successful search.
+    assert.doesNotMatch(out, /"b" \/ "ns-b": 0 record\(s\) — searched/);
+  });
+
+  it('treats a response missing the result envelope as a failure too', async () => {
+    const client = stub(
+      { searchRecords: async () => ({ usage: { readUnits: 1 } }) },
+      { a: indexPayload('a'), b: indexPayload('b') },
+    );
+    await assert.rejects(
+      () => opCascadingSearch(client, KEY, loaded(), args, log),
+      /reached none of the 2 requested target\(s\)/,
+    );
+  });
+
+  it('separates duplicates collapsed from nothing returned', async () => {
+    const client = stub(
+      {
+        searchRecords: async () => ({
+          result: { hits: [{ _id: 'a1', fields: {} }, { _id: 'a1', fields: {} }] },
+        }),
+        rerank: async () => ({ data: [] }),
+      },
+      { a: indexPayload('a') },
+    );
+    const out = await opCascadingSearch(
+      client, KEY, loaded(), { ...args, indexes: [{ name: 'a', namespace: 'ns-a' }] } as any, log,
+    );
+    assert.match(out, /1 record\(s\) \(2 hit\(s\), 1 duplicate\(s\) collapsed\)/);
+  });
+
+  it('still answers when one target fails and the other legitimately has nothing', async () => {
+    // The old guard threw "reached none of the 2 targets" here, which was
+    // false: one target WAS reached and reported, with evidence, that it holds
+    // no match.
+    const client = stub(
+      {
+        searchRecords: async (_host: string, namespace: string) => {
+          if (namespace === 'ns-b') throw new Error('upstream exploded');
+          return { result: { hits: [] } };
+        },
+      },
+      { a: indexPayload('a'), b: indexPayload('b') },
+    );
+    const out = await opCascadingSearch(client, KEY, loaded(), args, log);
+    assert.match(out, /PARTIAL RESULT/);
+    assert.match(out, /No matching records across 1 of 2 target\(s\)/);
+  });
+});
+
+describe('cascading-search: a missing index is named', () => {
+  const args = {
+    indexes: [{ name: 'a', namespace: 'ns-a' }, { name: 'typo', namespace: 'ns-a' }],
+    query: { topK: 5, inputs: { text: 'q' } },
+    rerank: { model: 'cohere-rerank-3.5', rankFields: ['chunk_text'] },
+  } as any;
+
+  it('says WHICH index could not be resolved', async () => {
+    // Promise.all rejected with whichever describe lost the race, and that
+    // error carries no index name — so a four-index call with one typo said
+    // "no index by that name" without ever saying which name.
+    const client = stub({}, { a: indexPayload('a') });
+    await assert.rejects(
+      () => opCascadingSearch(client, KEY, loaded(), args, log),
+      (err: Error) => {
+        assert.match(err.message, /"typo"/);
+        assert.match(err.message, /no index by that name exists/);
+        // And which ones were fine, so the caller can see the shape of it.
+        assert.match(err.message, /These resolved fine: "a"/);
+        assert.doesNotMatch(err.message, /NOT SEARCHED/);
+        return true;
+      },
+    );
+    assert.ok(!client.calls.includes('search'), 'nothing is searched when a name will not resolve');
+  });
+
+  it('distinguishes a forbidden index from a missing one', async () => {
+    // A key is scoped to one project, so an index in another project reads as
+    // 403 rather than 404 — different problem, different fix.
+    const client = stub(
+      {
+        describeIndex: async (name: string) => {
+          if (name === 'a') return indexPayload('a');
+          const e: any = new Error('forbidden');
+          e.status = 403;
+          throw e;
+        },
+      },
+      { a: indexPayload('a') },
+    );
+    await assert.rejects(
+      () => opCascadingSearch(client, KEY, loaded(), args, log),
+      /scoped to one project/,
+    );
+  });
+});
+
+describe('rerank.topN above the candidate pool', () => {
+  const base = {
+    indexes: [{ name: 'a', namespace: 'ns-a' }],
+    query: { topK: 5, inputs: { text: 'q' } },
+    rerank: { model: 'cohere-rerank-3.5', rankFields: ['chunk_text'], topN: 50 },
+  } as any;
+
+  it('says a topN above the candidates does nothing, and names the parameter that would help', async () => {
+    const client = stub(
+      {
+        searchRecords: async () => ({ result: { hits: [{ _id: 'a1', fields: { chunk_text: 'x' } }] } }),
+        rerank: async (input: any) => ({ data: [{ index: 0, score: 0.9, document: input.documents[0] }] }),
+      },
+      { a: indexPayload('a') },
+    );
+    const out = await opCascadingSearch(client, KEY, loaded(), base, log);
+    assert.match(out, /rerank\.topN is 50 but only 1 candidate record\(s\) reached the reranker/);
+    assert.match(out, /raise query\.topK/);
+  });
+
+  it('stays silent when topN is reachable', async () => {
+    const client = stub(
+      {
+        searchRecords: async () => ({ result: { hits: [{ _id: 'a1', fields: { chunk_text: 'x' } }] } }),
+        rerank: async (input: any) => ({ data: [{ index: 0, score: 0.9, document: input.documents[0] }] }),
+      },
+      { a: indexPayload('a') },
+    );
+    const out = await opCascadingSearch(client, KEY, loaded(), { ...base, rerank: { ...base.rerank, topN: 1 } } as any, log);
+    assert.doesNotMatch(out, /reached the reranker/);
+  });
+
+  it('warns on search-records too, where topK is the only cap', async () => {
+    const client = stub({}, { docs: indexPayload('docs') });
+    const out = await opSearchRecords(client, KEY, loaded(), {
+      name: 'docs',
+      namespace: 'hr',
+      query: { topK: 5, inputs: { text: 'q' } },
+      rerank: { model: 'cohere-rerank-3.5', rankFields: ['chunk_text'], topN: 40 },
+    } as any, log);
+    assert.match(out, /rerank\.topN is 40 but only 1 candidate record\(s\)/);
+  });
+});
+
+describe('score rendering', () => {
+  it('keeps a tiny score distinguishable instead of printing 0.0000', async () => {
+    // Pinecone's reranker returns the tail of a ranking in the 1e-5 range,
+    // where toFixed(4) renders every row as the identical 0.0000 — hiding
+    // both the ordering and that the tail was scored at all.
+    const client = stub(
+      {
+        searchRecords: async () => ({
+          result: {
+            hits: [
+              { _id: 'hi', _score: 0.8123456, fields: {} },
+              { _id: 'lo', _score: 0.0000241, fields: {} },
+              { _id: 'lower', _score: 0.0000193, fields: {} },
+            ],
+          },
+        }),
+      },
+      { docs: indexPayload('docs') },
+    );
+    const out = await opSearchRecords(client, KEY, loaded(), {
+      name: 'docs', namespace: 'hr', query: { topK: 10, inputs: { text: 'q' } },
+    } as any, log);
+    // The ordinary score keeps the rendering it has always had.
+    assert.match(out, /hi \(score 0\.8123\)/);
+    // The tail does not collapse.
+    assert.match(out, /lo \(score 2\.41e-5\)/);
+    assert.match(out, /lower \(score 1\.93e-5\)/);
+    assert.doesNotMatch(out, /0\.0000\)/);
+  });
+
+  it('prints an exact zero as 0, not as a measurement', async () => {
+    assert.equal(formatScore(0), '0');
+    assert.equal(formatScore(0.5), '0.5000');
+    assert.equal(formatScore(0.001), '0.0010');
+  });
+});
+
+describe('create-index-for-model on an existing name', () => {
+  const args = {
+    name: 'docs',
+    cloud: 'aws',
+    region: 'us-east-1',
+    embed: { model: 'llama-text-embed-v2', fieldMap: { text: 'body' } },
+  } as any;
+
+  it('WARNS when the existing index embeds a different model and field', async () => {
+    // "already exists" alone reported a success: the caller asked for
+    // llama-text-embed-v2 embedding `body` and silently got an index embedding
+    // `chunk_text` with multilingual-e5-large, then upserts records that are
+    // refused for a missing field. Neither can be changed after creation.
+    const client = stub({ listIndexes: async () => [indexPayload('docs')] });
+    const out = await opCreateIndexForModel(client, KEY, loaded(), args, log);
+    assert.match(out, /already exists/);
+    assert.match(out, /WARNING/);
+    assert.match(out, /you asked for "llama-text-embed-v2", the existing index uses "multilingual-e5-large"/);
+    assert.match(out, /you asked for "body", the existing index embeds "chunk_text"/);
+    assert.match(out, /Nothing was created or modified/);
+    assert.ok(!client.calls.includes('create'));
+  });
+
+  it('stays quiet when the existing index matches the request', async () => {
+    const client = stub({ listIndexes: async () => [indexPayload('docs')] });
+    const out = await opCreateIndexForModel(client, KEY, loaded(), {
+      ...args, embed: { model: 'multilingual-e5-large', fieldMap: { text: 'chunk_text' } },
+    } as any, log);
+    assert.match(out, /already exists/);
+    assert.doesNotMatch(out, /WARNING/);
+  });
+
+  it('calls out an existing index with no integrated embedding at all', async () => {
+    const client = stub({ listIndexes: async () => [indexPayload('docs', 'vectors')] });
+    const out = await opCreateIndexForModel(client, KEY, loaded(), args, log);
+    assert.match(out, /NO integrated-embedding configuration/);
   });
 });

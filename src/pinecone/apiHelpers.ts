@@ -114,6 +114,57 @@ export interface PineconeSearchResponse {
   usage?: Record<string, unknown>;
 }
 
+/**
+ * Read the hits out of a Records search answer, refusing an answer that cannot
+ * be read rather than reporting it as zero hits.
+ *
+ * `res?.result?.hits ?? []` was the first version, and it is a SILENT-EMPTY
+ * trap rather than a defensive default. jsonApiRequest resolves to `undefined`
+ * for a 204 and for any 2xx whose content type is not `application/json` — a
+ * proxy's HTML interstitial, a truncated body, an empty 200 — so "Pinecone
+ * could not be read" and "Pinecone found nothing" arrived here as the same
+ * empty array, with nothing downstream able to tell them apart.
+ *
+ * That is what produced the reported cascading-search failure: one target's
+ * sub-search came back unreadable, was rendered as a legitimate zero-hit
+ * search, and the ranking was labelled "from 2 of 2 target(s)" — complete —
+ * while silently missing everything that target held. The call was not
+ * reproducible, which is exactly the signature of a transport-level empty
+ * rather than a query that matched nothing.
+ *
+ * `result` present with a `hits` array is the only shape that proves Pinecone
+ * answered the question: an empty `hits: []` is positive evidence of zero
+ * matches, where an absent envelope is no evidence at all. Pinecone's own
+ * schema makes both fields required, so a missing one is shape drift and is
+ * reported as such — naming what arrived, so it is diagnosable instead of
+ * being rounded down to "nothing matched".
+ */
+export function readSearchHits(res: PineconeSearchResponse | undefined, where: string): PineconeSearchHit[] {
+  const hits = res?.result?.hits;
+  if (Array.isArray(hits)) return hits;
+
+  const shape =
+    res === undefined || res === null
+      ? 'the response had no readable JSON body at all (a 204, or a 2xx whose content type was not application/json — an interstitial or proxy page looks like this)'
+      : res.result === undefined || res.result === null
+        ? `the response carried no "result" key (got: ${describeKeys(res)})`
+        : `the response's "result" carried no "hits" array (got: ${describeKeys(res.result)})`;
+
+  throw new UserError(
+    `Pinecone answered the search of ${where} but the answer could not be read: ${shape}. ` +
+      `This is reported as a FAILURE rather than as zero results, because an unreadable answer is not evidence that the namespace is empty — ` +
+      `which is the one thing it would otherwise be mistaken for. Retry the search; if it persists, check describe-index-stats for that namespace's record count.`,
+  );
+}
+
+/** The keys of an object, for a shape-drift message. Bounded, since this reaches a user. */
+function describeKeys(value: unknown): string {
+  if (typeof value !== 'object' || value === null) return typeof value;
+  const keys = Object.keys(value);
+  if (!keys.length) return 'an object with no keys';
+  return keys.slice(0, 8).map(k => `"${k}"`).join(', ') + (keys.length > 8 ? ', …' : '');
+}
+
 export interface PineconeRerankRow {
   index: number;
   score: number;
@@ -317,7 +368,7 @@ export class PineconeClient {
     query: SearchQueryInput,
     rerank?: RerankInput,
     fields?: string[],
-  ): Promise<PineconeSearchResponse> {
+  ): Promise<PineconeSearchResponse | undefined> {
     const body: Record<string, unknown> = {
       query: {
         top_k: query.topK,
@@ -334,7 +385,11 @@ export class PineconeClient {
         ...(rerank.query ? { query: rerank.query } : {}),
       };
     }
-    return this.dataRequest<PineconeSearchResponse>(
+    // `| undefined` in the signature rather than a comfortable lie: jsonApiRequest
+    // genuinely resolves to undefined for a 204 or a non-JSON 2xx, and declaring
+    // otherwise is what let `res?.result?.hits ?? []` look safe at every call
+    // site. Callers must go through readSearchHits.
+    return this.dataRequest<PineconeSearchResponse | undefined>(
       host,
       'POST',
       `/records/namespaces/${encodeURIComponent(wireNamespace(namespace))}/search`,

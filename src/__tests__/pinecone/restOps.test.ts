@@ -318,3 +318,136 @@ describe('performUpsertRecords', () => {
     await assert.rejects(() => performUpsertRecords(ctx, args), /allowed-namespaces list/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The REST half of the cascading-search report. The findings have to be
+// machine-readable here, not prose: a client checking only `partial` saw
+// `false` for a ranking that was missing an entire namespace.
+// ---------------------------------------------------------------------------
+
+describe('performCascadingSearch: per-target contribution', () => {
+  const args = {
+    indexes: [{ name: 'a', namespace: 'ns-a' }, { name: 'b', namespace: 'ns-b' }],
+    query: { topK: 5, inputs: { text: 'q' } },
+    rerank: { model: 'cohere-rerank-3.5', rankFields: ['chunk_text'] },
+  } as any;
+
+  function lopsided(secondAnswer: any) {
+    return ctxWith(
+      {
+        searchRecords: async (_host: string, namespace: string) =>
+          namespace === 'ns-a'
+            ? { result: { hits: [{ _id: 'a1', fields: { chunk_text: 'x' } }] } }
+            : secondAnswer,
+        rerank: async (input: any) => ({ data: input.documents.map((d: any, i: number) => ({ index: i, score: 1, document: d })) }),
+      },
+      { a: indexPayload('a'), b: indexPayload('b') },
+    );
+  }
+
+  it('reports each target separately, so searched does not imply contributed', async () => {
+    const res = await performCascadingSearch(lopsided({ result: { hits: [] } }), args);
+    // The flag a naive client reads is still false — nothing failed.
+    assert.equal(res.partial, false);
+    assert.equal(res.indexesSearched, 2);
+    // ...which is exactly why the per-target array has to exist.
+    assert.deepEqual(res.targets.map(t => [t.index, t.searched, t.hits, t.kept]), [
+      ['a', true, 1, 1],
+      ['b', true, 0, 0],
+    ]);
+    assert.deepEqual(res.emptyTargets, ['b/ns-b']);
+  });
+
+  it('counts an unreadable sub-search as NOT searched', async () => {
+    // undefined is what jsonApiRequest resolves to for a 204 or a non-JSON
+    // 2xx. Reported as zero hits, it made a target look answered.
+    const res = await performCascadingSearch(lopsided(undefined), args);
+    assert.equal(res.partial, true);
+    assert.equal(res.indexesSearched, 1);
+    assert.equal(res.targets[1].searched, false);
+    assert.match(res.targets[1].error!, /could not be read/);
+    assert.deepEqual(res.emptyTargets, [], 'a failure is not an empty result');
+  });
+
+  it('reports topNNote when topN exceeds the candidates', async () => {
+    const res = await performCascadingSearch(lopsided({ result: { hits: [] } }), {
+      ...args, rerank: { ...args.rerank, topN: 40 },
+    } as any);
+    assert.match(res.topNNote!, /topN is 40 but only 1 candidate/);
+  });
+
+  it('omits topNNote when topN is reachable', async () => {
+    const res = await performCascadingSearch(lopsided({ result: { hits: [] } }), {
+      ...args, rerank: { ...args.rerank, topN: 1 },
+    } as any);
+    assert.equal(res.topNNote, undefined);
+  });
+
+  it('names the index that would not resolve', async () => {
+    const ctx = ctxWith({}, { a: indexPayload('a') });
+    await assert.rejects(
+      () => performCascadingSearch(ctx, { ...args, indexes: [{ name: 'a', namespace: 'ns-a' }, { name: 'typo', namespace: 'ns-a' }] } as any),
+      /"typo"/,
+    );
+    assert.ok(!ctx.calls.includes('search'));
+  });
+
+  it('still answers when one target fails and the other is genuinely empty', async () => {
+    const ctx = ctxWith(
+      {
+        searchRecords: async (_host: string, namespace: string) => {
+          if (namespace === 'ns-b') throw new Error('boom');
+          return { result: { hits: [] } };
+        },
+      },
+      { a: indexPayload('a'), b: indexPayload('b') },
+    );
+    const res = await performCascadingSearch(ctx, args);
+    assert.equal(res.partial, true);
+    assert.equal(res.uniqueRecords, 0);
+    assert.equal(res.indexesSearched, 1);
+  });
+});
+
+describe('performSearchRecords: an unreadable answer', () => {
+  it('fails rather than reporting an empty hit list', async () => {
+    const ctx = ctxWith({ searchRecords: async () => undefined }, { docs: indexPayload('docs') });
+    await assert.rejects(
+      () => performSearchRecords(ctx, { name: 'docs', namespace: 'hr', query: { topK: 5, inputs: { text: 'q' } } } as any),
+      /could not be read/,
+    );
+  });
+});
+
+describe('performCreateIndexForModel: drift against an existing index', () => {
+  const args = {
+    name: 'docs',
+    cloud: 'aws',
+    region: 'us-east-1',
+    embed: { model: 'llama-text-embed-v2', fieldMap: { text: 'body' } },
+  } as any;
+
+  it('reports the model and field mismatch as data', async () => {
+    const ctx = ctxWith({ listIndexes: async () => [indexPayload('docs')] });
+    const res = await performCreateIndexForModel(ctx, args);
+    assert.equal(res.created, false);
+    assert.equal(res.configDrift.length, 2);
+    assert.match(res.configDrift[0], /embedding model/);
+    assert.match(res.configDrift[1], /embedded field/);
+  });
+
+  it('is an empty array when the existing index matches', async () => {
+    const ctx = ctxWith({ listIndexes: async () => [indexPayload('docs')] });
+    const res = await performCreateIndexForModel(ctx, {
+      ...args, embed: { model: 'multilingual-e5-large', fieldMap: { text: 'chunk_text' } },
+    } as any);
+    assert.deepEqual(res.configDrift, []);
+  });
+
+  it('is an empty array on a real create', async () => {
+    const ctx = ctxWith({ listIndexes: async () => [] });
+    const res = await performCreateIndexForModel(ctx, args);
+    assert.equal(res.created, true);
+    assert.deepEqual(res.configDrift, []);
+  });
+});

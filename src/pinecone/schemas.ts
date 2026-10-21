@@ -29,11 +29,17 @@ const indexNameField = z
  * namespace, because a model that guesses "default" writes to a namespace
  * nobody reads. The name is `__default__`: Pinecone reserves it, refuses the
  * empty string this connector once documented, and reports it in index stats.
+ *
+ * The description used to end "but Pinecone itself rejects it", which was true
+ * of the raw API and misleading here — `wireNamespace` translates `""` at the
+ * wire boundary, so a caller passing it reaches the default namespace
+ * normally. Saying the API rejects a value this connector accepts invites the
+ * reader to work around a problem that does not exist on this surface.
  */
 const namespaceField = z
   .string()
   .describe(
-    'The namespace to use. For the DEFAULT namespace pass "__default__" — that is Pinecone\'s reserved name for it, and what describe-index-stats reports. An empty string "" is also accepted and treated as __default__, but Pinecone itself rejects it. describe-index-stats lists the namespaces an index actually has.',
+    'The namespace to use. For the DEFAULT namespace pass "__default__" — Pinecone\'s reserved name for it, and what describe-index-stats reports. An empty string "" works too: this connector translates it to "__default__" before the request, so either spelling reaches the same namespace. Any other value is a named namespace, matched exactly and case-sensitively. Run describe-index-stats to see which namespaces an index actually has.',
   );
 
 export const RERANK_MODELS = ['cohere-rerank-3.5', 'bge-reranker-v2-m3', 'pinecone-rerank-v0'] as const;
@@ -77,7 +83,9 @@ const rerankOptionsSchema = z.object({
     .int()
     .min(1)
     .optional()
-    .describe('The number of results to return after reranking. Must be less than or equal to query.topK.'),
+    .describe(
+      'How many results to keep after reranking. Reranking NARROWS the candidates the search retrieved; it cannot add to them, so a topN above the number of candidates is accepted and simply has no effect — the response says so when that happens. query.topK is what caps the candidate pool (per index, for cascading-search), so raise topK, not topN, to get more results.',
+    ),
   rankFields: z
     .array(z.string())
     .min(1)

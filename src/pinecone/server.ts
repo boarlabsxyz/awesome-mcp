@@ -207,6 +207,7 @@ pineconeServer.addTool({
   description:
     'Search several indexes at once, deduplicate the hits by record id and rerank them into ONE combined ranking. Reranking is required — that fusion is the whole point. ' +
     'Works only against integrated-embedding indexes: a document or vectors index is refused by name, while a schema this connector cannot classify is attempted anyway. To search a single index, use search-records. ' +
+    'The response reports what EACH target contributed, and names any target that was searched successfully but returned nothing — so a ranking missing a whole namespace is never reported as covering it. A target that could not be searched is listed separately as NOT SEARCHED and the result is labelled PARTIAL. ' +
     'If this connection\'s access rules deny any of the named indexes or namespaces, the whole call is refused rather than silently searching the rest: dropping a source would change the order and scores of everything that remains, and a ranking cannot be honestly labelled partial.',
   parameters: cascadingSearchSchema,
   execute: async (args, { log, session }) => {
@@ -254,7 +255,7 @@ pineconeServer.addTool({
   description:
     'Create a Pinecone index with integrated embedding, which automatically embeds the text field named in embed.fieldMap. ' +
     'That field name is fixed at creation and every record you later upsert must carry it, so choose it deliberately. ' +
-    'If an index with the same name already exists it is returned unchanged rather than erroring. ' +
+    'If an index with the same name already exists it is returned unchanged rather than erroring — and the response WARNS when that existing index uses a different embedding model or embeds a different field than you asked for, because neither can be changed after creation and reusing it silently would give you something other than what you requested. ' +
     'The index may take a few seconds to become ready; the response says which. ' +
     'Refused when this connection is set to read-only. If an index allowlist is configured, add the new name to it on the dashboard FIRST — an allowlist entry for a name that does not exist yet denies nothing.',
   parameters: createIndexForModelSchema,

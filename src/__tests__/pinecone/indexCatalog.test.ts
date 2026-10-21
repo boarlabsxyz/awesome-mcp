@@ -203,3 +203,53 @@ describe('forgetIndex', () => {
     assert.deepEqual(client.calls, ['docs', 'docs']);
   });
 });
+
+describe('resolveIndexes names the index that failed', () => {
+  it('lists every unresolvable name with its own reason', async () => {
+    // Promise.all rejected with whichever describe lost the race, and that
+    // error carries no index name at all — so a cascading call naming four
+    // indexes, one typo'd, reported "no index by that name" without saying
+    // which, and hid any second failure entirely.
+    const client: any = {
+      async describeIndex(name: string) {
+        if (name === 'good') return { name, host: 'good.svc.pinecone.io', status: { ready: true } };
+        const e: any = new Error('nope');
+        e.status = name === 'forbidden' ? 403 : 404;
+        throw e;
+      },
+    };
+    await assert.rejects(
+      () => resolveIndexes(client, 'k', ['good', 'missing', 'forbidden']),
+      (err: Error) => {
+        assert.match(err.message, /2 of the 3 index\(es\) named could not be resolved/);
+        assert.match(err.message, /- "missing": no index by that name exists/);
+        assert.match(err.message, /- "forbidden": Pinecone refused access to it/);
+        assert.match(err.message, /scoped to one project/);
+        assert.match(err.message, /These resolved fine: "good"/);
+        return true;
+      },
+    );
+  });
+
+  it('de-duplicates names before describing them', async () => {
+    const seen: string[] = [];
+    const client: any = {
+      async describeIndex(name: string) {
+        seen.push(name);
+        return { name, host: `${name}.svc.pinecone.io`, status: { ready: true } };
+      },
+    };
+    const map = await resolveIndexes(client, 'k2', ['a', 'a', 'b']);
+    assert.deepEqual(seen.sort(), ['a', 'b']);
+    assert.deepEqual([...map.keys()], ['a', 'b']);
+  });
+
+  it('keeps a UserError verbatim — an index with no host yet is its own message', async () => {
+    const client: any = {
+      async describeIndex(name: string) {
+        return { name, status: { ready: false, state: 'Initializing' } };
+      },
+    };
+    await assert.rejects(() => resolveIndexes(client, 'k3', ['building']), /has no host yet/);
+  });
+});

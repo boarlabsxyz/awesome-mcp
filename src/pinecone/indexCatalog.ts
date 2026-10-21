@@ -150,15 +150,64 @@ export async function resolveIndex(client: PineconeClient, apiKey: string, name:
   return resolved;
 }
 
-/** Resolve several at once, de-duplicated. Used by cascading-search. */
+/**
+ * Resolve several at once, de-duplicated. Used by cascading-search.
+ *
+ * Settled rather than `Promise.all`, for one reason: **the failure has to name
+ * the index**. `Promise.all` rejects with whichever describe lost the race,
+ * and that error has no index name on it — a cascading call naming four
+ * indexes, one of them typo'd, answered "Pinecone has no index by that name in
+ * this key's project" without ever saying WHICH name, which is the one fact
+ * needed to fix it. It also hid the second failure entirely.
+ *
+ * Every name is therefore resolved, every failure is collected, and the
+ * message lists each unresolvable index with its own reason — a 404 and an
+ * index that is still building are different problems with different fixes.
+ */
 export async function resolveIndexes(
   client: PineconeClient,
   apiKey: string,
   names: readonly string[],
 ): Promise<Map<string, ResolvedIndex>> {
   const unique = [...new Set(names)];
-  const resolved = await Promise.all(unique.map(n => resolveIndex(client, apiKey, n)));
-  return new Map(unique.map((n, i) => [n, resolved[i]]));
+  const settled = await Promise.allSettled(unique.map(n => resolveIndex(client, apiKey, n)));
+
+  const resolved = new Map<string, ResolvedIndex>();
+  const failures: Array<{ name: string; reason: string }> = [];
+  settled.forEach((outcome, i) => {
+    if (outcome.status === 'fulfilled') resolved.set(unique[i], outcome.value);
+    else failures.push({ name: unique[i], reason: describeResolveFailure(outcome.reason) });
+  });
+
+  if (failures.length) {
+    const lines = failures.map(f => `  - "${f.name}": ${f.reason}`).join('\n');
+    const ok = [...resolved.keys()];
+    throw new UserError(
+      `${failures.length} of the ${unique.length} index(es) named could not be resolved, so nothing was searched:\n${lines}` +
+        (ok.length ? `\n\nThese resolved fine: ${ok.map(n => `"${n}"`).join(', ')}.` : '') +
+        `\n\nRun list-indexes to see the index names this connection can reach. An index in another Pinecone project is invisible to this API key rather than listed.`,
+    );
+  }
+  return resolved;
+}
+
+/**
+ * Why one index would not resolve, in the terms that distinguish the causes.
+ *
+ * A 404 and a 403 mean different things here and a reader cannot tell them
+ * apart from a status alone: a key is scoped to ONE project, so an index that
+ * exists in another project reads as forbidden rather than missing.
+ */
+function describeResolveFailure(error: any): string {
+  if (error instanceof UserError) return error.message;
+  const status: number | undefined = error?.status;
+  if (status === 404) return 'no index by that name exists in this API key\'s project (check the spelling with list-indexes)';
+  if (status === 403) {
+    return 'Pinecone refused access to it — an API key is scoped to one project, so an index in a different project reads as forbidden rather than missing';
+  }
+  if (status === 401) return 'Pinecone rejected the API key; reconnect from the dashboard';
+  if (status === undefined) return `could not reach the Pinecone API (${error?.message ?? 'network error'})`;
+  return `Pinecone answered ${status}${error?.message ? ` (${error.message})` : ''}`;
 }
 
 /**
