@@ -160,12 +160,43 @@ describe('performCascadingSearch', () => {
     assert.deepEqual(ctx.calls, []);
   });
 
-  it('marks partial=false on a clean run', async () => {
+  it('marks partial=false on a clean run and keeps both records', async () => {
     const ctx = ctxWith({}, { a: indexPayload('a'), b: indexPayload('b') });
     const out = await performCascadingSearch(ctx, args);
     assert.equal(out.partial, false);
-    assert.equal(out.uniqueRecords, 1);   // both searches return the same _id
+    // Both searches return the same _id from DIFFERENT targets, which is two
+    // records — keying dedup on the id alone used to lose one.
+    assert.equal(out.uniqueRecords, 2);
     assert.equal(out.indexesSearched, 2);
+    assert.equal(out.targetsRequested, 2);
+  });
+
+  it('reports what was searched, not what was requested, on a partial run', async () => {
+    let n = 0;
+    const ctx = ctxWith(
+      { searchRecords: async () => { n += 1; if (n === 1) throw new Error('boom'); return { result: { hits: [{ _id: 'r2', fields: {} }] } }; } },
+      { a: indexPayload('a'), b: indexPayload('b') },
+    );
+    const out = await performCascadingSearch(ctx, args);
+    assert.equal(out.partial, true);
+    assert.equal(out.indexesSearched, 1);
+    assert.equal(out.targetsRequested, 2);
+  });
+
+  it('attributes every document to its source target', async () => {
+    let sent: any;
+    const ctx = ctxWith(
+      {
+        rerank: async (input: any) => { sent = input; return { data: [] }; },
+        searchRecords: async () => ({ result: { hits: [{ _id: 'a1', fields: {} }] } }),
+      },
+      { a: indexPayload('a'), b: indexPayload('b') },
+    );
+    await performCascadingSearch(ctx, args);
+    assert.deepEqual(
+      sent.documents.map((d: any) => `${d._index}/${d._namespace}/${d._id}`).sort(),
+      ['a/hr/a1', 'b/hr/a1'],
+    );
   });
 
   it('marks partial=true and names the failure when an index errors', async () => {

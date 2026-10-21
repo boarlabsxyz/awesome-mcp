@@ -25,14 +25,15 @@ const indexNameField = z
 /**
  * The namespace parameter.
  *
- * Required rather than defaulted, and the description says what the default
- * namespace is called, because "" is a real namespace whose name is nothing —
- * a model that guesses "default" writes to a namespace nobody reads.
+ * Required rather than defaulted, and the description NAMES the default
+ * namespace, because a model that guesses "default" writes to a namespace
+ * nobody reads. The name is `__default__`: Pinecone reserves it, refuses the
+ * empty string this connector once documented, and reports it in index stats.
  */
 const namespaceField = z
   .string()
   .describe(
-    'The namespace to use. Pass an empty string "" for the default namespace. describe-index-stats lists the namespaces an index actually has.',
+    'The namespace to use. For the DEFAULT namespace pass "__default__" — that is Pinecone\'s reserved name for it, and what describe-index-stats reports. An empty string "" is also accepted and treated as __default__, but Pinecone itself rejects it. describe-index-stats lists the namespaces an index actually has.',
   );
 
 export const RERANK_MODELS = ['cohere-rerank-3.5', 'bge-reranker-v2-m3', 'pinecone-rerank-v0'] as const;

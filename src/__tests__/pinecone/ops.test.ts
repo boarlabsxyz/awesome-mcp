@@ -55,7 +55,8 @@ function stub(overrides: Partial<Record<string, any>> = {}, payloads: Record<str
     },
     async describeIndexStats() {
       calls.push('stats');
-      return { namespaces: { '': { recordCount: 2 }, hr: { recordCount: 3 } }, totalRecordCount: 5 };
+      // Pinecone keys the default namespace as __default__, not ''.
+      return { namespaces: { __default__: { recordCount: 2 }, hr: { recordCount: 3 } }, totalRecordCount: 5 };
     },
     async searchRecords() {
       calls.push('search');
@@ -157,6 +158,17 @@ describe('opDescribeIndexStats', () => {
     assert.match(out, /do not sum to the total/);
   });
 
+  it('matches a __default__ key from Pinecone against a rule saved as ""', async () => {
+    // The read-path half of the namespace bug: stats come back keyed
+    // __default__, while a rule saved before the fix holds ''. If those did
+    // not canonicalise, the user's own default-namespace rule would hide the
+    // namespace it was written to allow.
+    const client = stub({}, { docs: indexPayload('docs') });
+    const out = await opDescribeIndexStats(client, KEY, loaded({ allowedNamespaces: [''] }), { name: 'docs' }, log);
+    assert.match(out, /\(default namespace\): 2 record\(s\)/);
+    assert.doesNotMatch(out, /"hr"/);
+  });
+
   it('warns that recent writes may not be visible', async () => {
     const client = stub({}, { docs: indexPayload('docs') });
     const out = await opDescribeIndexStats(client, KEY, loaded(), { name: 'docs' }, log);
@@ -223,12 +235,74 @@ describe('opCascadingSearch', () => {
     assert.deepEqual(client.calls, []);
   });
 
-  it('reranks the deduplicated union when every target is allowed', async () => {
-    const client = stub({}, { a: indexPayload('a'), b: indexPayload('b') });
+  it('keeps the SAME _id from two different targets — they are different records', async () => {
+    // The data-loss bug this replaced: dedup keyed on `_id` alone kept one of
+    // them and discarded the other silently. Ids are unique only WITHIN a
+    // namespace, so "a1" in two places is two records with different text.
+    let sent: any;
+    const client = stub(
+      {
+        rerank: async (input: any) => { sent = input; return { data: [] }; },
+        searchRecords: async () => ({ result: { hits: [{ _id: 'a1', fields: { chunk_text: 'x' } }] } }),
+      },
+      { a: indexPayload('a'), b: indexPayload('b') },
+    );
     const out = await opCascadingSearch(client, KEY, loaded(), args, log);
-    // Both searches return the same _id, so the union is one record.
-    assert.match(out, /1 unique record\(s\) from 2 index\(es\)/);
-    assert.ok(client.calls.includes('rerank'));
+    assert.equal(sent.documents.length, 2, 'both records must survive dedup');
+    assert.match(out, /2 unique record\(s\) from 2 of 2 target\(s\)/);
+  });
+
+  it('collapses a genuine duplicate — the same record seen twice', async () => {
+    // Same index, same namespace, same id: one record, correctly deduped.
+    let sent: any;
+    const client = stub(
+      {
+        rerank: async (input: any) => { sent = input; return { data: [] }; },
+        searchRecords: async () => ({ result: { hits: [{ _id: 'a1', fields: {} }, { _id: 'a1', fields: {} }] } }),
+      },
+      { a: indexPayload('a') },
+    );
+    await opCascadingSearch(client, KEY, loaded(), {
+      ...args, indexes: [{ name: 'a', namespace: 'hr' }],
+    } as any, log);
+    assert.equal(sent.documents.length, 1);
+  });
+
+  it('tells each hit apart by naming its source index and namespace', async () => {
+    // Without this the caller cannot tell WHICH a1 survived.
+    const client = stub(
+      {
+        rerank: async (input: any) => ({
+          data: input.documents.map((d: any, i: number) => ({ index: i, score: 1 - i * 0.1, document: d })),
+        }),
+        searchRecords: async () => ({ result: { hits: [{ _id: 'a1', fields: { chunk_text: 'x' } }] } }),
+      },
+      { a: indexPayload('a'), b: indexPayload('b') },
+    );
+    const out = await opCascadingSearch(client, KEY, loaded(), args, log);
+    assert.match(out, /from "a" \/ "hr"/);
+    assert.match(out, /from "b" \/ "hr"/);
+  });
+
+  it('renders a numbered list, not the raw rerank payload', async () => {
+    // The raw payload exposed Pinecone's internal `index` field — the position
+    // in an array the caller never saw, easily misread as the Pinecone index.
+    const client = stub(
+      {
+        rerank: async (input: any) => ({
+          data: [{ index: 0, score: 0.9, document: input.documents[0] }],
+        }),
+        searchRecords: async () => ({ result: { hits: [{ _id: 'a1', fields: { chunk_text: 'x' } }] } }),
+      },
+      { a: indexPayload('a') },
+    );
+    const out = await opCascadingSearch(client, KEY, loaded(), {
+      ...args, indexes: [{ name: 'a', namespace: 'hr' }],
+    } as any, log);
+    assert.match(out, /^1\. a1 \(score 0\.9000\)/m);
+    assert.doesNotMatch(out, /"index":/);
+    // The internal bookkeeping fields must not leak into the rendered body.
+    assert.doesNotMatch(out, /_namespace/);
   });
 
   it('labels a result PARTIAL when an index fails at the API', async () => {
@@ -248,6 +322,10 @@ describe('opCascadingSearch', () => {
     const out = await opCascadingSearch(client, KEY, loaded(), args, log);
     assert.match(out, /PARTIAL RESULT/);
     assert.match(out, /upstream exploded/);
+    // The count must agree with the warning beside it: one target was
+    // searched, not two. Saying "from 2 target(s)" overstated the coverage of
+    // a ranking the same output calls partial.
+    assert.match(out, /from 1 of 2 target\(s\)/);
   });
 
   it('sends _id with each document, so the ranking can say WHICH record ranked', async () => {
@@ -264,7 +342,9 @@ describe('opCascadingSearch', () => {
       { a: indexPayload('a'), b: indexPayload('b') },
     );
     await opCascadingSearch(client, KEY, loaded(), args, log);
-    assert.equal(sent.documents.length, 1);
+    // Two targets each return rec-7, and those are two DIFFERENT records —
+    // see the dedup test above. Both carry the id.
+    assert.equal(sent.documents.length, 2);
     assert.equal(sent.documents[0]._id, 'rec-7');
     // The stored fields must still be there beside it.
     assert.equal(sent.documents[0].chunk_text, 'hello');
@@ -275,7 +355,7 @@ describe('opCascadingSearch', () => {
       { searchRecords: async () => { throw new Error('down'); } },
       { a: indexPayload('a'), b: indexPayload('b') },
     );
-    await assert.rejects(() => opCascadingSearch(client, KEY, loaded(), args, log), /reached none of the requested/);
+    await assert.rejects(() => opCascadingSearch(client, KEY, loaded(), args, log), /reached none of the 2 requested target\(s\)/);
   });
 });
 

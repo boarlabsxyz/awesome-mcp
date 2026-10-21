@@ -65,14 +65,23 @@ describe('namespaceMatchesPattern', () => {
 });
 
 describe('toNamespaceList', () => {
-  it('PRESERVES the empty string — the default namespace', () => {
+  it('KEEPS the default namespace, canonicalised to Pinecone\'s reserved name', () => {
     // The whole point: a blank-dropping normaliser would silently delete the
-    // user's default-namespace rule on every save.
-    assert.deepEqual(toNamespaceList(['', 'hr']), ['', 'hr']);
+    // user's default-namespace rule on every save. The canonical form is
+    // __default__, which is what Pinecone accepts and reports — `''` is the
+    // spelling this connector shipped with and is translated, not dropped.
+    assert.deepEqual(toNamespaceList(['', 'hr']), ['__default__', 'hr']);
+    assert.deepEqual(toNamespaceList(['__default__', 'hr']), ['__default__', 'hr']);
+  });
+
+  it('collapses both spellings of the default namespace into ONE entry', () => {
+    // A rule list holding both would otherwise show the user what looks like
+    // a duplicate rule they cannot remove.
+    assert.deepEqual(toNamespaceList(['', '__default__']), ['__default__']);
   });
 
   it('de-duplicates but keeps order', () => {
-    assert.deepEqual(toNamespaceList(['hr', 'hr', '']), ['hr', '']);
+    assert.deepEqual(toNamespaceList(['hr', 'hr', '']), ['hr', '__default__']);
   });
 
   it('is not a list when given a non-array', () => {
@@ -80,8 +89,34 @@ describe('toNamespaceList', () => {
     assert.deepEqual(toNamespaceList(undefined), []);
   });
 
-  it('drops null and undefined entries but not the empty string', () => {
-    assert.deepEqual(toNamespaceList(['', null, undefined, 'a']), ['', 'a']);
+  it('drops null and undefined entries but not the default namespace', () => {
+    assert.deepEqual(toNamespaceList(['', null, undefined, 'a']), ['__default__', 'a']);
+  });
+});
+
+describe('namespaceMatchesPattern: the two default spellings are interchangeable', () => {
+  it('matches a rule saved as "" against a request for __default__, and vice versa', () => {
+    // Rules saved before the fix hold ''. They must keep working.
+    assert.equal(namespaceMatchesPattern('', '__default__'), true);
+    assert.equal(namespaceMatchesPattern('__default__', ''), true);
+    assert.equal(namespaceMatchesPattern('', ''), true);
+    assert.equal(namespaceMatchesPattern('__default__', '__default__'), true);
+  });
+
+  it('still refuses an unrelated namespace', () => {
+    assert.equal(namespaceMatchesPattern('__default__', 'hr'), false);
+    assert.equal(namespaceMatchesPattern('', 'hr'), false);
+  });
+
+  it('allows the default namespace through a rule list saved either way', () => {
+    for (const saved of ['', '__default__']) {
+      for (const asked of ['', '__default__']) {
+        assert.doesNotThrow(
+          () => assertNamespaceAllowed(loaded({ allowedNamespaces: [saved] }), 'idx', asked),
+          `saved ${JSON.stringify(saved)} should allow ${JSON.stringify(asked)}`,
+        );
+      }
+    }
   });
 });
 
@@ -114,7 +149,8 @@ describe('validateIndexPattern', () => {
 });
 
 describe('validateNamespacePattern', () => {
-  it('accepts the empty string — it is the default namespace', () => {
+  it('accepts both spellings of the default namespace', () => {
+    assert.equal(validateNamespacePattern('__default__'), null);
     assert.equal(validateNamespacePattern(''), null);
   });
 
@@ -279,8 +315,9 @@ describe('describeRules / describeNamespace', () => {
     assert.equal(describeRules({ readOnly: false }), undefined);
   });
 
-  it('renders the default namespace by name, not as an empty string', () => {
+  it('renders the default namespace by name, in either spelling', () => {
     assert.equal(describeNamespace(''), '(default namespace)');
+    assert.equal(describeNamespace('__default__'), '(default namespace)');
     const line = String(describeRules({ allowedNamespaces: [''] }));
     assert.match(line, /\(default namespace\)/);
     assert.match(line, /across every allowed index/);

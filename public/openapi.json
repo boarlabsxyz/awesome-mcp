@@ -21220,7 +21220,7 @@
       "get": {
         "operationId": "describePineconeIndexStats",
         "summary": "Record counts per namespace for one Pinecone index",
-        "description": "The default namespace is the empty string. Recently upserted records take a few seconds to appear. Mirrors the MCP tool `describe-index-stats`.",
+        "description": "The default namespace is reported as __default__. Recently upserted records take a few seconds to appear. Mirrors the MCP tool `describe-index-stats`.",
         "tags": [
           "pinecone"
         ],
@@ -21311,7 +21311,7 @@
       "post": {
         "operationId": "searchPineconeRecords",
         "summary": "Semantic search over one Pinecone index",
-        "description": "A read despite the POST: the body carries the namespace, a metadata filter and rerank options that do not fit a query string. Pass namespace as an empty string for the default namespace. Works only against integrated-embedding indexes; any other kind is refused with the evidence rather than an upstream 400. Also takes ?format=text. Mirrors the MCP tool `search-records`.",
+        "description": "A read despite the POST: the body carries the namespace, a metadata filter and rerank options that do not fit a query string. Pass namespace as __default__ for the default namespace. Works only against integrated-embedding indexes; any other kind is refused with the evidence rather than an upstream 400. Also takes ?format=text. Mirrors the MCP tool `search-records`.",
         "tags": [
           "pinecone"
         ],
@@ -21348,7 +21348,7 @@
                 "properties": {
                   "namespace": {
                     "type": "string",
-                    "description": "The namespace to use. Pass an empty string \"\" for the default namespace. describe-index-stats lists the namespaces an index actually has."
+                    "description": "The namespace to use. For the DEFAULT namespace pass \"__default__\" — Pinecone's reserved name for it, and what describe-index-stats reports. An empty string \"\" is accepted and translated, but Pinecone itself rejects it. describe-index-stats lists the namespaces an index actually has."
                   },
                   "query": {
                     "type": "object",
@@ -21530,7 +21530,7 @@
                         },
                         "namespace": {
                           "type": "string",
-                          "description": "The namespace to use. Pass an empty string \"\" for the default namespace. describe-index-stats lists the namespaces an index actually has."
+                          "description": "The namespace to use. For the DEFAULT namespace pass \"__default__\" — Pinecone's reserved name for it, and what describe-index-stats reports. An empty string \"\" is accepted and translated, but Pinecone itself rejects it. describe-index-stats lists the namespaces an index actually has."
                         }
                       },
                       "required": [
@@ -21833,7 +21833,7 @@
       "post": {
         "operationId": "upsertPineconeRecords",
         "summary": "Insert or update records in an index",
-        "description": "DESTRUCTIVE - a record whose _id already exists is OVERWRITTEN and there is no undo. Exposed with explicit sign-off: a curl has no confirmation affordance and the permanent dashboard API key is accepted here. It is also the bulk-load path the data plane exists for, which is why withholding it would cost more than it saves. Body limit 5mb, at most 1000 records; a larger batch is refused rather than split, because an upsert is not atomic across the body. Pass namespace as an empty string for the default namespace. Answers accepted, not indexed - embedding is asynchronous. Mirrors the MCP tool `upsert-records`.",
+        "description": "DESTRUCTIVE - a record whose _id already exists is OVERWRITTEN and there is no undo. Exposed with explicit sign-off: a curl has no confirmation affordance and the permanent dashboard API key is accepted here. It is also the bulk-load path the data plane exists for, which is why withholding it would cost more than it saves. Body limit 5mb, at most 1000 records; a larger batch is refused rather than split, because an upsert is not atomic across the body. Pass namespace as __default__ for the default namespace. Answers accepted, not indexed - embedding is asynchronous. Mirrors the MCP tool `upsert-records`.",
         "tags": [
           "pinecone"
         ],
@@ -21857,7 +21857,7 @@
                 "properties": {
                   "namespace": {
                     "type": "string",
-                    "description": "The namespace to use. Pass an empty string \"\" for the default namespace. describe-index-stats lists the namespaces an index actually has."
+                    "description": "The namespace to use. For the DEFAULT namespace pass \"__default__\" — Pinecone's reserved name for it, and what describe-index-stats reports. An empty string \"\" is accepted and translated, but Pinecone itself rejects it. describe-index-stats lists the namespaces an index actually has."
                   },
                   "records": {
                     "type": "array",
