@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Pinecone MCP REST API",
-    "description": "REST data plane for Pinecone vector indexes: list and describe indexes, read per-namespace record counts, semantic search, reranking, and the signed-off writes. Reads exist so a shell-capable client can curl | jq bulk payloads without them crossing the LLM context window; every read also accepts format=text for the same rendering the MCP tool returns. Every request is validated with the MCP tools own Zod schemas and calls the same operations, so the two surfaces cannot drift. The connection access rules (index and namespace allow-deny, plus a read-only switch) are enforced here exactly as on the tools, and a denial answers 403 naming the rule. Two shapes to know: search is a POST because the body carries a metadata filter and rerank options, and the namespace is always in the body rather than the path, because the default Pinecone namespace is the empty string and no path segment can express it.",
+    "description": "REST data plane for Pinecone vector indexes: list and describe indexes, read per-namespace record counts, semantic search, reranking, and the signed-off writes. Reads exist so a shell-capable client can curl | jq bulk payloads without them crossing the LLM context window; every read also accepts format=text for the same rendering the MCP tool returns. Every request is validated with the MCP tools own Zod schemas and calls the same operations, so the two surfaces cannot drift. The connection access rules (index and namespace allow-deny, plus a read-only switch) are enforced here exactly as on the tools, and a denial answers 403 naming the rule. Two shapes to know: search is a POST because the body carries a metadata filter and rerank options, and the namespace is always in the body rather than the path. For the default namespace pass Pinecone's reserved name __default__; an empty string is accepted and translated, but Pinecone itself refuses it.",
     "version": "1.0.0"
   },
   "servers": [
@@ -151,7 +151,7 @@
                           "text": {
                             "type": "string",
                             "minLength": 1,
-                            "description": "The name of the field in your records holding the text to embed. Every record you upsert must carry this field — pick the name you will actually use, because it cannot be changed later."
+                            "description": "The name of the field in your records holding the text to embed. Every record you upsert must carry this field \u2014 pick the name you will actually use, because it cannot be changed later."
                           }
                         },
                         "required": [
@@ -425,7 +425,7 @@
       "get": {
         "operationId": "describePineconeIndexStats",
         "summary": "Record counts per namespace for one Pinecone index",
-        "description": "The default namespace is the empty string. Recently upserted records take a few seconds to appear. Mirrors the MCP tool `describe-index-stats`.",
+        "description": "The default namespace is reported as __default__. Recently upserted records take a few seconds to appear. Mirrors the MCP tool `describe-index-stats`.",
         "tags": [
           "pinecone"
         ],
@@ -516,7 +516,7 @@
       "post": {
         "operationId": "searchPineconeRecords",
         "summary": "Semantic search over one Pinecone index",
-        "description": "A read despite the POST: the body carries the namespace, a metadata filter and rerank options that do not fit a query string. Pass namespace as an empty string for the default namespace. Works only against integrated-embedding indexes; any other kind is refused with the evidence rather than an upstream 400. Also takes ?format=text. Mirrors the MCP tool `search-records`.",
+        "description": "A read despite the POST: the body carries the namespace, a metadata filter and rerank options that do not fit a query string. Pass namespace as __default__ for the default namespace. Works only against integrated-embedding indexes; any other kind is refused with the evidence rather than an upstream 400. Also takes ?format=text. Mirrors the MCP tool `search-records`.",
         "tags": [
           "pinecone"
         ],
@@ -553,7 +553,7 @@
                 "properties": {
                   "namespace": {
                     "type": "string",
-                    "description": "The namespace to use. Pass an empty string \"\" for the default namespace. describe-index-stats lists the namespaces an index actually has."
+                    "description": "The namespace to use. For the DEFAULT namespace pass \"__default__\" \u2014 Pinecone's reserved name for it, and what describe-index-stats reports. An empty string \"\" is accepted and translated, but Pinecone itself rejects it. describe-index-stats lists the namespaces an index actually has."
                   },
                   "query": {
                     "type": "object",
@@ -580,7 +580,7 @@
                       "filter": {
                         "type": "object",
                         "additionalProperties": {},
-                        "description": "A filter to narrow the results, using the syntax of MongoDB query operators: $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists, $and, $or. The records must actually carry the fields you filter on — run a search without a filter first and look at the \"fields\" of the hits. Filtering on a field the records do not have returns nothing."
+                        "description": "A filter to narrow the results, using the syntax of MongoDB query operators: $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists, $and, $or. The records must actually carry the fields you filter on \u2014 run a search without a filter first and look at the \"fields\" of the hits. Filtering on a field the records do not have returns nothing."
                       }
                     },
                     "required": [
@@ -623,7 +623,7 @@
                       "model",
                       "rankFields"
                     ],
-                    "description": "Optional reranking of the initial results. Use a query.topK larger than you need, then rerank down to topN — that is what makes reranking worth the extra call."
+                    "description": "Optional reranking of the initial results. Use a query.topK larger than you need, then rerank down to topN \u2014 that is what makes reranking worth the extra call."
                   }
                 },
                 "required": [
@@ -735,7 +735,7 @@
                         },
                         "namespace": {
                           "type": "string",
-                          "description": "The namespace to use. Pass an empty string \"\" for the default namespace. describe-index-stats lists the namespaces an index actually has."
+                          "description": "The namespace to use. For the DEFAULT namespace pass \"__default__\" \u2014 Pinecone's reserved name for it, and what describe-index-stats reports. An empty string \"\" is accepted and translated, but Pinecone itself rejects it. describe-index-stats lists the namespaces an index actually has."
                         }
                       },
                       "required": [
@@ -771,7 +771,7 @@
                       "filter": {
                         "type": "object",
                         "additionalProperties": {},
-                        "description": "A filter to narrow the results, using the syntax of MongoDB query operators: $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists, $and, $or. The records must actually carry the fields you filter on — run a search without a filter first and look at the \"fields\" of the hits. Filtering on a field the records do not have returns nothing."
+                        "description": "A filter to narrow the results, using the syntax of MongoDB query operators: $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists, $and, $or. The records must actually carry the fields you filter on \u2014 run a search without a filter first and look at the \"fields\" of the hits. Filtering on a field the records do not have returns nothing."
                       }
                     },
                     "required": [
@@ -814,7 +814,7 @@
                       "model",
                       "rankFields"
                     ],
-                    "description": "How to rerank the combined results. Required for this tool — the whole point is one fused ranking across the indexes."
+                    "description": "How to rerank the combined results. Required for this tool \u2014 the whole point is one fused ranking across the indexes."
                   }
                 },
                 "required": [
@@ -1038,7 +1038,7 @@
       "post": {
         "operationId": "upsertPineconeRecords",
         "summary": "Insert or update records in an index",
-        "description": "DESTRUCTIVE - a record whose _id already exists is OVERWRITTEN and there is no undo. Exposed with explicit sign-off: a curl has no confirmation affordance and the permanent dashboard API key is accepted here. It is also the bulk-load path the data plane exists for, which is why withholding it would cost more than it saves. Body limit 5mb, at most 1000 records; a larger batch is refused rather than split, because an upsert is not atomic across the body. Pass namespace as an empty string for the default namespace. Answers accepted, not indexed - embedding is asynchronous. Mirrors the MCP tool `upsert-records`.",
+        "description": "DESTRUCTIVE - a record whose _id already exists is OVERWRITTEN and there is no undo. Exposed with explicit sign-off: a curl has no confirmation affordance and the permanent dashboard API key is accepted here. It is also the bulk-load path the data plane exists for, which is why withholding it would cost more than it saves. Body limit 5mb, at most 1000 records; a larger batch is refused rather than split, because an upsert is not atomic across the body. Pass namespace as __default__ for the default namespace. Answers accepted, not indexed - embedding is asynchronous. Mirrors the MCP tool `upsert-records`.",
         "tags": [
           "pinecone"
         ],
@@ -1062,7 +1062,7 @@
                 "properties": {
                   "namespace": {
                     "type": "string",
-                    "description": "The namespace to use. Pass an empty string \"\" for the default namespace. describe-index-stats lists the namespaces an index actually has."
+                    "description": "The namespace to use. For the DEFAULT namespace pass \"__default__\" \u2014 Pinecone's reserved name for it, and what describe-index-stats reports. An empty string \"\" is accepted and translated, but Pinecone itself rejects it. describe-index-stats lists the namespaces an index actually has."
                   },
                   "records": {
                     "type": "array",

@@ -168,7 +168,7 @@ pineconeServer.addTool({
   annotations: { readOnlyHint: true },
   description:
     'Report an index\'s record counts, broken down by namespace. This is how to discover which namespaces an index actually has — Pinecone has no separate list-namespaces here. ' +
-    'The default namespace is the empty string "". ' +
+    'The default namespace is reported under Pinecone\'s reserved name "__default__", which is what to pass back to the search and upsert tools. ' +
     'Recently upserted records take a few seconds to appear.',
   parameters: describeIndexStatsSchema,
   execute: async (args, { log, session }) => {

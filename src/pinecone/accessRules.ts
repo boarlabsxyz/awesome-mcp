@@ -23,6 +23,8 @@
 
 import { UserError } from 'fastmcp';
 
+import { PINECONE_DEFAULT_NAMESPACE } from './apiHelpers.js';
+
 export type PineconeDenialReason =
   | 'index-allowlist-miss'
   | 'index-blocklist-hit'
@@ -152,7 +154,21 @@ export function indexMatchesPattern(pattern: string, name: string): boolean {
  * against a namespace it does not name.
  */
 export function namespaceMatchesPattern(pattern: string, namespace: string): boolean {
-  return String(pattern ?? '') === String(namespace ?? '');
+  return canonicalNamespace(pattern) === canonicalNamespace(namespace);
+}
+
+/**
+ * One spelling for the default namespace, so a rule and a request cannot miss
+ * each other over which one they used.
+ *
+ * Pinecone's wire name is `__default__`; this connector shipped telling
+ * callers to pass `''`, and rules saved under that spelling are already in the
+ * store. Both normalise here, which is what keeps an existing allowlist
+ * working after the fix.
+ */
+export function canonicalNamespace(value: unknown): string {
+  const s = String(value ?? '');
+  return s === '' ? PINECONE_DEFAULT_NAMESPACE : s;
 }
 
 /** Normalise an index rule list, dropping blanks. */
@@ -169,9 +185,14 @@ export function toIndexList(value: unknown): string[] {
 /**
  * Normalise a namespace rule list, de-duping but PRESERVING `""`.
  *
- * THE DEFAULT NAMESPACE IS THE EMPTY STRING, and an allowlist that cannot
- * express it is a rule set that silently forbids the namespace most users
- * actually write to.
+ * THE DEFAULT NAMESPACE HAS A RESERVED NAME, `__default__`, and an allowlist
+ * that cannot express it is a rule set that silently forbids the namespace
+ * most users actually write to.
+ *
+ * This connector originally believed the default namespace was the empty
+ * string and argued that no sentinel could be safe, since any sentinel is a
+ * name a real namespace could have. Pinecone settles that for us: it reserves
+ * `__default__`, so the collision cannot arise and the sentinel IS the name.
  *
  * Browserbase's webServer `toList` drops blanks — correct for a hostname — and
  * reusing it here would delete the default-namespace entry on every save: the
@@ -191,7 +212,10 @@ export function toNamespaceList(value: unknown): string[] {
   const seen = new Set<string>();
   for (const v of value) {
     if (v === null || v === undefined) continue;
-    seen.add(String(v));
+    // Canonicalised on the way in, so a list holding both spellings of the
+    // default namespace collapses to one entry rather than showing the user
+    // what looks like a duplicate rule.
+    seen.add(canonicalNamespace(v));
   }
   return [...seen];
 }
@@ -222,7 +246,9 @@ export function hasNamespaceRules(rules?: PineconeAccessRules): boolean {
 
 /** Render a namespace for a human. The default namespace is `""` on the wire. */
 export function describeNamespace(ns: string): string {
-  return ns === '' ? '(default namespace)' : `"${ns}"`;
+  // Both spellings render the same, so output does not change depending on
+  // which one the caller happened to pass.
+  return canonicalNamespace(ns) === PINECONE_DEFAULT_NAMESPACE ? '(default namespace)' : `"${ns}"`;
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +287,9 @@ export function validateIndexPattern(pattern: string): string | null {
  * indistinguishable from one the user simply has not filled in yet.
  */
 export function validateNamespacePattern(pattern: string): string | null {
-  if (pattern === '') return null;
+  // Accepted and canonicalised to __default__ by toNamespaceList — the
+  // dashboard's default-namespace checkbox has always stored it this way.
+  if (pattern === '' || pattern === PINECONE_DEFAULT_NAMESPACE) return null;
   const raw = String(pattern ?? '');
   if (raw.length > 500) return `That namespace name is longer than Pinecone allows (500 characters).`;
   if (raw.trim() === '') {

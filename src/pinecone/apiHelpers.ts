@@ -44,6 +44,35 @@ export const PINECONE_CONTROL_BASE_URL = 'https://api.pinecone.io';
  */
 export const PINECONE_API_VERSION = '2026-07';
 
+/**
+ * Pinecone's reserved name for the namespace a request addresses when it names
+ * none. **It is NOT the empty string**, which is the mistake this connector
+ * shipped with: `""` is refused with a 400 naming `__default__` (observed live
+ * against 2026-07, and the spec requires a namespace to be 1-512 characters,
+ * so a zero-length one cannot be valid). `describe_index_stats` reports the
+ * namespace under this name too, so it is also what a caller reading stats
+ * sees and would naturally pass back.
+ *
+ * The earlier design reasoned that `encodeURIComponent('')` yields `''` and so
+ * `/records/namespaces//search` was "the correct address for the default
+ * namespace". That was inference about URL construction, never verified
+ * against the API, and it was wrong.
+ */
+export const PINECONE_DEFAULT_NAMESPACE = '__default__';
+
+/**
+ * Map a caller's namespace to the one the wire accepts.
+ *
+ * `''` is still accepted and translated rather than refused: every tool
+ * description shipped telling callers to use it, so refusing it now would
+ * break the exact callers who followed the documentation. Applied HERE, at the
+ * single wire boundary, so the MCP tools, the REST routes and anything added
+ * later cannot disagree about it.
+ */
+export function wireNamespace(namespace: string): string {
+  return namespace === '' ? PINECONE_DEFAULT_NAMESPACE : namespace;
+}
+
 const REQUEST_TIMEOUT_MS = 30_000;
 /** An upsert body may be up to 2 MB of text; give it longer than a metadata read. */
 const UPSERT_TIMEOUT_MS = 60_000;
@@ -219,7 +248,38 @@ export class PineconeClient {
 
   // ---- inference plane ----
 
-  rerank(input: {
+  /**
+   * POST /rerank, on the inference plane.
+   *
+   * A 403 here is enriched locally because this is the only place the model
+   * name is known, and because mapPineconeError's generic 403 is WRONG for
+   * this path: it explains the refusal as an index in another project, and
+   * /rerank touches no index at all. The observed cause is the model not
+   * being available to the account, so that is what the message names.
+   */
+  async rerank(input: {
+    model: string;
+    query: string;
+    documents: Array<Record<string, unknown>> | string[];
+    topN?: number;
+    rankFields?: string[];
+  }): Promise<PineconeRerankResponse> {
+    try {
+      return await this.rerankRequest(input);
+    } catch (error: any) {
+      if (error?.status === 403) {
+        throw new UserError(
+          `Pinecone refused the reranking model "${input.model}" (HTTP 403). This is about the MODEL, not the API key — a rejected key answers 401, ` +
+            `and reranking touches no index, so it is not a project or permission problem either. The usual cause is that the model is not available to ` +
+            `this account: the third-party models (the cohere-rerank family) are not included on every Pinecone plan. Try Pinecone's own ` +
+            `"pinecone-rerank-v0" or "bge-reranker-v2-m3", or check the model list for your plan at https://docs.pinecone.io/guides/search/rerank-results.`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  private rerankRequest(input: {
     model: string;
     query: string;
     documents: Array<Record<string, unknown>> | string[];
@@ -247,11 +307,9 @@ export class PineconeClient {
   /**
    * POST /records/namespaces/{namespace}/search.
    *
-   * The namespace goes through encodeURIComponent, and the DEFAULT NAMESPACE
-   * IS THE EMPTY STRING — which encodes to nothing, leaving `/namespaces//
-   * search`. That double slash is the correct address for it; collapsing the
-   * path would silently retarget the call at a namespace literally named
-   * "search".
+   * The namespace goes through wireNamespace first, so a caller passing `''`
+   * reaches `__default__` rather than producing the empty path segment the
+   * API refuses. See PINECONE_DEFAULT_NAMESPACE.
    */
   searchRecords(
     host: string,
@@ -279,7 +337,7 @@ export class PineconeClient {
     return this.dataRequest<PineconeSearchResponse>(
       host,
       'POST',
-      `/records/namespaces/${encodeURIComponent(namespace)}/search`,
+      `/records/namespaces/${encodeURIComponent(wireNamespace(namespace))}/search`,
       { body },
     );
   }
@@ -297,7 +355,7 @@ export class PineconeClient {
    * may and may not claim.
    */
   async upsertRecords(host: string, namespace: string, ndjson: string): Promise<void> {
-    await this.dataRequest<void>(host, 'POST', `/records/namespaces/${encodeURIComponent(namespace)}/upsert`, {
+    await this.dataRequest<void>(host, 'POST', `/records/namespaces/${encodeURIComponent(wireNamespace(namespace))}/upsert`, {
       rawBody: ndjson,
       contentType: 'application/x-ndjson',
       timeoutMs: UPSERT_TIMEOUT_MS,
@@ -406,7 +464,9 @@ export function mapPineconeError(prefix: string, error: any, log?: PineconeToolL
   }
   if (status === 403) {
     throw new UserError(
-      `${prefix}: the Pinecone API key is valid but is not allowed to do this. An API key is scoped to one project, so an index in a different project reads as forbidden rather than missing.`,
+      `${prefix}: the Pinecone API key is valid but is not allowed to do this (a rejected key answers 401, not 403). ` +
+        `For an index, the usual cause is that an API key is scoped to ONE project, so an index in a different project reads as forbidden rather than missing. ` +
+        `For a model or a feature, it may not be available on this account's plan.`,
     );
   }
   if (status === 404) {

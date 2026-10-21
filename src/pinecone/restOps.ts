@@ -17,11 +17,12 @@
 // as it refuses a tool call.
 // ---------------------------------------------------------------------------
 //
-// NAMESPACE LIVES IN THE BODY, NEVER IN THE PATH. Pinecone's default namespace
-// is the empty string, and an empty path segment cannot express it:
-// `/namespaces//upsert` is not a URL a client can reliably construct, and
-// collapsing it silently retargets the call. Keeping it in the body is the
-// only shape in which the default namespace is addressable at all.
+// NAMESPACE LIVES IN THE BODY, NEVER IN THE PATH — a contract choice, not a
+// constraint. The original justification was wrong: it held that the default
+// namespace was the empty string and so could not be a path segment, when in
+// fact Pinecone reserves `__default__` and refuses `''`. The body stays
+// because a namespace belongs beside the filter and rerank options it is used
+// with, and because moving it would break every existing caller.
 
 import type { z } from 'zod';
 
@@ -180,7 +181,10 @@ async function searchOne(
 }
 
 export interface CascadingSearchResult {
+  /** How many targets were actually searched. Lower than targetsRequested exactly when `partial`. */
   indexesSearched: number;
+  /** How many were asked for. Added so a client can see the shortfall without diffing its own request. */
+  targetsRequested: number;
   uniqueRecords: number;
   reranked: unknown;
   /**
@@ -205,26 +209,32 @@ export async function performCascadingSearch(
   );
 
   const failures: string[] = [];
-  const hits: PineconeSearchHit[] = [];
+  // Keyed on the WHOLE record identity, as in ops.ts: `_id` alone loses data,
+  // because ids are unique only within a namespace, so the same id in two
+  // namespaces is two different records. NUL is a safe separator — Pinecone's
+  // spec forbids it in a namespace name.
+  const byIdentity = new Map<string, Record<string, unknown>>();
   settled.forEach((outcome, i) => {
-    if (outcome.status === 'fulfilled') hits.push(...outcome.value);
-    else failures.push(`${args.indexes[i].name}: ${outcome.reason?.message ?? outcome.reason}`);
+    const t = args.indexes[i];
+    if (outcome.status !== 'fulfilled') {
+      failures.push(`${t.name} / ${t.namespace}: ${outcome.reason?.message ?? outcome.reason}`);
+      return;
+    }
+    for (const hit of outcome.value) {
+      const key = `${t.name}\u0000${t.namespace}\u0000${hit._id}`;
+      if (byIdentity.has(key)) continue;
+      // _index/_namespace ride along so a fused ranking can be attributed.
+      byIdentity.set(key, { _id: hit._id, _index: t.name, _namespace: t.namespace, ...hit.fields });
+    }
   });
 
-  if (!hits.length && failures.length) {
-    const err: any = new Error(`None of the requested indexes could be searched: ${failures.join('; ')}`);
+  if (!byIdentity.size && failures.length) {
+    const err: any = new Error(`None of the requested targets could be searched: ${failures.join('; ')}`);
     err.status = 502;
     throw err;
   }
 
-  // `_id` travels INTO each document, as it does in ops.ts: Pinecone's rerank
-  // reply refers to its inputs by array position, and the caller never sees
-  // the array we built — so without the id the ranking cannot say which
-  // record each row is. It does not affect scoring, which reads only the
-  // caller's rankFields.
-  const byId = new Map<string, Record<string, unknown>>();
-  for (const hit of hits) if (!byId.has(hit._id)) byId.set(hit._id, { _id: hit._id, ...hit.fields });
-  const documents = [...byId.values()];
+  const documents = [...byIdentity.values()];
 
   const reranked = documents.length
     ? await ctx.client.rerank({
@@ -237,7 +247,11 @@ export async function performCascadingSearch(
     : { data: [] };
 
   return {
+    // A count of what was actually searched, not what was requested — the two
+    // differ exactly when `partial` is true, and overstating it there
+    // contradicts the flag beside it.
     indexesSearched: args.indexes.length - failures.length,
+    targetsRequested: args.indexes.length,
     uniqueRecords: documents.length,
     reranked,
     partial: failures.length > 0,

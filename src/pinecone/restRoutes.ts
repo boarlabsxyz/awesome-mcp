@@ -17,11 +17,13 @@
 //    their bodies carry a metadata filter and rerank options that do not fit a
 //    query string. The catalog marks them reads in prose for that reason.
 //
-// 2. NAMESPACE IS IN THE BODY, NEVER THE PATH. Pinecone's default namespace is
-//    the empty string; `/namespaces//upsert` is not a URL a client can
-//    reliably build, and collapsing the empty segment silently retargets the
-//    call at a namespace named "upsert". The body is the only shape in which
-//    the default namespace is addressable at all.
+// 2. NAMESPACE IS IN THE BODY, NEVER THE PATH. The original reasoning for
+//    this was WRONG and is worth recording: it claimed the default namespace
+//    was the empty string, so a path parameter could not express it. In fact
+//    Pinecone reserves `__default__` and refuses `''` outright, so a path
+//    would have worked. The body stays because it is where a namespace sits
+//    beside the filter and rerank options it is used with, and because moving
+//    it now would break every caller — not because a path cannot carry it.
 // ---------------------------------------------------------------------------
 
 import type { ZodTypeAny } from 'zod';

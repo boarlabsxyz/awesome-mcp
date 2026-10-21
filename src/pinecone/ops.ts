@@ -251,6 +251,39 @@ export async function opSearchRecords(
   return withRulesNote(body, state);
 }
 
+/** A hit plus the target it came from, which the dedup key and the output both need. */
+interface SourcedHit {
+  index: string;
+  namespace: string;
+  hit: PineconeSearchHit;
+}
+
+/**
+ * Deduplicate the union of hits, keyed on the WHOLE identity of a record.
+ *
+ * A record is identified by (index, namespace, _id) — not by `_id` alone,
+ * which is what the first version used and which silently LOST DATA: `a1` in
+ * namespace `ns-a` and `a1` in `ns-b` are different records holding different
+ * text, and keying on the id alone kept one and discarded the other with
+ * nothing in the output to say so. Ids are only unique within a namespace.
+ *
+ * The NUL byte is the separator because Pinecone's own spec requires a
+ * namespace to contain no NUL character, so no name can forge a key boundary.
+ *
+ * `_index` and `_namespace` ride along in each document so the reranked
+ * output can attribute every row to its source. Like `_id`, they do not
+ * affect scoring — ranking reads only the caller's rankFields.
+ */
+function dedupeAcrossTargets(found: readonly SourcedHit[]): Array<Record<string, unknown>> {
+  const byIdentity = new Map<string, Record<string, unknown>>();
+  for (const { index, namespace, hit } of found) {
+    const key = `${index}\u0000${namespace}\u0000${hit._id}`;
+    if (byIdentity.has(key)) continue;
+    byIdentity.set(key, { _id: hit._id, _index: index, _namespace: namespace, ...hit.fields });
+  }
+  return [...byIdentity.values()];
+}
+
 /**
  * Body of `cascading-search`.
  *
@@ -287,36 +320,34 @@ export async function opCascadingSearch(
   );
 
   const failures: string[] = [];
-  const hits: PineconeSearchHit[] = [];
+  // Each hit is kept WITH the target it came from. Losing that is what made
+  // the first version drop records (see dedupeAcrossTargets) and left the
+  // output unable to say which source a row was from.
+  const found: SourcedHit[] = [];
   settled.forEach((outcome, i) => {
-    if (outcome.status === 'fulfilled') hits.push(...outcome.value);
-    else {
-      const t = args.indexes[i];
+    const t = args.indexes[i];
+    if (outcome.status === 'fulfilled') {
+      for (const hit of outcome.value) found.push({ index: t.name, namespace: t.namespace, hit });
+    } else {
       failures.push(`"${t.name}" / ${describeNamespace(t.namespace)}: ${outcome.reason?.message ?? outcome.reason}`);
     }
   });
 
-  if (!hits.length && failures.length) {
+  const searched = args.indexes.length - failures.length;
+
+  if (!found.length && failures.length) {
     throw new UserError(
-      `cascading-search reached none of the requested indexes:\n${bulleted(failures)}`,
+      `cascading-search reached none of the ${args.indexes.length} requested target(s):\n${bulleted(failures)}`,
     );
   }
 
-  // Deduplicate by record id, keeping the first occurrence. The reranker then
-  // scores the union, which is the whole point of this tool over N searches.
-  //
-  // `_id` is carried INTO each document deliberately. Pinecone's rerank reply
-  // refers to its inputs by array position, and the caller never sees the
-  // array we built — so without the id the ranking cannot say which record
-  // each row is, which is the one question this tool exists to answer. Two
-  // hits with identical fields would also be indistinguishable. It does not
-  // affect scoring: ranking reads only the caller's rankFields.
-  const byId = new Map<string, Record<string, unknown>>();
-  for (const hit of hits) if (!byId.has(hit._id)) byId.set(hit._id, { _id: hit._id, ...hit.fields });
-  const documents = [...byId.values()];
+  const documents = dedupeAcrossTargets(found);
 
   if (!documents.length) {
-    return withRulesNote(`No matching records across ${args.indexes.length} index(es).\n\n${FRESHNESS_NOTE}`, state);
+    return withRulesNote(
+      `No matching records across ${searched} of ${args.indexes.length} target(s).\n\n${FRESHNESS_NOTE}`,
+      state,
+    );
   }
 
   const reranked = await client.rerank({
@@ -328,12 +359,45 @@ export async function opCascadingSearch(
   });
 
   const warning = failures.length
-    ? `PARTIAL RESULT — ${failures.length} of ${args.indexes.length} index(es) could not be searched, ` +
+    ? `PARTIAL RESULT — ${failures.length} of ${args.indexes.length} target(s) could not be searched, ` +
       `so this ranking is missing whatever they would have contributed:\n${bulleted(failures)}\n\n`
     : '';
 
-  const header = `${documents.length} unique record(s) from ${args.indexes.length} index(es), reranked with ${args.rerank.model}:`;
-  return withRulesNote(`${warning}${header}\n\n${json(reranked)}`, state);
+  // Counts what was actually SEARCHED, not what was asked for: reporting
+  // "from 2 targets" after one of them failed overstated the ranking's
+  // coverage, and that number sits right beside the PARTIAL warning
+  // contradicting it.
+  const header =
+    `${documents.length} unique record(s) from ${searched} of ${args.indexes.length} target(s) ` +
+    `(index + namespace pairs), reranked with ${args.rerank.model}:`;
+  return withRulesNote(`${warning}${header}\n\n${formatRerankedHits(reranked)}`, state);
+}
+
+/**
+ * Render a reranked ranking the way search-records renders hits: a numbered
+ * list, highest first.
+ *
+ * Previously this returned the raw rerank payload, which exposed Pinecone's
+ * internal `index` field — the position of the document in the array WE
+ * built, meaningless to a caller who never saw that array and easily misread
+ * as the Pinecone index. Each row now names its real source instead, which is
+ * what makes a fused ranking across targets interpretable at all.
+ */
+function formatRerankedHits(reranked: any): string {
+  const rows = Array.isArray(reranked?.data) ? reranked.data : [];
+  if (!rows.length) return 'No records survived reranking.';
+  return rows
+    .map((row: any, i: number) => {
+      const doc = (row?.document ?? {}) as Record<string, unknown>;
+      const { _id, _index, _namespace, ...fields } = doc;
+      const score = typeof row?.score === 'number' ? ` (score ${row.score.toFixed(4)})` : '';
+      const source =
+        _index === undefined
+          ? ''
+          : ` — from "${String(_index)}" / ${describeNamespace(String(_namespace ?? ''))}`;
+      return `${i + 1}. ${String(_id ?? '(no id)')}${score}${source}\n${json(fields)}`;
+    })
+    .join('\n\n');
 }
 
 /** Body of `rerank-documents`. Touches no index, so no index or namespace rule applies. */

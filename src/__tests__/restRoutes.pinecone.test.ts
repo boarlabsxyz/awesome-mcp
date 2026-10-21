@@ -199,7 +199,11 @@ describe('REST data plane: Pinecone handlers', () => {
     assert.equal(search!.body.query.top_k, 3);
   });
 
-  it('addresses the DEFAULT namespace, which only works because it is in the body', async () => {
+  it('sends the DEFAULT namespace as __default__ end to end', async () => {
+    // The reported bug: `''` reached Pinecone as an empty path segment and was
+    // refused with a 400 naming __default__. The body still carries the
+    // namespace (a path parameter cannot express a reserved-name default any
+    // more cleanly), but the value is now translated at the wire boundary.
     const calls = mockPinecone();
     clearPineconeIndexCache();
     const res = await post('/api/v1/pinecone/indexes/docs/search', {
@@ -207,8 +211,27 @@ describe('REST data plane: Pinecone handlers', () => {
     });
     assert.equal(res.status, 200);
     const search = calls.find(c => c.url.endsWith('/search'));
-    // The empty path segment is correct for the default namespace.
-    assert.match(search!.url, /\/records\/namespaces\/\/search$/);
+    assert.match(search!.url, /\/records\/namespaces\/__default__\/search$/);
+  });
+
+  it('accepts __default__ from the caller directly', async () => {
+    const calls = mockPinecone();
+    clearPineconeIndexCache();
+    const res = await post('/api/v1/pinecone/indexes/docs/search', {
+      namespace: '__default__', query: { topK: 1, inputs: { text: 'q' } },
+    });
+    assert.equal(res.status, 200);
+    assert.match(calls.find(c => c.url.endsWith('/search'))!.url, /namespaces\/__default__\/search$/);
+  });
+
+  it('upserts into the default namespace too', async () => {
+    const calls = mockPinecone();
+    clearPineconeIndexCache();
+    const res = await post('/api/v1/pinecone/indexes/docs/upsert', {
+      namespace: '', records: [{ _id: 'a', chunk_text: 'x' }],
+    });
+    assert.equal(res.status, 200);
+    assert.match(calls.find(c => c.url.endsWith('/upsert'))!.url, /namespaces\/__default__\/upsert$/);
   });
 
   it('400s a malformed search body with the schema issues', async () => {

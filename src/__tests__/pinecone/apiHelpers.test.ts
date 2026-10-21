@@ -144,13 +144,32 @@ describe('PineconeClient data plane', () => {
     assert.equal(sent.rerank.top_n, 2);
   });
 
-  it('addresses the DEFAULT namespace as the empty path segment', async () => {
-    // "" encodes to nothing, leaving `/namespaces//search` — that double slash
-    // is the correct address, and collapsing it would retarget the call at a
-    // namespace literally named "search".
+  it('sends the DEFAULT namespace as __default__, never an empty path segment', async () => {
+    // The bug this replaced: `''` encoded to nothing, producing
+    // `/namespaces//search`, which Pinecone refuses with a 400 naming
+    // __default__. Every tool description told callers to pass '', so the
+    // translation happens here rather than refusing them.
     const { fetch: f, calls } = stubFetch({ result: { hits: [] } });
     await new PineconeClient('k', undefined, f).searchRecords(host, '', { topK: 1, inputs: { text: 'q' } });
-    assert.equal(calls[0].url, `https://${host}/records/namespaces//search`);
+    assert.equal(calls[0].url, `https://${host}/records/namespaces/__default__/search`);
+  });
+
+  it('passes __default__ through unchanged when the caller already uses it', async () => {
+    const { fetch: f, calls } = stubFetch({ result: { hits: [] } });
+    await new PineconeClient('k', undefined, f).searchRecords(host, '__default__', { topK: 1, inputs: { text: 'q' } });
+    assert.equal(calls[0].url, `https://${host}/records/namespaces/__default__/search`);
+  });
+
+  it('translates the default namespace on UPSERT too, not just search', async () => {
+    const { fetch: f, calls } = stubFetch(undefined, { status: 201, contentType: '' });
+    await new PineconeClient('k', undefined, f).upsertRecords(host, '', '{"_id":"a"}\n');
+    assert.equal(calls[0].url, `https://${host}/records/namespaces/__default__/upsert`);
+  });
+
+  it('leaves a named namespace alone', async () => {
+    const { fetch: f, calls } = stubFetch({ result: { hits: [] } });
+    await new PineconeClient('k', undefined, f).searchRecords(host, 'hr', { topK: 1, inputs: { text: 'q' } });
+    assert.equal(calls[0].url, `https://${host}/records/namespaces/hr/search`);
   });
 
   it('sends the upsert body as NDJSON, not JSON', async () => {
@@ -236,8 +255,14 @@ describe('mapPineconeError', () => {
     assert.match(msg(401), /Reconnect from the dashboard/);
   });
 
-  it('explains a 403 as a project scope, not a permission to fix', () => {
-    assert.match(msg(403), /scoped to one project/);
+  it('offers both causes for a 403 rather than asserting the index one', () => {
+    // It used to claim an index in another project, which is wrong on any
+    // path that touches no index — /rerank most of all.
+    const m = msg(403);
+    assert.match(m, /scoped to ONE project/);
+    assert.match(m, /plan/);
+    // And it rules the key out, since a bad key is a 401.
+    assert.match(m, /401/);
   });
 
   it('explains a 404 as "not in this key\'s project"', () => {
@@ -247,6 +272,37 @@ describe('mapPineconeError', () => {
   it('refuses to claim anything about a request with no status', () => {
     // undici reports every transport failure as a bare "fetch failed".
     assert.match(msg(undefined), /may or may not have been received/);
+  });
+});
+
+describe('rerank 403', () => {
+  it('names the MODEL and rules out the key and the index', async () => {
+    // The reported bug: a cohere-rerank 403 was explained as "an index in a
+    // different project" on a call that touches no index at all.
+    const { fetch: f } = stubFetch({ error: 'forbidden' }, { status: 403 });
+    await assert.rejects(
+      () => new PineconeClient('k', undefined, f).rerank({ model: 'cohere-rerank-3.5', query: 'q', documents: ['a'] }),
+      (err: any) => {
+        assert.match(err.message, /cohere-rerank-3\.5/);
+        assert.match(err.message, /not the API key/);
+        assert.match(err.message, /touches no index/);
+        assert.match(err.message, /plan/);
+        // And it suggests a model that is included.
+        assert.match(err.message, /pinecone-rerank-v0/);
+        return true;
+      },
+    );
+  });
+
+  it('leaves other rerank failures to the generic mapping', async () => {
+    const { fetch: f } = stubFetch({ error: 'boom' }, { status: 500 });
+    await assert.rejects(
+      () => new PineconeClient('k', undefined, f).rerank({ model: 'pinecone-rerank-v0', query: 'q', documents: ['a'] }),
+      (err: any) => {
+        assert.doesNotMatch(err.message, /not the API key/);
+        return true;
+      },
+    );
   });
 });
 
