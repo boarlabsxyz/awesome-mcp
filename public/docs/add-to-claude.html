@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <title>Add to Claude &middot; Docs &middot; Awesome MCP</title>
+  <meta name="description" content="Paste your MCP URL into Claude.ai, Claude Desktop or Claude Code, and verify it works.">
+  <link rel="canonical" href="https://app.awesome-mcp.xyz/docs/add-to-claude">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body class="docs-body">
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  <header class="header">
+    <div class="header-inner">
+      <button class="docs-menu-toggle" type="button" aria-expanded="false" aria-controls="docs-sidebar">
+        <span class="sr-only">Toggle documentation menu</span>
+        <span aria-hidden="true">&#9776;</span>
+      </button>
+      <h1><a href="/docs" translate="no">Awesome MCP <span class="docs-brand-tag">Docs</span></a></h1>
+      <div class="header-right">
+        <a href="/integrations" class="nav-link">Integrations</a>
+        <a href="/dashboard" class="btn-primary">Dashboard</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" id="docs-sidebar">
+      <nav aria-label="Documentation">
+        <p class="docs-nav-group">Getting started</p>
+        <ul>
+          <li><a href="/docs" class="docs-nav-link">Overview &amp; quickstart</a></li>
+          <li><a href="/docs/connect-a-connector" class="docs-nav-link">Connect a connector</a></li>
+          <li><a href="/docs/add-to-claude" class="docs-nav-link active" aria-current="page">Add to Claude</a></li>
+          <li><a href="/docs/images" class="docs-nav-link">Images</a></li>
+        </ul>
+        <p class="docs-nav-group">Connectors</p>
+        <ul>
+          <li><a href="/docs/google" class="docs-nav-link">Google Workspace</a></li>
+          <li><a href="/docs/clickup" class="docs-nav-link">ClickUp</a></li>
+          <li><a href="/docs/slack" class="docs-nav-link">Slack</a></li>
+          <li><a href="/docs/outline" class="docs-nav-link">Outline Wiki</a></li>
+          <li><a href="/docs/peopleforce" class="docs-nav-link">PeopleForce</a></li>
+          <li><a href="/docs/hubspot" class="docs-nav-link">HubSpot</a></li>
+        </ul>
+        <p class="docs-nav-group">Reference</p>
+        <ul>
+          <li><a href="/docs/rest-api" class="docs-nav-link">REST API</a></li>
+          <li><a href="/docs/troubleshooting" class="docs-nav-link">Troubleshooting</a></li>
+        </ul>
+      </nav>
+    </aside>
+
+    <main id="main" class="docs-content">
+  <p class="docs-eyebrow">Getting started</p>
+  <h1>Add to Claude</h1>
+  <p class="docs-lede">You have a URL from the dashboard. Here is where it goes in each Claude client, and how to tell whether it took.</p>
+
+
+  <h2 id="the-url">The URL</h2>
+  <p>Every connection on the dashboard has its own URL, which you get from its
+  <strong>Copy URL</strong> button. It looks like this:</p>
+  <div class="docs-pre-wrap"><pre><code>https://app.awesome-mcp.xyz/calendar?apiKey=YOUR_KEY.INSTANCE_ID</code></pre></div>
+
+  <p>The path (<code>/calendar</code>, <code>/sheets</code>, <code>/clickup</code>&hellip;) identifies the
+  service. The query parameter is your credential: your account API key, a dot, and the id of this
+  particular connection. That is how one key can drive several connections to the same service.</p>
+  <div class="docs-note docs-note--warn">
+    <span class="docs-note-label">This URL is a credential</span>
+    <p>Anyone holding it can use your connected account. Do not paste it into a shared doc, a
+    ticket, or a screenshot. If it leaks, delete that connection from the dashboard &mdash; the URL
+    dies with it &mdash; and connect again.</p>
+  </div>
+
+  <h2 id="claude-ai">Claude.ai</h2>
+  <figure class="docs-media docs-media--pending">
+    <div class="docs-media-placeholder" role="img" aria-label="Screencast pending: adding the MCP URL as a custom connector in Claude.ai settings">
+      <span class="docs-media-badge">Screencast</span>
+      <p>Adding a custom connector in Claude.ai &mdash; recording pending.</p>
+    </div>
+    <figcaption>Pasting the MCP URL into Claude.ai&rsquo;s connector settings.</figcaption>
+  </figure>
+  <ol class="docs-steps">
+    <li>Open <strong>Settings &rarr; Connectors</strong>.</li>
+    <li>Choose <strong>Add custom connector</strong>.</li>
+    <li>Paste the URL you copied from the dashboard.</li>
+    <li>Save, then start a new chat and ask for something the connector can do.</li>
+  </ol>
+
+  <h2 id="claude-desktop">Claude Desktop</h2>
+  <p>Claude Desktop reads a JSON config file. Add an entry under <code>mcpServers</code>:</p>
+  <div class="docs-pre-wrap"><pre><code>{
+  "mcpServers": {
+    "google-calendar": {
+      "url": "https://app.awesome-mcp.xyz/calendar?apiKey=YOUR_KEY.INSTANCE_ID"
+    }
+  }
+}</code></pre></div>
+
+  <p>The key (<code>google-calendar</code> above) is just a label you choose; it is how the server
+  shows up in Claude. Restart Claude Desktop after editing the file.</p>
+
+  <h2 id="claude-code">Claude Code</h2>
+  <p>From a terminal:</p>
+  <div class="docs-pre-wrap"><pre><code>claude mcp add --transport http awesome-calendar "https://app.awesome-mcp.xyz/calendar?apiKey=YOUR_KEY.INSTANCE_ID"</code></pre></div>
+
+  <p>Then confirm it registered:</p>
+  <div class="docs-pre-wrap"><pre><code>claude mcp list</code></pre></div>
+
+  <p>Quote the URL. It contains <code>?</code> and <code>&amp;</code>, which your shell will otherwise
+  interpret.</p>
+
+  <h2 id="verify">Check that it worked</h2>
+  <p>Ask for a read, not a write &mdash; it proves the connection without changing anything:</p>
+  <ul>
+    <li>Calendar &mdash; &ldquo;What&rsquo;s on my calendar tomorrow?&rdquo;</li>
+    <li>Slack &mdash; &ldquo;Summarize what I missed in #general today.&rdquo;</li>
+    <li>Google Drive &mdash; &ldquo;Find the latest version of the pricing memo.&rdquo;</li>
+    <li>HubSpot &mdash; &ldquo;Find the Acme Corp company and summarize its recent activity.&rdquo;</li>
+  </ul>
+
+  <h2 id="not-connected">&ldquo;MCP Not Connected&rdquo;</h2>
+  <p>If Claude shows an <strong>MCP Not Connected</strong> page instead of working, the order was
+  wrong: the connector has to be connected on the dashboard <em>before</em> it is added to Claude.
+  Go back to the <a href="/dashboard">dashboard</a>, connect that service, then retry in Claude.</p>
+  <p>Other failure modes are on the <a href="/docs/troubleshooting">troubleshooting page</a>.</p>
+
+
+  <nav class="docs-prevnext" aria-label="Pagination">
+    <a href="/docs/connect-a-connector" class="docs-prevnext-prev"><span class="docs-prevnext-dir">Previous</span><span class="docs-prevnext-title">Connect a connector</span></a>
+    <a href="/docs/images" class="docs-prevnext-next"><span class="docs-prevnext-dir">Next</span><span class="docs-prevnext-title">Images</span></a>
+  </nav>
+    </main>
+
+    <aside class="docs-toc" id="docs-toc" aria-labelledby="toc-heading" hidden>
+      <p id="toc-heading" class="docs-toc-title">On this page</p>
+      <nav aria-label="On this page"></nav>
+    </aside>
+  </div>
+
+  <footer class="docs-footer">
+    <p><a href="/dashboard">Dashboard</a> &middot; <a href="/integrations">Integrations</a> &middot; <a href="/updates">Updates</a></p>
+  </footer>
+
+  <script src="/docs/docs.js" defer></script>
+</body>
+</html>
