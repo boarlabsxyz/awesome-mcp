@@ -2,6 +2,7 @@
 // Maps Auth0 JWT subject claims to internal user records.
 
 import { getUserByAuth0Sub, setAuth0Sub, getUserByEmail, createUser, type UserRecord } from '../userStore.js';
+import { attributeUserToOrgByDomain } from '../orgStore.js';
 import type { JwtPayload } from './jwtValidator.js';
 
 /** Dependencies for user mapping, injectable for testing. */
@@ -10,9 +11,25 @@ export interface UserMappingDeps {
   setAuth0Sub: (userId: number, sub: string) => Promise<void>;
   getUserByEmail: (email: string) => Promise<UserRecord | undefined>;
   createUser: (profile: { email: string; name: string; auth0Sub?: string }) => Promise<UserRecord>;
+  /**
+   * Attribute a user to an org by verified email domain.
+   *
+   * Optional so existing callers and test doubles need no change. It matters
+   * here because this function AUTO-PROVISIONS accounts: without attribution on
+   * this path, arriving through an MCP client rather than the dashboard produces
+   * a brand-new account that belongs to no org, which is a way around whatever
+   * policy the user's org has set.
+   */
+  attributeUserToOrgByDomain?: (userId: number, email: string) => Promise<unknown>;
 }
 
-const defaultDeps: UserMappingDeps = { getUserByAuth0Sub, setAuth0Sub, getUserByEmail, createUser };
+const defaultDeps: UserMappingDeps = {
+  getUserByAuth0Sub,
+  setAuth0Sub,
+  getUserByEmail,
+  createUser,
+  attributeUserToOrgByDomain,
+};
 
 /** Check if an error is a unique constraint violation (Postgres code 23505). */
 export function isUniqueViolation(err: unknown): boolean {
@@ -33,6 +50,7 @@ export async function mapJwtToUser(payload: JwtPayload, deps: UserMappingDeps = 
   const bySubject = await deps.getUserByAuth0Sub(payload.sub);
   if (bySubject) {
     console.error(`[user-mapping] Found user by sub: id=${bySubject.id}, email=${bySubject.email}`);
+    await attributeIfPossible(bySubject, deps);
     return bySubject;
   }
 
@@ -51,6 +69,7 @@ export async function mapJwtToUser(payload: JwtPayload, deps: UserMappingDeps = 
         }
         throw err;
       }
+      await attributeIfPossible(byEmail, deps);
       return byEmail;
     }
   }
@@ -63,6 +82,7 @@ export async function mapJwtToUser(payload: JwtPayload, deps: UserMappingDeps = 
       name: payload.email?.split('@')[0] || payload.sub,
       auth0Sub: payload.sub,
     });
+    await attributeIfPossible(newUser, deps);
     return newUser;
   } catch (err) {
     if (isUniqueViolation(err)) {
@@ -72,5 +92,23 @@ export async function mapJwtToUser(payload: JwtPayload, deps: UserMappingDeps = 
       if (raced) return raced;
     }
     throw err;
+  }
+}
+
+/**
+ * Best-effort org attribution for a resolved user.
+ *
+ * Never throws: this runs on the authentication path, and failing a sign-in
+ * because an org lookup blipped is far worse than a user who gets attributed on
+ * their next request. Runs on the returning-user paths too, not just on create,
+ * so a domain verified after someone signed up still picks them up.
+ */
+async function attributeIfPossible(user: UserRecord, deps: UserMappingDeps): Promise<void> {
+  const attribute = deps.attributeUserToOrgByDomain;
+  if (!attribute || !user.id || !user.email) return;
+  try {
+    await attribute(user.id, user.email);
+  } catch (err: any) {
+    console.error('[user-mapping] org attribution failed:', err?.message || err);
   }
 }

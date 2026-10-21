@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <title>Organisation admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    .hidden { display: none !important; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #000;
+      color: #ededed;
+      min-height: 100vh;
+    }
+
+    :focus-visible { outline: 2px solid #0070f3; outline-offset: 2px; border-radius: 4px; }
+    .skip-link { position: absolute; left: -9999px; top: 0; }
+    .skip-link:focus {
+      left: 8px; top: 8px; z-index: 10000; padding: 0.5rem 1rem;
+      background: #0070f3; color: #fff; border-radius: 6px; text-decoration: none;
+    }
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
+
+    .page-container { max-width: 1000px; margin: 0 auto; padding: 2rem; }
+    .header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 2rem; padding: 1rem 0;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      position: sticky; top: 0; z-index: 100;
+      backdrop-filter: blur(12px); background: rgba(0,0,0,0.8);
+    }
+    .header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
+    .header-right { display: flex; align-items: center; gap: 1rem; }
+
+    .section-header {
+      display: flex; justify-content: space-between; align-items: baseline;
+      gap: 1rem; flex-wrap: wrap; margin: 2rem 0 1rem;
+    }
+    .section-header:first-of-type { margin-top: 0; }
+    .section-header h2 { font-size: 1.1rem; font-weight: 600; letter-spacing: -0.01em; }
+    .section-header p { font-size: 0.85rem; color: #666; }
+
+    .summary {
+      margin-bottom: 1.5rem; padding: 1rem 1.25rem;
+      background: #0a0a0a; border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px; font-size: 0.95rem; color: #888;
+    }
+    .summary strong { color: #ededed; }
+
+    table {
+      width: 100%; border-collapse: collapse; background: #0a0a0a;
+      border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; overflow: hidden;
+    }
+    .table-scroll { overflow-x: auto; }
+    th, td { text-align: left; padding: 0.75rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    th {
+      background: rgba(255,255,255,0.03); color: #888; font-size: 0.8rem;
+      text-transform: uppercase; letter-spacing: 0.03em; font-weight: 600;
+    }
+    td { font-size: 0.9rem; }
+    td.numeric { font-variant-numeric: tabular-nums; }
+    tr:last-child td { border-bottom: none; }
+    td.actions { white-space: nowrap; }
+
+    .tag {
+      display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px;
+      font-size: 0.75rem; font-weight: 500;
+      background: rgba(255,255,255,0.06); color: #999;
+    }
+    .tag-admin { background: rgba(0,112,243,0.18); color: #6aa9ff; }
+    .tag-verified { background: rgba(40,167,69,0.18); color: #4cc46a; }
+    .tag-unverified { background: rgba(255,171,0,0.18); color: #ffab00; }
+
+    form.inline { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+    input[type="email"], input[type="text"], select {
+      font: inherit; font-size: 0.9rem; padding: 0.55rem 0.75rem;
+      background: #111; color: #ededed;
+      border: 1px solid rgba(255,255,255,0.15); border-radius: 6px;
+    }
+    input[type="email"] { min-width: 240px; flex: 1 1 240px; }
+
+    button {
+      font: inherit; font-size: 0.85rem; font-weight: 500; padding: 0.55rem 1rem;
+      border-radius: 6px; cursor: pointer; touch-action: manipulation;
+      transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+    }
+    .btn-primary { background: #0070f3; color: #fff; border: 1px solid #0070f3; }
+    .btn-primary:hover:not(:disabled) { background: #0060d3; }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .btn-quiet, .btn-back {
+      background: transparent; color: #888; border: 1px solid rgba(255,255,255,0.15);
+      padding: 0.5rem 1rem; font-size: 0.85rem; border-radius: 6px; text-decoration: none;
+    }
+    .btn-quiet:hover, .btn-back:hover { background: #111; color: #ededed; }
+    .btn-danger { background: transparent; color: #dc3545; border: 1px solid rgba(220,53,69,0.35); }
+    .btn-danger:hover:not(:disabled) { background: rgba(220,53,69,0.12); }
+
+    .loading { text-align: center; padding: 2rem; color: #888; }
+    .error {
+      background: rgba(220,53,69,0.15); border: 1px solid rgba(220,53,69,0.3);
+      border-radius: 8px; padding: 1rem; color: #dc3545; margin-bottom: 1rem; font-size: 0.9rem;
+    }
+    .notice {
+      background: rgba(0,112,243,0.1); border: 1px solid rgba(0,112,243,0.25);
+      border-radius: 8px; padding: 1rem; color: #9ec5ff; margin-bottom: 1rem; font-size: 0.9rem;
+    }
+    .empty { padding: 1.25rem; color: #666; font-size: 0.9rem; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition-duration: 0.01ms !important; animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important; scroll-behavior: auto !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <div class="page-container">
+    <div class="header">
+      <h1>Organisation</h1>
+      <div class="header-right">
+        <a href="/dashboard" class="btn-back">Back to Dashboard</a>
+      </div>
+    </div>
+
+    <main id="main">
+      <div id="loading" class="loading" aria-live="polite">Loading…</div>
+      <div id="error" class="error hidden" role="alert" aria-live="polite"></div>
+      <div id="flash" class="notice hidden" role="status" aria-live="polite"></div>
+
+      <div id="content" class="hidden">
+        <div id="summary" class="summary"></div>
+
+        <div class="section-header">
+          <h2>Members</h2>
+          <p>An organisation must keep at least one admin.</p>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <caption class="sr-only">Members of this organisation</caption>
+            <thead>
+              <tr>
+                <th scope="col">Email</th>
+                <th scope="col">Name</th>
+                <th scope="col">Role</th>
+                <th scope="col">Joined via</th>
+                <th scope="col"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="membersBody"></tbody>
+          </table>
+        </div>
+
+        <div class="section-header">
+          <h2>Invite a member</h2>
+          <p>The invitation link expires after 7 days and can be used once.</p>
+        </div>
+        <form class="inline" id="inviteForm">
+          <label class="sr-only" for="inviteEmail">Email address to invite</label>
+          <input type="email" id="inviteEmail" placeholder="person@company.com" required autocomplete="off">
+          <label class="sr-only" for="inviteRole">Role</label>
+          <select id="inviteRole">
+            <option value="member">Member</option>
+            <option value="admin">Organisation admin</option>
+          </select>
+          <button type="submit" class="btn-primary" id="inviteSubmit">Send invitation</button>
+        </form>
+
+        <div class="section-header">
+          <h2>Pending invitations</h2>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <caption class="sr-only">Invitations that have not been accepted</caption>
+            <thead>
+              <tr>
+                <th scope="col">Email</th>
+                <th scope="col">Role</th>
+                <th scope="col">Expires</th>
+                <th scope="col"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="invitesBody"></tbody>
+          </table>
+        </div>
+
+        <div class="section-header">
+          <h2>Email domains</h2>
+          <p>Verified domains auto-join new sign-ups. Only a platform operator can claim or verify one.</p>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <caption class="sr-only">Email domains claimed by this organisation</caption>
+            <thead>
+              <tr>
+                <th scope="col">Domain</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody id="domainsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text === null || text === undefined ? '' : String(text);
+      return div.innerHTML;
+    }
+    function show(id) { document.getElementById(id).classList.remove('hidden'); }
+    function hide(id) { document.getElementById(id).classList.add('hidden'); }
+
+    const DATE_FMT = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    function fmtDate(value) {
+      if (!value) return '—';
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? '—' : DATE_FMT.format(parsed);
+    }
+
+    const SOURCE_LABELS = {
+      domain: 'Verified domain',
+      invite: 'Invitation',
+      manual: 'Added by operator',
+      idp: 'Identity provider',
+    };
+
+    function flash(message) {
+      const el = document.getElementById('flash');
+      el.textContent = message;
+      show('flash');
+    }
+    function fail(message) {
+      const el = document.getElementById('error');
+      el.textContent = message;
+      show('error');
+    }
+    function clearBanners() { hide('error'); hide('flash'); }
+
+    let state = { adminCount: 0 };
+
+    function renderMembers(members) {
+      const tbody = document.getElementById('membersBody');
+      if (!members.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty">No members yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = members.map(m => {
+        const roleTag = m.role === 'admin'
+          ? '<span class="tag tag-admin">Admin</span>'
+          : '<span class="tag">Member</span>';
+        // The last admin cannot be demoted or removed: an org with no admin can
+        // neither set policy nor invite anyone, and only a platform operator
+        // could undo it.
+        const lastAdmin = m.role === 'admin' && state.adminCount <= 1;
+        const toggle = m.role === 'admin'
+          ? `<button class="btn-quiet" type="button" data-action="set-role" data-user="${m.userId}" data-role="member"${lastAdmin ? ' disabled title="An organisation must keep at least one admin."' : ''}>Make member</button>`
+          : `<button class="btn-quiet" type="button" data-action="set-role" data-user="${m.userId}" data-role="admin">Make admin</button>`;
+        const remove = `<button class="btn-danger" type="button" data-action="remove" data-user="${m.userId}"${lastAdmin ? ' disabled title="An organisation must keep at least one admin."' : ''}>Remove</button>`;
+        return `
+          <tr>
+            <td>${escapeHtml(m.email)}</td>
+            <td>${escapeHtml(m.name)}</td>
+            <td>${roleTag}</td>
+            <td>${escapeHtml(SOURCE_LABELS[m.source] || m.source)}</td>
+            <td class="actions">${toggle} ${remove}</td>
+          </tr>`;
+      }).join('');
+    }
+
+    function renderInvites(invites) {
+      const tbody = document.getElementById('invitesBody');
+      if (!invites.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty">No pending invitations.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = invites.map(i => `
+        <tr>
+          <td>${escapeHtml(i.email)}</td>
+          <td>${i.role === 'admin' ? '<span class="tag tag-admin">Admin</span>' : '<span class="tag">Member</span>'}</td>
+          <td>${escapeHtml(fmtDate(i.expiresAt))}</td>
+          <td class="actions"><button class="btn-danger" type="button" data-action="revoke" data-invite="${i.id}">Revoke</button></td>
+        </tr>`).join('');
+    }
+
+    function renderDomains(domains) {
+      const tbody = document.getElementById('domainsBody');
+      if (!domains.length) {
+        tbody.innerHTML = '<tr><td colspan="2" class="empty">No domains claimed. Ask a platform operator to claim one.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = domains.map(d => `
+        <tr>
+          <td>${escapeHtml(d.domain)}</td>
+          <td>${d.verifiedAt
+            ? '<span class="tag tag-verified">Verified ' + escapeHtml(fmtDate(d.verifiedAt)) + '</span>'
+            : '<span class="tag tag-unverified">Claimed, not verified — does not auto-join anyone</span>'}</td>
+        </tr>`).join('');
+    }
+
+    async function load() {
+      const res = await fetch('/api/org/members', { credentials: 'same-origin' });
+      if (res.status === 401) { window.location.href = '/login'; return false; }
+      if (res.status === 403) {
+        hide('loading');
+        const data = await res.json().catch(() => ({}));
+        fail(data.error || 'Organisation admin access required.');
+        return false;
+      }
+      if (!res.ok) throw new Error('Failed to load organisation');
+
+      const data = await res.json();
+      state.adminCount = data.adminCount || 0;
+      const members = data.members || [];
+      document.getElementById('summary').innerHTML =
+        `<strong>${escapeHtml(data.org ? data.org.name : 'Organisation')}</strong> · ` +
+        `${members.length} member${members.length === 1 ? '' : 's'} · ` +
+        `${state.adminCount} admin${state.adminCount === 1 ? '' : 's'}`;
+      renderMembers(members);
+      renderInvites(data.pendingInvites || []);
+      renderDomains(data.domains || []);
+      hide('loading');
+      show('content');
+      return true;
+    }
+
+    async function reload() {
+      try { await load(); } catch (err) { fail('Failed to reload: ' + err.message); }
+    }
+
+    // Delegated so rows can be re-rendered wholesale without rebinding, and so
+    // no user-supplied value is ever interpolated into an inline handler.
+    document.getElementById('content').addEventListener('click', async (event) => {
+      const btn = event.target.closest('button[data-action]');
+      if (!btn || btn.disabled) return;
+      clearBanners();
+      const action = btn.dataset.action;
+      btn.disabled = true;
+      try {
+        let res;
+        if (action === 'set-role') {
+          res = await fetch('/api/org/members/' + encodeURIComponent(btn.dataset.user), {
+            method: 'PATCH',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ role: btn.dataset.role }),
+          });
+        } else if (action === 'remove') {
+          res = await fetch('/api/org/members/' + encodeURIComponent(btn.dataset.user), {
+            method: 'DELETE', credentials: 'same-origin',
+          });
+        } else if (action === 'revoke') {
+          res = await fetch('/api/org/invites/' + encodeURIComponent(btn.dataset.invite), {
+            method: 'DELETE', credentials: 'same-origin',
+          });
+        } else {
+          btn.disabled = false;
+          return;
+        }
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { fail(data.error || 'That change could not be applied.'); btn.disabled = false; return; }
+        await reload();
+      } catch (err) {
+        fail('That change could not be applied: ' + err.message);
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById('inviteForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      clearBanners();
+      const submit = document.getElementById('inviteSubmit');
+      const email = document.getElementById('inviteEmail').value.trim();
+      const role = document.getElementById('inviteRole').value;
+      submit.disabled = true;
+      submit.textContent = 'Sending…';
+      try {
+        const res = await fetch('/api/org/invites', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, role }),
+        });
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { fail(data.error || 'Could not send the invitation.'); return; }
+        document.getElementById('inviteEmail').value = '';
+        flash('Invitation sent to ' + email + '.');
+        await reload();
+      } catch (err) {
+        fail('Could not send the invitation: ' + err.message);
+      } finally {
+        submit.disabled = false;
+        submit.textContent = 'Send invitation';
+      }
+    });
+
+    (async () => {
+      try { await load(); }
+      catch (err) { hide('loading'); fail('Failed to load data: ' + err.message); }
+    })();
+  </script>
+</body>
+</html>
