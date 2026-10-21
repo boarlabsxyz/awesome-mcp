@@ -32,10 +32,11 @@ import {
   assertNamespaceAllowed,
   assertTargetsAllowed,
   assertWriteAllowed,
+  describeNamespace,
   filterIndexRows,
   filterNamespaceStats,
 } from './accessRules.js';
-import type { PineconeClient, PineconeIndexSummary, PineconeSearchHit } from './apiHelpers.js';
+import { type PineconeClient, type PineconeIndexSummary, type PineconeSearchHit, readSearchHits } from './apiHelpers.js';
 import { searchPineconeDocs } from './docsProxy.js';
 import { primeIndexCache, resolveIndexes, withResolvedIndex } from './indexCatalog.js';
 import {
@@ -168,7 +169,13 @@ async function searchOne(
     assertRecordsApiUsable(resolved.verdict, indexName, 'search');
     try {
       const res = await ctx.client.searchRecords(resolved.host, namespace, query, rerank);
-      return res?.result?.hits ?? [];
+      // readSearchHits, never `?? []`: a 204 or a non-JSON 2xx resolves to
+      // undefined, and reporting that as zero hits is the silent-empty trap
+      // its header describes. Shared with ops.ts so both surfaces refuse the
+      // same unreadable answer.
+      // describeNamespace so the default namespace is named rather than
+      // rendering as a trailing slash with nothing after it.
+      return readSearchHits(res, `"${indexName}" / ${describeNamespace(namespace)}`);
     } catch (error: any) {
       if (error?.status === 400 && resolved.verdict.kind === 'unknown') {
         const err: any = new Error(explainRecordsApiFailure(resolved.verdict, indexName, 'search', error?.message ?? 'no detail'));
@@ -178,6 +185,19 @@ async function searchOne(
       throw error;
     }
   });
+}
+
+/** What one target of a cascading search did, as data. */
+export interface CascadingTargetReport {
+  index: string;
+  namespace: string;
+  /** False only for an upstream failure; a rules denial refuses the whole call. */
+  searched: boolean;
+  /** Hits Pinecone returned. Meaningful only when `searched`. */
+  hits: number;
+  /** How many survived dedup — what this target actually put into the ranking. */
+  kept: number;
+  error?: string;
 }
 
 export interface CascadingSearchResult {
@@ -195,6 +215,26 @@ export interface CascadingSearchResult {
    */
   partial: boolean;
   failures: string[];
+  /**
+   * Per-target contribution.
+   *
+   * `indexesSearched` alone says how many targets ANSWERED, not how many
+   * contributed, and conflating those is the reported bug: a ranking reported
+   * 2 of 2 searched while one namespace had put nothing into it, so the result
+   * read as covering both. A client checking `partial` would still have seen
+   * false. This array is what makes the shortfall machine-readable.
+   */
+  targets: CascadingTargetReport[];
+  /**
+   * Targets that were searched successfully and contributed nothing, as
+   * `index/namespace` labels. Empty, never absent, so a client can rely on
+   * reading it. A successful empty search is a real answer — this separates it
+   * from a failure without hiding it.
+   */
+  emptyTargets: string[];
+  /** Set when rerank.topN exceeded the candidates that reached the reranker, which silently does nothing. */
+  topNNote?: string;
+  freshness: string;
 }
 
 export async function performCascadingSearch(
@@ -202,33 +242,51 @@ export async function performCascadingSearch(
   args: z.infer<typeof cascadingSearchSchema>,
 ): Promise<CascadingSearchResult> {
   assertTargetsAllowed(ctx.rules, args.indexes.map(i => ({ index: i.name, namespace: i.namespace })));
+  // Names the index that would not resolve — Promise.all could not. See resolveIndexes.
   await resolveIndexes(ctx.client, ctx.apiKey, args.indexes.map(i => i.name));
 
   const settled = await Promise.allSettled(
     args.indexes.map(t => searchOne(ctx, t.name, t.namespace, args.query, undefined)),
   );
 
-  const failures: string[] = [];
   // Keyed on the WHOLE record identity, as in ops.ts: `_id` alone loses data,
   // because ids are unique only within a namespace, so the same id in two
   // namespaces is two different records. NUL is a safe separator — Pinecone's
   // spec forbids it in a namespace name.
   const byIdentity = new Map<string, Record<string, unknown>>();
-  settled.forEach((outcome, i) => {
-    const t = args.indexes[i];
+  const keptByTarget = new Map<string, number>();
+  const targets: CascadingTargetReport[] = args.indexes.map((t, i) => {
+    const outcome = settled[i];
     if (outcome.status !== 'fulfilled') {
-      failures.push(`${t.name} / ${t.namespace}: ${outcome.reason?.message ?? outcome.reason}`);
-      return;
+      return {
+        index: t.name,
+        namespace: t.namespace,
+        searched: false,
+        hits: 0,
+        kept: 0,
+        error: outcome.reason?.message ?? String(outcome.reason),
+      };
     }
+    const target = `${t.name}\u0000${t.namespace}`;
     for (const hit of outcome.value) {
-      const key = `${t.name}\u0000${t.namespace}\u0000${hit._id}`;
+      const key = `${target}\u0000${hit._id}`;
       if (byIdentity.has(key)) continue;
       // _index/_namespace ride along so a fused ranking can be attributed.
       byIdentity.set(key, { _id: hit._id, _index: t.name, _namespace: t.namespace, ...hit.fields });
+      keptByTarget.set(target, (keptByTarget.get(target) ?? 0) + 1);
     }
+    return {
+      index: t.name,
+      namespace: t.namespace,
+      searched: true,
+      hits: outcome.value.length,
+      kept: keptByTarget.get(target) ?? 0,
+    };
   });
 
-  if (!byIdentity.size && failures.length) {
+  const failures = targets.filter(t => !t.searched).map(t => `${t.index} / ${t.namespace}: ${t.error}`);
+
+  if (!byIdentity.size && failures.length === args.indexes.length) {
     const err: any = new Error(`None of the requested targets could be searched: ${failures.join('; ')}`);
     err.status = 502;
     throw err;
@@ -246,16 +304,28 @@ export async function performCascadingSearch(
       })
     : { data: [] };
 
+  const topN = args.rerank.topN;
+  const topNNote =
+    topN !== undefined && topN > documents.length
+      ? `rerank.topN is ${topN} but only ${documents.length} candidate record(s) reached the reranker, so at most ${documents.length} can be returned. ` +
+        `query.topK (${args.query.topK}) applies per target and is what caps the pool; raising topN alone does nothing.`
+      : undefined;
+
   return {
     // A count of what was actually searched, not what was requested — the two
     // differ exactly when `partial` is true, and overstating it there
-    // contradicts the flag beside it.
+    // contradicts the flag beside it. It still does not claim every searched
+    // target CONTRIBUTED; `targets` and `emptyTargets` are for that.
     indexesSearched: args.indexes.length - failures.length,
     targetsRequested: args.indexes.length,
     uniqueRecords: documents.length,
     reranked,
     partial: failures.length > 0,
     failures,
+    targets,
+    emptyTargets: targets.filter(t => t.searched && t.kept === 0).map(t => `${t.index}/${t.namespace}`),
+    ...(topNNote ? { topNNote } : {}),
+    freshness: FRESHNESS_NOTE,
   };
 }
 
@@ -288,6 +358,44 @@ export interface CreateIndexResult {
   index: PineconeIndexSummary;
   /** Pinecone builds asynchronously; a false here is normal, not a failure. */
   ready: boolean;
+  /**
+   * How the existing index differs from what was requested, when it does.
+   *
+   * Reported only on the `created: false` path, and it is the whole reason
+   * that path is not simply a success: the embedding model and the embedded
+   * field CANNOT be changed after creation, so reusing an index that differs
+   * in either silently hands back something other than what was asked for —
+   * and the next upsert then fails for a missing field, or succeeds with a
+   * model the caller did not choose. Empty when the existing index matches.
+   */
+  configDrift: string[];
+}
+
+/**
+ * The machine-readable half of ops.ts's describeIndexConfigDrift — same two
+ * comparisons, stated as data rather than prose. Kept beside the route so the
+ * REST response can carry the finding without the MCP wording, but the rule
+ * that decides it (model and field are fixed at creation) is the same one.
+ */
+function indexConfigDrift(
+  existing: PineconeIndexSummary,
+  args: z.infer<typeof createIndexForModelSchema>,
+): string[] {
+  const model = existing.embed?.model;
+  const field = existing.embed?.field_map?.text;
+  const drift: string[] = [];
+  if (model !== undefined && model !== args.embed.model) {
+    drift.push(`embedding model: requested "${args.embed.model}", existing "${model}" (cannot be changed after creation)`);
+  }
+  if (field !== undefined && field !== args.embed.fieldMap.text) {
+    drift.push(
+      `embedded field: requested "${args.embed.fieldMap.text}", existing "${field}" — upsert-records will require "${field}" on every record`,
+    );
+  }
+  if (model === undefined && field === undefined) {
+    drift.push('the existing index has no integrated-embedding configuration, so it is not the kind of index this endpoint creates');
+  }
+  return drift;
 }
 
 export async function performCreateIndexForModel(
@@ -299,11 +407,18 @@ export async function performCreateIndexForModel(
   assertIndexAllowed(ctx.rules, args.name, { intent: 'create' });
 
   const existing = (await ctx.client.listIndexes()).find(i => i.name === args.name);
-  if (existing) return { created: false, index: existing, ready: existing?.status?.ready === true };
+  if (existing) {
+    return {
+      created: false,
+      index: existing,
+      ready: existing?.status?.ready === true,
+      configDrift: indexConfigDrift(existing, args),
+    };
+  }
 
   const created = await ctx.client.createIndexForModel(args);
   primeIndexCache(ctx.apiKey, args.name, created);
-  return { created: true, index: created, ready: created?.status?.ready === true };
+  return { created: true, index: created, ready: created?.status?.ready === true, configDrift: [] };
 }
 
 export interface UpsertResult {

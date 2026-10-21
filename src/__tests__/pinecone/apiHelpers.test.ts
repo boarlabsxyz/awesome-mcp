@@ -9,6 +9,7 @@ import {
   dataBaseUrl,
   getPineconeClient,
   mapPineconeError,
+  readSearchHits,
   withPineconeClient,
 } from '../../pinecone/apiHelpers.js';
 
@@ -334,5 +335,52 @@ describe('withPineconeClient', () => {
         }),
       /rate-limited/,
     );
+  });
+});
+
+describe('readSearchHits', () => {
+  it('returns the hits when Pinecone answered the question', async () => {
+    const hits = [{ _id: 'a' }, { _id: 'b' }];
+    assert.deepEqual(readSearchHits({ result: { hits } } as any, 'x'), hits);
+  });
+
+  it('accepts an EMPTY hits array as a real answer of zero matches', async () => {
+    // `hits: []` is positive evidence; it is the one shape that must not throw.
+    assert.deepEqual(readSearchHits({ result: { hits: [] } } as any, 'x'), []);
+  });
+
+  it('refuses an undefined response rather than calling it zero hits', async () => {
+    // jsonApiRequest resolves to undefined for a 204 and for any non-JSON
+    // 2xx. `res?.result?.hits ?? []` turned both into "nothing matched",
+    // which is how a cascading-search target was counted as searched while
+    // contributing nothing.
+    assert.throws(
+      () => readSearchHits(undefined, '"b" / "ns-b"'),
+      (err: Error) => {
+        assert.ok(err instanceof UserError);
+        assert.match(err.message, /"b" \/ "ns-b"/);
+        assert.match(err.message, /no readable JSON body/);
+        assert.match(err.message, /reported as a FAILURE rather than as zero results/);
+        return true;
+      },
+    );
+  });
+
+  it('refuses a response with no result envelope, naming what arrived', async () => {
+    assert.throws(
+      () => readSearchHits({ usage: { readUnits: 1 } } as any, 'x'),
+      /no "result" key \(got: "usage"\)/,
+    );
+  });
+
+  it('refuses a result with no hits array, naming what arrived', async () => {
+    assert.throws(
+      () => readSearchHits({ result: { matches: [] } } as any, 'x'),
+      /"result" carried no "hits" array \(got: "matches"\)/,
+    );
+  });
+
+  it('refuses a non-array hits value', async () => {
+    assert.throws(() => readSearchHits({ result: { hits: 'none' } } as any, 'x'), /no "hits" array/);
   });
 });

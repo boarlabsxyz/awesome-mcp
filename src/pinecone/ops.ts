@@ -22,11 +22,12 @@ import {
   filterIndexRows,
   filterNamespaceStats,
 } from './accessRules.js';
-import type {
-  PineconeClient,
-  PineconeIndexSummary,
-  PineconeSearchHit,
-  PineconeToolLog,
+import {
+  type PineconeClient,
+  type PineconeIndexSummary,
+  type PineconeSearchHit,
+  type PineconeToolLog,
+  readSearchHits,
 } from './apiHelpers.js';
 import { searchPineconeDocs } from './docsProxy.js';
 import { primeIndexCache, resolveIndexes, withResolvedIndex } from './indexCatalog.js';
@@ -193,14 +194,68 @@ export async function opDescribeIndexStats(
 // Search
 // ---------------------------------------------------------------------------
 
+/**
+ * Render a relevance score so that the RANKING stays visible.
+ *
+ * `toFixed(4)` alone is wrong for this data, not merely terse. Pinecone's
+ * reranker returns scores for lower-ranked hits down in the 1e-5 range, where
+ * four decimals renders every one of them as the identical `0.0000` — so a
+ * ranking of ten records read as "one scored hit and nine zeroes", hiding both
+ * the ordering and the fact that the tail was scored at all.
+ *
+ * Four decimals is kept for anything at or above 0.001, because that is what
+ * every ordinary score looks like and changing its rendering would churn the
+ * output for no gain. Below that the value switches to exponential with three
+ * significant digits, which is the only format that keeps 2.4e-5 and 1.9e-5
+ * distinguishable. Exact zero prints as `0` rather than `0.00e+0`: that one
+ * really is nothing, and dressing it up as a measurement would be worse.
+ */
+export function formatScore(score: number): string {
+  if (!Number.isFinite(score)) return String(score);
+  if (score === 0) return '0';
+  return Math.abs(score) >= 0.001 ? score.toFixed(4) : score.toExponential(2);
+}
+
 function formatHits(hits: PineconeSearchHit[]): string {
   if (!hits.length) return 'No matching records.';
   return hits
     .map((h, i) => {
-      const score = typeof h._score === 'number' ? ` (score ${h._score.toFixed(4)})` : '';
+      const score = typeof h._score === 'number' ? ` (score ${formatScore(h._score)})` : '';
       return `${i + 1}. ${h._id}${score}\n${json(h.fields ?? {})}`;
     })
     .join('\n\n');
+}
+
+/**
+ * Say so when `rerank.topN` asks for more records than the reranker was given.
+ *
+ * Reranking NARROWS a candidate pool; it cannot add to it. A `topN` above the
+ * candidate count is accepted by Pinecone and silently has no effect, so a
+ * caller who asked for 50 and got 7 has no way to tell "only 7 matched" from
+ * "topN was ignored" — and the fix (raise `topK`, which is what caps the pool)
+ * is in a different parameter than the one they set.
+ *
+ * Computed from the candidates that ACTUALLY reached the reranker rather than
+ * from topK alone, which is what makes it correct for the cascading case too:
+ * there the pool is up to topK per target, so `topN > topK` is not by itself
+ * unreachable.
+ */
+function topNReachNote(
+  topN: number | undefined,
+  topK: number,
+  targets: number,
+  candidates: number,
+): string | null {
+  if (topN === undefined || topN <= candidates) return null;
+  const ceiling =
+    targets > 1
+      ? `query.topK (${topK}) applies per target, so these ${targets} target(s) could retrieve at most ${topK * targets} candidate(s)`
+      : `query.topK (${topK}) is what caps the candidate pool`;
+  return (
+    `NOTE — rerank.topN is ${topN} but only ${candidates} candidate record(s) reached the reranker, so at most ${candidates} can come back. ` +
+    `Reranking narrows a pool of candidates; it never adds to it, and ${ceiling}. ` +
+    `If you wanted ${topN} results, raise query.topK — raising topN alone does nothing.`
+  );
 }
 
 /**
@@ -219,7 +274,9 @@ async function searchOne(
     assertRecordsApiUsable(resolved.verdict, indexName, 'search');
     try {
       const res = await client.searchRecords(resolved.host, namespace, query, rerank);
-      return res?.result?.hits ?? [];
+      // readSearchHits, never `?? []`: an answer that could not be read must
+      // not arrive here as "nothing matched". See its header.
+      return readSearchHits(res, `"${indexName}" / ${describeNamespace(namespace)}`);
     } catch (error: any) {
       if (error?.status === 400 && resolved.verdict.kind === 'unknown') {
         throw new UserError(
@@ -247,8 +304,13 @@ export async function opSearchRecords(
   const header = `${hits.length} hit(s) in "${args.name}" / ${describeNamespace(args.namespace)}${
     args.rerank ? `, reranked with ${args.rerank.model}` : ''
   }:`;
+  // Pinecone reranks server-side on this path, so the candidate pool it saw is
+  // capped by topK — a topN above that is accepted and quietly ignored.
+  const reach = args.rerank
+    ? topNReachNote(args.rerank.topN, args.query.topK, 1, Math.min(args.query.topK, hits.length))
+    : null;
   const body = hits.length ? `${header}\n\n${formatHits(hits)}` : `${header}\n\n${FRESHNESS_NOTE}`;
-  return withRulesNote(body, state);
+  return withRulesNote(reach ? `${body}\n\n${reach}` : body, state);
 }
 
 /** A hit plus the target it came from, which the dedup key and the output both need. */
@@ -256,6 +318,33 @@ interface SourcedHit {
   index: string;
   namespace: string;
   hit: PineconeSearchHit;
+}
+
+/**
+ * What one target of a cascading search did.
+ *
+ * Kept per target rather than only counted in aggregate, because "searched"
+ * and "contributed" are different facts and conflating them is the reported
+ * bug: a ranking said `from 2 of 2 target(s)` — which was true, both were
+ * searched — while one of them had contributed nothing, so the output read as
+ * complete coverage of both. `hits` and `kept` are what make that visible.
+ */
+interface TargetOutcome {
+  index: string;
+  namespace: string;
+  /** `"idx" / "ns"`, the label every message here uses for a target. */
+  label: string;
+  /** False only for an upstream failure; a rules denial never gets this far. */
+  searched: boolean;
+  /** Hits Pinecone returned. 0 is a real answer here, unlike a failed search. */
+  hits: number;
+  /** How many survived dedup, i.e. what this target actually put into the ranking. */
+  kept: number;
+  error?: string;
+}
+
+function targetLabel(index: string, namespace: string): string {
+  return `"${index}" / ${describeNamespace(namespace)}`;
 }
 
 /**
@@ -273,15 +362,71 @@ interface SourcedHit {
  * `_index` and `_namespace` ride along in each document so the reranked
  * output can attribute every row to its source. Like `_id`, they do not
  * affect scoring — ranking reads only the caller's rankFields.
+ *
+ * Returns the per-target kept counts alongside the documents: without them the
+ * output can say how many records went into the ranking but not where from,
+ * which is the question a short result actually raises.
  */
-function dedupeAcrossTargets(found: readonly SourcedHit[]): Array<Record<string, unknown>> {
+function dedupeAcrossTargets(found: readonly SourcedHit[]): {
+  documents: Array<Record<string, unknown>>;
+  keptByTarget: Map<string, number>;
+} {
   const byIdentity = new Map<string, Record<string, unknown>>();
+  const keptByTarget = new Map<string, number>();
   for (const { index, namespace, hit } of found) {
-    const key = `${index}\u0000${namespace}\u0000${hit._id}`;
+    const target = `${index}\u0000${namespace}`;
+    const key = `${target}\u0000${hit._id}`;
     if (byIdentity.has(key)) continue;
     byIdentity.set(key, { _id: hit._id, _index: index, _namespace: namespace, ...hit.fields });
+    keptByTarget.set(target, (keptByTarget.get(target) ?? 0) + 1);
   }
-  return [...byIdentity.values()];
+  return { documents: [...byIdentity.values()], keptByTarget };
+}
+
+/**
+ * One line per target: what it was asked, and what it gave.
+ *
+ * A failed target is marked `NOT SEARCHED` and its reason is NOT repeated
+ * here: the PARTIAL RESULT banner above carries the full text, and these
+ * messages run to several sentences — printing each one twice buries the one
+ * thing this block exists to show, which is the contribution column.
+ */
+function formatContributions(outcomes: readonly TargetOutcome[]): string {
+  const rows = outcomes.map(o => {
+    if (!o.searched) return `  - ${o.label}: NOT SEARCHED — see the PARTIAL RESULT note above`;
+    const deduped = o.hits !== o.kept ? ` (${o.hits} hit(s), ${o.hits - o.kept} duplicate(s) collapsed)` : '';
+    const nothing = o.kept === 0 ? ' — searched, nothing matched' : '';
+    return `  - ${o.label}: ${o.kept} record(s)${deduped}${nothing}`;
+  });
+  return `Per-target contribution:\n${rows.join('\n')}`;
+}
+
+/**
+ * Say so when a target was searched successfully and contributed nothing.
+ *
+ * This is the half of the reported bug that is not a transport failure. A
+ * sub-search that genuinely returns zero hits is a legitimate answer and is
+ * counted as searched — but a fused ranking built from it looks identical to
+ * one built from every target, and the per-target counts alone are easy to
+ * read past. Naming the empty targets, and the reasons a namespace that holds
+ * records can still return none, is what turns "the result looks short" into a
+ * question the caller can answer in one more call.
+ *
+ * Emitted only when something else DID contribute: when every target came back
+ * empty the "no matching records" path already says so, and repeating it per
+ * target would be noise.
+ */
+function emptyTargetNote(outcomes: readonly TargetOutcome[]): string | null {
+  const searched = outcomes.filter(o => o.searched);
+  const empty = searched.filter(o => o.kept === 0);
+  if (!empty.length || empty.length === searched.length) return null;
+  return (
+    `NOTE — ${empty.length} of the ${searched.length} target(s) that were searched returned NO records: ` +
+    `${empty.map(o => o.label).join(', ')}. Pinecone answered those searches, so they count as searched rather than failed — ` +
+    `an unreadable or failed sub-search is reported separately, as NOT SEARCHED. ` +
+    `If you expect records there, run search-records against that one target to confirm: a namespace that holds records and still returns none here usually means ` +
+    `the query text matched nothing, a metadata filter excluded everything, or the records are still being embedded (which takes a few seconds after an upsert).`
+  );
 }
 
 /**
@@ -296,6 +441,13 @@ function dedupeAcrossTargets(found: readonly SourcedHit[]): Array<Record<string,
  * because a network failure is not a policy decision and refusing everything
  * for one flaky index would be worse than saying which one was missing. The
  * result still says so in its first line, so it is never read as complete.
+ *
+ * The third case is the one this was rebuilt for: a target that was searched
+ * successfully and returned nothing. That is neither a failure nor a
+ * contribution, and reporting only how many targets were SEARCHED let a
+ * ranking missing an entire namespace read as covering it. Every target's own
+ * contribution is now in the output, and a zero-contribution target is called
+ * out by name.
  */
 export async function opCascadingSearch(
   client: PineconeClient,
@@ -310,7 +462,8 @@ export async function opCascadingSearch(
   );
   log.info(`Cascading search across ${args.indexes.length} Pinecone index(es)`);
 
-  // Resolve first so a bad index name fails before any search runs.
+  // Resolve first so a bad index name fails before any search runs — and
+  // resolveIndexes names which name was bad, which Promise.all could not.
   await resolveIndexes(client, apiKey, args.indexes.map(i => i.name));
 
   const settled = await Promise.allSettled(
@@ -319,33 +472,53 @@ export async function opCascadingSearch(
     ),
   );
 
-  const failures: string[] = [];
   // Each hit is kept WITH the target it came from. Losing that is what made
   // the first version drop records (see dedupeAcrossTargets) and left the
   // output unable to say which source a row was from.
   const found: SourcedHit[] = [];
-  settled.forEach((outcome, i) => {
-    const t = args.indexes[i];
+  const outcomes: TargetOutcome[] = args.indexes.map((t, i) => {
+    const outcome = settled[i];
+    const base = { index: t.name, namespace: t.namespace, label: targetLabel(t.name, t.namespace) };
     if (outcome.status === 'fulfilled') {
       for (const hit of outcome.value) found.push({ index: t.name, namespace: t.namespace, hit });
-    } else {
-      failures.push(`"${t.name}" / ${describeNamespace(t.namespace)}: ${outcome.reason?.message ?? outcome.reason}`);
+      return { ...base, searched: true, hits: outcome.value.length, kept: 0 };
     }
+    return {
+      ...base,
+      searched: false,
+      hits: 0,
+      kept: 0,
+      error: outcome.reason?.message ?? String(outcome.reason),
+    };
   });
 
-  const searched = args.indexes.length - failures.length;
+  const failures = outcomes.filter(o => !o.searched);
+  const searched = outcomes.length - failures.length;
 
-  if (!found.length && failures.length) {
+  if (!found.length && failures.length === args.indexes.length) {
     throw new UserError(
-      `cascading-search reached none of the ${args.indexes.length} requested target(s):\n${bulleted(failures)}`,
+      `cascading-search reached none of the ${args.indexes.length} requested target(s):\n` +
+        bulleted(failures.map(f => `${f.label}: ${f.error}`)),
     );
   }
 
-  const documents = dedupeAcrossTargets(found);
+  const { documents, keptByTarget } = dedupeAcrossTargets(found);
+  for (const o of outcomes) {
+    o.kept = keptByTarget.get(`${o.index}\u0000${o.namespace}`) ?? 0;
+  }
+
+  const contributions = formatContributions(outcomes);
+  const warning = failures.length
+    ? `PARTIAL RESULT — ${failures.length} of ${args.indexes.length} target(s) could not be searched, ` +
+      `so this ranking is missing whatever they would have contributed:\n${bulleted(failures.map(f => `${f.label}: ${f.error}`))}\n\n`
+    : '';
 
   if (!documents.length) {
+    // Every target that answered answered with nothing. The per-target block
+    // still goes out, because "no matches in either namespace" and "no matches
+    // in one of them, the other unreachable" are different situations.
     return withRulesNote(
-      `No matching records across ${searched} of ${args.indexes.length} target(s).\n\n${FRESHNESS_NOTE}`,
+      `${warning}No matching records across ${searched} of ${args.indexes.length} target(s).\n\n${contributions}\n\n${FRESHNESS_NOTE}`,
       state,
     );
   }
@@ -358,19 +531,28 @@ export async function opCascadingSearch(
     rankFields: args.rerank.rankFields,
   });
 
-  const warning = failures.length
-    ? `PARTIAL RESULT — ${failures.length} of ${args.indexes.length} target(s) could not be searched, ` +
-      `so this ranking is missing whatever they would have contributed:\n${bulleted(failures)}\n\n`
-    : '';
-
   // Counts what was actually SEARCHED, not what was asked for: reporting
   // "from 2 targets" after one of them failed overstated the ranking's
   // coverage, and that number sits right beside the PARTIAL warning
-  // contradicting it.
+  // contradicting it. It still does not claim every searched target
+  // CONTRIBUTED — that is what the per-target block below is for.
   const header =
     `${documents.length} unique record(s) from ${searched} of ${args.indexes.length} target(s) ` +
     `(index + namespace pairs), reranked with ${args.rerank.model}:`;
-  return withRulesNote(`${warning}${header}\n\n${formatRerankedHits(reranked)}`, state);
+
+  const notes = [
+    contributions,
+    emptyTargetNote(outcomes),
+    // `searched`, not the requested count: with a target unreachable, only the
+    // targets that answered contributed to the pool, so the ceiling this note
+    // quotes would otherwise overstate what was reachable.
+    topNReachNote(args.rerank.topN, args.query.topK, searched, documents.length),
+  ].filter(Boolean);
+
+  return withRulesNote(
+    `${warning}${header}\n\n${notes.join('\n\n')}\n\n${formatRerankedHits(reranked)}`,
+    state,
+  );
 }
 
 /**
@@ -390,7 +572,10 @@ function formatRerankedHits(reranked: any): string {
     .map((row: any, i: number) => {
       const doc = (row?.document ?? {}) as Record<string, unknown>;
       const { _id, _index, _namespace, ...fields } = doc;
-      const score = typeof row?.score === 'number' ? ` (score ${row.score.toFixed(4)})` : '';
+      // formatScore, not toFixed(4): the reranked tail is exactly where the
+      // scores are small enough for four decimals to flatten every row to
+      // 0.0000. See its header.
+      const score = typeof row?.score === 'number' ? ` (score ${formatScore(row.score)})` : '';
       const source =
         _index === undefined
           ? ''
@@ -430,6 +615,63 @@ export async function opSearchDocs(
 // Writes
 // ---------------------------------------------------------------------------
 
+/**
+ * Compare a create request against the index that already bears that name.
+ *
+ * `create-index-for-model` is idempotent by name, which is deliberate — but
+ * "returned unchanged" was reported as an unqualified success even when the
+ * existing index embeds a DIFFERENT model, or a different field. Those are the
+ * two things that cannot be changed after creation: the field name is fixed at
+ * creation and every later upsert must carry it, and the model decides what
+ * the vectors mean. So a caller who asked for `llama-text-embed-v2` embedding
+ * `body`, and silently got an index embedding `chunk_text` with
+ * `multilingual-e5-large`, goes on to upsert records that are rejected for a
+ * missing field — or, worse, accepted and embedded by a model they did not
+ * choose, with the mismatch discoverable only by reading the payload.
+ *
+ * Reported rather than refused: the index is real, usable, and reusing it is
+ * very often what was meant. What is not acceptable is not SAYING so. The
+ * payload is already in the response, but a difference inside 40 lines of JSON
+ * is not something a reader is going to notice unprompted.
+ */
+function describeIndexConfigDrift(
+  existing: PineconeIndexSummary,
+  args: z.infer<typeof createIndexForModelSchema>,
+): string | null {
+  const existingModel = existing.embed?.model;
+  const existingField = existing.embed?.field_map?.text;
+  const differences: string[] = [];
+
+  if (existingModel !== undefined && existingModel !== args.embed.model) {
+    differences.push(
+      `embedding MODEL: you asked for "${args.embed.model}", the existing index uses "${existingModel}". ` +
+        `A model cannot be changed after creation, and vectors from two models are not comparable.`,
+    );
+  }
+  if (existingField !== undefined && existingField !== args.embed.fieldMap.text) {
+    differences.push(
+      `embedded FIELD: you asked for "${args.embed.fieldMap.text}", the existing index embeds "${existingField}". ` +
+        `upsert-records will require "${existingField}" on every record and refuse the ones carrying "${args.embed.fieldMap.text}".`,
+    );
+  }
+  // Absent rather than different: an index with no `embed` block at all is not
+  // an integrated-embedding index, which is a bigger mismatch than a changed
+  // field and is the one case where reusing it cannot work.
+  if (existingModel === undefined && existingField === undefined) {
+    differences.push(
+      `the existing index has NO integrated-embedding configuration at all, so it is not the kind of index this tool creates. ` +
+        `Run describe-index "${existing.name}" to see what it is; search-records and upsert-records may not work against it.`,
+    );
+  }
+
+  if (!differences.length) return null;
+  return (
+    `WARNING — the existing index does NOT match what you asked for, and these cannot be changed after creation:\n` +
+    `${bulleted(differences)}\n` +
+    `Nothing was created or modified. To get the configuration you asked for, use a different index name.`
+  );
+}
+
 /** Body of `create-index-for-model`. */
 export async function opCreateIndexForModel(
   client: PineconeClient,
@@ -449,8 +691,9 @@ export async function opCreateIndexForModel(
   // call and turns the error into an answer.
   const existing = (await client.listIndexes()).find(i => i.name === args.name);
   if (existing) {
+    const drift = describeIndexConfigDrift(existing, args);
     return withRulesNote(
-      `Index not created — an index named "${args.name}" already exists:\n\n${json(existing)}`,
+      `Index not created — an index named "${args.name}" already exists.${drift ? `\n\n${drift}` : ''}\n\n${json(existing)}`,
       state,
     );
   }
