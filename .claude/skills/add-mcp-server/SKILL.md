@@ -234,7 +234,35 @@ Service notes live in a nested `CLAUDE.md` next to the code, which Claude Code l
 
 - Create `src/<slug>/CLAUDE.md` with a `# <Service> — notes for Claude` heading, a `## Rules and limitations` section, and a `## Source Files` table pointing at `src/<slug>/server.ts` (and `apiHelpers.ts` for third-party).
 - If the source repo flagged tools as unimplemented or had known limitations, add them as terse bullets: the rule plus a one-clause reason, no investigation history.
-- Add one line for the new file to the "Per-service notes" index in the root `CLAUDE.md`, and add the provider to its one-line overview.
+- Add one line for the new file to the "Per-service notes" index in the root `CLAUDE.md`, and add the provider to its one-line overview. Those two lines are the **only** root edits a scaffold makes.
+
+Skeleton:
+
+```markdown
+# <Service> — notes for Claude
+
+## Rules and limitations
+
+- **<the rule, as a short claim>** — <what to do or not do, and the one-clause reason>.
+
+## Source Files
+
+| File | Contains |
+|------|----------|
+| `src/<slug>/server.ts` | <Service> tool definitions |
+| `src/<slug>/apiHelpers.ts` | `<Service>Client` — <auth style> client for the <Service> API |
+```
+
+**Which file a note belongs in:**
+
+| The note is about… | Goes in |
+|---|---|
+| this provider's API, auth, tools, or REST routes | `src/<slug>/CLAUDE.md` |
+| a dashboard/connect-flow or `webServer.ts`-wide handler behaviour | `src/website/CLAUDE.md` |
+| a shared helper used by several providers (`src/util/*`) | the root `CLAUDE.md` Source Files table, plus a cross-cutting rule only if it applies to every service |
+| how the bug was found, ticket numbers, dates | nowhere in `CLAUDE.md` — the commit message or PR |
+
+Hidden-by-default flags (`<SLUG_UPPER>_ENABLED`), required env vars, scopes that need a reconnect, and anything marked "NOT exercised live" belong in the provider file, not the root.
 
 ### 8. Verify
 
@@ -261,7 +289,7 @@ To get a verdict anyway, run each file separately with a hard timeout and treat 
 ### 9. Report and offer the next step
 
 End with a tight summary:
-- Files created and patched (one bullet each, with path).
+- Files created and patched (one bullet each, with path) — including `src/<slug>/CLAUDE.md` and the root `CLAUDE.md` index line.
 - Number of tools generated, split into fully translated vs TODO-stubbed.
 - Source repo + commit sha if used.
 - Anything the user still has to do manually. The common list:
