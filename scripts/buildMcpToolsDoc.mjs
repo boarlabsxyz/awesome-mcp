@@ -45,6 +45,7 @@ const SERVICES = [
   ['src/browserbase/server.ts',           'Browserbase',           'browserbase'],
   ['src/github/server.ts',                'GitHub',                'github'],
   ['src/pinecone/server.ts',              'Pinecone',              'pinecone'],
+  ['src/supabase/server.ts',              'Supabase',              'supabase'],
 ];
 
 // ---------------------------------------------------------------------------
@@ -114,6 +115,7 @@ const REGISTRATION_OPENERS = [
   'addPersonScopedListTool',
   'addNamedCreateTool',
   'addNamedUpdateTool',
+  'supabaseTool',
 ];
 
 function findAddToolBlocks(src) {

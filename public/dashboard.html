@@ -1683,7 +1683,8 @@
       const pasteCapable =
         provider === 'slack-bot' || provider === 'outline' ||
         provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot' ||
-        provider === 'redmine' || provider === 'browserbase' || provider === 'github' || provider === 'pinecone';
+        provider === 'redmine' || provider === 'browserbase' || provider === 'github' || provider === 'pinecone' ||
+        provider === 'supabase';
       return pasteCapable && !mcp.oauthAuthorizationUrl;
     }
 
@@ -1763,7 +1764,8 @@
       const isTokenProvider =
         (provider === 'slack-bot' || provider === 'outline' || provider === 'peopleforce'
           || provider === 'peopleforce-v4' || provider === 'hubspot' || provider === 'redmine'
-          || provider === 'browserbase' || provider === 'github' || provider === 'pinecone')
+          || provider === 'browserbase' || provider === 'github' || provider === 'pinecone'
+          || provider === 'supabase')
         && !selectedMcpType.oauthAuthorizationUrl;
 
       // For OAuth providers, skip naming step — name is auto-generated on the backend
@@ -1921,6 +1923,21 @@
         nameSection.style.display = 'none';
         nameInput.value = '';
         tokenInput.focus();
+      } else if (provider === 'supabase') {
+        tokenLabel.textContent = 'Personal Access Token';
+        tokenInput.placeholder = 'sbp_\u2026';
+        tokenHint.innerHTML =
+          'In <span translate="no">Supabase</span>: <strong>Account \u2192 Access Tokens</strong> ' +
+          '(<a href="https://supabase.com/dashboard/account/tokens" target="_blank" rel="noopener">supabase.com/dashboard/account/tokens</a>), ' +
+          'then generate a token and paste it here. This is your <strong>account</strong> token, not a project key such as ' +
+          '<code translate="no">anon</code> or <code translate="no">service_role</code>. It reaches every organization and project your account can, ' +
+          'and the tools can run SQL and apply migrations \u2014 Supabase\u2019s own confirmation prompt for destructive SQL does not run through this connector.';
+        // SaaS: one API host, so no URL field.
+        urlSection.style.display = 'none';
+        // No user-entered name — the backend names it after the organizations the token reaches.
+        nameSection.style.display = 'none';
+        nameInput.value = '';
+        tokenInput.focus();
       } else {
         tokenLabel.textContent = 'Bot Token';
         tokenInput.placeholder = 'xoxb-…';
@@ -1966,7 +1983,7 @@
       // we can display.
       const isOutline = provider === 'outline';
       const isRedmine = provider === 'redmine';
-      const autoName = isOutline || isRedmine || provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot' || provider === 'browserbase' || provider === 'github' || provider === 'pinecone';
+      const autoName = isOutline || isRedmine || provider === 'peopleforce' || provider === 'peopleforce-v4' || provider === 'hubspot' || provider === 'browserbase' || provider === 'github' || provider === 'pinecone' || provider === 'supabase';
       const name = autoName ? '' : document.getElementById('instanceNameInput').value.trim();
       if (!autoName && !name) { alert('Please enter a name for this instance'); return; }
       const token = document.getElementById('tokenInput').value.trim();
@@ -1980,6 +1997,7 @@
                   : provider === 'browserbase' ? 'Please enter your Browserbase API key'
                   : provider === 'github' ? 'Please enter your GitHub personal access token'
                   : provider === 'pinecone' ? 'Please enter your Pinecone API key'
+                  : provider === 'supabase' ? 'Please enter your Supabase personal access token'
                   : 'Please enter a bot token';
         alert(msg);
         return;

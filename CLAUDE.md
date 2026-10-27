@@ -1,6 +1,6 @@
 # Google Docs MCP Server
 
-Multi-service FastMCP hosting platform: one MCP server per provider under `src/<provider>/server.ts` — Google Docs, Sheets, Calendar, Drive, Gmail and Slides, ClickUp, Slack (bot + user), Outline, PeopleForce (v2/v3 and v4), HubSpot, Redmine, Browserbase, GitHub and Pinecone — plus a curl-able REST data plane under `/api/v1/*`.
+Multi-service FastMCP hosting platform: one MCP server per provider under `src/<provider>/server.ts` — Google Docs, Sheets, Calendar, Drive, Gmail and Slides, ClickUp, Slack (bot + user), Outline, PeopleForce (v2/v3 and v4), HubSpot, Redmine, Browserbase, GitHub, Pinecone and Supabase — plus a curl-able REST data plane under `/api/v1/*`.
 
 ## Tool Inventory
 
@@ -29,6 +29,7 @@ Service-specific rules and limitations live next to the code, in nested `CLAUDE.
 - `src/redmine/CLAUDE.md` — Redmine
 - `src/slack/CLAUDE.md` — Slack shared code and the `slack-bot` server
 - `src/slack-user/CLAUDE.md` — Slack user server and its access rules
+- `src/supabase/CLAUDE.md` — Supabase (hosted-MCP proxy, modern protocol)
 - `src/website/CLAUDE.md` — dashboard sign-up/login, REST-plane handlers, body parsing
 
 **Where new notes go:** a rule about one provider goes in that provider's `CLAUDE.md`; this file holds only what applies across services. Write the rule plus the one-clause reason it exists. The investigation story belongs in the commit message or PR; detailed reasoning belongs in a code comment next to the guard it protects.
@@ -56,7 +57,7 @@ Per-provider files are listed in each provider's `CLAUDE.md`.
 |------|----------|
 | `src/types.ts` | Zod schemas, hex color validation, style parameter definitions |
 | `src/restCatalog.ts` | Single source of truth for the REST plane (drives `docs/REST_ENDPOINTS.md` and the OpenAPI specs) |
-| `src/util/mcpProxyClient.ts` | Streamable-HTTP MCP transport shared by Browserbase and Pinecone: per-call transport, SSE frames; a replica-affine session is never cached |
+| `src/util/mcpProxyClient.ts` | Streamable-HTTP MCP transport shared by Browserbase, Pinecone and Supabase: per-call transport, SSE frames, the legacy `initialize` path and the stateless `protocol: 'modern'` path; a replica-affine session is never cached |
 | `src/util/baseUrlGuard.ts` | `isPrivateHost` + `checkBaseUrl` — SSRF guard for the self-hosted connectors (Outline, Redmine) |
 | `src/util/oauthTokenGrant.ts` | `postTokenGrant` — shared OAuth token-endpoint POST (HubSpot, Redmine) |
 | `src/website/webServer.ts` | Express app, proxy routes, registration/OAuth pages, REST routes |

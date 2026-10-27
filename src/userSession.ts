@@ -119,6 +119,23 @@ export interface UserSession {
   pineconeAccessToken?: string;
   /** Connection instance id, so per-call access rules can be re-read from the store. */
   pineconeInstanceId?: string;
+  /**
+   * Supabase credential: an OAuth access token (expires; refreshed at call
+   * time) or a pasted personal access token (does not expire). Both are sent
+   * as Bearer to Supabase's hosted MCP server. No base URL field: the Supabase
+   * platform is SaaS with one API host, and self-hosted Supabase has no
+   * Management API for these tools to reach.
+   */
+  supabaseAccessToken?: string;
+  /** Refresh token — OAuth connections only; a PAT has none. */
+  supabaseRefreshToken?: string;
+  /** Access-token expiry as ms-epoch; absent = non-expiring (a PAT). */
+  supabaseTokenExpiry?: number;
+  /** OAuth client credentials (from env) used to drive the refresh_token grant. */
+  supabaseOauthClientId?: string;
+  supabaseOauthClientSecret?: string;
+  /** Connection instance id, so a refresh can persist the new tokens back to the store. */
+  supabaseInstanceId?: string;
 }
 
 // Cache sessions to avoid recreating clients per request
@@ -759,6 +776,59 @@ export function createPineconeSession(
     pineconeAccessToken: accessToken,
     pineconeInstanceId: connection.instanceId,
     // Null placeholders for Google clients (Pinecone MCP won't use them)
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
+  };
+
+  mcpSessionCache.set(cacheKey, session);
+  return session;
+}
+
+/**
+ * Create a user session for Supabase connections.
+ *
+ * Two credential shapes land here and need no flag to tell apart: a pasted
+ * personal access token carries neither refresh token nor expiry (so the
+ * refresh path in apiHelpers no-ops), while an OAuth token carries both and is
+ * refreshed at call time — which is why the instance id rides along for the
+ * write-back. Same shape as createGitHubSession.
+ */
+export function createSupabaseSession(
+  user: UserRecord,
+  connection: McpConnection,
+): UserSession {
+  const providerTokens = connection.providerTokens as {
+    access_token?: string;
+    refresh_token?: string;
+    expiry_date?: number;
+  } | undefined;
+  const accessToken = providerTokens?.access_token;
+  if (!accessToken) {
+    throw new Error(`Supabase access token missing for connection ${connection.instanceId}. Please reconnect.`);
+  }
+
+  const cacheKey = `${user.apiKey}:${connection.instanceId}`;
+  const cached = cachedSessionFor(cacheKey, accessToken, s => s.supabaseAccessToken);
+  if (cached) return cached;
+
+  const session: UserSession = {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: connection.mcpSlug,
+    supabaseAccessToken: accessToken,
+    supabaseRefreshToken: providerTokens?.refresh_token,
+    supabaseTokenExpiry: providerTokens?.expiry_date,
+    // Present only on OAuth deployments (the same vars the catalog seed reads).
+    supabaseOauthClientId: process.env.SUPABASE_CLIENT_ID || undefined,
+    supabaseOauthClientSecret: process.env.SUPABASE_CLIENT_SECRET || undefined,
+    supabaseInstanceId: connection.instanceId,
+    // Null placeholders for Google clients (Supabase MCP won't use them)
     googleDocs: null as any,
     googleDrive: null as any,
     googleSheets: null as any,

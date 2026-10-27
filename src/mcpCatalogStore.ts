@@ -4,6 +4,7 @@ import { stripTrailingSlashes } from './util/url.js';
 import * as path from 'path';
 import { isDatabaseAvailable, getPool } from './db.js';
 import { GITHUB_AUTHORIZE_URL, GITHUB_TOKEN_URL, GITHUB_OAUTH_SCOPES } from './github/oauthCallback.js';
+import { SUPABASE_AUTHORIZE_URL, SUPABASE_TOKEN_URL } from './supabase/oauthCallback.js';
 
 const DATA_DIR = process.env.DATA_DIR || './data';
 const CATALOG_FILE = path.join(DATA_DIR, 'mcp-catalog.json');
@@ -371,6 +372,59 @@ async function seedGitHubCatalog(normalizeUrl: NormalizeUrl): Promise<void> {
     oauthScopes: githubOauthEnabled ? GITHUB_OAUTH_SCOPES : [],
     isLocal: !process.env.GITHUB_MCP_URL,
     isActive: true,
+  });
+}
+
+/**
+ * Seed the Supabase catalog row.
+ *
+ * Env-gated dual mode, like GitHub: the Supabase platform is one host, so one
+ * OAuth app serves every user and no base URL is involved.
+ *
+ *   OAuth flow    — SUPABASE_CLIENT_ID + SUPABASE_CLIENT_SECRET set, from an
+ *                   OAuth app an organization owner registers in the Supabase
+ *                   dashboard (Organization settings → OAuth Apps) with the
+ *                   redirect URL <BASE_URL>/connect/supabase/callback. Dashboard
+ *                   shows "Connect with Supabase". The app's scopes are chosen
+ *                   when it is registered, not per request, so `oauthScopes`
+ *                   stays empty and the generic /connect redirect sends no
+ *                   `scope` (the ClickUp shape).
+ *   Paste-token   — otherwise. Each user pastes a personal access token from
+ *                   supabase.com/dashboard/account/tokens, validated via
+ *                   GET /v1/organizations.
+ *
+ * The client id/secret must be set on BOTH the web service (this seed and the
+ * /connect exchange) and the supabase MCP service (call-time refresh), or an
+ * OAuth connection works until its first access token expires and then 401s.
+ *
+ * Hidden by default (`SUPABASE_ENABLED`), exactly as browserbase, pinecone and
+ * peopleforce-v4: both catalog backends filter on is_active, so an inactive row
+ * drops out of /api/v1/catalogs and therefore out of the dashboard's Add Tool
+ * list and the public integrations page. The comparison is strict, so
+ * SUPABASE_ENABLED=yes leaves it hidden; the seed upserts on every boot, so
+ * flipping it is a restart, not a deploy. Seeded rather than skipped so the
+ * flag can go back off without orphaning a connection.
+ */
+async function seedSupabaseCatalog(normalizeUrl: NormalizeUrl): Promise<void> {
+  const supabaseClientId     = process.env.SUPABASE_CLIENT_ID || null;
+  const supabaseClientSecret = process.env.SUPABASE_CLIENT_SECRET || null;
+  const supabaseOauthEnabled = !!(supabaseClientId && supabaseClientSecret);
+
+  await createMcpCatalog({
+    slug: 'supabase',
+    name: 'Supabase MCP',
+    description: 'Query and manage your Supabase projects — run SQL, apply migrations, read logs and advisors, deploy edge functions and manage branches',
+    iconUrl: 'https://supabase.com/favicon/favicon.ico',
+    mcpUrl: normalizeUrl(process.env.SUPABASE_MCP_URL, '/supabase'),
+    provider: 'supabase',
+    scopes: [],
+    googleClientId: supabaseClientId,
+    googleClientSecret: supabaseClientSecret,
+    oauthAuthorizationUrl: supabaseOauthEnabled ? SUPABASE_AUTHORIZE_URL : '',
+    oauthTokenUrl:         supabaseOauthEnabled ? SUPABASE_TOKEN_URL     : '',
+    oauthScopes: [],
+    isLocal: !process.env.SUPABASE_MCP_URL,
+    isActive: process.env.SUPABASE_ENABLED === 'true',
   });
 }
 
@@ -849,6 +903,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
 
   await seedRedmineCatalog(normalizeUrl);
   await seedGitHubCatalog(normalizeUrl);
+  await seedSupabaseCatalog(normalizeUrl);
 
   console.error('Default MCP catalog entries seeded.');
 }

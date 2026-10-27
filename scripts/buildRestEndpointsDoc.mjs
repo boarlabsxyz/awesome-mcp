@@ -68,9 +68,10 @@ const SERVICE_TITLE = {
   browserbase: 'Browserbase',
   github: 'GitHub',
   pinecone: 'Pinecone',
+  supabase: 'Supabase',
 };
 
-const SERVICE_ORDER = ['docs', 'sheets', 'calendar', 'drive', 'gmail', 'slides', 'clickup', 'slack', 'outline', 'peopleforce', 'hubspot', 'redmine', 'browserbase', 'github', 'pinecone'];
+const SERVICE_ORDER = ['docs', 'sheets', 'calendar', 'drive', 'gmail', 'slides', 'clickup', 'slack', 'outline', 'peopleforce', 'hubspot', 'redmine', 'browserbase', 'github', 'pinecone', 'supabase'];
 
 const lines = [];
 lines.push('# REST Data Plane — Endpoint Catalog');
