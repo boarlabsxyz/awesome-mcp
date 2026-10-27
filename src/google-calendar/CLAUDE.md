@@ -1,11 +1,26 @@
 # Google Calendar — notes for Claude
 
-## Known Limitations
+## Rules and limitations
 
-- **Answering a Google Calendar invitation means rewriting the whole guest list, which is why it rides `performUpdateEvent`:** Google has **no "set my response" endpoint** — an RSVP is an `events.update` whose `attendees` array carries your own entry with a new `responseStatus`. And a body with a *partial* `attendees` array **REPLACES** the list, uninviting everyone absent from it, so this could only be built on the existing read-modify-write: `myResponseStatus` maps the array `events.get` just returned and swaps one row, leaving every other guest *and their answers* untouched (there is a test pinning all three rows plus the `recurrence`). **An RSVP on its own is sent as an `events.patch` carrying only that array, not as the full-resource update** — because the common case is a meeting *somebody else* organised, where this account is merely an attendee and `guestsCanModify` is false, and handing Google back the organiser's `summary`/`start`/`recurrence` may be refused as a 403 that surfaces as "make sure you have write access": the feature failing opaquely in exactly its main use case. A patch touching only the guest list asks for nothing an attendee is not entitled to change; a call that *also* edits other fields keeps the merge, since such a caller is editing the event anyway. **This split is reasoned, not measured** — there is no Calendar connection on hand to observe the 403, so the lower-risk shape was chosen rather than asserting Google's behaviour. **The caller's own row is found by Google's `self: true` flag, never by comparing emails** — the connected account may be invited through an alias or a group, so an email comparison finds nobody and silently changes nothing, or worse reports a colleague's answer as the user's. When there is **no** `self` row the call is **refused with nothing written** rather than adding the user to the guest list: that is inviting yourself to someone else's meeting, a different act from replying, and Google would accept it silently. It is a normal state, not a malfunction — an organizer frequently does not appear in `attendees` at all. Only **three** of Google's four `responseStatus` values are offered: `needsAction` is the *absence* of an answer, so writing it back would be an un-answer nobody asked for. The confirmation is **read off the event Google returned**, not echoed from the request, because `events.update` answers with the stored resource and a response Google declined to record would otherwise read as a successful reply. **`sendUpdates` still defaults to `none`**, which for an RSVP means *the organizer is never told* — the default is kept (it is what stops a curl emailing a whole calendar) but both the tool description and the response say so, since a silent reply is the one outcome a planner would not expect. On the read side, `listEvents` now renders **`My response:`** per row — including `needsAction (not answered yet)`, which is precisely the state a planner scans for, so rendering it blank would hide the actionable rows — and this is what removes the old `getEvent`-per-event just to learn whether a reply was owed; `getEvent` marks which attendee is **`— you`**. `projectEvent` gained `attendees[].self` and a hoisted `myResponseStatus`: that projection is the **published contract** of the ChatGPT-compat event routes, so keys may be **added** (clients ignore what they do not read) but never renamed or removed — the test that pins the attendee shape was updated, not deleted. Note the pre-existing **no-ETag caveat applies to an RSVP too**: a concurrent writer's change between the read and the write can still be overwritten.
+### REST writes
+- **Validate with `createEventSchema`, `updateEventSchema`, `deleteEventSchema`**; ops `performCreateEvent`/`performUpdateEvent`/`projectEvent` live here so webServer holds no second copy. Legacy `POST /api/v1/calendars/{id}/events` is unchanged (`openapiOperationId: createEvent`).
+- **`performUpdateEvent` pre-reads with `events.get`** — `events.update` replaces the resource, so omitted fields would be cleared.
+- **Update is a POST on the event path** (`updateCalendarEvent`; catalog is `GET | POST`), sharing a handler with the legacy PATCH.
+- **`deleteEvent` is destructive, exposed with sign-off** as `POST .../events/{eventId}/cancel`.
+- **`projectEvent` is a published contract** — keys may be added, never renamed or removed.
+
+### RSVP (`myResponseStatus`)
+- **No "set my response" endpoint; a partial `attendees` array replaces the list** — swap only the caller's row in the array `events.get` returned.
+- **RSVP alone is an `events.patch` of `attendees` only** — a full update may 403 for a non-organiser. Reasoned, not verified live. Combined with other edits it uses the merge.
+- **Find the caller by `self: true`, never by email** (aliases/groups). No `self` row → refuse, nothing written (adding it would self-invite).
+- **Offer three values** — not `needsAction` (an un-answer).
+- **Confirm from the event Google returned**, not the request.
+- **`sendUpdates` defaults to `none`** — the organiser isn't told; description and response say so.
+- `listEvents` renders `My response:` (incl. `needsAction (not answered yet)`); `getEvent` marks `— you`.
+- **No ETag** — a concurrent write between read and write can be overwritten.
 
 ## Source Files
 
 | File | Contains |
 |------|----------|
-| `src/google-calendar/server.ts` | Google Calendar tool definitions |
+| `src/google-calendar/server.ts` | Tool definitions; exported write schemas and ops |
