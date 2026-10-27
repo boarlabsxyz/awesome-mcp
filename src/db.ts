@@ -341,6 +341,106 @@ CREATE INDEX IF NOT EXISTS idx_image_blobs_expires_at
   ON image_blobs(expires_at) WHERE expires_at IS NOT NULL;
 `;
 
+// --- Org tenancy (admin-org policy enforcement layer) ---
+//
+// An org is the unit a corporate admin governs. Nothing above the individual
+// user existed before this: access rules were per-connection, owned and edited
+// by the one user who created the connection, so a company had no way to say
+// what its people may connect to and no record of what was allowed.
+//
+// Membership is deliberately its own table rather than a users.org_id column.
+// The attribution mechanism is still open (verified email domain today, an IdP's
+// group claims possibly later), so `source` records how a member arrived and a
+// second mechanism needs no migration. Stage 1 allows at most one org per user —
+// enforced in orgStore, not here — because merging two orgs' conflicting
+// policies is an unanswered product question, and refusing the second
+// membership is the honest answer until it is decided. The table shape already
+// permits many, so lifting the limit is a store change only.
+const CREATE_ORGS_TABLE = `
+CREATE TABLE IF NOT EXISTS orgs (
+  id          SERIAL PRIMARY KEY,
+  name        VARCHAR(255) NOT NULL,
+  slug        VARCHAR(100) NOT NULL UNIQUE,
+  created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+`;
+
+// Email domains an org claims. `verified_at IS NULL` means claimed but NOT
+// trusted: an unverified domain never auto-joins anybody.
+//
+// That column is the whole security model of domain attribution. Without it,
+// creating an org and claiming `acme.com` silently captures every Acme employee
+// who signs up afterwards — including their existing connections — which is
+// account takeover by typing a string. Verification is operator-set in stage 1.
+//
+// `domain` is globally UNIQUE rather than unique per org: two orgs claiming the
+// same domain would make attribution ambiguous, and picking a winner silently is
+// worse than refusing the second claim.
+const CREATE_ORG_DOMAINS_TABLE = `
+CREATE TABLE IF NOT EXISTS org_domains (
+  id          SERIAL PRIMARY KEY,
+  org_id      INTEGER NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  domain      VARCHAR(255) NOT NULL UNIQUE,
+  verified_at TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+`;
+
+// Who is in an org, and who administers it.
+//
+// `role` is scoped to the org and is NOT the platform admin role: ADMIN_EMAILS
+// (webServer.ts) stays the operator credential that can see every account. An
+// org admin governs one org's policy and must never be able to read another's.
+const CREATE_ORG_MEMBERS_TABLE = `
+CREATE TABLE IF NOT EXISTS org_members (
+  id         SERIAL PRIMARY KEY,
+  org_id     INTEGER NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role       VARCHAR(20) NOT NULL DEFAULT 'member',
+  source     VARCHAR(20) NOT NULL DEFAULT 'invite',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(org_id, user_id)
+);
+`;
+
+const CREATE_ORG_MEMBERS_USER_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_org_members_user
+  ON org_members(user_id);
+`;
+
+// Pending invitations.
+//
+// `token_hash` is a SHA-256 of the emailed token and the token itself is never
+// stored, for the same reason pendingRegistrationStore.ts hashes its own: the
+// token is a bearer credential that grants membership of an org, so a database
+// dump must not yield a usable one. No work factor is needed — the input is 32
+// CSPRNG bytes, not a password.
+//
+// `accepted_at` marks redemption instead of deleting the row, so an invite that
+// was already used can answer "already accepted" rather than being
+// indistinguishable from one that never existed.
+const CREATE_ORG_INVITES_TABLE = `
+CREATE TABLE IF NOT EXISTS org_invites (
+  id          SERIAL PRIMARY KEY,
+  org_id      INTEGER NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  email       VARCHAR(255) NOT NULL,
+  role        VARCHAR(20) NOT NULL DEFAULT 'member',
+  token_hash  CHAR(64) NOT NULL UNIQUE,
+  invited_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  accepted_at TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+`;
+
+const CREATE_ORG_INVITES_ORG_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_org_invites_org
+  ON org_invites(org_id, accepted_at);
+`;
+
 // Add unique constraint on instance_id (each instance must be unique)
 const ADD_INSTANCE_ID_UNIQUE_CONSTRAINT = `
 DO $$
@@ -473,6 +573,16 @@ export async function initDatabase(): Promise<void> {
     await pool.query(ALTER_IMAGE_BLOBS_ADD_EXPIRES_AT);
     await pool.query(CREATE_IMAGE_BLOBS_EXPIRES_INDEX);
     console.error('Image blobs table ensured.');
+
+    // Org tenancy. Ordered after users because every table here has a
+    // users(id) foreign key.
+    await pool.query(CREATE_ORGS_TABLE);
+    await pool.query(CREATE_ORG_DOMAINS_TABLE);
+    await pool.query(CREATE_ORG_MEMBERS_TABLE);
+    await pool.query(CREATE_ORG_MEMBERS_USER_INDEX);
+    await pool.query(CREATE_ORG_INVITES_TABLE);
+    await pool.query(CREATE_ORG_INVITES_ORG_INDEX);
+    console.error('Org tenancy tables ensured.');
 
     dbAvailable = true;
 

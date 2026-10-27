@@ -85,3 +85,46 @@ export function alreadyRegisteredEmail(to: string, signInUrl: string): MailMessa
       'If it was not you, no action is needed — your account and password are untouched.\n',
   };
 }
+
+/**
+ * The org invitation mail.
+ *
+ * Like the verification mail, the link is the whole payload and appears twice
+ * for clients that rewrite anchors. It names the org, because "you've been
+ * invited" with no organisation reads as phishing — and the recipient has to
+ * recognise the name to judge whether accepting is safe.
+ */
+export function orgInviteEmail(
+  to: string,
+  orgName: string,
+  acceptUrl: string,
+  ttlDays: number,
+): MailMessage {
+  const safeUrl = escapeHtml(acceptUrl);
+  const safeOrg = escapeHtml(orgName);
+  return {
+    to,
+    subject: `You've been invited to join ${orgName}`,
+    html:
+      WRAPPER_OPEN +
+      `<h2 style="font-size:18px;margin:0 0 12px">Join ${safeOrg}</h2>` +
+      `<p style="margin:0 0 20px">You've been invited to join <strong>${safeOrg}</strong>. ` +
+      'Once you accept, your connected tools follow the policies this organisation sets.</p>' +
+      `<p style="margin:0 0 20px"><a href="${safeUrl}" ` +
+      'style="display:inline-block;background:#0070f3;color:#fff;text-decoration:none;' +
+      'padding:11px 20px;border-radius:8px;font-weight:500">Review invitation</a></p>' +
+      '<p style="margin:0 0 20px;color:#555">Or paste this link into your browser:<br>' +
+      `<span style="word-break:break-all">${safeUrl}</span></p>` +
+      `<p style="margin:0;color:#777;font-size:13px">The invitation expires in ${ttlDays} days. ` +
+      "If you don't recognise this organisation, ignore this email — nothing changes unless you accept.</p>" +
+      WRAPPER_CLOSE,
+    text:
+      `Join ${orgName}\n\n` +
+      `You've been invited to join ${orgName}. Once you accept, your connected ` +
+      'tools follow the policies this organisation sets.\n\n' +
+      'Open this link to review the invitation:\n\n' +
+      `${acceptUrl}\n\n` +
+      `The invitation expires in ${ttlDays} days.\n` +
+      "If you don't recognise this organisation, ignore this email — nothing changes unless you accept.\n",
+  };
+}
