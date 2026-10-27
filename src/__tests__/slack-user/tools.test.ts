@@ -159,7 +159,7 @@ describe('slack-user tool registry', () => {
 // ---------------------------------------------------------------------------
 // Access-gating guard.
 //
-// claude.md states that this server "wraps every channel-scoped tool in
+// src/slack-user/CLAUDE.md states that this server "wraps every channel-scoped tool in
 // enforceAccess", and the access rules are only worth anything if that is
 // true — a tool that takes a channelId and skips the check reads and writes
 // channels the user has explicitly denied. Nothing asserted it until now, so a

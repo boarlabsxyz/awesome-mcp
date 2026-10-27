@@ -67,7 +67,7 @@ another service. Its `kind` column is **read off each tool's `annotations`**
 (`readOnlyHint` / `destructiveHint`), not hand-decided; keep it that way, and
 prefer a generator over typing 227 entries.
 
-Drop anything in `NOT_IMPLEMENTED` — CLAUDE.md's "Known Limitations" lists tools
+Drop anything in `NOT_IMPLEMENTED` — the root CLAUDE.md's "Tool Inventory" lists tools
 that are registered but unusable, and scaffolding those produces red nobody can
 fix.
 

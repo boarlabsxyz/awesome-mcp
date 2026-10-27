@@ -1141,7 +1141,7 @@ hubspotServer.addTool({
 
 // The reference exposed a `searchData` tool backed by a local FAISS vector
 // store. This codebase has no vector store, so rather than advertise a tool
-// that always throws, it is intentionally not registered. See CLAUDE.md.
+// that always throws, it is intentionally not registered. See src/hubspot/CLAUDE.md.
 
 // --- Property tools ---
 
