@@ -77,9 +77,9 @@ Push the tool name into either `READ_TOOLS` or `WRITE_TOOLS` depending on the cl
 
 If the new tool isn't fully implemented (e.g. you scaffolded params + executes a placeholder), also add it to the `NOT_IMPLEMENTED` set so the e2e harness skips it.
 
-### 8. Update `CLAUDE.md`
+### 8. Update `src/<provider>/CLAUDE.md` (only if there is something to say)
 
-Bump the count in the Tool Categories table for the relevant row. If the tool introduces a new category (e.g. first comment tool ever), add the row.
+Do not bump any tool count — `docs/MCP_TOOLS.md` is generated and authoritative. If the tool has a limitation, an upstream quirk, or a guard someone could undo by accident, add one terse bullet to the provider's nested `src/<provider>/CLAUDE.md` (create it if absent, and add it to the index in the root `CLAUDE.md`): the rule plus a one-clause reason. Keep investigation history out of it — that belongs in the commit message. Only a rule that applies across services goes in the root `CLAUDE.md`.
 
 ### 9. Offer the two follow-ups
 
@@ -115,7 +115,7 @@ Added <toolName> to src/<provider>/server.ts
 
 Updated:
   e2e/tools.ts (added to <READ_TOOLS | WRITE_TOOLS>)
-  CLAUDE.md (bumped <category> count)
+  src/<provider>/CLAUDE.md (<added note | no change>)
 
 Typecheck: <pass | N errors>
 

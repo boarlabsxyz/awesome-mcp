@@ -199,6 +199,7 @@ Added <mcpToolName> → <METHOD> <path>
   docs/REST_ENDPOINTS.md                 regenerated (N endpoints)
   public/openapi.json                    regenerated
   docs/MCP_TOOLS.md                      regenerated
+  src/<provider>/CLAUDE.md               REST-plane note (if any)
 
 Typecheck: <pass | N errors>
 Tests: <pass | N failing>
@@ -211,6 +212,8 @@ Next:
   /update-openapi <provider>   ← required for POST (the stub has no requestBody)
   open a SEPARATE pull request for this pass   ← never folded into a scaffold or feature PR
 ```
+
+**Record what the next reader cannot derive from the code** — a forced verb or path choice, a destructive endpoint exposed with sign-off, a legacy uncatalogued route kept on its old body contract, an upstream status remapped (e.g. 401 → 502), a write deliberately left MCP-only. Add it as one terse bullet under a `### REST plane` heading in **`src/<provider>/CLAUDE.md`**, never in the root `CLAUDE.md`, which loads into every session. A behaviour of `webServer.ts` itself (body parsing, error mapping shared by all routes) goes in `src/website/CLAUDE.md`; only a rule every service's REST routes must follow goes in the root's "Cross-cutting rules". Endpoint counts and the investigation story stay out — `docs/REST_ENDPOINTS.md` and the PR carry those.
 
 Name the declined tools explicitly. Silence reads as "every tool is covered", and the gap is then found by whoever reaches for the missing endpoint rather than by the person who could have overruled the gate.
 

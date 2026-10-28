@@ -185,7 +185,7 @@ WHERE field_name ILIKE '%l&d%spend%' OR field_name ILIKE '%training budget%'
 GROUP BY captured_at ORDER BY captured_at;
 ```
 
-## Limits (inherited from the API — see CLAUDE.md)
+## Limits (inherited from the API — see src/peopleforce/CLAUDE.md)
 
 - **Courses completed / participation counts**: no first-class entity in the API.
   Only reachable if a tenant records them as custom fields (above) or as objective

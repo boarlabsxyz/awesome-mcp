@@ -84,7 +84,7 @@ For third-party providers we don't have a prebuilt SDK on the session — just t
 
 - IDs are required strings: `documentId`, `spreadsheetId`, `fileId`, `calendarId`, `eventId`. Always `.describe('The ID of the X (from the URL).')` so the LLM knows where to find it.
 - Hex colors validate to `/^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/` — reuse the existing Zod helper in `src/types.ts` rather than redefining.
-- Alignment uses `z.enum(['START', 'END', 'CENTER', 'JUSTIFIED'])` — these are Google's terms, not LEFT/RIGHT. CLAUDE.md flags this explicitly because the wrong values fail silently.
+- Alignment uses `z.enum(['START', 'END', 'CENTER', 'JUSTIFIED'])` — these are Google's terms, not LEFT/RIGHT. `src/google-docs/CLAUDE.md` (Parameter Patterns) flags this explicitly because the wrong values fail silently.
 - Indices are 1-based, ranges are `[startIndex, endIndex)`. Match `src/types.ts` `RangeParameters`.
 - For complex composed schemas (text style, paragraph style, batch operations), import the shared object from `src/types.ts` rather than redefining it.
 

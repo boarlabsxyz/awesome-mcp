@@ -228,14 +228,41 @@ Why it is worth the extra PR rather than one big one: the scaffold is mechanical
 
 **Branch PR 2 off PR 1's branch, not off `main`.** The routes import the server module, so `main` cannot typecheck them until the scaffold lands. That makes PR 2 stacked: retarget or rebase it onto `main` once PR 1 merges, and **re-check that nothing was stranded** — a merge that lands at an older commit silently drops anything pushed afterwards, so verify with `git merge-base --is-ancestor <sha> origin/main` for each commit you expected to ship.
 
-### 7. Update `CLAUDE.md` (lightly)
+### 7. Create `src/<slug>/CLAUDE.md` (lightly)
 
-`CLAUDE.md` is manually maintained and its "N tools" header is usually stale relative to auto-generated `docs/MCP_TOOLS.md` — don't waste effort keeping the exact count in sync. What's worth adding:
+Service notes live in a nested `CLAUDE.md` next to the code, which Claude Code loads only when working in that directory — keep them out of the root file, which loads into every session. Don't track tool counts anywhere; `docs/MCP_TOOLS.md` is generated and authoritative.
 
-- A row in the Source Files table pointing at `src/<slug>/server.ts` (and `apiHelpers.ts` for third-party).
-- If the source repo flagged any tools as unimplemented or had known limitations, surface them under Known Limitations so the user doesn't get bitten later.
+- Create `src/<slug>/CLAUDE.md` with a `# <Service> — notes for Claude` heading, a `## Rules and limitations` section, and a `## Source Files` table pointing at `src/<slug>/server.ts` (and `apiHelpers.ts` for third-party).
+- If the source repo flagged tools as unimplemented or had known limitations, add them as terse bullets: the rule plus a one-clause reason, no investigation history.
+- Add one line for the new file to the "Per-service notes" index in the root `CLAUDE.md`, and add the provider to its one-line overview. Those two lines are the **only** root edits a scaffold makes.
 
-Skip the Tool Categories row and the tool-count bump — `docs/MCP_TOOLS.md` is authoritative for both.
+Skeleton:
+
+```markdown
+# <Service> — notes for Claude
+
+## Rules and limitations
+
+- **<the rule, as a short claim>** — <what to do or not do, and the one-clause reason>.
+
+## Source Files
+
+| File | Contains |
+|------|----------|
+| `src/<slug>/server.ts` | <Service> tool definitions |
+| `src/<slug>/apiHelpers.ts` | `<Service>Client` — <auth style> client for the <Service> API |
+```
+
+**Which file a note belongs in:**
+
+| The note is about… | Goes in |
+|---|---|
+| this provider's API, auth, tools, or REST routes | `src/<slug>/CLAUDE.md` |
+| a dashboard/connect-flow or `webServer.ts`-wide handler behaviour | `src/website/CLAUDE.md` |
+| a shared helper used by several providers (`src/util/*`) | the root `CLAUDE.md` Source Files table, plus a cross-cutting rule only if it applies to every service |
+| how the bug was found, ticket numbers, dates | nowhere in `CLAUDE.md` — the commit message or PR |
+
+Hidden-by-default flags (`<SLUG_UPPER>_ENABLED`), required env vars, scopes that need a reconnect, and anything marked "NOT exercised live" belong in the provider file, not the root.
 
 ### 8. Verify
 
@@ -262,7 +289,7 @@ To get a verdict anyway, run each file separately with a hard timeout and treat 
 ### 9. Report and offer the next step
 
 End with a tight summary:
-- Files created and patched (one bullet each, with path).
+- Files created and patched (one bullet each, with path) — including `src/<slug>/CLAUDE.md` and the root `CLAUDE.md` index line.
 - Number of tools generated, split into fully translated vs TODO-stubbed.
 - Source repo + commit sha if used.
 - Anything the user still has to do manually. The common list:
@@ -282,7 +309,7 @@ Then offer the soft chain:
 
 > The server is scaffolded with a `ping` tool. Want me to add real tools now? Tell me the tool names and I'll invoke `/add-mcp-tool <name>` for each, using the same patterns.
 
-If the user lists tools, follow `../add-mcp-tool/SKILL.md` for each one in turn — its procedure handles the addTool block, tools.ts classification, CLAUDE.md bump, and the optional e2e test chain. If the user says no, just mention they can run `/add-mcp-tool <name>` later.
+If the user lists tools, follow `../add-mcp-tool/SKILL.md` for each one in turn — its procedure handles the addTool block, tools.ts classification, the provider's `CLAUDE.md` note, and the optional e2e test chain. If the user says no, just mention they can run `/add-mcp-tool <name>` later.
 
 This is a soft chain (suggestion, not auto-execution) because the user often wants to review the scaffold, run typecheck, and look at the diff before adding tools — not be rushed into more decisions while their attention is still on the server wiring.
 
@@ -338,7 +365,7 @@ Each of these is here because we've seen the failure mode in the wild or it prod
 - **`data/mcp-catalog.json` is gitignored** — the catalog edit is local-only. Don't be surprised when it's absent from the PR diff. Prod catalog is seeded through a separate path — call this out in the final report.
 - **Web+mcp combined mode wiring is separate** — the `MCP_SERVERS_BY_SLUG` table in `MCP_MODE=mcp` covers per-service deployment; the combined mode has its own port constants, `.start()` calls, `createWebApp` signature, and proxy routes in `webServer.ts`. If the user runs the combined mode and you only wired the ternary, `/<slug>` silently 404s.
 - **REST catalog entries default to `planned`** — until the actual `/api/v1/<slug>/*` routes are wired in `webServer.ts`, marking anything `live` is a lie. The doc generator honors the status: `planned` entries show `—` in `docs/MCP_TOOLS.md`'s REST column, which is correct behavior.
-- **`CLAUDE.md` tool count drifts** — it's manually maintained. Don't try to keep it exact; `docs/MCP_TOOLS.md` is authoritative and auto-regenerates.
+- **Don't put tool counts or service notes in the root `CLAUDE.md`** — counts drift (`docs/MCP_TOOLS.md` is authoritative and auto-regenerates), and the root file loads into every session. Service notes go in `src/<slug>/CLAUDE.md`.
 - **Dashboard paste-token form is a separate allowlist** — `public/dashboard.html`'s `selectMcpType` hardcodes which providers show the token-input form (step 5f). A paste-token provider missing there routes to the OAuth `/connect/<slug>` flow, which 400s with `"<slug> uses direct token authentication. Please connect via the dashboard."` The catalog, session router, and `/api/connect-token` branch can all be correct and the user still can't connect. Symptom is a *runtime* error in the browser, not a build/test failure — the scaffold looks done.
 - **`TRANSPORT` typo bricks a per-service deploy** — the boot only treats `httpStream` / `http` / `remote` as multi-user HTTP mode (`src/google-docs/server.ts`); any other value (a stray `httpsStream`) silently falls back to stdio, which calls `initializeGoogleClient()` and hard-exits when Google creds are absent — so `/health` never binds and the healthcheck fails. If a newly-created per-service MCP fails its healthcheck, check `TRANSPORT=httpStream`, `MCP_MODE=mcp`, `MCP_SLUG=<slug>` on that Railway service before suspecting the scaffold.
 - **OAuth client creds must be on BOTH services** — the web service uses `<SLUG_UPPER>_CLIENT_ID`/`_CLIENT_SECRET` for the catalog seed + `/connect/<slug>` exchange; the MCP service uses the same vars for the tool-call-time refresh. Set them only on the web service and connect succeeds but tools 401 once the access token expires. With **OAuth-by-default** catalogs (unconditional `oauthAuthorizationUrl`), missing creds are worse — the Connect button redirects with an invalid client and there is no paste-token fallback in the UI. Prefer the env-gated catalog unless the user explicitly wants OAuth-only.

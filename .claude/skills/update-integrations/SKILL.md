@@ -54,7 +54,7 @@ Add a `'<slug>': [ ... ]` block to the `SAMPLE_PROMPTS` object. Keep it consiste
 
 - **Exactly 3 prompts.** The card layout is tuned for three.
 - **First-person, imperative, concrete.** "Who's out on leave next week?", not "Query the absence API." They read like something a user would actually type to their assistant.
-- **Grounded in the MCP's real tools.** Skim `src/<slug>/server.ts` tool names/descriptions (or the CLAUDE.md limitations section) and pick three that map to real, implemented capabilities — one read, one write, one search/summarize is a good spread. Don't promise a capability the server doesn't have.
+- **Grounded in the MCP's real tools.** Skim `src/<slug>/server.ts` tool names/descriptions (or `src/<slug>/CLAUDE.md`) and pick three that map to real, implemented capabilities — one read, one write, one search/summarize is a good spread. Don't promise a capability the server doesn't have.
 - **No fake specifics that look real.** Placeholder names (`jane@acme.com`, `#eng-platform`, `Acme Corp`) are fine; a plausible-but-fake internal doc ID is not — it reads as a broken example.
 - Escape apostrophes in single-quoted strings (`'Who\'s out…'`) or use the existing quoting style.
 

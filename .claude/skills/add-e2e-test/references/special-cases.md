@@ -85,6 +85,6 @@ Never point one at a fixture or rich resource. `writes: true` prevents resolving
 those credentials, but a delete that takes an id from an env var can still be
 handed the wrong id by a misconfigured run; prefer ids that came from `setup`.
 
-Some destructive operations are not safely repeatable in CI at all — CLAUDE.md
+Some destructive operations are not safely repeatable in CI at all — src/peopleforce/CLAUDE.md
 flags `disqualifyVacancyApplication` as non-idempotent. Scaffold those, mark them
 `todo` with the reason, and leave them out of the scheduled run.
