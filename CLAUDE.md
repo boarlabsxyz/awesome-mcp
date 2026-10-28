@@ -1,4 +1,4 @@
-# Google Docs MCP Server
+# Awesome MCP
 
 Multi-service FastMCP hosting platform: one MCP server per provider under `src/<provider>/server.ts` — Google Docs, Sheets, Calendar, Drive, Gmail and Slides, ClickUp, Slack (bot + user), Outline, PeopleForce (v2/v3 and v4), HubSpot, Redmine, Browserbase, GitHub and Pinecone — plus a curl-able REST data plane under `/api/v1/*`.
 
@@ -9,8 +9,6 @@ Do not keep tool counts here; they drift. The generated lists are the source of 
 - `docs/MCP_TOOLS.md` — every MCP tool, grouped by service (`scripts/buildMcpToolsDoc.mjs`)
 - `docs/REST_ENDPOINTS.md` — every REST endpoint, generated from `src/restCatalog.ts`
 
-Google Docs tools that throw rather than work (`NOT_IMPLEMENTED` in `e2e/tools.ts`): `editTableCell`, `fixListFormatting`, `findElement`.
-
 ## Per-service notes
 
 Service-specific rules and limitations live next to the code, in nested `CLAUDE.md` files that load only when you work in that directory:
@@ -19,7 +17,7 @@ Service-specific rules and limitations live next to the code, in nested `CLAUDE.
 - `src/clickup/CLAUDE.md` — ClickUp
 - `src/github/CLAUDE.md` — GitHub
 - `src/google-calendar/CLAUDE.md` — Google Calendar
-- `src/google-docs/CLAUDE.md` — Google Docs, including its parameter patterns (document IDs, indices, colors, alignment, tabs)
+- `src/google-docs/CLAUDE.md` — Google Docs, including its parameter patterns and the tools that throw (`NOT_IMPLEMENTED`)
 - `src/google-sheets/CLAUDE.md` — Google Sheets
 - `src/hubspot/CLAUDE.md` — HubSpot
 - `src/outline/CLAUDE.md` — Outline
@@ -31,7 +29,7 @@ Service-specific rules and limitations live next to the code, in nested `CLAUDE.
 - `src/slack-user/CLAUDE.md` — Slack user server and its access rules
 - `src/website/CLAUDE.md` — dashboard sign-up/login, REST-plane handlers, body parsing
 
-**Where new notes go:** a rule about one provider goes in that provider's `CLAUDE.md`; this file holds only what applies across services. Write the rule plus the one-clause reason it exists. The investigation story belongs in the commit message or PR; detailed reasoning belongs in a code comment next to the guard it protects.
+**Where new notes go:** a rule about one provider goes in that provider's `CLAUDE.md`; this file holds only what applies across services. Write the rule plus the one-clause reason it exists. The investigation story belongs in the commit message or PR; detailed reasoning belongs in a code comment next to the guard it protects. Verification status ("verified live", "UNVERIFIED", what to check first on a live run) stays in the note — it tells the next reader which assumption to suspect first.
 
 ## Cross-cutting rules
 
@@ -44,7 +42,7 @@ Service-specific rules and limitations live next to the code, in nested `CLAUDE.
 - **Every app factory that calls `registerRestApiRoutes` must call `registerRestBodyParsers` first**, or `req.body` is `undefined` and POSTs fail with misleading "Required" errors. Details in `src/website/CLAUDE.md`.
 - **`src/google-docs/server.ts` is the application entry point.** It imports `createWebApp`, so `webServer.ts` must never import it; shared schemas and ops go in separate modules (the `writeSchemas.ts` / `writeOps.ts` pattern). It boots unless `NODE_TEST_CONTEXT` is set.
 - **New OAuth scopes need already-connected users to reconnect** — a token keeps the scopes it was minted with. Never seed a scope string the provider does not define: an unknown scope fails the whole consent flow.
-- **Hidden connectors are seeded with `isActive: false` behind `<NAME>_ENABLED`** (strict `=== 'true'`; a restart, not a deploy). Seed rather than skip, so existing connections are not orphaned.
+- **Hidden connectors seed `isActive` from `<NAME>_ENABLED`** — strict `=== 'true'`, so anything else (including unset) means `false`; flipping it is a restart, not a deploy. Seed rather than skip, so existing connections are not orphaned.
 - **Reconnect merges keep any non-empty `providerTokens.accessRules`** (`PRESERVED_ON_RECONNECT`). To clear rules, delete the key — `{}` is non-empty and would survive every reconnect.
 - **`sharedToolsRegistration.test.ts` strips whole-line `//` comments before block comments.** The order is load-bearing: a line comment ending in `/` + `*` would otherwise swallow the registration calls after it.
 

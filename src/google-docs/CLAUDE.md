@@ -3,7 +3,7 @@
 ## Rules and limitations
 
 ### Comments and suggestions (Docs API `batchUpdate`; NOT exercised live)
-- **No Drive API** — all comment/suggestion tools use `documents.batchUpdate` (`insertComment` with `range`, `addCommentReply`, `updateCommentPost`, `deleteComment`, `deleteCommentReply`, `accept/reject/deleteSuggestion`, `writeControl.writeMode: 'SUGGEST'`). Never set Drive's `anchor`: Docs renders it as "Original content deleted".
+- **No Drive API** — comment/suggestion writes use `documents.batchUpdate` (reads use `documents.get`, below) (`insertComment` with `range`, `addCommentReply`, `updateCommentPost`, `deleteComment`, `deleteCommentReply`, `accept/reject/deleteSuggestion`, `writeControl.writeMode: 'SUGGEST'`). Never set Drive's `anchor`: Docs renders it as "Original content deleted".
 - **Resolve/reopen is a reply action** — `post.commentAction: 'RESOLVE' | 'REOPEN'`; `content` is optional only for those.
 - **Confirm from `commentUpdateState`** — only `ALL_SAVED` means applied; `ALL_FAILED_UNKNOWN_REASON` throws; anything else is `confirmed: false`. Suggestions confirm by the id appearing in `suggestionResponses[].accepted/rejected/deletedSuggestionIds`.
 - **Reads need three params together** — `commentsViewMode: COMMENTS_VIEW_MODE_INCLUDED` + `suggestionsViewMode: SUGGESTIONS_INLINE` + `includeTabsContent: true`; without the first, `comments` is absent (reads as "no comments").
