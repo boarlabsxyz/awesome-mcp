@@ -7,6 +7,12 @@ export interface JwtPayload {
   sub: string;
   scope: string;
   email?: string;
+  /**
+   * True only when the identity provider asserted the address is verified
+   * (`email_verified`). An unverified email must never be used to link or
+   * name an account — see mapJwtToUser.
+   */
+  emailVerified?: boolean;
   iss: string;
   aud: string;
   /** True when validated via opaque /userinfo flow (no scope claims available). */
@@ -53,7 +59,7 @@ export async function validateJwt(token: string): Promise<JwtPayload> {
     audience,
   });
 
-  const p = payload as JWTPayload & { scope?: string; email?: string };
+  const p = payload as JWTPayload & { scope?: string; email?: string; email_verified?: unknown };
 
   if (!p.sub) throw new Error('JWT missing sub claim');
 
@@ -61,6 +67,7 @@ export async function validateJwt(token: string): Promise<JwtPayload> {
     sub: p.sub,
     scope: p.scope ?? '',
     email: p.email,
+    emailVerified: p.email_verified === true,
     iss: String(p.iss),
     aud: Array.isArray(p.aud) ? p.aud[0] : String(p.aud),
   };
@@ -117,6 +124,7 @@ export async function validateOpaqueToken(token: string): Promise<JwtPayload> {
     sub: String(userinfo.sub),
     scope: '',
     email: userinfo.email ? String(userinfo.email) : undefined,
+    emailVerified: userinfo.email_verified === true,
     iss: getIssuer(),
     aud: '',
     isOpaque: true,

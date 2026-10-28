@@ -212,6 +212,19 @@ describe('resourceServerMiddleware', () => {
     assert.equal(res._json?.error, 'user_mapping_error');
   });
 
+  it('returns 403, not a retryable 503, when the JWT email is not verified', async () => {
+    const unverified = Object.assign(new Error('The email x@y.z is not verified'), { name: 'UnverifiedEmailError' });
+    const deps = makeDeps({ mapJwtToUser: mock.fn(async () => { throw unverified; }) });
+    const mw = createResourceServerMiddleware(deps);
+    const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJ0ZXN0IjoxfQ.validsig';
+    const res = makeRes();
+    let nextCalled = false;
+    await mw(makeReq({ headers: { authorization: `Bearer ${jwt}` } }), res as any, (() => { nextCalled = true; }) as NextFunction);
+    assert.equal(nextCalled, false);
+    assert.equal(res._status, 403);
+    assert.equal(res._json?.error, 'email_not_verified');
+  });
+
   it('skips scope check for unknown routes', async () => {
     const deps = makeDeps({ getRequiredScope: mock.fn(() => null) });
     const mw = createResourceServerMiddleware(deps);
@@ -242,6 +255,19 @@ describe('resourceServerMiddleware', () => {
 
     assert.equal(nextCalled, false);
     assert.equal(res._status, 503);
+  });
+
+  it('returns 403 when the opaque token email is not verified', async () => {
+    const unverified = Object.assign(new Error('not verified'), { name: 'UnverifiedEmailError' });
+    const deps = makeDeps({
+      validateOpaqueToken: mock.fn(async () => ({ ...fakePayload, isOpaque: true })),
+      mapJwtToUser: mock.fn(async () => { throw unverified; }),
+    });
+    const mw = createResourceServerMiddleware(deps);
+    const res = makeRes();
+    await mw(makeReq({ headers: { authorization: `Bearer ${fakeOpaqueToken}` } }), res as any, (() => {}) as NextFunction);
+    assert.equal(res._status, 403);
+    assert.equal(res._json?.error, 'email_not_verified');
   });
 
   it('returns 403 for opaque token with insufficient scope', async () => {

@@ -30,6 +30,7 @@ function deps(over: Partial<AdminOpsDeps> = {}): AdminOpsDeps {
   return {
     pool: () => makePool([]),
     getUserByEmail: async () => undefined,
+    getAllUsers: async () => [],
     listUsers: async () => [],
     ...over,
   };
@@ -130,6 +131,15 @@ describe('getUserActivity', () => {
     await assert.rejects(resolveUserId('ana', d), /neither a numeric user id nor an email/);
     await assert.rejects(resolveUserId('0', d), /not a valid user id/);
     await assert.rejects(resolveUserId('2147483648', d), /not a valid user id/);
+  });
+
+  it('finds an account whatever the capitalisation of the address', async () => {
+    const d = deps({
+      getUserByEmail: async (e) => (e === 'ana@example.com' ? { id: 12 } : undefined),
+      getAllUsers: async () => [{ id: 12, email: 'ana@example.com' }, { id: 13, email: 'Bob@Example.com' }],
+    });
+    assert.equal(await resolveUserId('Ana@Example.COM', d), 12);
+    assert.equal(await resolveUserId('bob@example.com', d), 13);
   });
 
   it('explains a file-store user that has no numeric id', async () => {

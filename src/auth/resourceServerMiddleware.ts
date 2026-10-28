@@ -89,6 +89,11 @@ export function createResourceServerMiddleware(deps: MiddlewareDeps = defaultDep
         next();
       } catch (err: any) {
         console.error('[jwt-auth] User mapping failed:', err.message);
+        // Not a transient failure: retrying cannot help, so do not say "try again".
+        if (err?.name === 'UnverifiedEmailError') {
+          res.status(403).json({ error: 'email_not_verified', message: err.message });
+          return;
+        }
         res.status(503).json({
           error: 'user_mapping_error',
           message: 'Failed to resolve user identity. Please try again.',
@@ -125,6 +130,10 @@ export function createResourceServerMiddleware(deps: MiddlewareDeps = defaultDep
           next();
         } catch (err: any) {
           console.error('[oauth] User mapping failed:', err.message);
+          if (err?.name === 'UnverifiedEmailError') {
+            res.status(403).json({ error: 'email_not_verified', message: err.message });
+            return;
+          }
           res.status(503).json({
             error: 'user_mapping_error',
             message: 'Failed to resolve user identity. Please try again.',

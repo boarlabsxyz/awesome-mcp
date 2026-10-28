@@ -12,7 +12,7 @@ import {
   type UsageFilter,
 } from '../usage/usageQueries.js';
 import { listUsersWithConnections, type AdminUser } from '../usage/adminUsers.js';
-import { getUserByEmail } from '../userStore.js';
+import { getUserByEmail, getAllUsers } from '../userStore.js';
 import {
   formatOverview,
   formatRetryLoops,
@@ -37,12 +37,15 @@ export const filterParams = {
 export interface AdminOpsDeps {
   pool: () => UsagePool | null;
   getUserByEmail: (email: string) => Promise<{ id?: number } | undefined>;
+  /** Plain account list (no connections), for the case-insensitive fallback. */
+  getAllUsers: () => Promise<Array<{ id?: number; email: string }>>;
   listUsers: () => Promise<AdminUser[]>;
 }
 
 export const defaultAdminOpsDeps: AdminOpsDeps = {
   pool: usagePool,
   getUserByEmail,
+  getAllUsers,
   listUsers: () => listUsersWithConnections(),
 };
 
@@ -100,7 +103,13 @@ export async function resolveUserId(user: string, deps: AdminOpsDeps): Promise<n
   if (!value.includes('@')) {
     throw new UserError(`"${value}" is neither a numeric user id nor an email address. Use listUsers to find one.`);
   }
-  const found = await deps.getUserByEmail(value);
+  // The store matches emails exactly, and models often capitalise addresses,
+  // so an exact miss falls back to a case-insensitive scan before refusing.
+  let found = await deps.getUserByEmail(value);
+  if (!found) {
+    const lower = value.toLowerCase();
+    found = (await deps.getAllUsers()).find((u) => u.email?.toLowerCase() === lower);
+  }
   if (!found) throw new UserError(`No user with the email ${value}. Use listUsers to search by part of an address.`);
   if (!found.id) {
     throw new UserError(`${value} exists only in the file-based user store, which has no numeric id, so it has no recorded usage.`);

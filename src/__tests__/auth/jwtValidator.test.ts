@@ -78,6 +78,32 @@ describe('jwtValidator', () => {
   });
 
   describe('validateOpaqueToken', () => {
+    it('reports emailVerified only when /userinfo says email_verified: true', async () => {
+      const realFetch = globalThis.fetch;
+      const savedDomain = process.env.AUTH0_DOMAIN;
+      process.env.AUTH0_DOMAIN = 'tenant.example.test';
+      const answers: Record<string, unknown>[] = [
+        { sub: 'auth0|v', email: 'v@example.com', email_verified: true },
+        { sub: 'auth0|u', email: 'u@example.com', email_verified: false },
+        { sub: 'auth0|m', email: 'm@example.com' },
+        { sub: 'auth0|s', email: 's@example.com', email_verified: 'true' },
+      ];
+      let i = 0;
+      globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => answers[i++] })) as any;
+      try {
+        const results = [];
+        for (const token of ['tok-verified', 'tok-unverified', 'tok-missing', 'tok-string']) {
+          results.push((await validateOpaqueToken(`${token}-${Date.now()}`)).emailVerified);
+        }
+        // Only a real boolean true counts; a string "true" is not trusted.
+        assert.deepEqual(results, [true, false, false, false]);
+      } finally {
+        globalThis.fetch = realFetch;
+        if (savedDomain === undefined) delete process.env.AUTH0_DOMAIN;
+        else process.env.AUTH0_DOMAIN = savedDomain;
+      }
+    });
+
     it('should throw when AUTH0_DOMAIN is not set', async () => {
       delete process.env.AUTH0_DOMAIN;
 
