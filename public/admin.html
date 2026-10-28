@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#000000">
-  <title>Admin - Users</title>
+  <title>Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -53,7 +53,7 @@
     }
 
     .page-container {
-      max-width: 1000px;
+      max-width: 1200px;
       margin: 0 auto;
       padding: 2rem;
     }
@@ -152,6 +152,203 @@
       margin-bottom: 1rem;
     }
 
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 0.25rem;
+      margin-bottom: 1.5rem;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .tab {
+      padding: 0.6rem 1rem;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: #888;
+      font: inherit;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      margin-bottom: -1px;
+      transition: color 0.2s, border-color 0.2s;
+      touch-action: manipulation;
+    }
+    .tab:hover { color: #ededed; }
+    .tab[aria-selected="true"] { color: #ededed; border-bottom-color: #0070f3; }
+
+    /* Usage tab */
+    .section { margin-bottom: 2rem; }
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    .section-header h2 {
+      font-size: 1.1rem;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: -0.02em;
+    }
+    .section-note { font-size: 0.8rem; color: #666; }
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      margin-bottom: 1.5rem;
+    }
+    .filters label { font-size: 0.85rem; color: #888; display: flex; gap: 0.5rem; align-items: center; }
+    .filters select {
+      padding: 0.45rem 0.6rem;
+      background: #0a0a0a;
+      color: #ededed;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 6px;
+      font: inherit;
+      font-size: 0.85rem;
+      touch-action: manipulation;
+    }
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    .kpi {
+      padding: 1.25rem 1.5rem;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+    }
+    .kpi-label { font-size: 0.8rem; color: #888; text-transform: uppercase; letter-spacing: 0.03em; }
+    .kpi-value { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em; margin-top: 0.25rem; font-variant-numeric: tabular-nums; }
+    .chart-card {
+      padding: 1.25rem 1.5rem;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+    }
+    .chart-card svg { display: block; width: 100%; height: auto; }
+    .chart-card text { fill: #888; font-size: 11px; font-family: inherit; }
+    .legend { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-top: 0.75rem; font-size: 0.8rem; color: #aaa; }
+    .legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+    .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+    .two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 1.5rem; }
+    /* Grid items default to min-width:auto, which lets a wide table stretch the column past the viewport. */
+    .two-col > * { min-width: 0; }
+    .table-wrap { overflow-x: auto; border-radius: 12px; }
+    th.sortable { cursor: pointer; user-select: none; }
+    th.sortable:hover { color: #ededed; }
+    th[aria-sort="ascending"]::after { content: " ▲"; }
+    th[aria-sort="descending"]::after { content: " ▼"; }
+    .muted { color: #666; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; }
+    .err-text { color: #dc3545; }
+    .ok-text { color: #34a853; }
+    .warn-text { color: #f59e0b; }
+    .badge {
+      display: inline-block;
+      padding: 0.1rem 0.45rem;
+      border-radius: 4px;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      background: rgba(0,112,243,0.15);
+      color: #4ea3ff;
+    }
+    .link-btn {
+      background: none;
+      border: none;
+      padding: 0;
+      color: #4f8df7;
+      font: inherit;
+      cursor: pointer;
+      text-align: left;
+      touch-action: manipulation;
+    }
+    .link-btn:hover { text-decoration: underline; }
+    .empty-state {
+      text-align: center;
+      padding: 3rem;
+      color: #888;
+      background: #0a0a0a;
+      border-radius: 12px;
+      border: 2px dashed rgba(255,255,255,0.15);
+    }
+    .notice {
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.5rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      color: #aaa;
+      background: rgba(0,112,243,0.1);
+      border: 1px solid rgba(0,112,243,0.3);
+    }
+
+    /* Timeline modal */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    .modal {
+      background: #0a0a0a;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      padding: 2rem;
+      width: 90%;
+      max-width: 960px;
+      max-height: 85vh;
+      overflow-y: auto;
+      overflow-x: hidden;
+      overscroll-behavior: contain;
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
+    }
+    .modal-header h3 { font-size: 1.2rem; letter-spacing: -0.02em; }
+    .btn-close {
+      background: none;
+      border: none;
+      font-size: 1.5rem;
+      cursor: pointer;
+      color: #888;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      line-height: 1;
+      transition: background-color 0.2s, color 0.2s;
+      touch-action: manipulation;
+    }
+    .btn-close:hover { background: rgba(255,255,255,0.05); color: #ededed; }
+    .session-block { margin-bottom: 1.5rem; }
+    .session-head { font-size: 0.8rem; color: #888; margin-bottom: 0.5rem; }
+    /* Fixed layout so the columns line up from one session block to the next. */
+    .session-block table { table-layout: fixed; min-width: 640px; }
+    .session-block th:nth-child(1) { width: 17%; }
+    .session-block th:nth-child(2) { width: 23%; }
+    .session-block th:nth-child(3) { width: 30%; }
+    .session-block th:nth-child(4) { width: 20%; }
+    .session-block th:nth-child(5) { width: 10%; }
+    .session-block td { overflow-wrap: anywhere; }
+    .btn-more { margin-top: 1rem; }
+
+    @media (max-width: 640px) {
+      .page-container { padding: 1rem; }
+      .two-col { grid-template-columns: 1fr; }
+      th, td { padding: 0.6rem 0.6rem; }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
         transition-duration: 0.01ms !important;
@@ -166,13 +363,19 @@
   <a href="#main" class="skip-link">Skip to content</a>
   <div class="page-container">
     <div class="header">
-      <h1>Admin · Users</h1>
+      <h1>Admin</h1>
       <div class="header-right">
         <a href="/dashboard" class="btn-back">Back to Dashboard</a>
       </div>
     </div>
 
     <main id="main">
+      <div class="tabs" role="tablist" aria-label="Admin sections">
+        <button class="tab" role="tab" id="tab-users" aria-controls="panel-users" aria-selected="true" type="button">Users</button>
+        <button class="tab" role="tab" id="tab-usage" aria-controls="panel-usage" aria-selected="false" type="button">Usage</button>
+      </div>
+
+      <section id="panel-users" role="tabpanel" aria-labelledby="tab-users">
       <div id="loading" class="loading" aria-live="polite">Loading…</div>
       <div id="error" class="error hidden" role="alert" aria-live="polite"></div>
 
@@ -191,7 +394,151 @@
           <tbody id="usersBody"></tbody>
         </table>
       </div>
+      </section>
+
+      <section id="panel-usage" role="tabpanel" aria-labelledby="tab-usage" class="hidden">
+        <p class="notice">MCP clients never send the user's prompt to a server, so it can't be shown. Each call shows the tool, its argument names and — for search-type fields only — the value the model sent, truncated, with secrets redacted.</p>
+
+        <div class="filters">
+          <label>Period
+            <select id="f-days">
+              <option value="1">Last 24 hours</option>
+              <option value="7" selected>Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 90 days</option>
+            </select>
+          </label>
+          <label>Service
+            <select id="f-slug"><option value="">All services</option></select>
+          </label>
+          <label>Surface
+            <select id="f-surface">
+              <option value="">MCP + REST</option>
+              <option value="mcp">MCP only</option>
+              <option value="rest">REST only</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="usage-loading" class="loading" aria-live="polite">Loading…</div>
+        <div id="usage-error" class="error hidden" role="alert" aria-live="polite"></div>
+
+        <div id="usage-content" class="hidden">
+          <div class="kpis">
+            <div class="kpi"><div class="kpi-label">Calls</div><div class="kpi-value" id="kpi-calls">-</div></div>
+            <div class="kpi"><div class="kpi-label">Active users</div><div class="kpi-value" id="kpi-users">-</div></div>
+            <div class="kpi"><div class="kpi-label">Error rate</div><div class="kpi-value" id="kpi-errors">-</div></div>
+          </div>
+
+          <section class="section">
+            <div class="section-header"><h2>Calls per day</h2></div>
+            <div class="chart-card">
+              <div id="chart"></div>
+              <div id="legend" class="legend"></div>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-header">
+              <h2>Tools</h2>
+              <span class="section-note">Click a column to sort. Sort by error % to find broken tools.</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col" class="sortable" data-key="slug">Service</th>
+                    <th scope="col" class="sortable" data-key="tool">Tool</th>
+                    <th scope="col" class="sortable" data-key="calls" aria-sort="descending">Calls</th>
+                    <th scope="col" class="sortable" data-key="users">Users</th>
+                    <th scope="col" class="sortable" data-key="errorRate">Error %</th>
+                    <th scope="col" class="sortable" data-key="p50Ms">p50</th>
+                    <th scope="col" class="sortable" data-key="p95Ms">p95</th>
+                    <th scope="col" class="sortable" data-key="lastUsed">Last used</th>
+                  </tr>
+                </thead>
+                <tbody id="toolsBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-header"><h2>Top errors</h2></div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Tool</th>
+                    <th scope="col">Error</th>
+                    <th scope="col">Calls</th>
+                    <th scope="col">Users</th>
+                    <th scope="col">Last seen</th>
+                  </tr>
+                </thead>
+                <tbody id="errorsBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-header">
+              <h2>Retry loops</h2>
+              <span class="section-note">4+ calls to one tool in one session, each within 60s of the last — usually a model retrying because a response confused it.</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">User</th>
+                    <th scope="col">Tool</th>
+                    <th scope="col">Calls</th>
+                    <th scope="col">Failed</th>
+                    <th scope="col">When</th>
+                  </tr>
+                </thead>
+                <tbody id="loopsBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <div class="two-col">
+            <section class="section">
+              <div class="section-header"><h2>Top users</h2></div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th scope="col">User</th><th scope="col">Calls</th><th scope="col">Errors</th><th scope="col">Tools</th><th scope="col">Last seen</th></tr>
+                  </thead>
+                  <tbody id="topUsersBody"></tbody>
+                </table>
+              </div>
+            </section>
+            <section class="section">
+              <div class="section-header"><h2>Clients</h2></div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th scope="col">Client</th><th scope="col">Surface</th><th scope="col">Calls</th><th scope="col">Users</th></tr>
+                  </thead>
+                  <tbody id="clientsBody"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
     </main>
+
+    <div id="timeline" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="timeline-title">
+      <div class="modal">
+        <div class="modal-header">
+          <h3 id="timeline-title">User activity</h3>
+          <button class="btn-close" id="timeline-close" type="button" aria-label="Close">&times;</button>
+        </div>
+        <div id="timeline-body"></div>
+        <button id="timeline-more" class="btn-back btn-more hidden" type="button">Load older calls</button>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -236,7 +583,7 @@
           return `
           <tr>
             <td class="numeric">${u.id ?? '-'}</td>
-            <td>${escapeHtml(u.email)}</td>
+            <td>${u.id ? `<button class="link-btn" type="button" data-user-id="${u.id}">${escapeHtml(u.email)}</button>` : escapeHtml(u.email)}</td>
             <td>${escapeHtml(u.name)}</td>
             <td>${escapeHtml(created)}</td>
             <td>${conns}</td>
@@ -253,6 +600,370 @@
     }
 
     init();
+
+    // ── Tabs ────────────────────────────────────────────────────────────
+    const tabs = { users: document.getElementById('tab-users'), usage: document.getElementById('tab-usage') };
+    const panels = { users: document.getElementById('panel-users'), usage: document.getElementById('panel-usage') };
+    let usageLoaded = false;
+
+    function showTab(name) {
+      for (const key of Object.keys(tabs)) {
+        const active = key === name;
+        tabs[key].setAttribute('aria-selected', String(active));
+        tabs[key].tabIndex = active ? 0 : -1;
+        panels[key].classList.toggle('hidden', !active);
+      }
+      if (history.replaceState) history.replaceState(null, '', name === 'usage' ? '#usage' : '#');
+      if (name === 'usage' && !usageLoaded) {
+        usageLoaded = true;
+        loadUsage();
+      }
+    }
+    tabs.users.addEventListener('click', () => showTab('users'));
+    tabs.usage.addEventListener('click', () => showTab('usage'));
+    document.querySelector('.tabs').addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      const next = tabs.users.getAttribute('aria-selected') === 'true' ? 'usage' : 'users';
+      showTab(next);
+      tabs[next].focus();
+    });
+
+    // ── Formatting ──────────────────────────────────────────────────────
+    const NUM = new Intl.NumberFormat();
+    const TIME_FMT = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const fmtTime = (iso) => (iso ? TIME_FMT.format(new Date(iso)) : '-');
+    const fmtPct = (r) => (r * 100).toFixed(r > 0 && r < 0.1 ? 1 : 0) + '%';
+    const fmtMs = (ms) => (ms === null || ms === undefined ? '-' : ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms');
+    const errClass = (r) => (r >= 0.2 ? 'err-text' : r >= 0.05 ? 'warn-text' : '');
+    const userCell = (id, email) =>
+      `<button class="link-btn" type="button" data-user-id="${Number(id)}">${escapeHtml(email || 'user #' + id)}</button>`;
+    const emptyRow = (cols, text) => `<tr><td colspan="${cols}" class="muted">${escapeHtml(text)}</td></tr>`;
+
+    // ── Usage tab ───────────────────────────────────────────────────────
+    const filterEls = { days: document.getElementById('f-days'), slug: document.getElementById('f-slug'), surface: document.getElementById('f-surface') };
+    Object.values(filterEls).forEach((el) => el.addEventListener('change', loadUsage));
+
+    function usageQuery() {
+      const params = new URLSearchParams({ days: filterEls.days.value });
+      if (filterEls.slug.value) params.set('slug', filterEls.slug.value);
+      if (filterEls.surface.value) params.set('surface', filterEls.surface.value);
+      return params.toString();
+    }
+
+    async function getJson(url) {
+      const res = await fetch(url, { credentials: 'same-origin' });
+      if (res.status === 401) { window.location.href = '/login'; throw new Error('Not signed in'); }
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+      return body;
+    }
+
+    let toolRows = [];
+    let toolSort = { key: 'calls', dir: -1 };
+    let usageRequest = 0;
+
+    async function loadUsage() {
+      const requestId = ++usageRequest;
+      const q = usageQuery();
+      document.getElementById('usage-loading').classList.remove('hidden');
+      document.getElementById('usage-error').classList.add('hidden');
+      try {
+        const [overview, tools, errors, loops] = await Promise.all([
+          getJson('/api/admin/usage/overview?' + q),
+          getJson('/api/admin/usage/tools?' + q),
+          getJson('/api/admin/usage/errors?' + q),
+          getJson('/api/admin/usage/loops?' + q),
+        ]);
+        if (requestId !== usageRequest) return; // a newer filter change won
+        renderOverview(overview);
+        toolRows = tools.tools || [];
+        renderTools();
+        renderErrors(errors.errors || []);
+        renderLoops(loops.loops || []);
+        document.getElementById('usage-content').classList.remove('hidden');
+      } catch (err) {
+        if (requestId !== usageRequest) return;
+        document.getElementById('usage-content').classList.add('hidden');
+        const box = document.getElementById('usage-error');
+        box.textContent = err.message;
+        box.classList.remove('hidden');
+      } finally {
+        if (requestId === usageRequest) document.getElementById('usage-loading').classList.add('hidden');
+      }
+    }
+
+    function renderOverview(o) {
+      document.getElementById('kpi-calls').textContent = NUM.format(o.totals.calls);
+      document.getElementById('kpi-users').textContent = NUM.format(o.totals.users);
+      const errEl = document.getElementById('kpi-errors');
+      errEl.textContent = o.totals.calls ? fmtPct(o.totals.errorRate) : '-';
+      errEl.className = 'kpi-value ' + errClass(o.totals.errorRate);
+
+      // Keep the selected service even if it has no calls in this window.
+      const current = filterEls.slug.value;
+      const slugs = Array.from(new Set([...(o.slugs || []), ...(current ? [current] : [])])).sort();
+      filterEls.slug.innerHTML = '<option value="">All services</option>' +
+        slugs.map((s) => `<option value="${escapeHtml(s)}"${s === current ? ' selected' : ''}>${escapeHtml(s)}</option>`).join('');
+
+      renderChart(o.daily || [], Number(filterEls.days.value));
+
+      document.getElementById('topUsersBody').innerHTML = (o.topUsers || []).map((u) => `
+        <tr>
+          <td>${userCell(u.userId, u.email)}</td>
+          <td class="numeric">${NUM.format(u.calls)}</td>
+          <td class="numeric ${u.errors ? 'err-text' : ''}">${NUM.format(u.errors)}</td>
+          <td class="numeric">${NUM.format(u.tools)}</td>
+          <td>${fmtTime(u.lastSeen)}</td>
+        </tr>`).join('') || emptyRow(5, 'No calls in this period.');
+
+      document.getElementById('clientsBody').innerHTML = (o.clients || []).map((c) => `
+        <tr>
+          <td>${escapeHtml(c.client)}</td>
+          <td><span class="badge">${escapeHtml(c.surface)}</span></td>
+          <td class="numeric">${NUM.format(c.calls)}</td>
+          <td class="numeric">${NUM.format(c.users)}</td>
+        </tr>`).join('') || emptyRow(4, 'No calls in this period.');
+    }
+
+    // Series colours for the chart. The first is the app's primary blue; the
+    // rest are new tokens for categorical data on the dark background.
+    const SERIES_COLORS = ['#0070f3', '#34a853', '#f59e0b', '#a855f7', '#ec4899', '#14b8a6'];
+    const OTHER_COLOR = '#666';
+
+    function renderChart(daily, days) {
+      const chart = document.getElementById('chart');
+      const legend = document.getElementById('legend');
+      if (!daily.length) {
+        chart.innerHTML = '<div class="empty-state">No calls in this period.</div>';
+        legend.innerHTML = '';
+        return;
+      }
+
+      // Top services get their own colour; the rest share "other".
+      const bySlug = {};
+      daily.forEach((d) => { bySlug[d.slug] = (bySlug[d.slug] || 0) + d.calls; });
+      const ranked = Object.keys(bySlug).sort((a, b) => bySlug[b] - bySlug[a]);
+      const named = ranked.slice(0, SERIES_COLORS.length);
+      const series = ranked.length > named.length ? [...named, 'other'] : named;
+      const colorOf = (s) => (s === 'other' ? OTHER_COLOR : SERIES_COLORS[named.indexOf(s)]);
+
+      // One bucket per UTC day in the window, including days with no calls.
+      const dayKey = (iso) => iso.slice(0, 10);
+      const buckets = [];
+      const today = new Date();
+      for (let i = Math.max(days, 1) - 1; i >= 0; i--) {
+        const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - i));
+        buckets.push({ key: d.toISOString().slice(0, 10), values: {} });
+      }
+      const index = Object.fromEntries(buckets.map((b, i) => [b.key, i]));
+      daily.forEach((d) => {
+        const i = index[dayKey(d.day)];
+        if (i === undefined) return;
+        const s = named.includes(d.slug) ? d.slug : 'other';
+        buckets[i].values[s] = (buckets[i].values[s] || 0) + d.calls;
+      });
+
+      const W = 900, H = 220, padL = 44, padB = 24, padT = 8;
+      const max = Math.max(1, ...buckets.map((b) => Object.values(b.values).reduce((a, v) => a + v, 0)));
+      const plotW = W - padL, plotH = H - padB - padT;
+      const slot = plotW / buckets.length;
+      const barW = Math.max(2, Math.min(36, slot * 0.7));
+      const y = (v) => padT + plotH - (v / max) * plotH;
+
+      let svg = '';
+      [0, 0.5, 1].forEach((t) => {
+        const v = Math.round(max * t);
+        svg += `<line x1="${padL}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="rgba(255,255,255,0.06)"/>`;
+        svg += `<text x="${padL - 8}" y="${y(v) + 4}" text-anchor="end">${NUM.format(v)}</text>`;
+      });
+      const labelEvery = Math.ceil(buckets.length / 10);
+      buckets.forEach((b, i) => {
+        const x = padL + i * slot + (slot - barW) / 2;
+        let acc = 0;
+        const total = Object.values(b.values).reduce((a, v) => a + v, 0);
+        series.forEach((s) => {
+          const v = b.values[s];
+          if (!v) return;
+          svg += `<rect x="${x}" y="${y(acc + v)}" width="${barW}" height="${y(acc) - y(acc + v)}" fill="${colorOf(s)}"><title>${escapeHtml(b.key)} · ${escapeHtml(s)}: ${NUM.format(v)} of ${NUM.format(total)}</title></rect>`;
+          acc += v;
+        });
+        if (i % labelEvery === 0) {
+          svg += `<text x="${padL + i * slot + slot / 2}" y="${H - 6}" text-anchor="middle">${escapeHtml(b.key.slice(5))}</text>`;
+        }
+      });
+      chart.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Calls per day by service">${svg}</svg>`;
+      legend.innerHTML = series.map((s) =>
+        `<span><i style="background:${colorOf(s)}"></i>${escapeHtml(s)}${s === 'other' ? '' : ' · ' + NUM.format(bySlug[s])}</span>`
+      ).join('');
+    }
+
+    function renderTools() {
+      const { key, dir } = toolSort;
+      const rows = [...toolRows].sort((a, b) => {
+        const av = a[key] ?? -Infinity, bv = b[key] ?? -Infinity;
+        if (typeof av === 'string' || typeof bv === 'string') return String(av).localeCompare(String(bv)) * dir;
+        return (av - bv) * dir;
+      });
+      document.querySelectorAll('th.sortable').forEach((th) => {
+        if (th.dataset.key === key) th.setAttribute('aria-sort', dir === 1 ? 'ascending' : 'descending');
+        else th.removeAttribute('aria-sort');
+      });
+      document.getElementById('toolsBody').innerHTML = rows.map((t) => `
+        <tr>
+          <td>${escapeHtml(t.slug)}</td>
+          <td class="mono">${escapeHtml(t.tool)}${t.surface === 'rest' ? ' <span class="badge">rest</span>' : ''}</td>
+          <td class="numeric">${NUM.format(t.calls)}</td>
+          <td class="numeric">${NUM.format(t.users)}</td>
+          <td class="numeric ${errClass(t.errorRate)}">${fmtPct(t.errorRate)}</td>
+          <td class="numeric">${fmtMs(t.p50Ms)}</td>
+          <td class="numeric">${fmtMs(t.p95Ms)}</td>
+          <td>${fmtTime(t.lastUsed)}</td>
+        </tr>`).join('') || emptyRow(8, 'No calls in this period.');
+    }
+
+    document.querySelectorAll('th.sortable').forEach((th) => {
+      th.tabIndex = 0;
+      const sort = () => {
+        const key = th.dataset.key;
+        // Text columns start A→Z, numeric ones highest first.
+        const textCol = key === 'slug' || key === 'tool';
+        toolSort = toolSort.key === key ? { key, dir: -toolSort.dir } : { key, dir: textCol ? 1 : -1 };
+        renderTools();
+      };
+      th.addEventListener('click', sort);
+      th.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sort(); } });
+    });
+
+    function renderErrors(errors) {
+      document.getElementById('errorsBody').innerHTML = errors.map((e) => `
+        <tr>
+          <td><span class="muted">${escapeHtml(e.slug)}</span><br><span class="mono">${escapeHtml(e.tool)}</span></td>
+          <td><span class="badge">${escapeHtml(e.kind || 'error')}</span> ${escapeHtml(e.message || '(no message)')}</td>
+          <td class="numeric">${NUM.format(e.calls)}</td>
+          <td class="numeric">${NUM.format(e.users)}</td>
+          <td>${fmtTime(e.lastSeen)}</td>
+        </tr>`).join('') || emptyRow(5, 'No errors in this period.');
+    }
+
+    function renderLoops(loops) {
+      document.getElementById('loopsBody').innerHTML = loops.map((l) => `
+        <tr>
+          <td>${userCell(l.userId, l.email)}</td>
+          <td><span class="muted">${escapeHtml(l.slug)}</span> <span class="mono">${escapeHtml(l.tool)}</span></td>
+          <td class="numeric">${NUM.format(l.calls)}</td>
+          <td class="numeric ${l.errors ? 'err-text' : ''}">${NUM.format(l.errors)}</td>
+          <td>${fmtTime(l.started)}</td>
+        </tr>`).join('') || emptyRow(5, 'No retry loops in this period.');
+    }
+
+    // ── User timeline ───────────────────────────────────────────────────
+    const timeline = document.getElementById('timeline');
+    const timelineBody = document.getElementById('timeline-body');
+    const timelineMore = document.getElementById('timeline-more');
+    let timelineUser = null;
+    let timelineBefore = null;
+    let timelineEvents = [];
+    let timelineOpener = null;
+
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-user-id]');
+      if (btn) openTimeline(Number(btn.dataset.userId), btn);
+    });
+    document.getElementById('timeline-close').addEventListener('click', closeTimeline);
+    timeline.addEventListener('click', (e) => { if (e.target === timeline) closeTimeline(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !timeline.classList.contains('hidden')) closeTimeline(); });
+    timelineMore.addEventListener('click', () => loadTimelinePage());
+
+    function openTimeline(userId, opener) {
+      timelineOpener = opener || null;
+      timelineUser = userId;
+      timelineBefore = null;
+      timelineEvents = [];
+      document.getElementById('timeline-title').textContent = 'User activity';
+      timelineBody.innerHTML = '<div class="loading">Loading…</div>';
+      timelineMore.classList.add('hidden');
+      timeline.classList.remove('hidden');
+      document.getElementById('timeline-close').focus();
+      loadTimelinePage();
+    }
+
+    function closeTimeline() {
+      timeline.classList.add('hidden');
+      timelineUser = null;
+      if (timelineOpener) timelineOpener.focus();
+    }
+
+    async function loadTimelinePage() {
+      const userId = timelineUser;
+      const params = new URLSearchParams({ limit: '100' });
+      if (timelineBefore) params.set('before', String(timelineBefore));
+      try {
+        const data = await getJson(`/api/admin/usage/users/${userId}/events?` + params);
+        if (userId !== timelineUser) return; // closed or switched user meanwhile
+        document.getElementById('timeline-title').textContent = data.user.email || 'user #' + userId;
+        timelineEvents = timelineEvents.concat(data.events);
+        timelineBefore = data.nextBefore;
+        renderTimeline();
+        timelineMore.classList.toggle('hidden', !timelineBefore);
+      } catch (err) {
+        if (userId !== timelineUser) return;
+        timelineBody.innerHTML = `<div class="error" role="alert">${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function argsCell(ev) {
+      const preview = ev.argPreview || {};
+      const parts = (ev.argKeys || []).map((k) => {
+        if (!(k in preview)) return `<span class="muted">${escapeHtml(k)}</span>`;
+        const v = preview[k];
+        const shown = v && typeof v === 'object' ? `[${v.type}, ${v.length}]` : JSON.stringify(v);
+        return `${escapeHtml(k)}=<span class="mono">${escapeHtml(shown)}</span>`;
+      });
+      return parts.join(', ') || '<span class="muted">none</span>';
+    }
+
+    function renderTimeline() {
+      if (!timelineEvents.length) {
+        timelineBody.innerHTML = `<div class="empty-state">No recorded calls for this user in the retention window.</div>`;
+        return;
+      }
+      // Consecutive calls from the same session form one block.
+      const blocks = [];
+      timelineEvents.forEach((ev) => {
+        const last = blocks[blocks.length - 1];
+        const sid = ev.sessionId || (ev.surface === 'rest' ? 'rest' : 'none');
+        if (last && last.sid === sid) last.events.push(ev);
+        else blocks.push({ sid, events: [ev] });
+      });
+      timelineBody.innerHTML = blocks.map((b) => {
+        const first = b.events[0];
+        const label = b.sid === 'rest' ? 'REST API calls'
+          : b.sid === 'none' ? 'Calls without a session id'
+          : `Session ${escapeHtml(b.sid.slice(0, 8))}`;
+        const client = first.client ? ` · ${escapeHtml(first.client)}${first.clientVersion ? ' ' + escapeHtml(first.clientVersion) : ''}` : '';
+        return `
+          <div class="session-block">
+            <div class="session-head">${label}${client} · ${b.events.length} call${b.events.length === 1 ? '' : 's'}</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th scope="col">Time</th><th scope="col">Tool</th><th scope="col">Arguments</th><th scope="col">Result</th><th scope="col">Took</th></tr></thead>
+                <tbody>${b.events.map((ev) => `
+                  <tr>
+                    <td>${fmtTime(ev.ts)}</td>
+                    <td><span class="muted">${escapeHtml(ev.slug)}</span><br><span class="mono">${escapeHtml(ev.tool)}</span></td>
+                    <td>${argsCell(ev)}</td>
+                    <td>${ev.ok ? '<span class="ok-text">ok</span>'
+                      : `<span class="err-text">${escapeHtml(ev.errorKind || 'error')}</span>${ev.errorMessage ? '<br><span class="muted">' + escapeHtml(ev.errorMessage) + '</span>' : ''}`}</td>
+                    <td class="numeric">${fmtMs(ev.durationMs)}</td>
+                  </tr>`).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    if (location.hash === '#usage') showTab('usage');
   </script>
 </body>
 </html>
