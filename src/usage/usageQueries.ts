@@ -50,7 +50,11 @@ export async function usageOverview(pool: UsagePool, f: UsageFilter) {
       params,
     ),
     pool.query(
-      `SELECT date_trunc('day', e.ts) AS day, e.mcp_slug, count(*) AS calls
+      // Bucket by UTC calendar day and return the date as text. date_trunc on a
+      // timestamptz truncates in the session's TimeZone, so a database east of
+      // UTC would put every bar a day early on a page that buckets by UTC date.
+      `SELECT to_char(date_trunc('day', e.ts AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day,
+              e.mcp_slug, count(*) AS calls
          FROM tool_call_events e WHERE ${where}
         GROUP BY 1, 2 ORDER BY 1, 2`,
       params,
@@ -88,7 +92,7 @@ export async function usageOverview(pool: UsagePool, f: UsageFilter) {
       errors: num(t.errors),
       errorRate: calls ? num(t.errors) / calls : 0,
     },
-    daily: daily.rows.map((r) => ({ day: iso(r.day), slug: r.mcp_slug as string, calls: num(r.calls) })),
+    daily: daily.rows.map((r) => ({ day: r.day as string, slug: r.mcp_slug as string, calls: num(r.calls) })),
     clients: clients.rows.map((r) => ({
       client: r.client as string,
       surface: r.surface as string,
@@ -167,9 +171,12 @@ export const LOOP_GAP_SECONDS = 60;
 export const LOOP_MIN_CALLS = 4;
 
 /**
- * Runs of repeated calls to the same tool — usually a model retrying because
- * a response or a tool description confused it. A run breaks on any gap longer
- * than LOOP_GAP_SECONDS.
+ * Runs of repeated calls to the same tool — often a model retrying because a
+ * response or a tool description confused it, though a legitimate batch
+ * (getTask over ten tasks) looks the same, which is why runs containing a
+ * failure are listed first. MCP only: REST calls carry no session id and come
+ * from scripts, so a loop over one endpoint is a for-loop, not a retry. A run
+ * breaks on any gap longer than LOOP_GAP_SECONDS.
  */
 export async function usageRetryLoops(pool: UsagePool, f: UsageFilter) {
   const params: unknown[] = [];
@@ -184,7 +191,7 @@ export async function usageRetryLoops(pool: UsagePool, f: UsageFilter) {
               CASE WHEN e.ts - lag(e.ts) OVER w <= make_interval(secs => ${gapParam})
                    THEN 0 ELSE 1 END AS starts_run
          FROM tool_call_events e
-        WHERE ${where} AND e.user_id IS NOT NULL
+        WHERE ${where} AND e.user_id IS NOT NULL AND e.surface = 'mcp'
        WINDOW w AS (PARTITION BY e.user_id, coalesce(e.session_id, ''), e.mcp_slug, e.tool ORDER BY e.ts)
      ), runs AS (
        SELECT *, sum(starts_run) OVER (
@@ -198,7 +205,7 @@ export async function usageRetryLoops(pool: UsagePool, f: UsageFilter) {
        FROM runs r LEFT JOIN users u ON u.id = r.user_id
       GROUP BY r.user_id, u.email, r.sid, r.mcp_slug, r.tool, r.run_id
      HAVING count(*) >= ${minParam}
-      ORDER BY max(r.ts) DESC LIMIT 50`,
+      ORDER BY (count(*) FILTER (WHERE NOT r.ok) > 0) DESC, max(r.ts) DESC LIMIT 50`,
     params,
   );
   return rows.map((r) => ({

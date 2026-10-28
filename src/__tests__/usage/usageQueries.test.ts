@@ -65,18 +65,26 @@ describe('usageOverview', () => {
   it('maps totals, the daily series, clients, users and slugs', async () => {
     const pool = makePool([
       [/count\(\*\) FILTER \(WHERE NOT e\.ok\) AS errors\s+FROM tool_call_events e WHERE/, [{ calls: '10', users: '3', errors: '2' }]],
-      [/date_trunc/, [{ day: '2026-10-20T00:00:00Z', mcp_slug: 'clickup', calls: '4' }]],
+      [/date_trunc/, [{ day: '2026-10-20', mcp_slug: 'clickup', calls: '4' }]],
       [/client_name/, [{ client: 'claude-ai', surface: 'mcp', calls: '9', users: '3' }]],
       [/LEFT JOIN users/, [{ user_id: 5, email: 'a@b.c', calls: '7', errors: '1', tools: '2', last_seen: '2026-10-21T10:00:00Z' }]],
       [/SELECT DISTINCT e\.mcp_slug/, [{ mcp_slug: 'clickup' }, { mcp_slug: 'github' }]],
     ]);
     const out = await usageOverview(pool, { days: 7 });
     assert.deepEqual(out.totals, { calls: 10, users: 3, errors: 2, errorRate: 0.2 });
-    assert.deepEqual(out.daily, [{ day: '2026-10-20T00:00:00.000Z', slug: 'clickup', calls: 4 }]);
+    assert.deepEqual(out.daily, [{ day: '2026-10-20', slug: 'clickup', calls: 4 }]);
     assert.deepEqual(out.clients, [{ client: 'claude-ai', surface: 'mcp', calls: 9, users: 3 }]);
     assert.equal(out.topUsers[0].email, 'a@b.c');
     assert.equal(out.topUsers[0].calls, 7);
     assert.deepEqual(out.slugs, ['clickup', 'github']);
+  });
+
+  it('buckets days in UTC whatever the database time zone is', async () => {
+    const pool = makePool([]);
+    await usageOverview(pool, { days: 7 });
+    const daily = pool.calls.find((c) => /date_trunc/.test(c.text))!;
+    assert.match(daily.text, /date_trunc\('day', e\.ts AT TIME ZONE 'UTC'\)/);
+    assert.match(daily.text, /to_char\(/);
   });
 
   it('reports a zero error rate, not NaN, when there are no calls', async () => {
@@ -120,6 +128,13 @@ describe('usageRetryLoops', () => {
     assert.deepEqual(pool.calls[0].params, [7, 'clickup', LOOP_GAP_SECONDS, LOOP_MIN_CALLS]);
     assert.match(pool.calls[0].text, /make_interval\(secs => \$3\)/);
     assert.match(pool.calls[0].text, /HAVING count\(\*\) >= \$4/);
+  });
+
+  it('only counts MCP calls and lists runs with failures first', async () => {
+    const pool = makePool([]);
+    await usageRetryLoops(pool, { days: 7 });
+    assert.match(pool.calls[0].text, /e\.surface = 'mcp'/);
+    assert.match(pool.calls[0].text, /ORDER BY \(count\(\*\) FILTER \(WHERE NOT r\.ok\) > 0\) DESC, max\(r\.ts\) DESC/);
   });
 });
 

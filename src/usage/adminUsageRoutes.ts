@@ -18,6 +18,8 @@ import {
 
 type Gate = (req: any, res: Response, next: NextFunction) => unknown;
 
+const PG_INT_MAX = 2_147_483_647;
+
 function badRequest(res: Response, err: ZodError): void {
   res.status(400).json({ error: 'Invalid query parameters', issues: err.flatten().fieldErrors });
 }
@@ -58,7 +60,9 @@ export function registerAdminUsageRoutes(app: Express, requireAdmin: Gate): void
 
   app.get('/api/admin/usage/users/:userId/events', requireAdmin, async (req: Request, res: Response) => {
     const userId = Number(req.params.userId);
-    if (!Number.isInteger(userId) || userId <= 0) {
+    // users.id is a Postgres INT: anything larger would reach the query and
+    // come back as a 500 "out of range" instead of the caller's 400.
+    if (!Number.isInteger(userId) || userId <= 0 || userId > PG_INT_MAX) {
       res.status(400).json({ error: 'userId must be a positive integer' });
       return;
     }

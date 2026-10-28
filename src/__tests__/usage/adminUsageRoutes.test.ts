@@ -63,6 +63,17 @@ describe('admin usage routes', () => {
     assert.equal(res.status, 400);
   });
 
+  it('refuses a user id beyond Postgres INT range with 400, not a database 500', async () => {
+    let queries = 0;
+    __setUsagePoolForTests({ query: async () => { queries++; return { rows: [] }; } });
+    const ok = await request(makeApp()).get('/api/admin/usage/users/2147483647/events');
+    assert.equal(ok.status, 200);
+    const before = queries;
+    const res = await request(makeApp()).get('/api/admin/usage/users/2147483648/events');
+    assert.equal(res.status, 400);
+    assert.equal(queries, before, 'the out-of-range id must not reach the database');
+  });
+
   it('answers 500 without leaking the database error', async () => {
     __setUsagePoolForTests({ query: async () => { throw new Error('relation "secret_table" does not exist'); } });
     const res = await request(makeApp()).get('/api/admin/usage/errors');

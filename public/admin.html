@@ -483,7 +483,7 @@
           <section class="section">
             <div class="section-header">
               <h2>Retry loops</h2>
-              <span class="section-note">4+ calls to one tool in one session, each within 60s of the last — usually a model retrying because a response confused it.</span>
+              <span class="section-note">4+ MCP calls to one tool in one session, each within 60s of the last. Often a model retrying because a response confused it, but a batch (reading ten tasks) looks the same — runs with failures are listed first.</span>
             </div>
             <div class="table-wrap">
               <table>
@@ -542,10 +542,11 @@
   </div>
 
   <script>
+    // Safe in text AND in attribute values: the textContent/innerHTML trick
+    // this replaced escaped < > & but not quotes.
+    const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
     function escapeHtml(text) {
-      const div = document.createElement('div');
-      div.textContent = text || '';
-      return div.innerHTML;
+      return String(text || '').replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
     }
 
     const DATE_FMT = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
@@ -747,11 +748,14 @@
       const series = ranked.length > named.length ? [...named, 'other'] : named;
       const colorOf = (s) => (s === 'other' ? OTHER_COLOR : SERIES_COLORS[named.indexOf(s)]);
 
-      // One bucket per UTC day in the window, including days with no calls.
-      const dayKey = (iso) => iso.slice(0, 10);
+      // One bucket per UTC day the window touches, including days with no
+      // calls. "Last N days" runs from now minus N×24h, so it touches N+1
+      // calendar days; N buckets would drop the earliest, partial day and the
+      // bars would add up to less than the Calls tile.
+      const dayKey = (day) => day.slice(0, 10);
       const buckets = [];
       const today = new Date();
-      for (let i = Math.max(days, 1) - 1; i >= 0; i--) {
+      for (let i = Math.max(days, 1); i >= 0; i--) {
         const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - i));
         buckets.push({ key: d.toISOString().slice(0, 10), values: {} });
       }
