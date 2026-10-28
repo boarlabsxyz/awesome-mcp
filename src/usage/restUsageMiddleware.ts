@@ -22,6 +22,7 @@ const PATH_SERVICE_TO_SLUG: Record<string, string> = {
   slides: 'google-slides',
 };
 
+/** The catalog slug a REST call belongs to: the session's own, else derived from the path. */
 export function restServiceSlug(originalUrl: string, sessionSlug?: string): string {
   if (sessionSlug) return sessionSlug;
   const segment = originalUrl.split('?')[0].split('/')[3] ?? '';
@@ -35,13 +36,21 @@ export function restRouteName(req: Request): string {
   return `${req.method} ${path}`;
 }
 
+/**
+ * Records the call once the response is over. Listens for `close`, not
+ * `finish`: a response destroyed mid-stream (a download whose upstream failed)
+ * never emits `finish`, and would otherwise vanish from the failure counts.
+ * `close` fires exactly once either way, and `writableFinished` says which
+ * ending it was.
+ */
 export function restUsageMiddleware(req: Request, res: Response, next: NextFunction): void {
   const started = performance.now();
-  res.on('finish', () => {
+  res.once('close', () => {
     try {
       const session = (req as any).userSession as { userId?: number; instanceId?: string; mcpSlug?: string } | undefined;
       if (!session) return;
-      const ok = res.statusCode < 400;
+      const completed = res.writableFinished;
+      const ok = completed && res.statusCode < 400;
       recordToolCall({
         userId: typeof session.userId === 'number' ? session.userId : null,
         instanceId: session.instanceId ?? null,
@@ -51,7 +60,7 @@ export function restUsageMiddleware(req: Request, res: Response, next: NextFunct
         clientName: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'].slice(0, 100) : null,
         durationMs: performance.now() - started,
         ok,
-        errorKind: ok ? null : String(res.statusCode),
+        errorKind: ok ? null : completed ? String(res.statusCode) : 'aborted',
         argKeys: Object.keys(req.query ?? {}),
       });
     } catch {

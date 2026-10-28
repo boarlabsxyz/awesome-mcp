@@ -16,6 +16,7 @@ import { recordToolCall } from './usageStore.js';
 
 type AnyTool = { name: string; execute: (args: any, context: any) => Promise<any> };
 
+/** The who/where of a call, read defensively from FastMCP's execute context. */
 function contextFields(context: any) {
   const session = context?.session;
   const clientVersion = context?.client?.version;
@@ -28,6 +29,7 @@ function contextFields(context: any) {
   };
 }
 
+/** `tool` with an `execute` that records each call, returning the result and rethrowing the error untouched. */
 export function wrapTool<T extends AnyTool>(tool: T, slug: string): T {
   const execute = tool.execute;
   const wrapped = async (args: any, context: any) => {
@@ -65,6 +67,7 @@ export function wrapTool<T extends AnyTool>(tool: T, slug: string): T {
   return { ...tool, execute: wrapped };
 }
 
+/** Makes every tool later added to `server` record its calls under `slug`. Must wrap the constructor. */
 export function instrumentServer<S extends FastMCP<any>>(server: S, slug: string): S {
   const addTool = server.addTool.bind(server);
   const addTools = server.addTools.bind(server);

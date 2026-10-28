@@ -553,6 +553,7 @@ async function cleanupPartial(): Promise<void> {
   }
 }
 
+/** Flushes buffered usage events, then closes Redis and Postgres. */
 export async function closeDatabase(): Promise<void> {
   // Drain buffered usage events while the pool is still open. Best-effort and
   // dynamic for the same cycle reason as the schedulers above.

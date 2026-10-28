@@ -62,6 +62,11 @@ let buffer: ToolCallEvent[] = [];
 let droppedSinceLastFlush = 0;
 let flushing: Promise<void> | null = null;
 
+/**
+ * Queues one event for the next flush. Synchronous and never throws: a no-op
+ * when tracking is off or there is no database, and it drops the OLDEST
+ * events once the buffer is full.
+ */
 export function recordToolCall(event: ToolCallEvent): void {
   try {
     if (!isUsageTrackingEnabled()) return;
@@ -86,7 +91,29 @@ const COLUMNS = [
   'error_message', 'arg_keys', 'arg_preview', 'arg_bytes',
 ] as const;
 
-function rowValues(e: ToolCallEvent): unknown[] {
+// Postgres refuses U+0000 in TEXT ("invalid byte sequence") and in JSONB
+// ("unsupported Unicode escape sequence"), and one refused row fails the whole
+// multi-row INSERT — so a NUL in a REST query key, an MCP argument or an error
+// message would drop every other user's events in that batch. Strip it here,
+// at the one boundary every value crosses, rather than at each source.
+const NUL = '\u0000';
+const withoutNul = (text: string): string => (text.includes(NUL) ? text.split(NUL).join('') : text);
+
+/** `value` with U+0000 removed from every string in it, object keys included. */
+export function stripNul<T>(value: T): T {
+  if (typeof value === 'string') return withoutNul(value) as T;
+  if (Array.isArray(value)) return value.map(stripNul) as T;
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[withoutNul(k)] = stripNul(v);
+    return out as T;
+  }
+  return value;
+}
+
+/** One event as the 16 column values of COLUMNS, in order, NUL-free. */
+function rowValues(event: ToolCallEvent): unknown[] {
+  const e = stripNul(event);
   return [
     e.ts ?? new Date(),
     e.userId ?? null,
@@ -107,6 +134,7 @@ function rowValues(e: ToolCallEvent): unknown[] {
   ];
 }
 
+/** A single multi-row INSERT for `events`, with every value bound as a parameter. */
 export function buildInsert(events: ToolCallEvent[]): { text: string; params: unknown[] } {
   const params: unknown[] = [];
   const tuples = events.map((e) => {
@@ -123,6 +151,7 @@ export function buildInsert(events: ToolCallEvent[]): { text: string; params: un
   };
 }
 
+/** Drains the buffer in batches; a failed batch is logged and dropped. */
 async function flushOnce(): Promise<void> {
   const pool = currentPool();
   if (!pool) {
@@ -178,6 +207,7 @@ export function readUsageRetentionDays(): number {
   return Math.floor(n);
 }
 
+/** Deletes events older than the retention window; returns how many. */
 export async function pruneUsageEvents(): Promise<number> {
   const days = readUsageRetentionDays();
   if (days === 0) return 0;
@@ -220,6 +250,7 @@ export function startUsageRetentionScheduler(): void {
   void runOnce();
 }
 
+/** Stops the flush and retention timers (used on shutdown and in tests). */
 export function stopUsageTimers(): void {
   if (flushTimer) {
     clearInterval(flushTimer);
