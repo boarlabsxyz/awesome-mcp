@@ -11,6 +11,7 @@ import {
   usageUserTimeline,
   LOOP_GAP_SECONDS,
   LOOP_MIN_CALLS,
+  TOOL_USER_LIST_MAX,
 } from '../../usage/usageQueries.js';
 
 // Answers each query with the rows registered for the first pattern it matches.
@@ -101,15 +102,34 @@ describe('usageOverview', () => {
 });
 
 describe('usageToolStats', () => {
-  it('computes the error rate and rounds percentiles', async () => {
-    const pool = makePool([[/percentile_cont/, [{
+  it('computes the error rate and lists who used each tool', async () => {
+    const pool = makePool([[/jsonb_agg/, [{
       mcp_slug: 'google-docs', tool: 'readGoogleDoc', surface: 'mcp', calls: '8', users: '2',
-      errors: '2', p50: 120.4, p95: 999.6, last_used: '2026-10-21T00:00:00Z',
+      errors: '2', last_used: '2026-10-21T00:00:00Z',
+      user_list: [{ userId: 5, email: 'a@b.c', calls: 6 }, { userId: 9, email: null, calls: 2 }],
     }]]]);
     const [row] = await usageToolStats(pool, { days: 7 });
     assert.equal(row.errorRate, 0.25);
-    assert.equal(row.p50Ms, 120);
-    assert.equal(row.p95Ms, 1000);
+    assert.equal(row.users, 2);
+    assert.deepEqual(row.userList, [
+      { userId: 5, email: 'a@b.c', calls: 6 },
+      { userId: 9, email: null, calls: 2 },
+    ]);
+    assert.equal('p50Ms' in row, false);
+  });
+
+  it('caps the named list but keeps the full user count', async () => {
+    const list = Array.from({ length: TOOL_USER_LIST_MAX + 5 }, (_, i) => ({ userId: i + 1, email: null, calls: 1 }));
+    const pool = makePool([[/jsonb_agg/, [{ mcp_slug: 's', tool: 't', surface: 'mcp', calls: '60', users: String(list.length), errors: '0', last_used: null, user_list: list }]]]);
+    const [row] = await usageToolStats(pool, { days: 7 });
+    assert.equal(row.userList.length, TOOL_USER_LIST_MAX);
+    assert.equal(row.users, TOOL_USER_LIST_MAX + 5);
+  });
+
+  it('answers an empty list, not null, for a tool with no known users', async () => {
+    const pool = makePool([[/jsonb_agg/, [{ mcp_slug: 's', tool: 't', surface: 'mcp', calls: '1', users: '0', errors: '0', last_used: null, user_list: null }]]]);
+    const [row] = await usageToolStats(pool, { days: 7 });
+    assert.deepEqual(row.userList, []);
   });
 });
 

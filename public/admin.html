@@ -242,6 +242,30 @@
     .two-col > * { min-width: 0; }
     .table-wrap { overflow-x: auto; border-radius: 12px; }
     th.sortable { cursor: pointer; user-select: none; }
+    /* The Users column takes the slack; headers and dates stay on one line. */
+    .tools-table th, .tools-table td:nth-child(5) { white-space: nowrap; }
+    .tools-table td:nth-child(3) { width: 45%; }
+    .chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.4rem 0.75rem;
+      background: rgba(255,255,255,0.03);
+      color: #aaa;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      font: inherit;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+      touch-action: manipulation;
+    }
+    .chip:hover { background: rgba(255,255,255,0.05); color: #ededed; border-color: rgba(255,255,255,0.15); }
+    .chip[aria-pressed="true"] { background: rgba(0,112,243,0.15); border-color: #0070f3; color: #ededed; }
+    .chip-count { color: #888; font-variant-numeric: tabular-nums; }
+    .user-list { display: flex; flex-wrap: wrap; gap: 0.15rem 0.6rem; }
+    .user-list .muted { font-size: 0.8rem; }
     th.sortable:hover { color: #ededed; }
     th[aria-sort="ascending"]::after { content: " ▲"; }
     th[aria-sort="descending"]::after { content: " ▼"; }
@@ -441,19 +465,17 @@
           <section class="section">
             <div class="section-header">
               <h2>Tools</h2>
-              <span class="section-note">Click a column to sort. Sort by error % to find broken tools.</span>
+              <span class="section-note">Pick an MCP to see its tools. Click a column to sort; sort by error % to find broken tools.</span>
             </div>
+            <div id="toolChips" class="chips" role="group" aria-label="Show tools of one MCP"></div>
             <div class="table-wrap">
-              <table>
+              <table class="tools-table">
                 <thead>
                   <tr>
-                    <th scope="col" class="sortable" data-key="slug">Service</th>
                     <th scope="col" class="sortable" data-key="tool">Tool</th>
                     <th scope="col" class="sortable" data-key="calls" aria-sort="descending">Calls</th>
                     <th scope="col" class="sortable" data-key="users">Users</th>
                     <th scope="col" class="sortable" data-key="errorRate">Error %</th>
-                    <th scope="col" class="sortable" data-key="p50Ms">p50</th>
-                    <th scope="col" class="sortable" data-key="p95Ms">p95</th>
                     <th scope="col" class="sortable" data-key="lastUsed">Last used</th>
                   </tr>
                 </thead>
@@ -661,6 +683,9 @@
 
     let toolRows = [];
     let toolSort = { key: 'calls', dir: -1 };
+    let toolSlug = '';                  // '' = all MCPs
+    const expandedToolUsers = new Set(); // rows whose full user list is open
+    const USERS_SHOWN = 3;
     let usageRequest = 0;
 
     async function loadUsage() {
@@ -801,36 +826,84 @@
       ).join('');
     }
 
+    const toolKey = (t) => `${t.slug}|${t.surface}|${t.tool}`;
+
+    function renderToolChips() {
+      const bySlug = {};
+      toolRows.forEach((t) => { bySlug[t.slug] = (bySlug[t.slug] || 0) + t.calls; });
+      const slugs = Object.keys(bySlug).sort((a, b) => bySlug[b] - bySlug[a] || a.localeCompare(b));
+      if (toolSlug && !slugs.includes(toolSlug)) toolSlug = '';
+      const total = toolRows.reduce((a, t) => a + t.calls, 0);
+      const chip = (slug, label, calls) =>
+        `<button class="chip" type="button" data-slug="${escapeHtml(slug)}" aria-pressed="${toolSlug === slug}">${escapeHtml(label)} <span class="chip-count">${NUM.format(calls)}</span></button>`;
+      document.getElementById('toolChips').innerHTML = toolRows.length
+        ? chip('', 'All', total) + slugs.map((s) => chip(s, s, bySlug[s])).join('')
+        : '';
+    }
+
+    function usersCell(t) {
+      const list = t.userList || [];
+      if (!list.length) return `<span class="muted">${t.users ? NUM.format(t.users) + ' user(s)' : 'no signed-in users'}</span>`;
+      const open = expandedToolUsers.has(toolKey(t));
+      const shown = open ? list : list.slice(0, USERS_SHOWN);
+      const names = shown.map((u) =>
+        `<span>${userCell(u.userId, u.email)} <span class="muted">${NUM.format(u.calls)}</span></span>`).join('');
+      const hiddenCount = t.users - shown.length;
+      let more = '';
+      if (!open && list.length > USERS_SHOWN) {
+        more = `<button class="link-btn muted" type="button" data-expand-users="${escapeHtml(toolKey(t))}">+${NUM.format(hiddenCount)} more</button>`;
+      } else if (open && hiddenCount > 0) {
+        // The API names at most 50 users per tool; say how many were left out.
+        more = `<span class="muted">and ${NUM.format(hiddenCount)} more</span>`;
+      }
+      return `<div class="user-list">${names}${more}</div>`;
+    }
+
     function renderTools() {
+      renderToolChips();
       const { key, dir } = toolSort;
-      const rows = [...toolRows].sort((a, b) => {
-        const av = a[key] ?? -Infinity, bv = b[key] ?? -Infinity;
-        if (typeof av === 'string' || typeof bv === 'string') return String(av).localeCompare(String(bv)) * dir;
-        return (av - bv) * dir;
-      });
+      const rows = toolRows
+        .filter((t) => !toolSlug || t.slug === toolSlug)
+        .sort((a, b) => {
+          const av = a[key] ?? -Infinity, bv = b[key] ?? -Infinity;
+          if (typeof av === 'string' || typeof bv === 'string') return String(av).localeCompare(String(bv)) * dir;
+          return (av - bv) * dir;
+        });
       document.querySelectorAll('th.sortable').forEach((th) => {
         if (th.dataset.key === key) th.setAttribute('aria-sort', dir === 1 ? 'ascending' : 'descending');
         else th.removeAttribute('aria-sort');
       });
+      // With every MCP shown, a tool name alone is ambiguous, so name its MCP.
+      const showSlug = !toolSlug;
       document.getElementById('toolsBody').innerHTML = rows.map((t) => `
         <tr>
-          <td>${escapeHtml(t.slug)}</td>
-          <td class="mono">${escapeHtml(t.tool)}${t.surface === 'rest' ? ' <span class="badge">rest</span>' : ''}</td>
+          <td>${showSlug ? `<span class="muted">${escapeHtml(t.slug)}</span><br>` : ''}<span class="mono">${escapeHtml(t.tool)}</span>${t.surface === 'rest' ? ' <span class="badge">rest</span>' : ''}</td>
           <td class="numeric">${NUM.format(t.calls)}</td>
-          <td class="numeric">${NUM.format(t.users)}</td>
+          <td>${usersCell(t)}</td>
           <td class="numeric ${errClass(t.errorRate)}">${fmtPct(t.errorRate)}</td>
-          <td class="numeric">${fmtMs(t.p50Ms)}</td>
-          <td class="numeric">${fmtMs(t.p95Ms)}</td>
           <td>${fmtTime(t.lastUsed)}</td>
-        </tr>`).join('') || emptyRow(8, 'No calls in this period.');
+        </tr>`).join('') || emptyRow(5, 'No calls in this period.');
     }
+
+    document.getElementById('toolChips').addEventListener('click', (e) => {
+      const chip = e.target.closest('.chip');
+      if (!chip) return;
+      toolSlug = chip.dataset.slug;
+      renderTools();
+    });
+    document.getElementById('toolsBody').addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-expand-users]');
+      if (!btn) return;
+      expandedToolUsers.add(btn.dataset.expandUsers);
+      renderTools();
+    });
 
     document.querySelectorAll('th.sortable').forEach((th) => {
       th.tabIndex = 0;
       const sort = () => {
         const key = th.dataset.key;
         // Text columns start A→Z, numeric ones highest first.
-        const textCol = key === 'slug' || key === 'tool';
+        const textCol = key === 'tool';
         toolSort = toolSort.key === key ? { key, dir: -toolSort.dir } : { key, dir: textCol ? 1 : -1 };
         renderTools();
       };
