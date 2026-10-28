@@ -12,7 +12,7 @@ import { registerAdminUsageRoutes } from '../usage/adminUsageRoutes.js';
 import { isAdminEmail } from '../auth/admin.js';
 import { listUsersWithConnections } from '../usage/adminUsers.js';
 import { connectAdminMcp } from '../admin-mcp/connect.js';
-import { resourceServerMiddleware, createResourceServerMiddleware } from '../auth/resourceServerMiddleware.js';
+import { resourceServerMiddleware, createResourceServerMiddleware, stripTrustedIdentityHeaders } from '../auth/resourceServerMiddleware.js';
 import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
 import { validateJwt, validateOpaqueToken, hasScope } from '../auth/jwtValidator.js';
 import { mapJwtToUser } from '../auth/userMapping.js';
@@ -10195,19 +10195,37 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
   const mcpWwwAuth = `Bearer resource_metadata="${mcpBaseUrl}/.well-known/oauth-protected-resource"`;
 
   const mcpOnlyMiddleware = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    // Only this middleware may set the identity headers FastMCP trusts from
+    // loopback (see stripTrustedIdentityHeaders). jwtMiddleware strips them
+    // too; doing it here as well keeps this wrapper safe on its own.
+    stripTrustedIdentityHeaders(req);
+
     // Try JWT/Auth0 auth first
-    const origEnd = res.end;
     let jwtFailed = false;
+    let jwtRejection: { status: number; body: unknown } | null = null;
     const fakeRes = Object.create(res);
     fakeRes.status = (code: number) => {
       if (code === 401) jwtFailed = true;
+      else if (code >= 400) jwtRejection = { status: code, body: undefined };
       return fakeRes;
     };
     fakeRes.setHeader = () => fakeRes;
-    fakeRes.json = () => fakeRes;
+    fakeRes.json = (body: unknown) => {
+      if (jwtRejection) jwtRejection.body = body;
+      return fakeRes;
+    };
     fakeRes.end = () => {};
 
-    await jwtMiddleware(req, fakeRes as any, () => { jwtFailed = false; });
+    await jwtMiddleware(req, fakeRes as any, () => { jwtFailed = false; jwtRejection = null; });
+
+    // A non-401 rejection (insufficient scope, unverified email, a mapping
+    // outage) is final: answer it. Proxying it on would hand the MCP server
+    // a request nobody identified.
+    if (jwtRejection) {
+      const { status, body } = jwtRejection as { status: number; body: unknown };
+      res.status(status).json(body ?? { error: 'unauthorized' });
+      return;
+    }
     if (!jwtFailed) {
       next();
       return;

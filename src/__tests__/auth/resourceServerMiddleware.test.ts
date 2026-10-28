@@ -88,6 +88,37 @@ describe('resourceServerMiddleware', () => {
     assert.equal(res._headers['X-Auth-Migration'], 'deprecated');
   });
 
+  // The MCP server behind the proxy trusts these headers from loopback, and
+  // the dual-mode paths pass a request on WITHOUT identifying the caller, so a
+  // client-supplied one must never survive this middleware.
+  it('strips client-supplied identity headers on every path that calls next()', async () => {
+    process.env.DUAL_AUTH_MODE = 'true';
+    const spoofed = () => ({ 'x-mcp-user-id': '1', 'x-mcp-user-email': 'boss@example.com', 'x-mcp-user-sub': 'auth0|boss' });
+    const mw = createResourceServerMiddleware(makeDeps({
+      validateOpaqueToken: mock.fn(async () => { throw new Error('not an Auth0 token'); }),
+    }));
+
+    for (const req of [
+      makeReq({ headers: spoofed(), query: { apiKey: 'unvalidated' } }),
+      makeReq({ headers: { ...spoofed(), authorization: 'Bearer plain-api-key' } }),
+    ]) {
+      let nextCalled = false;
+      await mw(req, makeRes() as any, (() => { nextCalled = true; }) as NextFunction);
+      assert.ok(nextCalled);
+      assert.equal(req.headers['x-mcp-user-id'], undefined);
+      assert.equal(req.headers['x-mcp-user-email'], undefined);
+      assert.equal(req.headers['x-mcp-user-sub'], undefined);
+    }
+  });
+
+  it('replaces a spoofed identity with the one it verified', async () => {
+    const mw = createResourceServerMiddleware(makeDeps());
+    const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJ0ZXN0IjoxfQ.validsig';
+    const req = makeReq({ headers: { authorization: `Bearer ${jwt}`, 'x-mcp-user-id': '999999' } });
+    await mw(req, makeRes() as any, (() => {}) as NextFunction);
+    assert.notEqual(req.headers['x-mcp-user-id'], '999999');
+  });
+
   // --- Non-JWT bearer token ---
 
   it('validates non-JWT token as opaque via /userinfo', async () => {

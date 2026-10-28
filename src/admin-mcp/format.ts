@@ -13,15 +13,19 @@ import type {
 } from '../usage/usageQueries.js';
 
 type Overview = Awaited<ReturnType<typeof usageOverview>>;
-type ToolRow = Awaited<ReturnType<typeof usageToolStats>>[number];
-type ErrorRow = Awaited<ReturnType<typeof usageTopErrors>>[number];
-type LoopRow = Awaited<ReturnType<typeof usageRetryLoops>>[number];
+type ToolStats = Awaited<ReturnType<typeof usageToolStats>>;
+type ToolRow = ToolStats['tools'][number];
+type TopErrors = Awaited<ReturnType<typeof usageTopErrors>>;
+type RetryLoops = Awaited<ReturnType<typeof usageRetryLoops>>;
 type Timeline = Awaited<ReturnType<typeof usageUserTimeline>>;
 
 export type ToolSortKey = 'calls' | 'errorRate' | 'users' | 'lastUsed';
 
 const pct = (r: number) => `${(r * 100).toFixed(r > 0 && r < 0.1 ? 1 : 0)}%`;
 const who = (id: number, email: string | null) => email ?? `user #${id} (account deleted)`;
+/** "3 clients" or "showing 20 of 37 clients" — a capped list states its total. */
+const countLine = (shown: number, total: number, noun: string) =>
+  shown < total ? `showing ${shown} of ${total} ${noun}` : `${total} ${noun}`;
 
 /** "last 7 days, service clickup, MCP only" — the scope every answer is about. */
 export function describeFilter(f: UsageFilter): string {
@@ -52,11 +56,11 @@ export function formatOverview(o: Overview, f: UsageFilter): string {
   for (const [day, calls] of [...byDay].sort()) lines.push(`  ${day}: ${calls}`);
 
   if (o.clients.length) {
-    lines.push('', 'Clients:');
+    lines.push('', `Clients (${countLine(o.clients.length, o.clientsTotal, 'client/surface pairs')}):`);
     for (const c of o.clients) lines.push(`  ${c.client} (${c.surface}): ${c.calls} calls, ${c.users} users`);
   }
   if (o.topUsers.length) {
-    lines.push('', `Top users (up to ${o.topUsers.length}):`);
+    lines.push('', `Top users by calls (${countLine(o.topUsers.length, o.topUsersTotal, 'active users')}):`);
     for (const u of o.topUsers) {
       lines.push(`  ${who(u.userId, u.email)} [id ${u.userId}]: ${u.calls} calls, ${u.errors} errors, ${u.tools} tools, last seen ${u.lastSeen ?? '-'}`);
     }
@@ -71,18 +75,19 @@ export function sortTools(rows: ToolRow[], key: ToolSortKey): ToolRow[] {
   return [...rows].sort((a, b) => val(b) - val(a) || b.calls - a.calls);
 }
 
-export function formatToolUsage(rows: ToolRow[], f: UsageFilter, sortBy: ToolSortKey, limit: number): string {
+export function formatToolUsage(stats: ToolStats, f: UsageFilter, sortBy: ToolSortKey, limit: number): string {
   const head = `Tool usage — ${describeFilter(f)}`;
+  const { tools: rows, total } = stats;
   if (!rows.length) return `${head}\n\nNo recorded calls in this period.`;
   const sorted = sortTools(rows, sortBy);
   const shown = sorted.slice(0, limit);
-  const lines = [
-    head,
-    shown.length < sorted.length
-      ? `Showing ${shown.length} of ${sorted.length} tools, sorted by ${sortBy}.`
-      : `${sorted.length} tool(s), sorted by ${sortBy}.`,
-    '',
-  ];
+  const lines = [head, `${countLine(shown.length, total, 'tools')}, sorted by ${sortBy}.`];
+  // The query keeps only the most-called tools, so ranking by anything else
+  // ranks that subset — a rarely-called tool that always fails can be missing.
+  if (total > rows.length && sortBy !== 'calls') {
+    lines.push(`Only the ${rows.length} most-called tools were ranked; sorting by ${sortBy} does not consider the other ${total - rows.length}. Narrow by slug to rank them.`);
+  }
+  lines.push('');
   for (const t of shown) {
     const users = t.userList.slice(0, TOOL_USERS_SHOWN).map((u) => `${who(u.userId, u.email)} (${u.calls})`);
     const more = t.users - users.length;
@@ -94,10 +99,10 @@ export function formatToolUsage(rows: ToolRow[], f: UsageFilter, sortBy: ToolSor
   return lines.join('\n');
 }
 
-export function formatTopErrors(rows: ErrorRow[], f: UsageFilter): string {
+export function formatTopErrors({ errors: rows, total }: TopErrors, f: UsageFilter): string {
   const head = `Top errors — ${describeFilter(f)}`;
   if (!rows.length) return `${head}\n\nNo failed calls in this period.`;
-  const lines = [head, `${rows.length} error group(s) (at most 50), most frequent first.`, ''];
+  const lines = [head, `${countLine(rows.length, total, 'error groups')}, most frequent first.`, ''];
   for (const e of rows) {
     lines.push(
       `${e.slug} / ${e.tool} — ${e.kind ?? 'error'}: ${e.message || '(no message)'}`,
@@ -107,13 +112,13 @@ export function formatTopErrors(rows: ErrorRow[], f: UsageFilter): string {
   return lines.join('\n');
 }
 
-export function formatRetryLoops(rows: LoopRow[], f: UsageFilter): string {
+export function formatRetryLoops({ loops: rows, total }: RetryLoops, f: UsageFilter): string {
   const head = `Retry loops — ${describeFilter(f)}`;
   const rule =
     'A loop is 4+ MCP calls to one tool in one session, each within 60s of the last. ' +
     'It is often a model retrying, but a batch (reading ten tasks) looks the same; runs containing failures are listed first.';
   if (!rows.length) return `${head}\n${rule}\n\nNo loops in this period.`;
-  const lines = [head, rule, `${rows.length} loop(s) (at most 50).`, ''];
+  const lines = [head, rule, `${countLine(rows.length, total, 'loops')}.`, ''];
   for (const l of rows) {
     lines.push(
       `${who(l.userId, l.email)} [id ${l.userId}] — ${l.slug} / ${l.tool}: ${l.calls} calls, ${l.errors} failed, ${l.started ?? '-'} → ${l.ended ?? '-'}`,

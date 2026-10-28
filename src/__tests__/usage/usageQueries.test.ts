@@ -108,7 +108,7 @@ describe('usageToolStats', () => {
       errors: '2', last_used: '2026-10-21T00:00:00Z',
       user_list: [{ userId: 5, email: 'a@b.c', calls: 6 }, { userId: 9, email: null, calls: 2 }],
     }]]]);
-    const [row] = await usageToolStats(pool, { days: 7 });
+    const { tools: [row] } = await usageToolStats(pool, { days: 7 });
     assert.equal(row.errorRate, 0.25);
     assert.equal(row.users, 2);
     assert.deepEqual(row.userList, [
@@ -121,15 +121,37 @@ describe('usageToolStats', () => {
   it('caps the named list but keeps the full user count', async () => {
     const list = Array.from({ length: TOOL_USER_LIST_MAX + 5 }, (_, i) => ({ userId: i + 1, email: null, calls: 1 }));
     const pool = makePool([[/jsonb_agg/, [{ mcp_slug: 's', tool: 't', surface: 'mcp', calls: '60', users: String(list.length), errors: '0', last_used: null, user_list: list }]]]);
-    const [row] = await usageToolStats(pool, { days: 7 });
+    const { tools: [row] } = await usageToolStats(pool, { days: 7 });
     assert.equal(row.userList.length, TOOL_USER_LIST_MAX);
     assert.equal(row.users, TOOL_USER_LIST_MAX + 5);
   });
 
   it('answers an empty list, not null, for a tool with no known users', async () => {
     const pool = makePool([[/jsonb_agg/, [{ mcp_slug: 's', tool: 't', surface: 'mcp', calls: '1', users: '0', errors: '0', last_used: null, user_list: null }]]]);
-    const [row] = await usageToolStats(pool, { days: 7 });
+    const { tools: [row] } = await usageToolStats(pool, { days: 7 });
     assert.deepEqual(row.userList, []);
+  });
+});
+
+describe('totals of capped lists', () => {
+  it('reads each total from the window column, not from the rows returned', async () => {
+    const pool = makePool([
+      [/jsonb_agg/, [{ mcp_slug: 's', tool: 't', surface: 'mcp', calls: '1', users: '0', errors: '0', last_used: null, user_list: [], total: '812' }]],
+      [/AND NOT e\.ok/, [{ mcp_slug: 's', tool: 't', error_kind: 'E', message: 'm', calls: '1', users: '1', last_seen: null, total: '73' }]],
+      [/WITH ordered AS/, [{ user_id: 1, email: null, mcp_slug: 's', tool: 't', calls: '4', errors: '0', started: null, ended: null, total: '61' }]],
+    ]);
+    assert.equal((await usageToolStats(pool, { days: 7 })).total, 812);
+    assert.equal((await usageTopErrors(pool, { days: 7 })).total, 73);
+    assert.equal((await usageRetryLoops(pool, { days: 7 })).total, 61);
+    for (const c of pool.calls) assert.match(c.text, /count\(\*\) OVER \(\) AS total/);
+  });
+
+  it('answers a total of 0 for an empty result', async () => {
+    const pool = makePool([]);
+    assert.deepEqual(await usageToolStats(pool, { days: 7 }), { tools: [], total: 0 });
+    const o = await usageOverview(pool, { days: 7 });
+    assert.equal(o.clientsTotal, 0);
+    assert.equal(o.topUsersTotal, 0);
   });
 });
 

@@ -72,9 +72,9 @@ describe('getUsageOverview', () => {
   });
 });
 
-const toolRow = (tool: string, calls: number, errors: number, users: number, lastUsed: string) => ({
+const toolRow = (tool: string, calls: number, errors: number, users: number, lastUsed: string, total = 3) => ({
   mcp_slug: 'clickup', tool, surface: 'mcp', calls: String(calls), users: String(users), errors: String(errors),
-  last_used: lastUsed,
+  last_used: lastUsed, total: String(total),
   user_list: Array.from({ length: users }, (_, i) => ({ userId: i + 1, email: i === 0 ? null : `u${i + 1}@example.com`, calls: users - i })),
 });
 
@@ -87,7 +87,7 @@ describe('listToolUsage', () => {
 
   it('sorts as asked and says how many tools exist when it shows fewer', async () => {
     const out = await opToolUsage({ ...filter, sortBy: 'errorRate', limit: 2 }, deps({ pool }));
-    assert.match(out, /Showing 2 of 3 tools, sorted by errorRate\./);
+    assert.match(out, /showing 2 of 3 tools, sorted by errorRate\./);
     assert.ok(out.indexOf('searchTasks') < out.indexOf('getTask'));
     assert.doesNotMatch(out, /updateTask/);
   });
@@ -96,6 +96,15 @@ describe('listToolUsage', () => {
     const out = await opToolUsage({ ...filter, sortBy: 'calls', limit: 10 }, deps({ pool }));
     assert.match(out, /users \(7\): user #1 \(account deleted\) \(7\), u2@example\.com \(6\)/);
     assert.match(out, /and 2 more/);
+  });
+
+  it('says when a non-calls ranking only covers the most-called tools', async () => {
+    const capped = () => makePool([[/jsonb_agg/, [toolRow('getTask', 50, 1, 2, '2026-10-20T00:00:00Z', 812)]]]);
+    const out = await opToolUsage({ ...filter, sortBy: 'errorRate', limit: 10 }, deps({ pool: capped }));
+    assert.match(out, /showing 1 of 812 tools/);
+    assert.match(out, /Only the 1 most-called tools were ranked; sorting by errorRate does not consider the other 811/);
+    const byCalls = await opToolUsage({ ...filter, sortBy: 'calls', limit: 10 }, deps({ pool: capped }));
+    assert.doesNotMatch(byCalls, /most-called tools were ranked/);
   });
 
   it('sorts by last use', async () => {
@@ -108,11 +117,12 @@ describe('listToolUsage', () => {
 describe('listTopErrors and listRetryLoops', () => {
   it('render their rows and say when there are none', async () => {
     const pool = () => makePool([
-      [/AND NOT e\.ok/, [{ mcp_slug: 'redmine', tool: 'listTimeEntries', error_kind: 'UserError', message: 'Redmine refused (403)', calls: '5', users: '2', last_seen: '2026-10-27T00:00:00Z' }]],
-      [/WITH ordered AS/, [{ user_id: 3, email: 'bob@example.com', mcp_slug: 'clickup', tool: 'searchTasks', calls: '6', errors: '4', started: '2026-10-27T10:00:00Z', ended: '2026-10-27T10:01:00Z' }]],
+      [/AND NOT e\.ok/, [{ mcp_slug: 'redmine', tool: 'listTimeEntries', error_kind: 'UserError', message: 'Redmine refused (403)', calls: '5', users: '2', last_seen: '2026-10-27T00:00:00Z', total: '64' }]],
+      [/WITH ordered AS/, [{ user_id: 3, email: 'bob@example.com', mcp_slug: 'clickup', tool: 'searchTasks', calls: '6', errors: '4', started: '2026-10-27T10:00:00Z', ended: '2026-10-27T10:01:00Z', total: '1' }]],
     ]);
     const errors = await opTopErrors(filter, deps({ pool }));
     assert.match(errors, /redmine \/ listTimeEntries — UserError: Redmine refused \(403\)/);
+    assert.match(errors, /showing 1 of 64 error groups/);
     const loops = await opRetryLoops(filter, deps({ pool }));
     assert.match(loops, /bob@example\.com \[id 3\] — clickup \/ searchTasks: 6 calls, 4 failed/);
     assert.match(loops, /a batch .* looks the same/);

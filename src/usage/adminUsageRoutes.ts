@@ -54,9 +54,9 @@ function filtered(run: (pool: UsagePool, filter: ReturnType<typeof usageFilterSc
 
 export function registerAdminUsageRoutes(app: Express, requireAdmin: Gate): void {
   app.get('/api/admin/usage/overview', requireAdmin, filtered(usageOverview));
-  app.get('/api/admin/usage/tools', requireAdmin, filtered(async (pool, f) => ({ tools: await usageToolStats(pool, f) })));
-  app.get('/api/admin/usage/errors', requireAdmin, filtered(async (pool, f) => ({ errors: await usageTopErrors(pool, f) })));
-  app.get('/api/admin/usage/loops', requireAdmin, filtered(async (pool, f) => ({ loops: await usageRetryLoops(pool, f) })));
+  app.get('/api/admin/usage/tools', requireAdmin, filtered(usageToolStats));
+  app.get('/api/admin/usage/errors', requireAdmin, filtered(usageTopErrors));
+  app.get('/api/admin/usage/loops', requireAdmin, filtered(usageRetryLoops));
 
   app.get('/api/admin/usage/users/:userId/events', requireAdmin, async (req: Request, res: Response) => {
     const userId = Number(req.params.userId);
