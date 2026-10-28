@@ -8,6 +8,7 @@
 // date-range filters (not supported by the public v2 API).
 
 import { FastMCP, UserError } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 
 import { UserSession } from '../userSession.js';
@@ -55,11 +56,11 @@ import {
   EMPLOYEE_STATUS_VALUES,
 } from './apiHelpers.js';
 
-export const peopleForceServer = new FastMCP<UserSession>({
+export const peopleForceServer = instrumentServer(new FastMCP<UserSession>({
   name: 'PeopleForce MCP',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'peopleforce'),
-});
+}), 'peopleforce');
 
 // PeopleForce publishes 45 live REST endpoints (src/restCatalog.ts), and
 // public/openapi-peopleforce.json documents their auth as "a 5-minute bearer

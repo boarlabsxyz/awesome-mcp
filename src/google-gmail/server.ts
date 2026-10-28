@@ -1,5 +1,6 @@
 // src/google-gmail/server.ts
 import { FastMCP, UserError } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 import { gmail_v1 } from 'googleapis';
 
@@ -16,11 +17,11 @@ import {
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
-const gmailServer = new FastMCP<UserSession>({
+const gmailServer = instrumentServer(new FastMCP<UserSession>({
   name: 'Gmail MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-gmail'),
-});
+}), 'google-gmail');
 
 registerMintRestBearerForCurl(gmailServer);
 registerListRestEndpoints(gmailServer);

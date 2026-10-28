@@ -5,12 +5,15 @@ import { {{api}}_{{v}} } from 'googleapis';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
+import { instrumentServer } from '../usage/instrumentServer.js';
 
-export const {{slugCamel}}Server = new FastMCP<UserSession>({
+// Constructed inside instrumentServer() so every tool call is recorded for usage
+// analytics; src/__tests__/usage/instrumentRegistration.test.ts fails otherwise.
+export const {{slugCamel}}Server = instrumentServer(new FastMCP<UserSession>({
   name: '{{displayName}}',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || '{{slug}}'),
-});
+}), '{{slug}}');
 
 function get{{X}}Client(session?: UserSession): {{api}}_{{v}}.{{X}} {
   if (session?.google{{X}}) return session.google{{X}};
