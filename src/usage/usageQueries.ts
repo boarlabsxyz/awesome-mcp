@@ -111,33 +111,59 @@ export async function usageOverview(pool: UsagePool, f: UsageFilter) {
   };
 }
 
+/** How many of a tool's users are listed by name; `users` still counts them all. */
+export const TOOL_USER_LIST_MAX = 50;
+
+export interface ToolUser {
+  userId: number;
+  email: string | null;
+  calls: number;
+}
+
+/** Per-tool counts plus WHO used each tool, busiest users first. */
 export async function usageToolStats(pool: UsagePool, f: UsageFilter) {
   const params: unknown[] = [];
   const where = filterClause(f, params);
   const { rows } = await pool.query(
-    `SELECT e.mcp_slug, e.tool, e.surface,
-            count(*) AS calls,
-            count(DISTINCT e.user_id) AS users,
-            count(*) FILTER (WHERE NOT e.ok) AS errors,
-            percentile_cont(0.5) WITHIN GROUP (ORDER BY e.duration_ms) AS p50,
-            percentile_cont(0.95) WITHIN GROUP (ORDER BY e.duration_ms) AS p95,
-            max(e.ts) AS last_used
-       FROM tool_call_events e WHERE ${where}
+    `WITH per_user AS (
+       SELECT e.mcp_slug, e.tool, e.surface, e.user_id,
+              count(*) AS calls,
+              count(*) FILTER (WHERE NOT e.ok) AS errors,
+              max(e.ts) AS last_used
+         FROM tool_call_events e WHERE ${where}
+        GROUP BY 1, 2, 3, 4
+     )
+     SELECT p.mcp_slug, p.tool, p.surface,
+            sum(p.calls) AS calls,
+            count(p.user_id) AS users,
+            sum(p.errors) AS errors,
+            max(p.last_used) AS last_used,
+            coalesce(
+              jsonb_agg(jsonb_build_object('userId', p.user_id, 'email', u.email, 'calls', p.calls)
+                        ORDER BY p.calls DESC, p.user_id)
+                FILTER (WHERE p.user_id IS NOT NULL),
+              '[]'::jsonb
+            ) AS user_list
+       FROM per_user p LEFT JOIN users u ON u.id = p.user_id
       GROUP BY 1, 2, 3 ORDER BY 4 DESC LIMIT 500`,
     params,
   );
   return rows.map((r) => {
     const calls = num(r.calls);
+    const list = (Array.isArray(r.user_list) ? r.user_list : []) as Array<Record<string, unknown>>;
     return {
       slug: r.mcp_slug as string,
       tool: r.tool as string,
       surface: r.surface as string,
       calls,
       users: num(r.users),
+      userList: list.slice(0, TOOL_USER_LIST_MAX).map((u): ToolUser => ({
+        userId: num(u.userId),
+        email: (u.email as string | null) ?? null,
+        calls: num(u.calls),
+      })),
       errors: num(r.errors),
       errorRate: calls ? num(r.errors) / calls : 0,
-      p50Ms: numOrNull(r.p50) === null ? null : Math.round(num(r.p50)),
-      p95Ms: numOrNull(r.p95) === null ? null : Math.round(num(r.p95)),
       lastUsed: iso(r.last_used),
     };
   });
