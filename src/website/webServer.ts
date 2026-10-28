@@ -8,6 +8,7 @@ import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { restUsageMiddleware } from '../usage/restUsageMiddleware.js';
+import { registerAdminUsageRoutes } from '../usage/adminUsageRoutes.js';
 import { resourceServerMiddleware, createResourceServerMiddleware } from '../auth/resourceServerMiddleware.js';
 import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
 import { validateJwt, validateOpaqueToken, hasScope } from '../auth/jwtValidator.js';
@@ -3842,6 +3843,9 @@ function registerSharedRoutes(app: express.Express): void {
       res.status(500).json({ error: 'Failed to fetch users' });
     }
   });
+
+  // Usage analytics for the Usage tab (src/usage/adminUsageRoutes.ts).
+  registerAdminUsageRoutes(app, requireAdmin);
 
   // === Internal API (GitHub Actions → app server) ===
 
