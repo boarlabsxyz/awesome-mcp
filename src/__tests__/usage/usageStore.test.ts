@@ -9,12 +9,13 @@ import {
   pruneUsageEvents,
   readUsageRetentionDays,
   recordToolCall,
+  stripNul,
   FLUSH_BATCH_SIZE,
   MAX_BUFFERED_EVENTS,
   type ToolCallEvent,
 } from '../../usage/usageStore.js';
 
-function makeFakePool(opts: { failInserts?: boolean } = {}) {
+function makeFakePool(opts: { failInserts?: boolean; rejectNul?: boolean } = {}) {
   const inserted: unknown[][] = [];
   const queries: Array<{ text: string; params: any[] }> = [];
   return {
@@ -24,6 +25,10 @@ function makeFakePool(opts: { failInserts?: boolean } = {}) {
       queries.push({ text, params });
       if (/^INSERT INTO tool_call_events/.test(text)) {
         if (opts.failInserts) throw new Error('db down');
+        // What Postgres does: a NUL anywhere in TEXT or JSONB fails the statement.
+        if (opts.rejectNul && JSON.stringify(params).includes('\\u0000')) {
+          throw new Error('invalid byte sequence for encoding "UTF8": 0x00');
+        }
         const width = 16;
         for (let i = 0; i < params.length; i += width) inserted.push(params.slice(i, i + width));
         return { rows: [], rowCount: params.length / width };
@@ -161,5 +166,27 @@ describe('retention', () => {
     process.env.USAGE_RETENTION_DAYS = '0';
     assert.equal(await pruneUsageEvents(), 0);
     assert.equal(pool.queries.length, 0);
+  });
+});
+
+describe('NUL characters', () => {
+  it('a NUL in one event does not cost the rest of the batch', async () => {
+    const pool = makeFakePool({ rejectNul: true });
+    __setUsagePoolForTests(pool);
+    recordToolCall(event({ tool: 'clean' }));
+    recordToolCall(event({ tool: 'rest', surface: 'rest', argKeys: ['a\u0000b'] }));
+    recordToolCall(event({ tool: 'preview', argPreview: { query: 'x\u0000y', ['k\u0000']: 1 } }));
+    recordToolCall(event({ tool: 'err', ok: false, errorMessage: 'bad\u0000' }));
+    await flushUsageEvents();
+
+    assert.equal(pool.inserted.length, 4);
+    assert.deepEqual(pool.inserted[1][13], ['ab']);
+    assert.equal(pool.inserted[2][14], '{"query":"xy","k":1}');
+    assert.equal(pool.inserted[3][12], 'bad');
+  });
+
+  it('stripNul handles nested values and leaves dates and numbers alone', () => {
+    const ts = new Date(0);
+    assert.deepEqual(stripNul({ a: ['x\u0000'], b: { 'c\u0000': 'd' }, ts, n: 1 }), { a: ['x'], b: { c: 'd' }, ts, n: 1 });
   });
 });

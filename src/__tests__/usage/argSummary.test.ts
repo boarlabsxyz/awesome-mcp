@@ -4,6 +4,7 @@ import {
   summarizeArgs,
   summarizeError,
   redactSecrets,
+  redactAndTruncate,
   PREVIEW_MAX_CHARS,
   ERROR_MESSAGE_MAX_CHARS,
 } from '../../usage/argSummary.js';
@@ -115,5 +116,44 @@ describe('summarizeError', () => {
 
   it('handles non-Error throws', () => {
     assert.deepEqual(summarizeError('boom'), { kind: 'Error', message: 'boom' });
+  });
+});
+
+describe('redactAndTruncate', () => {
+  // Any run of token characters after a secret prefix, other than a placeholder.
+  const LEAK = /\b(ghp_|sbp_|xoxb-)[A-Za-z0-9]/;
+
+  it('redacts a token that straddles the cut instead of storing its prefix', () => {
+    const token = 'ghp_' + 'A'.repeat(36);
+    // `at` is where the token starts; it follows a space, as in real text,
+    // because the patterns only match a token that starts at a word boundary.
+    for (let at = PREVIEW_MAX_CHARS - 13; at <= PREVIEW_MAX_CHARS; at++) {
+      const out = redactAndTruncate('x'.repeat(at - 1) + ' ' + token, PREVIEW_MAX_CHARS);
+      assert.ok(out.length <= PREVIEW_MAX_CHARS);
+      assert.doesNotMatch(out, LEAK, `token starting at ${at} leaked: …${out.slice(-20)}`);
+    }
+  });
+
+  it('masks a fragment cut off at the redaction window, not just at the final cut', () => {
+    // Long JWTs shrink to a short placeholder, pulling text from near the end
+    // of the 4x window into the final 200 characters — including a token the
+    // window itself cut short.
+    const jwt = 'eyJ' + 'a'.repeat(80) + '.' + 'b'.repeat(80) + '.' + 'c'.repeat(80);
+    const head = Array(3).fill(jwt).join(' ') + ' ';
+    const window = PREVIEW_MAX_CHARS * 4;
+    const pad = 'p'.repeat(window - head.length - ' sbp_'.length - 6);
+    const input = head + pad + ' sbp_' + 'S'.repeat(40);
+    assert.equal(input.slice(window - 10, window), 'sbp_SSSSSS');
+    const out = redactAndTruncate(input, PREVIEW_MAX_CHARS);
+    assert.doesNotMatch(out, LEAK);
+  });
+
+  it('leaves untruncated text alone, including short look-alikes', () => {
+    assert.equal(redactAndTruncate('ask sk-abc about it', 200), 'ask sk-abc about it');
+  });
+
+  it('applies to error messages at their own cap', () => {
+    const err = new Error('x'.repeat(ERROR_MESSAGE_MAX_CHARS - 7) + ' xoxb-1234-5678-abcdefgh');
+    assert.doesNotMatch(summarizeError(err).message, LEAK);
   });
 });

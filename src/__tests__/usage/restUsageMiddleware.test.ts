@@ -22,6 +22,12 @@ function makeApp(session?: Record<string, unknown>) {
   };
   app.get('/api/v1/clickup/tasks/:taskId', auth, (_req, res) => { res.json({ ok: true }); });
   app.get('/api/v1/docs/:documentId', auth, (_req, res) => { res.status(404).json({ error: 'missing' }); });
+  // A streamed download whose upstream fails mid-body: headers sent, then destroyed.
+  app.get('/api/v1/drive/files/:fileId/download', auth, (_req, res) => {
+    res.status(200).setHeader('Content-Type', 'application/octet-stream');
+    res.write('partial');
+    setImmediate(() => res.destroy());
+  });
   return app;
 }
 
@@ -67,6 +73,24 @@ describe('restUsageMiddleware', () => {
     assert.equal(e.ok, false);
     assert.equal(e.errorKind, '404');
     assert.equal(e.mcpSlug, 'google-docs');
+  });
+
+  it('records a response destroyed mid-stream as aborted, exactly once', async () => {
+    const app = makeApp({ userId: 7 });
+    await request(app).get('/api/v1/drive/files/f1/download').catch(() => {});
+    await new Promise((r) => setTimeout(r, 20));
+    const events = __pendingUsageEvents();
+    assert.equal(events.length, 1);
+    assert.equal(events[0].ok, false);
+    assert.equal(events[0].errorKind, 'aborted');
+    assert.equal(events[0].tool, 'GET /api/v1/drive/files/:fileId/download');
+  });
+
+  it('records a completed response exactly once', async () => {
+    const app = makeApp({ userId: 7, mcpSlug: 'clickup' });
+    await request(app).get('/api/v1/clickup/tasks/abc');
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(__pendingUsageEvents().length, 1);
   });
 
   it('records nothing for an unauthenticated call', async () => {
