@@ -1,5 +1,6 @@
 // src/server.ts
 import { FastMCP, UserError } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 import { google, docs_v1, drive_v3, sheets_v4 } from 'googleapis';
 import { authorize } from '../auth.js';
@@ -179,11 +180,11 @@ process.on('unhandledRejection', (reason, promise) => {
 // MCP slug for this server instance (set via environment variable or defaults to google-docs)
 const MCP_SLUG = process.env.MCP_SLUG || 'google-docs';
 
-const server = new FastMCP<UserSession>({
+const server = instrumentServer(new FastMCP<UserSession>({
   name: 'Ultimate Google Docs & Sheets MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(MCP_SLUG),
-});
+}), 'google-docs');
 
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';

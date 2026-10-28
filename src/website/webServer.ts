@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { createProxyMiddleware } from 'http-proxy-middleware';
+import { restUsageMiddleware } from '../usage/restUsageMiddleware.js';
 import { resourceServerMiddleware, createResourceServerMiddleware } from '../auth/resourceServerMiddleware.js';
 import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
 import { validateJwt, validateOpaqueToken, hasScope } from '../auth/jwtValidator.js';
@@ -4151,6 +4152,10 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
 }
 
 function registerRestApiRoutes(app: express.Express): void {
+  // Usage analytics for the REST plane — before every route, so it sees each
+  // response's final status. Records authenticated calls only.
+  app.use('/api/v1', restUsageMiddleware);
+
   // === REST API for ChatGPT Integration ===
 
   /**

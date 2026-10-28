@@ -1,5 +1,6 @@
 // src/slack/server.ts
 import { FastMCP, UserError } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
@@ -8,11 +9,11 @@ import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handle
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
-export const slackBotServer = new FastMCP<UserSession>({
+export const slackBotServer = instrumentServer(new FastMCP<UserSession>({
   name: 'Slack Bot MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'slack-bot'),
-});
+}), 'slack-bot');
 
 registerMintRestBearerForCurl(slackBotServer);
 registerListRestEndpoints(slackBotServer);

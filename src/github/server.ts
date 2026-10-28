@@ -21,6 +21,7 @@
 //     without push access) are compared against the response, not assumed.
 
 import { FastMCP } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
@@ -86,11 +87,11 @@ import {
   opGetPullRequestReviews,
 } from './ops.js';
 
-export const githubServer = new FastMCP<UserSession>({
+export const githubServer = instrumentServer(new FastMCP<UserSession>({
   name: 'GitHub MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'github'),
-});
+}), 'github');
 
 // The REST plane is live for this service (/api/v1/github/*): without these an
 // MCP client could neither discover it nor mint the 5-minute bearer, leaving
