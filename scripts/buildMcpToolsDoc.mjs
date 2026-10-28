@@ -45,6 +45,7 @@ const SERVICES = [
   ['src/browserbase/server.ts',           'Browserbase',           'browserbase'],
   ['src/github/server.ts',                'GitHub',                'github'],
   ['src/pinecone/server.ts',              'Pinecone',              'pinecone'],
+  ['src/admin-mcp/server.ts',             'Admin (usage analytics)', null],
 ];
 
 // ---------------------------------------------------------------------------

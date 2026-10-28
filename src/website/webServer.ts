@@ -9,6 +9,9 @@ import { OAuth2Client } from 'google-auth-library';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { restUsageMiddleware } from '../usage/restUsageMiddleware.js';
 import { registerAdminUsageRoutes } from '../usage/adminUsageRoutes.js';
+import { isAdminEmail } from '../auth/admin.js';
+import { listUsersWithConnections } from '../usage/adminUsers.js';
+import { connectAdminMcp } from '../admin-mcp/connect.js';
 import { resourceServerMiddleware, createResourceServerMiddleware } from '../auth/resourceServerMiddleware.js';
 import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
 import { validateJwt, validateOpaqueToken, hasScope } from '../auth/jwtValidator.js';
@@ -537,7 +540,6 @@ export function sanitizePostLoginRedirect(value: unknown): string | null {
   const allowed = path === '/dashboard' || path.startsWith('/connect/');
   return allowed ? value : null;
 }
-const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
 
 // Extend Express Request to include session
 interface AuthenticatedRequest extends Request {
@@ -1958,6 +1960,22 @@ function registerSharedRoutes(app: express.Express): void {
       const mcp = await getMcpCatalog(mcpSlug);
       if (!mcp) {
         res.status(404).send('MCP not found');
+        return;
+      }
+
+      // The Admin MCP has no credential and no provider consent: connecting
+      // just creates the row that carries its URL (src/admin-mcp/connect.ts).
+      if (mcpSlug === 'admin') {
+        const result = await connectAdminMcp({ id: connectingUser.id, email: connectingUser.email });
+        if (result.outcome === 'forbidden') {
+          res.status(403).send('The Admin MCP is for administrators only.');
+        } else if (result.outcome === 'exists') {
+          res.redirect('/dashboard?already_exists=' + encodeURIComponent(result.instanceName));
+        } else {
+          console.error(`User ${connectingUser.id} connected Admin MCP: ${result.instanceId}`);
+          // The dashboard banner prints this value, so it is the name, not the id.
+          res.redirect('/dashboard?connected=' + encodeURIComponent(result.instanceName));
+        }
         return;
       }
 
@@ -3796,7 +3814,7 @@ function registerSharedRoutes(app: express.Express): void {
       res.status(401).json({ error: 'Not authenticated' });
       return;
     }
-    if (!ADMIN_EMAILS.includes(user.email.toLowerCase())) {
+    if (!isAdminEmail(user.email)) {
       res.status(403).json({ error: 'Access denied' });
       return;
     }
@@ -3809,34 +3827,7 @@ function registerSharedRoutes(app: express.Express): void {
 
   app.get('/api/admin/users', requireAdmin, async (_req: AuthenticatedRequest, res) => {
     try {
-      await loadUsers();
-      const allUsers = await getAllUsers();
-      const usersWithConnections = await Promise.all(
-        allUsers.map(async (u) => {
-          let connectionCount = 0;
-          let connections: { mcpSlug: string; instanceName: string; googleEmail: string | null }[] = [];
-          if (u.id) {
-            try {
-              const mcpConns = await getUserConnectedMcps(u.id);
-              connectionCount = mcpConns.length;
-              connections = mcpConns.map(c => ({
-                mcpSlug: c.mcpSlug,
-                instanceName: c.instanceName,
-                googleEmail: c.googleEmail,
-              }));
-            } catch {}
-          }
-          return {
-            id: u.id,
-            email: u.email,
-            name: u.name,
-            authMethod: u.authMethod,
-            createdAt: u.createdAt,
-            connectionCount,
-            connections,
-          };
-        })
-      );
+      const usersWithConnections = await listUsersWithConnections();
       res.json({ users: usersWithConnections });
     } catch (err: any) {
       console.error('Error fetching admin users:', err);
@@ -3871,7 +3862,7 @@ function registerSharedRoutes(app: express.Express): void {
     try {
       // Find an admin user with a Gmail connection to send from
       const allUsers = await getAllUsers();
-      const adminUser = allUsers.find(u => ADMIN_EMAILS.includes(u.email.toLowerCase()));
+      const adminUser = allUsers.find(u => isAdminEmail(u.email));
       if (!adminUser || !adminUser.id) {
         res.status(503).json({ error: 'No admin user found for sending emails' });
         return;
@@ -4002,6 +3993,11 @@ function registerSharedRoutes(app: express.Express): void {
       'Log 3 hours against issue #1482 for today',
       'Show the wiki page "Release Process" in the platform project',
     ],
+    'admin': [
+      'How were the MCPs used this week? Which services and tools are busiest?',
+      'Which tools fail most often in the last 30 days, and with what errors?',
+      'Show me what ana@example.com did yesterday and where the model got stuck retrying',
+    ],
     'pinecone': [
       'List my Pinecone indexes and tell me which namespaces each one has and how many records',
       'Search the company-docs index for records about the vacation policy and show me the top 5',
@@ -4019,11 +4015,31 @@ function registerSharedRoutes(app: express.Express): void {
     ],
   };
 
+  // Catalogs only administrators may see. is_active is global, so the filter
+  // is per request: the dashboard's same-origin fetch carries the session
+  // cookie, while the public integrations page and anonymous callers do not.
+  const ADMIN_ONLY_SLUGS = new Set(['admin']);
+
+  /** True only for a request with a live dashboard session belonging to an admin. Never throws. */
+  async function requestIsAdmin(req: Request): Promise<boolean> {
+    try {
+      const sessionId = (req as any).signedCookies?.session;
+      if (!sessionId) return false;
+      const session = await getSession(sessionId);
+      if (!session || session.expiresAt < Date.now()) return false;
+      const user = await resolveSessionUser(session);
+      return isAdminEmail(user?.email);
+    } catch {
+      return false;
+    }
+  }
+
   // GET /api/v1/catalogs - List all active MCPs
-  app.get('/api/v1/catalogs', async (_req, res) => {
+  app.get('/api/v1/catalogs', async (req, res) => {
     try {
       console.error('[/api/v1/catalogs] Fetching catalogs...');
-      const catalogs = await listMcpCatalogs();
+      const isAdmin = await requestIsAdmin(req);
+      const catalogs = (await listMcpCatalogs()).filter((c) => isAdmin || !ADMIN_ONLY_SLUGS.has(c.slug));
       console.error(`[/api/v1/catalogs] Found ${catalogs.length} catalogs`);
       res.json({
         catalogs: catalogs.map(c => {
@@ -4055,7 +4071,7 @@ function registerSharedRoutes(app: express.Express): void {
   app.get('/api/v1/catalogs/:slug', async (req, res) => {
     try {
       const catalog = await getMcpCatalog(req.params.slug);
-      if (!catalog) {
+      if (!catalog || (ADMIN_ONLY_SLUGS.has(catalog.slug) && !(await requestIsAdmin(req)))) {
         res.status(404).json({ error: 'Catalog not found' });
         return;
       }

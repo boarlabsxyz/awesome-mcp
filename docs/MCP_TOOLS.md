@@ -24,10 +24,11 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Browserbase](#browserbase) (9)
 - [GitHub](#github) (27)
 - [Pinecone](#pinecone) (9)
+- [Admin (usage analytics)](#admin-usage-analytics-) (6)
 
 ## Shared (opt-in per server)
 
-Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 16 of 17 servers; not on PeopleForce v4).
+Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 16 of 18 servers; not on PeopleForce v4, Admin (usage analytics)).
 
 | Tool | Description | REST |
 |---|---|---|
@@ -548,6 +549,19 @@ Source: `src/pinecone/server.ts` — 9 tools.
 | `create-index-for-model` | Create a Pinecone index with integrated embedding, which automatically embeds the text field named in embed.fieldMap. That field name is fixed at creation and every record you later upsert must carry it, so choose it deliberately. If an index with the same name already exists it is returned unchanged rather than erroring — and the response WARNS when that existing index uses a different embedding model or embeds a different field than you asked for, because neither can be changed after creation and reusing it silently would give you something other than what you requested. The index may take a few seconds to become ready; the response says which. Refused when this connection is set to read-only. If an index allowlist is configured, add the new name to it on the dashboard FIRST — an allowlist entry for a name that does not exist yet denies nothing. | `POST /api/v1/pinecone/indexes` |
 | `upsert-records` | Insert or update records in an integrated-embedding index. A record whose _id already exists is OVERWRITTEN. Every record needs an _id and the text field named by the index's embed.field_map — call describe-index first to confirm that field name; this tool checks it locally and sends nothing if any record is missing it. At most 1000 records per call: a larger batch is refused rather than split, because an upsert is not atomic across the body and a failure part-way through several chunks would leave some records written and some not. Embedding is asynchronous, so the records will not be searchable for a few seconds. Refused when this connection is set to read-only. | `POST /api/v1/pinecone/indexes/{indexName}/upsert` |
 
+## Admin (usage analytics)
+
+Source: `src/admin-mcp/server.ts` — 6 tools.
+
+| Tool | Description | REST |
+|---|---|---|
+| `getUsageOverview` | Summary of how the MCPs on this platform are used: total calls, active users, error rate, calls per service and per day, client apps (Claude, ChatGPT, Cursor, curl…) and the busiest users. Start here for "how are people using the MCPs". MCP clients never send the user's prompt to a server, so prompts are not recorded; argument values are kept only for search-type fields (query, textToFind, title, …), truncated and with secrets redacted. | — |
+| `listToolUsage` | Per-tool usage: calls, error count and rate, last use, and WHICH users called each tool (busiest first, with their call counts). Sort by errorRate to find broken tools, by calls for the most used, by lastUsed for recent activity. A tool with no calls in the period does not appear. | — |
+| `listTopErrors` | The most frequent failures, grouped by tool, error kind and message (up to 50 groups), with how many calls and users each affected and when it was last seen. Error messages are stored truncated and with secrets redacted. | — |
+| `listRetryLoops` | Bursts of repeated calls to one tool: 4+ MCP calls in one session, each within 60s of the last. Often a model retrying because a response or tool description confused it — but a legitimate batch looks the same, so runs containing failures are listed first. Follow up with getUserActivity to read the calls themselves. | — |
+| `getUserActivity` | One user's recorded calls, newest first, grouped by MCP session: tool, arguments (names, plus values for search-type fields), result or error, and duration. The closest available view of what the user was trying to do. MCP clients never send the user's prompt to a server, so prompts are not recorded; argument values are kept only for search-type fields, truncated and with secrets redacted. | — |
+| `listUsers` | Every account on the platform with its sign-in method, join date and connected MCPs (connector name and, for Google ones, the Google account). Filter by part of an email address or name. | — |
+
 ---
 
-**Grand total: 397 tools across 18 sections.**
+**Grand total: 403 tools across 19 sections.**

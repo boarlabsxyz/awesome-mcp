@@ -123,7 +123,12 @@ describe('POST /api/internal/release-notify', () => {
       else delete process.env.ADMIN_EMAILS;
     });
 
-    it('returns 503 when admin exists but has no id (file-based store)', async () => {
+    // This used to be "admin exists but has no id (file-based store)". File
+    // users do get numeric ids, and the test only passed because ADMIN_EMAILS
+    // was read once at module load, so setting it here was ignored and no
+    // admin was found at all. With the per-call check (src/auth/admin.ts) the
+    // admin IS found, and the route stops at the next real precondition.
+    it('returns 503 when the admin has no Gmail connection to send from', async () => {
       const adminEmail = 'release-test-admin@example.com';
       const saved = process.env.ADMIN_EMAILS;
       process.env.ADMIN_EMAILS = adminEmail;
@@ -142,9 +147,8 @@ describe('POST /api/internal/release-notify', () => {
         .set('Authorization', `Bearer ${testKey}`)
         .send({ subject: 'Release v1.0', body: '<p>Notes</p>' });
 
-      // File-based users don't have numeric id, so !adminUser.id is true
       assert.equal(res.status, 503);
-      assert.equal(res.body.error, 'No admin user found for sending emails');
+      assert.equal(res.body.error, 'Admin user has no Gmail connection');
 
       if (saved !== undefined) process.env.ADMIN_EMAILS = saved;
       else delete process.env.ADMIN_EMAILS;

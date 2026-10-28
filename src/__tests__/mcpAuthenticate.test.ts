@@ -30,6 +30,7 @@ function makeDeps(overrides: Partial<AuthDeps> = {}): AuthDeps {
     createBrowserbaseSession: mock.fn(() => fakeSession),
     createGitHubSession: mock.fn(() => fakeSession),
     createPineconeSession: mock.fn(() => fakeSession),
+    createAdminSession: mock.fn(() => fakeSession),
     ...overrides,
   };
 }
@@ -295,6 +296,65 @@ describe('authenticateRequest', () => {
     });
     await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.inst1' }), 'github', deps);
     assert.equal((deps.createGitHubSession as any).mock.calls.length, 1);
+    assert.equal((deps.createUserSessionFromConnection as any).mock.calls.length, 0);
+  });
+});
+
+// The Admin MCP is gated on WHO is calling, and on nothing else: scopes can be
+// requested by anyone, an instance id skips ownership, and the global Google
+// token fallback would otherwise hand any user a session for any slug.
+describe('Admin MCP (slug "admin")', () => {
+  const savedAdmins = process.env.ADMIN_EMAILS;
+  beforeEach(() => { process.env.ADMIN_EMAILS = 'boss@example.com, Ops@Example.com'; });
+  const restore = () => {
+    if (savedAdmins === undefined) delete process.env.ADMIN_EMAILS;
+    else process.env.ADMIN_EMAILS = savedAdmins;
+  };
+
+  const admin = { id: 7, email: 'ops@example.com', tokens: { refresh_token: 'rt' } };
+  const adminConnection = { instanceId: 'adm1', userId: 7, mcpSlug: 'admin', provider: 'admin', providerTokens: {} };
+
+  it('refuses a non-admin with 403 even though their Google token would open any other slug', async () => {
+    const deps = makeDeps();
+    try {
+      await authenticateRequest(makeRequest({ authorization: 'Bearer validkey' }), 'admin', deps);
+      assert.fail('should have thrown');
+    } catch (e: any) {
+      assert.equal(e.status, 403);
+      assert.match(e.statusText, /administrators only/);
+    } finally { restore(); }
+    assert.equal((deps.createUserSession as any).mock.calls.length, 0);
+    assert.equal((deps.createAdminSession as any).mock.calls.length, 0);
+  });
+
+  it('refuses a non-admin holding a real admin instance id', async () => {
+    const deps = makeDeps({ getMcpConnectionByInstanceId: mock.fn(async () => adminConnection) });
+    try {
+      await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.adm1' }), 'admin', deps);
+      assert.fail('should have thrown');
+    } catch (e: any) {
+      assert.equal(e.status, 403);
+    } finally { restore(); }
+  });
+
+  it('gives an admin an admin session without looking up any connection', async () => {
+    const deps = makeDeps({ getUserByApiKey: mock.fn(async () => admin) });
+    try {
+      await authenticateRequest(makeRequest({ authorization: 'Bearer adminkey.adm1' }), 'admin', deps);
+    } finally { restore(); }
+    assert.equal((deps.createAdminSession as any).mock.calls.length, 1);
+    assert.equal((deps.getMcpConnectionByInstanceId as any).mock.calls.length, 0);
+    assert.equal((deps.getMcpConnection as any).mock.calls.length, 0);
+  });
+
+  it('refuses an admin instance id replayed against another server', async () => {
+    const deps = makeDeps({ getMcpConnectionByInstanceId: mock.fn(async () => adminConnection) });
+    try {
+      await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.adm1' }), 'google-docs', deps);
+      assert.fail('should have thrown');
+    } catch (e: any) {
+      assert.equal(e.status, 400);
+    } finally { restore(); }
     assert.equal((deps.createUserSessionFromConnection as any).mock.calls.length, 0);
   });
 });

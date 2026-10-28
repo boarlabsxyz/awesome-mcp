@@ -1,6 +1,6 @@
 # Awesome MCP
 
-Multi-service FastMCP hosting platform: one MCP server per provider under `src/<provider>/server.ts` — Google Docs, Sheets, Calendar, Drive, Gmail and Slides, ClickUp, Slack (bot + user), Outline, PeopleForce (v2/v3 and v4), HubSpot, Redmine, Browserbase, GitHub and Pinecone — plus a curl-able REST data plane under `/api/v1/*`.
+Multi-service FastMCP hosting platform: one MCP server per provider under `src/<provider>/server.ts` — Google Docs, Sheets, Calendar, Drive, Gmail and Slides, ClickUp, Slack (bot + user), Outline, PeopleForce (v2/v3 and v4), HubSpot, Redmine, Browserbase, GitHub and Pinecone, plus an admins-only Admin MCP over the usage analytics — and a curl-able REST data plane under `/api/v1/*`.
 
 ## Tool Inventory
 
@@ -13,6 +13,7 @@ Do not keep tool counts here; they drift. The generated lists are the source of 
 
 Service-specific rules and limitations live next to the code, in nested `CLAUDE.md` files that load only when you work in that directory:
 
+- `src/admin-mcp/CLAUDE.md` — Admin MCP: the usage analytics as tools, and why the admin email check is the only gate
 - `src/browserbase/CLAUDE.md` — Browserbase
 - `src/clickup/CLAUDE.md` — ClickUp
 - `src/github/CLAUDE.md` — GitHub
