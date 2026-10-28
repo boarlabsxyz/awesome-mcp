@@ -27,6 +27,7 @@
 // page navigated itself". They still do not limit the API key itself.
 
 import { FastMCP } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
@@ -72,11 +73,11 @@ export {
   upsertRecordsSchema,
 };
 
-export const pineconeServer = new FastMCP<UserSession>({
+export const pineconeServer = instrumentServer(new FastMCP<UserSession>({
   name: 'Pinecone MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'pinecone'),
-});
+}), 'pinecone');
 
 // Required once any of this service's REST catalog entries is `live`:
 // without them a caller has no way to mint a short-lived bearer or discover

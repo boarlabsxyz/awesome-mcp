@@ -1,5 +1,6 @@
 // src/clickup/server.ts
 import { FastMCP, UserError } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
@@ -54,11 +55,11 @@ import {
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
-export const clickUpServer = new FastMCP<UserSession>({
+export const clickUpServer = instrumentServer(new FastMCP<UserSession>({
   name: 'ClickUp MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'clickup'),
-});
+}), 'clickup');
 
 registerMintRestBearerForCurl(clickUpServer);
 registerListRestEndpoints(clickUpServer);

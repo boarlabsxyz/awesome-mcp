@@ -1,5 +1,6 @@
 // src/calendarServer.ts
 import { FastMCP, UserError } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 import { calendar_v3 } from 'googleapis';
 
@@ -15,11 +16,11 @@ import {
   hasExistingConference,
 } from './conferenceFormatter.js';
 
-const calendarServer = new FastMCP<UserSession>({
+const calendarServer = instrumentServer(new FastMCP<UserSession>({
   name: 'Google Calendar MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-calendar'),
-});
+}), 'google-calendar');
 
 registerMintRestBearerForCurl(calendarServer);
 registerListRestEndpoints(calendarServer);

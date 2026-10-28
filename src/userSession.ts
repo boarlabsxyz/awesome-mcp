@@ -11,6 +11,8 @@ export interface UserSession {
   apiKey: string;
   email: string;
   mcpSlug?: string;
+  /** The mcp_connections instance this session was built from — tells two connectors of one service apart in usage analytics. */
+  instanceId?: string;
   googleDocs: docs_v1.Docs;
   googleDrive: drive_v3.Drive;
   googleSheets: sheets_v4.Sheets;
@@ -206,6 +208,7 @@ export function createUserSessionFromConnection(
     apiKey: user.apiKey,
     email: user.email,
     mcpSlug: connection.mcpSlug,
+    instanceId: connection.instanceId,
     googleDocs: google.docs({ version: 'v1', auth: oauthClient }),
     googleDrive: google.drive({ version: 'v3', auth: oauthClient }),
     googleSheets: google.sheets({ version: 'v4', auth: oauthClient }),
@@ -241,6 +244,7 @@ export function createClickUpSession(
     apiKey: user.apiKey,
     email: user.email,
     mcpSlug: connection.mcpSlug,
+    instanceId: connection.instanceId,
     clickUpAccessToken: accessToken,
     // Null placeholders for Google clients (ClickUp MCP won't use them)
     googleDocs: null as any,
@@ -278,6 +282,7 @@ export function createSlackBotSession(
     apiKey: user.apiKey,
     email: user.email,
     mcpSlug: connection.mcpSlug,
+    instanceId: connection.instanceId,
     slackBotToken: botToken,
     // Null placeholders for Google clients (Slack MCP won't use them)
     googleDocs: null as any,
@@ -322,6 +327,7 @@ export function createSlackUserSession(
     apiKey: user.apiKey,
     email: user.email,
     mcpSlug: connection.mcpSlug,
+    instanceId: connection.instanceId,
     slackUserToken: accessToken,
     slackAccessRules: accessRules,
     slackInstanceId: connection.instanceId,
@@ -374,6 +380,7 @@ export function createOutlineSession(
     apiKey: user.apiKey,
     email: user.email,
     mcpSlug: connection.mcpSlug,
+    instanceId: connection.instanceId,
     outlineAccessToken: accessToken,
     outlineBaseUrl: baseUrl,
     // Refresh plumbing — only populated for OAuth connections (paste tokens
@@ -424,6 +431,7 @@ export function createPeopleForceSession(
     apiKey: user.apiKey,
     email: user.email,
     mcpSlug: connection.mcpSlug,
+    instanceId: connection.instanceId,
     peopleForceAccessToken: accessToken,
     peopleForceBaseUrl: baseUrl,
     // Null placeholders for Google clients (PeopleForce MCP won't use them)
@@ -467,6 +475,7 @@ export function createPeopleForceV4Session(
     apiKey: user.apiKey,
     email: user.email,
     mcpSlug: connection.mcpSlug,
+    instanceId: connection.instanceId,
     peopleForceV4AccessToken: accessToken,
     peopleForceV4BaseUrl: baseUrl,
     // Null placeholders for Google clients (the PeopleForce v4 MCP won't use them)
@@ -521,6 +530,7 @@ export function createHubSpotSession(
     apiKey: user.apiKey,
     email: user.email,
     mcpSlug: connection.mcpSlug,
+    instanceId: connection.instanceId,
     hubspotAccessToken: accessToken,
     hubspotBaseUrl: baseUrl,
     // Refresh plumbing — only populated for OAuth connections (paste tokens
@@ -599,6 +609,7 @@ export function createRedmineSession(
     apiKey: user.apiKey,
     email: user.email,
     mcpSlug: connection.mcpSlug,
+    instanceId: connection.instanceId,
     redmineAccessToken: accessToken,
     redmineBaseUrl: baseUrl,
     // Refresh plumbing — only populated for OAuth connections.
@@ -653,6 +664,7 @@ export function createBrowserbaseSession(
     apiKey: user.apiKey,
     email: user.email,
     mcpSlug: connection.mcpSlug,
+    instanceId: connection.instanceId,
     browserbaseAccessToken: accessToken,
     browserbaseProjectId: providerTokens?.projectId,
     // Carried so getRules can re-read the connection's domain rules per call:
@@ -705,6 +717,7 @@ export function createGitHubSession(
     apiKey: user.apiKey,
     email: user.email,
     mcpSlug: connection.mcpSlug,
+    instanceId: connection.instanceId,
     githubAccessToken: accessToken,
     githubRefreshToken: providerTokens?.refresh_token,
     githubTokenExpiry: providerTokens?.expiry_date,
@@ -756,6 +769,7 @@ export function createPineconeSession(
     apiKey: user.apiKey,
     email: user.email,
     mcpSlug: connection.mcpSlug,
+    instanceId: connection.instanceId,
     pineconeAccessToken: accessToken,
     pineconeInstanceId: connection.instanceId,
     // Null placeholders for Google clients (Pinecone MCP won't use them)

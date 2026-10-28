@@ -1,6 +1,7 @@
 // src/slack-user/server.ts
 // Slack MCP using user OAuth tokens (xoxp-) with rule-based access control.
 import { FastMCP, UserError } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
@@ -26,11 +27,11 @@ import type { SlackAccessRules } from '../mcpConnectionStore.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
-export const slackUserServer = new FastMCP<UserSession>({
+export const slackUserServer = instrumentServer(new FastMCP<UserSession>({
   name: 'Slack MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'slack'),
-});
+}), 'slack');
 
 registerMintRestBearerForCurl(slackUserServer);
 registerListRestEndpoints(slackUserServer);

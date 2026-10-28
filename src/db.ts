@@ -341,6 +341,36 @@ CREATE INDEX IF NOT EXISTS idx_image_blobs_expires_at
   ON image_blobs(expires_at) WHERE expires_at IS NOT NULL;
 `;
 
+// Tool-call usage analytics, read by the /admin Usage tab. All DML lives in
+// src/usage/usageStore.ts. user_id deliberately has no FK: deleting a user
+// must never fail because of analytics rows, and the rows age out on their own
+// (USAGE_RETENTION_DAYS). Arguments are summarised before they get here — see
+// src/usage/argSummary.ts — so no document, email or message body is stored.
+const CREATE_TOOL_CALL_EVENTS_TABLE = `
+CREATE TABLE IF NOT EXISTS tool_call_events (
+  id             BIGSERIAL PRIMARY KEY,
+  ts             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  user_id        INT,
+  instance_id    TEXT,
+  session_id     TEXT,
+  mcp_slug       TEXT NOT NULL,
+  tool           TEXT NOT NULL,
+  surface        TEXT NOT NULL,
+  client_name    TEXT,
+  client_version TEXT,
+  duration_ms    INT NOT NULL,
+  ok             BOOLEAN NOT NULL,
+  error_kind     TEXT,
+  error_message  TEXT,
+  arg_keys       TEXT[],
+  arg_preview    JSONB,
+  arg_bytes      INT
+);
+CREATE INDEX IF NOT EXISTS idx_tool_call_events_ts ON tool_call_events(ts);
+CREATE INDEX IF NOT EXISTS idx_tool_call_events_user_ts ON tool_call_events(user_id, ts);
+CREATE INDEX IF NOT EXISTS idx_tool_call_events_tool_ts ON tool_call_events(mcp_slug, tool, ts);
+`;
+
 // Add unique constraint on instance_id (each instance must be unique)
 const ADD_INSTANCE_ID_UNIQUE_CONSTRAINT = `
 DO $$
@@ -473,6 +503,8 @@ export async function initDatabase(): Promise<void> {
     await pool.query(ALTER_IMAGE_BLOBS_ADD_EXPIRES_AT);
     await pool.query(CREATE_IMAGE_BLOBS_EXPIRES_INDEX);
     console.error('Image blobs table ensured.');
+    await pool.query(CREATE_TOOL_CALL_EVENTS_TABLE);
+    console.error('Tool call events table ensured.');
 
     dbAvailable = true;
 
@@ -496,6 +528,13 @@ export async function initDatabase(): Promise<void> {
     } catch (err: any) {
       console.error('[db] failed to start image blob retention scheduler:', err?.message || err);
     }
+    try {
+      const { startUsageRetentionScheduler, startUsageFlushTimer } = await import('./usage/usageStore.js');
+      startUsageFlushTimer();
+      startUsageRetentionScheduler();
+    } catch (err: any) {
+      console.error('[db] failed to start usage tracking:', err?.message || err);
+    }
   } catch (err) {
     console.error('Failed to connect to database(s), falling back to file storage:', err);
     await cleanupPartial();
@@ -514,7 +553,19 @@ async function cleanupPartial(): Promise<void> {
   }
 }
 
+/** Flushes buffered usage events, then closes Redis and Postgres. */
 export async function closeDatabase(): Promise<void> {
+  // Drain buffered usage events while the pool is still open. Best-effort and
+  // dynamic for the same cycle reason as the schedulers above.
+  if (pool) {
+    try {
+      const { flushUsageEvents, stopUsageTimers } = await import('./usage/usageStore.js');
+      stopUsageTimers();
+      await flushUsageEvents();
+    } catch (err: any) {
+      console.error('[usage] final flush failed:', err?.message || err);
+    }
+  }
   if (redis) {
     redis.disconnect();
     redis = null;

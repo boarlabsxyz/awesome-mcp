@@ -18,6 +18,7 @@
 // rendering a silent gap.
 
 import { FastMCP } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 
 import { UserSession } from '../userSession.js';
@@ -57,11 +58,11 @@ import {
   COMPLIANCE_DOCUMENT_STATUS_VALUES,
 } from './apiHelpers.js';
 
-export const peopleForceV4Server = new FastMCP<UserSession>({
+export const peopleForceV4Server = instrumentServer(new FastMCP<UserSession>({
   name: 'PeopleForce v4 MCP',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'peopleforce-v4'),
-});
+}), 'peopleforce-v4');
 
 // ---------------------------------------------------------------------------
 // Shared argument shapes
