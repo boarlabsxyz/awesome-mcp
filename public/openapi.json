@@ -26742,6 +26742,28 @@
             "description": "Resource not found"
           }
         }
+      },
+      "post": {
+        "operationId": "postSlackMessage",
+        "summary": "Post a message (text, markdownText or Block Kit blocks)",
+        "description": "Post a message (text, markdownText or Block Kit blocks). Mirrors the MCP tool `postMessage`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
       }
     },
     "/api/v1/slack/channels/{channelId}/threads/{threadTs}": {
@@ -26749,6 +26771,52 @@
         "operationId": "readThreadReplies",
         "summary": "Read replies in a thread",
         "description": "Read replies in a thread. Mirrors the MCP tool `readThreadReplies`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      },
+      "post": {
+        "operationId": "replyInSlackThread",
+        "summary": "Reply in a thread, optionally also to the channel",
+        "description": "Reply in a thread, optionally also to the channel. Mirrors the MCP tool `replyInThread`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/channels/{channelId}/messages/{ts}/edit": {
+      "post": {
+        "operationId": "editSlackMessage",
+        "summary": "Replace the content of a message the bot posted",
+        "description": "Replace the content of a message the bot posted. Mirrors the MCP tool `editMessage`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
         "tags": [
           "slack"
         ],

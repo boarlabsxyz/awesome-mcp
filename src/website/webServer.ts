@@ -312,7 +312,7 @@ import { sendMail, isMailConfigured, MailNotConfiguredError } from './mailer.js'
 import { verificationEmail, alreadyRegisteredEmail } from './authEmails.js';
 import { createPendingRegistration, consumePendingRegistration, deletePendingRegistration, restorePendingRegistration, PENDING_REGISTRATION } from './pendingRegistrationStore.js';
 import { lookupRestToken } from './restTokenStore.js';
-import { mapSlackErrorToHttpStatus } from './slackErrorMapper.js';
+import { mapSlackErrorToHttpStatus, slackWriteErrorStatus } from './slackErrorMapper.js';
 import { negotiateFormat, respondNegotiated } from './restContent.js';
 import { sendUpstreamError } from './restUpstreamError.js';
 import { qstr, qint, qarr, qoptint, qflag, redmineCustomFieldFilters } from '../util/queryParams.js';
@@ -1361,6 +1361,11 @@ const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
   // up to 100 of them — committing generated content without routing it
   // through a model is the reason those two endpoints exist.
   '/api/v1/github/repos',
+  // Slack post / reply / edit: a Block Kit message built in a file. Slack caps
+  // a message at 50 blocks, but a block's text runs to 3,000 characters, so a
+  // full message passes 100kb well before Slack refuses it. GET siblings on the
+  // same prefix are unaffected — a parser only reads a body that is present.
+  '/api/v1/slack/channels',
 ];
 
 /**
@@ -4302,6 +4307,37 @@ function registerRestApiRoutes(app: express.Express): void {
   }
 
   /**
+   * Mount AFTER a service auth: let through only a short-lived bearer minted by
+   * the `mintRestBearerForCurl` MCP tool, refusing the permanent dashboard API
+   * key and every other credential `resolveTokenToUser` accepts.
+   *
+   * For writes that act as someone else in front of other people (posting or
+   * editing as the Slack bot) and that a curl cannot ask to confirm. Minting
+   * takes an MCP tool call, which the person's client approves, so each
+   * five-minute window of writes starts with a human-approved step — and a
+   * leaked or forgotten dashboard key cannot write at all. Fails closed: a
+   * token store that cannot be read is a 503, never a pass.
+   */
+  async function requireMintedRestBearer(req: ApiAuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    const token = (req.headers.authorization ?? '').substring('Bearer '.length);
+    let mintedFor: number | null;
+    try {
+      mintedFor = await lookupRestToken(token);
+    } catch {
+      res.status(503).json({ error: 'Could not verify the bearer. Try again in a moment.' });
+      return;
+    }
+    if (mintedFor === null || mintedFor !== req.userSession?.userId) {
+      res.status(403).json({
+        error: 'This endpoint accepts only a short-lived bearer from the mintRestBearerForCurl MCP tool, ' +
+          'not the dashboard API key. Call mintRestBearerForCurl on the Slack Bot MCP and use the bearer it returns (valid 5 minutes).',
+      });
+      return;
+    }
+    next();
+  }
+
+  /**
    * Factory for service-specific REST auth middleware.
    * Resolves token → user → finds MCP connection for the service → creates session.
    */
@@ -7013,12 +7049,20 @@ function registerRestApiRoutes(app: express.Express): void {
       const { SlackClient } = await import('../slack/apiHelpers.js');
       const client = new SlackClient(req.userSession.slackBotToken);
       const limit = qint(req.query.limit, 50, { max: 200 });
-      const result = await client.conversationsHistory(req.params.channelId as string, {
-        limit,
+      const range = {
         oldest: qstr(req.query.oldest) || undefined,
         latest: qstr(req.query.latest) || undefined,
         cursor: qstr(req.query.cursor) || undefined,
-      });
+      };
+      // ?format=text gives readChannelHistory's line format (which caps limit
+      // at 100); the default stays Slack's raw message objects.
+      if (negotiateFormat(req) === 'text') {
+        const { handleReadChannelHistory } = await import('../slack/helpers.js');
+        const text = await handleReadChannelHistory(client, req.userSession.slackBotToken, req.params.channelId as string, { limit, ...range });
+        res.type('text/plain; charset=utf-8').send(text);
+        return;
+      }
+      const result = await client.conversationsHistory(req.params.channelId as string, { limit, ...range });
       res.json({
         channelId: req.params.channelId,
         messages: result.messages,
@@ -7040,6 +7084,15 @@ function registerRestApiRoutes(app: express.Express): void {
       const { SlackClient } = await import('../slack/apiHelpers.js');
       const client = new SlackClient(req.userSession.slackBotToken);
       const limit = qint(req.query.limit, 50, { max: 200 });
+      if (negotiateFormat(req) === 'text') {
+        const { handleReadThreadReplies } = await import('../slack/helpers.js');
+        const text = await handleReadThreadReplies(
+          client, req.userSession.slackBotToken, req.params.channelId as string, req.params.threadTs as string,
+          { limit, cursor: qstr(req.query.cursor) || undefined },
+        );
+        res.type('text/plain; charset=utf-8').send(text);
+        return;
+      }
       const result = await client.conversationsReplies(
         req.params.channelId as string,
         req.params.threadTs as string,
@@ -7056,6 +7109,77 @@ function registerRestApiRoutes(app: express.Express): void {
       res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || 'Failed to read thread' });
     }
   });
+
+  // Slack writes — postMessage, replyInThread, editMessage. A script posts a
+  // Block Kit message built in a file without a model repeating it. Bodies are
+  // the tools' own shared fields (`src/slack/helpers.ts`); the ids come from
+  // the path, and a same-named body key is dropped. The ops carry the
+  // SLACK_WRITES_ENABLED gate (503) and the content rules (400), and tag each
+  // refusal with its status — see slackWriteErrorStatus. Not idempotent: a
+  // repeated POST posts the message again. Short-lived bearer only
+  // (requireMintedRestBearer): the permanent dashboard key cannot post or edit
+  // as the bot — signed off on 2026-10-29 instead of exposing it to that key.
+  type SlackOps = typeof import('../slack/helpers.js');
+  type SlackClientT = import('../slack/apiHelpers.js').SlackClient;
+  interface SlackWriteRoute {
+    path: string;
+    status: 200 | 201;
+    fallback: string;
+    schema: (m: SlackOps) => { safeParse(v: unknown): { success: boolean; data?: any; error?: any } };
+    run: (m: SlackOps, client: SlackClientT, args: any, p: Record<string, string>) => Promise<Record<string, unknown>>;
+  }
+  const SLACK_WRITE_ROUTES: SlackWriteRoute[] = [
+    {
+      path: '/api/v1/slack/channels/:channelId/messages',
+      status: 201,
+      fallback: 'Failed to post message',
+      schema: (m) => m.postMessageRestSchema,
+      run: async (m, c, a, p) => m.projectWriteOutcome(await m.performPostMessage(c, p.channelId, a.text, undefined, a), a),
+    },
+    {
+      path: '/api/v1/slack/channels/:channelId/threads/:threadTs',
+      status: 201,
+      fallback: 'Failed to post reply',
+      schema: (m) => m.replyInThreadRestSchema,
+      run: async (m, c, a, p) => m.projectWriteOutcome(
+        await m.performPostMessage(c, p.channelId, a.text, p.threadTs, a), { ...a, threadTs: p.threadTs },
+      ),
+    },
+    {
+      path: '/api/v1/slack/channels/:channelId/messages/:ts/edit',
+      status: 200,
+      fallback: 'Failed to edit message',
+      schema: (m) => m.editMessageRestSchema,
+      run: async (m, c, a, p) => m.projectWriteOutcome(await m.performEditMessage(c, p.channelId, p.ts, a.text, a)),
+    },
+  ];
+  for (const route of SLACK_WRITE_ROUTES) {
+    app.post(route.path, requireSlackApiKey, requireMintedRestBearer, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        if (!req.userSession?.slackBotToken) {
+          res.status(403).json({ error: 'Slack-bot connection required for REST. Connect via the dashboard.' });
+          return;
+        }
+        const ops = await import('../slack/helpers.js');
+        const params = req.params as Record<string, string>;
+        const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+          ? Object.fromEntries(Object.entries(req.body).filter(([k]) => !(k in params)))
+          : req.body;
+        const parsed = route.schema(ops).safeParse(body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const { SlackClient } = await import('../slack/apiHelpers.js');
+        const client = new SlackClient(req.userSession.slackBotToken);
+        res.status(route.status).json(await route.run(ops, client, parsed.data, params));
+      } catch (err: any) {
+        const status = slackWriteErrorStatus(err);
+        if (status >= 500) console.error(`Slack REST write failed (${route.path}):`, err?.message || err);
+        res.status(status).json({ error: err?.message || route.fallback });
+      }
+    });
+  }
 
   // GET /api/v1/slack/users - List workspace users
   app.get('/api/v1/slack/users', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {

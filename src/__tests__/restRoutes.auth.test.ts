@@ -210,6 +210,11 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/hubspot/notes',
   '/api/v1/hubspot/calls',
   '/api/v1/hubspot/meetings',
+  // Slack. /messages and /threads/{ts} are in both arrays: the GET reads,
+  // the POST posts.
+  '/api/v1/slack/channels/C123/messages',
+  '/api/v1/slack/channels/C123/threads/1234.5678',
+  '/api/v1/slack/channels/C123/messages/1234.5678/edit',
   // Redmine
   '/api/v1/redmine/issues',
   '/api/v1/redmine/issues/123',

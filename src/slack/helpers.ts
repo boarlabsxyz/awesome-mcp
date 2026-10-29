@@ -8,6 +8,7 @@ import {
   type SlackFileMatch, type SlackMessageMatch, type SlackSearchPage,
   type SlackUnfurlOptions, type SlackMessageContent,
   type SlackPostOptions, type SlackUpdateOptions, type SlackPostedMessage,
+  type SlackHistoryMessage, type SlackMessagePage,
 } from './apiHelpers.js';
 
 /** Module-level user name cache: key = "token:userId", value = { name, expiresAt }. */
@@ -155,48 +156,141 @@ export function formatMessage(msg: any, userNames: Map<string, string>, channelI
   return [line, ...formatFiles(files)].join('\n');
 }
 
+/**
+ * A refusal that also says which HTTP status it means on the REST plane.
+ *
+ * The MCP tools only read the message. The REST write routes read `status`
+ * (see `slackWriteErrorStatus` in `src/website/slackErrorMapper.ts`), because
+ * the rewritten messages below no longer contain Slack's error code — so
+ * matching the text, as the read routes do, would turn every one into a 500.
+ */
+function refusal(status: number, message: string): UserError {
+  const err = new UserError(message);
+  (err as UserError & { status: number }).status = status;
+  return err;
+}
+
 export function assertWritesEnabled(): void {
   if (process.env.SLACK_WRITES_ENABLED !== 'true') {
-    throw new UserError('Slack posting is disabled for this deployment. The operator must enable Slack writes before this tool can be used.');
+    // 503, not 403: the caller is allowed, the deployment has not turned it on.
+    throw refusal(503, 'Slack posting is disabled for this deployment. The operator must enable Slack writes before this tool can be used.');
   }
+}
+
+/**
+ * `format` on the two read tools, defined once so both servers describe it the
+ * same way.
+ *
+ * The text format shows a message's `text`, which once a message has blocks is
+ * only the notification fallback: it cannot show whether a block edit landed,
+ * who (user or app) wrote the message, or whether it was edited. `json` returns
+ * what Slack stored for each message.
+ */
+export const messageFormatParam = {
+  format: z.enum(['text', 'json']).optional().default('text').describe(
+    '"text" (default): one readable line per message. "json": each message as Slack stores it — ' +
+    'ts, thread_ts, user (a person) or bot_id/app_id (an app), subtype, text, blocks, attachments, ' +
+    'files, edited (set once a message was edited), reactions, reply_count and metadata. Use json ' +
+    'to check that a Block Kit message you posted or edited holds the blocks you sent; its text is ' +
+    'only the notification fallback.',
+  ),
+};
+
+export type MessageFormat = 'text' | 'json';
+
+/** File fields worth returning; the rest of Slack's file object is thumbnail URLs. */
+function projectFile(f: SlackFileRef) {
+  return {
+    id: f.id, name: f.name, title: f.title, mimetype: f.mimetype, filetype: f.filetype,
+    size: f.size, mode: f.mode, file_access: f.file_access, is_external: f.is_external,
+  };
+}
+
+/**
+ * One message in the `json` format: the documented subset of Slack's object,
+ * plus the resolved author name and a permalink, which the text format shows.
+ * Absent fields are left `undefined` so `JSON.stringify` drops them.
+ */
+export function projectMessage(
+  msg: SlackHistoryMessage, userNames: Map<string, string>, channelId: string, workspaceUrl?: string,
+): Record<string, unknown> {
+  return {
+    ts: msg.ts,
+    thread_ts: msg.thread_ts,
+    user: msg.user,
+    userName: msg.user ? userNames.get(msg.user) : undefined,
+    bot_id: msg.bot_id,
+    app_id: msg.app_id,
+    username: msg.username,
+    subtype: msg.subtype,
+    text: msg.text,
+    blocks: msg.blocks,
+    attachments: msg.attachments,
+    files: msg.files?.map(projectFile),
+    edited: msg.edited,
+    reactions: msg.reactions,
+    reply_count: msg.reply_count,
+    latest_reply: msg.latest_reply,
+    metadata: msg.metadata,
+    permalink: workspaceUrl ? buildPermalink(workspaceUrl, channelId, msg.ts) : undefined,
+  };
+}
+
+/** Render one page of messages (already in display order) in the requested format. */
+async function renderMessagePage(
+  client: SlackClient, tokenKey: string, page: SlackMessagePage, messages: SlackHistoryMessage[],
+  where: { channelId: string; threadTs?: string }, format: MessageFormat, empty: string, more: string,
+): Promise<string> {
+  const nextCursor = page.response_metadata?.next_cursor || null;
+  // Text mode answers an empty page with a sentence; json keeps the shape, so
+  // a script reads `messages: []` rather than having to parse prose.
+  if (messages.length === 0 && format === 'text') return empty;
+
+  const wsUrl = await getWorkspaceUrl(client, tokenKey);
+  const userIds = messages.map(m => m.user).filter(Boolean) as string[];
+  const userNames = await resolveUsers(client, userIds, tokenKey);
+
+  if (format === 'json') {
+    return JSON.stringify({
+      channelId: where.channelId,
+      ...(where.threadTs ? { threadTs: where.threadTs } : {}),
+      messages: messages.map(msg => projectMessage(msg, userNames, where.channelId, wsUrl)),
+      hasMore: !!page.has_more,
+      nextCursor,
+    });
+  }
+
+  let output = messages.map(msg => formatMessage(msg, userNames, where.channelId, wsUrl)).join('\n');
+  if (nextCursor) output += `\n\n---\nMore ${more} available. Use cursor: "${nextCursor}"`;
+  return output;
 }
 
 // === Shared tool handlers ===
 
 export async function handleReadChannelHistory(
   client: SlackClient, tokenKey: string, channelId: string,
-  opts: { limit: number; oldest?: string; latest?: string; cursor?: string },
+  opts: { limit: number; oldest?: string; latest?: string; cursor?: string; format?: MessageFormat },
 ): Promise<string> {
   const limit = Math.min(Math.max(opts.limit, 1), 100);
-  const wsUrl = await getWorkspaceUrl(client, tokenKey);
   const result = await client.conversationsHistory(channelId, { limit, oldest: opts.oldest, latest: opts.latest, cursor: opts.cursor });
-  const messages = result.messages;
-  if (messages.length === 0) return 'No messages found in this channel.';
-  const userIds = messages.map(m => m.user).filter(Boolean) as string[];
-  const userNames = await resolveUsers(client, userIds, tokenKey);
-  const lines = messages.reverse().map(msg => formatMessage(msg, userNames, channelId, wsUrl));
-  let output = lines.join('\n');
-  const nextCursor = result.response_metadata?.next_cursor;
-  if (nextCursor) output += `\n\n---\nMore messages available. Use cursor: "${nextCursor}"`;
-  return output;
+  // Slack returns newest first; both formats show them oldest first.
+  const messages = [...result.messages].reverse();
+  return renderMessagePage(
+    client, tokenKey, result, messages, { channelId }, opts.format ?? 'text',
+    'No messages found in this channel.', 'messages',
+  );
 }
 
 export async function handleReadThreadReplies(
   client: SlackClient, tokenKey: string, channelId: string, threadTs: string,
-  opts: { limit: number; cursor?: string },
+  opts: { limit: number; cursor?: string; format?: MessageFormat },
 ): Promise<string> {
   const limit = Math.min(Math.max(opts.limit, 1), 200);
-  const wsUrl = await getWorkspaceUrl(client, tokenKey);
   const result = await client.conversationsReplies(channelId, threadTs, { limit, cursor: opts.cursor });
-  const messages = result.messages;
-  if (messages.length === 0) return 'No replies found in this thread.';
-  const userIds = messages.map(m => m.user).filter(Boolean) as string[];
-  const userNames = await resolveUsers(client, userIds, tokenKey);
-  const lines = messages.map(msg => formatMessage(msg, userNames, channelId, wsUrl));
-  let output = lines.join('\n');
-  const nextCursor = result.response_metadata?.next_cursor;
-  if (nextCursor) output += `\n\n---\nMore replies available. Use cursor: "${nextCursor}"`;
-  return output;
+  return renderMessagePage(
+    client, tokenKey, result, result.messages, { channelId, threadTs }, opts.format ?? 'text',
+    'No replies found in this thread.', 'replies',
+  );
 }
 
 // === Search ===
@@ -595,6 +689,53 @@ export const broadcastParam = {
   ),
 };
 
+/**
+ * The full parameter set of each write, minus the ids, defined once.
+ *
+ * Both servers' tools spread these, and the REST write routes build their body
+ * schemas from them (the ids come from the path there), so a field added to a
+ * tool cannot silently go missing from its REST sibling. Guarded by
+ * `src/__tests__/restWriteSchemaSharing.test.ts`.
+ */
+export const postMessageFields = {
+  text: z.string().optional().describe(
+    'Message text as Slack mrkdwn. Supports bold, italic, strikethrough, code and blockquote, ' +
+    'but NOT lists — use markdownText for those. Optional, but pass it alongside blocks as the ' +
+    'notification fallback. Exactly one of text or markdownText.',
+  ),
+  ...richTextParams,
+  ...unfurlParams,
+};
+
+export const replyInThreadFields = {
+  text: z.string().optional().describe(
+    'Reply text as Slack mrkdwn. Supports bold, italic, strikethrough, code and blockquote, but ' +
+    'NOT lists — use markdownText for those. Optional, but pass it alongside blocks as the ' +
+    'notification fallback. Exactly one of text or markdownText.',
+  ),
+  ...richTextParams,
+  ...broadcastParam,
+  ...unfurlParams,
+};
+
+export const editMessageFields = {
+  text: z.string().optional().describe(
+    'The new message text as Slack mrkdwn, replacing the old content entirely. Does not support ' +
+    'lists — use markdownText for those. Note that sending this alone strips any blocks the ' +
+    'message already had.',
+  ),
+  ...richTextParams,
+};
+
+/**
+ * REST bodies. `.strict()` because Zod strips unknown keys: a script sending
+ * Slack's own `unfurl_links: false` or `thread_ts` would otherwise get a 201
+ * for a message posted without them. An unknown key is a 400 naming it.
+ */
+export const postMessageRestSchema = z.object(postMessageFields).strict();
+export const replyInThreadRestSchema = z.object(replyInThreadFields).strict();
+export const editMessageRestSchema = z.object(editMessageFields).strict();
+
 /** What a caller asked the message to contain, before it is checked. */
 export interface MessageBodyInput extends SlackMessageContent {
   text?: string;
@@ -627,14 +768,14 @@ export function resolveMessageBody(input: MessageBodyInput): MessageBodyInput {
   // Slack answers this combination with `markdown_text_conflict`, which names
   // neither the offending argument nor which one to drop.
   if (markdownText !== undefined && text !== undefined) {
-    throw new UserError(
+    throw refusal(400,
       'Pass either markdownText or text, not both — Slack rejects a message that carries both ' +
       '(markdown_text_conflict). markdownText holds the entire message, so move the text into it: ' +
       'it renders the same prose and additionally supports real bullet and numbered lists.',
     );
   }
   if (markdownText !== undefined && blocks !== undefined) {
-    throw new UserError(
+    throw refusal(400,
       'Pass either markdownText or blocks, not both — Slack rejects a message that carries both ' +
       '(markdown_text_conflict). markdownText is already converted into blocks by Slack; use ' +
       'blocks alone if you need a layout it cannot express.',
@@ -645,7 +786,7 @@ export function resolveMessageBody(input: MessageBodyInput): MessageBodyInput {
   // destructive on an edit: `chat.update` reads `blocks: []` as "remove the
   // blocks", which would read back as a successful no-op.
   if (blocks !== undefined && blocks.length === 0) {
-    throw new UserError(
+    throw refusal(400,
       'blocks is empty. Omit it rather than passing an empty array — on an edit Slack reads an ' +
       'empty array as "remove every block from this message", which would look like a successful ' +
       'no-op. Pass text or markdownText to set the content.',
@@ -655,7 +796,7 @@ export function resolveMessageBody(input: MessageBodyInput): MessageBodyInput {
   // Slack would answer `no_text` here, which does not say that two other
   // parameters would also have satisfied it.
   if (text === undefined && markdownText === undefined && blocks === undefined) {
-    throw new UserError(
+    throw refusal(400,
       'Nothing to send. Pass one of: text (plain mrkdwn), markdownText (markdown, and the only ' +
       'one of the three that renders real bullet and numbered lists), or blocks (Block Kit).',
     );
@@ -684,7 +825,7 @@ export function mapContentError(err: any): void {
 
   // `invalid_blocks_format` contains `invalid_blocks`, so this covers both.
   if (slackError.includes('invalid_blocks')) {
-    throw new UserError(
+    throw refusal(400,
       'Slack rejected the blocks array as malformed. A bulleted or numbered list is one block of ' +
       'type "rich_text" whose elements hold {type: "rich_text_list", style: "bullet" | "ordered", ' +
       'elements: [{type: "rich_text_section", elements: [{type: "text", text: "..."}]}]}. Passing ' +
@@ -692,13 +833,13 @@ export function mapContentError(err: any): void {
     );
   }
   if (slackError.includes('msg_blocks_too_long')) {
-    throw new UserError(
+    throw refusal(400,
       'The blocks array is larger than Slack allows for one message (50 blocks, and 3,000 ' +
       'characters per text object). Split it across several messages, or send fewer blocks.',
     );
   }
   if (slackError.includes('markdown_text_conflict')) {
-    throw new UserError(
+    throw refusal(400,
       'Slack refused the message because markdownText cannot be combined with text or blocks. ' +
       'markdownText carries the whole message on its own.',
     );
@@ -789,13 +930,34 @@ function unfurlNote(options?: SlackUnfurlOptions): string {
     'so this reports what was requested, not what it rendered.';
 }
 
-export async function handlePostMessage(
-  client: SlackClient, channelId: string, text: string | undefined, options?: SlackPostOptions,
-): Promise<string> {
+/** What a post or edit sent, and what Slack answered with. */
+export interface SlackWriteOutcome {
+  body: MessageBodyInput;
+  result: { ts: string; channel: string; text?: string; message?: SlackPostedMessage };
+}
+
+/**
+ * Post a message or a thread reply: the gate, the content rules and the call.
+ *
+ * Shared by the MCP tools (which render a sentence from it) and the REST write
+ * routes (which return it as JSON), so the two cannot disagree on what is
+ * refused or what is sent.
+ */
+export async function performPostMessage(
+  client: SlackClient, channelId: string, text: string | undefined, threadTs?: string,
+  options?: SlackPostOptions,
+): Promise<SlackWriteOutcome> {
   assertWritesEnabled();
   // Before the API call: a refused combination must leave nothing posted.
   const body = resolveMessageBody({ text, markdownText: options?.markdownText, blocks: options?.blocks });
-  const result = await postOrExplain(client, channelId, body.text, undefined, options);
+  const result = await postOrExplain(client, channelId, body.text, threadTs, options);
+  return { body, result };
+}
+
+export async function handlePostMessage(
+  client: SlackClient, channelId: string, text: string | undefined, options?: SlackPostOptions,
+): Promise<string> {
+  const { body, result } = await performPostMessage(client, channelId, text, undefined, options);
   return `Message posted to ${result.channel} (ts: ${result.ts})` +
     renderNote(result.message, { rich: usedRichContent(body) }) +
     unfurlNote(options);
@@ -805,12 +967,39 @@ export async function handleReplyInThread(
   client: SlackClient, channelId: string, threadTs: string, text: string | undefined,
   options?: SlackPostOptions,
 ): Promise<string> {
-  assertWritesEnabled();
-  const body = resolveMessageBody({ text, markdownText: options?.markdownText, blocks: options?.blocks });
-  const result = await postOrExplain(client, channelId, body.text, threadTs, options);
+  const { body, result } = await performPostMessage(client, channelId, text, threadTs, options);
   return `Reply posted to thread ${threadTs} in ${result.channel} (ts: ${result.ts})` +
     renderNote(result.message, { rich: usedRichContent(body), broadcast: options?.broadcast }) +
     unfurlNote(options);
+}
+
+/**
+ * The JSON a REST write answers with: the message's ts and channel, and the
+ * message object Slack echoed — what it stored, not what was asked.
+ *
+ * The two things Slack does not echo are reported as unconfirmed rather than
+ * repeated from the request: `broadcast` is `true` only when Slack recorded a
+ * `thread_broadcast` (else `null`), and link-preview flags come back under
+ * `requested` with `confirmed: null`. Reading the message back with
+ * `format=json` is the proof for everything else.
+ */
+export function projectWriteOutcome(
+  outcome: SlackWriteOutcome,
+  requested: { threadTs?: string } & SlackPostOptions = {},
+): Record<string, unknown> {
+  const { result } = outcome;
+  const out: Record<string, unknown> = { channel: result.channel, ts: result.ts };
+  if (requested.threadTs) out.threadTs = requested.threadTs;
+  if (result.text !== undefined) out.text = result.text;
+  out.message = result.message ?? null;
+  if (requested.broadcast) out.broadcast = result.message?.subtype === 'thread_broadcast' ? true : null;
+  if (requested.unfurlLinks !== undefined || requested.unfurlMedia !== undefined) {
+    out.linkPreviews = {
+      requested: { unfurlLinks: requested.unfurlLinks, unfurlMedia: requested.unfurlMedia },
+      confirmed: null,
+    };
+  }
+  return out;
 }
 
 /** Whether the caller asked for anything mrkdwn `text` could not have carried. */
@@ -846,45 +1035,45 @@ async function postOrExplain(
  * write this message" case, not a malfunction. Each is mapped to what the
  * caller can actually do about it.
  */
-export async function handleEditMessage(
+export async function performEditMessage(
   client: SlackClient, channelId: string, ts: string, text: string | undefined,
   options?: SlackUpdateOptions,
-): Promise<string> {
+): Promise<SlackWriteOutcome> {
   assertWritesEnabled();
 
   const body = resolveMessageBody({ text, markdownText: options?.markdownText, blocks: options?.blocks });
 
-  let result: { ts: string; channel: string; text?: string; message?: SlackPostedMessage };
+  let result: SlackWriteOutcome['result'];
   try {
     result = await client.chatUpdate(channelId, ts, body.text, body);
   } catch (err: any) {
     const slackError = String(err?.message || '');
 
     if (slackError.includes('cant_update_message')) {
-      throw new UserError(
+      throw refusal(403,
         `Slack will not let this connection edit message ${ts}. A message can only be edited by ` +
         'whoever wrote it, so this is expected unless you are the author — check that the ts belongs ' +
         'to one of your own messages rather than a colleague\'s or an app\'s.',
       );
     }
     if (slackError.includes('edit_window_closed')) {
-      throw new UserError(
+      throw refusal(403,
         `Message ${ts} is older than the edit window this workspace allows. A workspace admin sets ` +
         'that limit and it cannot be bypassed through the API — the message has to be deleted and ' +
         'reposted instead.',
       );
     }
     if (slackError.includes('message_not_found')) {
-      throw new UserError(
+      throw refusal(404,
         `No message with ts ${ts} in channel ${channelId}. Timestamps are per-channel, so passing a ` +
         'ts from one channel while naming another fails this way — re-read the channel to get the ts.',
       );
     }
     if (slackError.includes('msg_too_long')) {
-      throw new UserError('The replacement text is longer than Slack allows for one message (about 40,000 characters).');
+      throw refusal(400, 'The replacement text is longer than Slack allows for one message (about 40,000 characters).');
     }
     if (slackError.includes('missing_scope')) {
-      throw new UserError(
+      throw refusal(403,
         'Slack rejected chat.update for lack of the "chat:write" scope. Reconnect Slack from the ' +
         'dashboard to re-consent.',
       );
@@ -892,7 +1081,14 @@ export async function handleEditMessage(
     mapContentError(err);
     throw err;
   }
+  return { body, result };
+}
 
+export async function handleEditMessage(
+  client: SlackClient, channelId: string, ts: string, text: string | undefined,
+  options?: SlackUpdateOptions,
+): Promise<string> {
+  const { body, result } = await performEditMessage(client, channelId, ts, text, options);
   const note = renderNote(result.message, { rich: usedRichContent(body) });
 
   // With blocks or markdownText there may be no `text` at all, so printing the

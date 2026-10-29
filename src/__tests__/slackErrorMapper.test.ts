@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { mapSlackErrorToHttpStatus } from '../website/slackErrorMapper.js';
+import { mapSlackErrorToHttpStatus, slackWriteErrorStatus } from '../website/slackErrorMapper.js';
 
 describe('mapSlackErrorToHttpStatus', () => {
   describe('embedded HTTP status from "HTTP error (NNN)" transport messages', () => {
@@ -96,5 +96,32 @@ describe('mapSlackErrorToHttpStatus', () => {
       assert.equal(mapSlackErrorToHttpStatus(null), 500);
       assert.equal(mapSlackErrorToHttpStatus(undefined), 500);
     });
+  });
+});
+
+describe('slackWriteErrorStatus', () => {
+  it('prefers the status a write op tagged its refusal with', () => {
+    // The rewritten message has no Slack code left in it, so text matching
+    // alone would answer 500.
+    assert.equal(slackWriteErrorStatus({ message: 'Slack will not let this connection edit', status: 403 }), 403);
+    assert.equal(slackWriteErrorStatus({ message: 'Slack posting is disabled', status: 503 }), 503);
+  });
+
+  it('maps write-only Slack codes the read mapper does not know', () => {
+    assert.equal(slackWriteErrorStatus({ message: 'Slack API error (chat.postMessage): is_archived' }), 403);
+    assert.equal(slackWriteErrorStatus({ message: 'Slack API error (chat.postMessage): restricted_action' }), 403);
+    assert.equal(slackWriteErrorStatus({ message: 'Slack API error (chat.postMessage): no_text' }), 400);
+    assert.equal(slackWriteErrorStatus({ message: 'Slack API error (chat.postMessage): msg_too_long' }), 400);
+  });
+
+  it('never answers 401: a revoked connection token is the upstream refusing, not the caller bearer', () => {
+    assert.equal(slackWriteErrorStatus({ message: 'Slack API error (chat.postMessage): invalid_auth' }), 502);
+    assert.equal(slackWriteErrorStatus({ message: 'Slack API HTTP error (401): nope' }), 502);
+  });
+
+  it('falls back to the read mapping for everything else', () => {
+    assert.equal(slackWriteErrorStatus({ message: 'Slack API error (chat.postMessage): channel_not_found' }), 404);
+    assert.equal(slackWriteErrorStatus({ message: 'Slack rate limit exceeded.' }), 429);
+    assert.equal(slackWriteErrorStatus(new Error('boom')), 500);
   });
 });

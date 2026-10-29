@@ -316,6 +316,43 @@ export interface SlackPostedMessage {
   blocks?: Array<{ type?: string; elements?: Array<{ type?: string }> }>;
 }
 
+/**
+ * A message as `conversations.history` / `conversations.replies` return it.
+ *
+ * Only the fields this codebase reads are typed; Slack sends more, and the REST
+ * read routes forward the whole object. `text` is the notification fallback
+ * once a message has blocks, so the blocks are the content a person sees.
+ */
+export interface SlackHistoryMessage {
+  type: string;
+  ts: string;
+  text: string;
+  thread_ts?: string;
+  user?: string;
+  /** Set on messages an app posted; `user` may then be absent. */
+  bot_id?: string;
+  app_id?: string;
+  /** The display name a bot message was posted under. */
+  username?: string;
+  subtype?: string;
+  blocks?: unknown[];
+  attachments?: unknown[];
+  files?: SlackFileRef[];
+  /** Present once a message has been edited: who edited it, and when. */
+  edited?: { user?: string; ts?: string };
+  reactions?: Array<{ name: string; count?: number; users?: string[] }>;
+  reply_count?: number;
+  latest_reply?: string;
+  /** Returned only because the reads pass `include_all_metadata`. */
+  metadata?: { event_type?: string; event_payload?: Record<string, unknown> };
+}
+
+export interface SlackMessagePage {
+  messages: SlackHistoryMessage[];
+  has_more: boolean;
+  response_metadata?: { next_cursor?: string };
+}
+
 export class SlackClient {
   constructor(private botToken: string) {}
 
@@ -451,18 +488,13 @@ export class SlackClient {
 
   async conversationsHistory(channel: string, options?: {
     limit?: number; oldest?: string; latest?: string; cursor?: string;
-  }): Promise<{
-    messages: Array<{
-      type: string; user?: string; text: string; ts: string;
-      thread_ts?: string; reply_count?: number; subtype?: string;
-      files?: SlackFileRef[];
-    }>;
-    has_more: boolean;
-    response_metadata?: { next_cursor?: string };
-  }> {
+  }): Promise<SlackMessagePage> {
     return this.request('conversations.history', {
       channel,
       limit: options?.limit ?? 20,
+      // Without it Slack leaves `metadata` off every message, so a machine-
+      // readable marker posted with a message could never be read back.
+      include_all_metadata: true,
       ...(options?.oldest ? { oldest: options.oldest } : {}),
       ...(options?.latest ? { latest: options.latest } : {}),
       ...(options?.cursor ? { cursor: options.cursor } : {}),
@@ -471,19 +503,12 @@ export class SlackClient {
 
   async conversationsReplies(channel: string, ts: string, options?: {
     limit?: number; cursor?: string;
-  }): Promise<{
-    messages: Array<{
-      type: string; user?: string; text: string; ts: string;
-      thread_ts?: string; reply_count?: number; subtype?: string;
-      files?: SlackFileRef[];
-    }>;
-    has_more: boolean;
-    response_metadata?: { next_cursor?: string };
-  }> {
+  }): Promise<SlackMessagePage> {
     return this.request('conversations.replies', {
       channel,
       ts,
       limit: options?.limit ?? 50,
+      include_all_metadata: true,
       ...(options?.cursor ? { cursor: options.cursor } : {}),
     });
   }
