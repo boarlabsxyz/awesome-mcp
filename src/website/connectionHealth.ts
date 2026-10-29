@@ -468,6 +468,9 @@ export async function checkConnectionHealth(
         } as any), !!providerTokens.refresh_token);
       }
 
+      case 'admin':
+        // No credential to expire: access is decided per call by ADMIN_EMAILS.
+        return { state: 'healthy' };
       default:
         return { state: 'unknown', reason: `No health probe implemented for provider "${provider}".` };
     }

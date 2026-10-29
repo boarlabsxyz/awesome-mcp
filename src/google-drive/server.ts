@@ -1,5 +1,6 @@
 // src/google-drive/server.ts
 import { FastMCP } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 
 import { UserSession } from '../userSession.js';
@@ -27,11 +28,11 @@ import {
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
-const driveServer = new FastMCP<UserSession>({
+const driveServer = instrumentServer(new FastMCP<UserSession>({
   name: 'Google Drive MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-drive'),
-});
+}), 'google-drive');
 
 registerMintRestBearerForCurl(driveServer);
 registerListRestEndpoints(driveServer);

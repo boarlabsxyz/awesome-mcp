@@ -11,7 +11,7 @@
 - **Absent rules = unrestricted, never written back as empty defaults** — `{}` would survive reconnect merges and reset rules (`PRESERVED_ON_RECONNECT`). `persistPasteConnectionFor` must preserve `accessRules` like the OAuth path.
 - **Matching is label-boundary hostname suffix, never glob** — `example.com` covers `app.example.com`, not `notexample.com`.
 - **Env:** owns only `BROWSERBASE_MCP_URL` and `BROWSERBASE_ENABLED`. `BROWSERBASE_API_KEY`/`BROWSERBASE_PROJECT_ID` belong to the unrelated e2e transport (`.github/workflows/e2e-smoke.yml`); the key here is per-connection.
-- **Hidden behind `BROWSERBASE_ENABLED`** — seeded with `isActive: false`, strict `=== 'true'` (verified), restart not deploy. While hidden, existing connections keep working (`mcp:browserbase` stays in `scopeMap.ts`) but the dashboard row degrades: raw slug, fallback icon, `getMcpUrl` returns `''`.
+- **Hidden behind `BROWSERBASE_ENABLED`** — seeded with `isActive` from the flag (default `false`), strict `=== 'true'` (verified), restart not deploy. While hidden, existing connections keep working (`mcp:browserbase` stays in `scopeMap.ts`) but the dashboard row degrades: raw slug, fallback icon, `getMcpUrl` returns `''`.
 - **No `act` on REST** — it submits forms on third-party sites, the plane accepts the permanent dashboard API key, and curl has no confirmation.
 
 ### Response safety (`responseSafety.ts`) — verified live

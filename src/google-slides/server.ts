@@ -1,5 +1,6 @@
 // src/google-slides/server.ts
 import { FastMCP } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 
 import { UserSession } from '../userSession.js';
@@ -17,11 +18,11 @@ import {
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
-const slidesServer = new FastMCP<UserSession>({
+const slidesServer = instrumentServer(new FastMCP<UserSession>({
   name: 'Google Slides MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-slides'),
-});
+}), 'google-slides');
 
 registerMintRestBearerForCurl(slidesServer);
 registerListRestEndpoints(slidesServer);

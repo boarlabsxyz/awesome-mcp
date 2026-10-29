@@ -36,6 +36,7 @@
 
 import { FastMCP } from 'fastmcp';
 import { z } from 'zod';
+import { instrumentServer } from '../usage/instrumentServer.js';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
@@ -52,11 +53,11 @@ import {
   projectId,
 } from './schemas.js';
 
-export const supabaseServer = new FastMCP<UserSession>({
+export const supabaseServer = instrumentServer(new FastMCP<UserSession>({
   name: 'Supabase MCP',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'supabase'),
-});
+}), 'supabase');
 
 /** Every registered tool, in registration order — for tests and the REST plane. */
 export const SUPABASE_TOOLS: SupabaseToolDef[] = [];

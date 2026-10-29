@@ -34,7 +34,7 @@ export interface ToolEntry {
 }
 
 /**
- * Registered but not actually usable -- the root CLAUDE.md's "Tool Inventory" lists
+ * Registered but not actually usable -- src/google-docs/CLAUDE.md lists
  * these as unimplemented or unreliable. Scaffolding checks for them produces
  * red that nobody can fix, so they are excluded rather than skipped.
  */

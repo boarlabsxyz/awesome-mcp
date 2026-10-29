@@ -1,6 +1,6 @@
-# Google Docs MCP Server
+# Awesome MCP
 
-Multi-service FastMCP hosting platform: one MCP server per provider under `src/<provider>/server.ts` — Google Docs, Sheets, Calendar, Drive, Gmail and Slides, ClickUp, Slack (bot + user), Outline, PeopleForce (v2/v3 and v4), HubSpot, Redmine, Browserbase, GitHub, Pinecone and Supabase — plus a curl-able REST data plane under `/api/v1/*`.
+Multi-service FastMCP hosting platform: one MCP server per provider under `src/<provider>/server.ts` — Google Docs, Sheets, Calendar, Drive, Gmail and Slides, ClickUp, Slack (bot + user), Outline, PeopleForce (v2/v3 and v4), HubSpot, Redmine, Browserbase, GitHub, Pinecone and Supabase, plus an admins-only Admin MCP over the usage analytics — and a curl-able REST data plane under `/api/v1/*`.
 
 ## Tool Inventory
 
@@ -9,17 +9,16 @@ Do not keep tool counts here; they drift. The generated lists are the source of 
 - `docs/MCP_TOOLS.md` — every MCP tool, grouped by service (`scripts/buildMcpToolsDoc.mjs`)
 - `docs/REST_ENDPOINTS.md` — every REST endpoint, generated from `src/restCatalog.ts`
 
-Google Docs tools that throw rather than work (`NOT_IMPLEMENTED` in `e2e/tools.ts`): `editTableCell`, `fixListFormatting`, `findElement`.
-
 ## Per-service notes
 
 Service-specific rules and limitations live next to the code, in nested `CLAUDE.md` files that load only when you work in that directory:
 
+- `src/admin-mcp/CLAUDE.md` — Admin MCP: the usage analytics as tools, and why the admin email check is the only gate
 - `src/browserbase/CLAUDE.md` — Browserbase
 - `src/clickup/CLAUDE.md` — ClickUp
 - `src/github/CLAUDE.md` — GitHub
 - `src/google-calendar/CLAUDE.md` — Google Calendar
-- `src/google-docs/CLAUDE.md` — Google Docs, including its parameter patterns (document IDs, indices, colors, alignment, tabs)
+- `src/google-docs/CLAUDE.md` — Google Docs, including its parameter patterns and the tools that throw (`NOT_IMPLEMENTED`)
 - `src/google-sheets/CLAUDE.md` — Google Sheets
 - `src/hubspot/CLAUDE.md` — HubSpot
 - `src/outline/CLAUDE.md` — Outline
@@ -30,9 +29,10 @@ Service-specific rules and limitations live next to the code, in nested `CLAUDE.
 - `src/slack/CLAUDE.md` — Slack shared code and the `slack-bot` server
 - `src/slack-user/CLAUDE.md` — Slack user server and its access rules
 - `src/supabase/CLAUDE.md` — Supabase (hosted-MCP proxy, modern protocol)
+- `src/usage/CLAUDE.md` — usage analytics (`tool_call_events`): what is recorded, what never is
 - `src/website/CLAUDE.md` — dashboard sign-up/login, REST-plane handlers, body parsing
 
-**Where new notes go:** a rule about one provider goes in that provider's `CLAUDE.md`; this file holds only what applies across services. Write the rule plus the one-clause reason it exists. The investigation story belongs in the commit message or PR; detailed reasoning belongs in a code comment next to the guard it protects.
+**Where new notes go:** a rule about one provider goes in that provider's `CLAUDE.md`; this file holds only what applies across services. Write the rule plus the one-clause reason it exists. The investigation story belongs in the commit message or PR; detailed reasoning belongs in a code comment next to the guard it protects. Verification status ("verified live", "UNVERIFIED", what to check first on a live run) stays in the note — it tells the next reader which assumption to suspect first.
 
 ## Cross-cutting rules
 
@@ -42,10 +42,13 @@ Service-specific rules and limitations live next to the code, in nested `CLAUDE.
 - **REST writes validate with the MCP tool's own exported Zod schema** (`safeParse` → 400 with `flatten()`), never hand-rolled `if (!field)` checks. Path params override same-named body keys. Where two surfaces compose fields differently, share a field object instead (guarded by `src/__tests__/restWriteSchemaSharing.test.ts`).
 - **The permanent dashboard API key can call every REST write.** `createServiceAuth` accepts it alongside the 5-minute `mintRestBearerForCurl` bearer, and a curl has no confirmation step. Destructive endpoints ship only with explicit sign-off recorded in the catalog `notes` (`src/restCatalog.ts`). The catalog method union is `GET | POST`, so updates and deletes are POSTs to action paths.
 - **`sendUpstreamError` (`src/website/restUpstreamError.ts`) maps only 404 and 403**, reading the status from `err.code`, `err.response.status` or `err.status`; everything else becomes a 500. A handler whose upstream signals a caller error (400, 422, 429) or keeps its status elsewhere must map it itself. Never echo an upstream 401 on the REST plane — there it would mean the caller's bearer is bad.
+- **Every MCP server is constructed as `instrumentServer(new FastMCP(...), '<catalog slug>')`** so usage analytics see its calls; a bare `new FastMCP` works but never shows up, and `src/__tests__/usage/instrumentRegistration.test.ts` fails it. Analytics record tool names and allowlisted arguments, never prompts — details in `src/usage/CLAUDE.md`.
 - **Every app factory that calls `registerRestApiRoutes` must call `registerRestBodyParsers` first**, or `req.body` is `undefined` and POSTs fail with misleading "Required" errors. Details in `src/website/CLAUDE.md`.
 - **`src/google-docs/server.ts` is the application entry point.** It imports `createWebApp`, so `webServer.ts` must never import it; shared schemas and ops go in separate modules (the `writeSchemas.ts` / `writeOps.ts` pattern). It boots unless `NODE_TEST_CONTEXT` is set.
+- **Only the proxy's own auth middleware may set `x-mcp-user-id` / `-email` / `-sub`.** FastMCP's `authenticateRequest` trusts them from loopback, and every proxied request reaches it from loopback, so a client-supplied one forwarded untouched signs the caller in as any user id on any MCP. `resourceServerMiddleware` strips them first thing (`stripTrustedIdentityHeaders`) because its dual-mode API-key paths call `next()` without identifying anyone; `mcpOnlyMiddleware` strips them too and answers any non-401 rejection (403, 503) instead of proxying an unidentified request. `src/__tests__/mcpIdentityHeaders.test.ts` puts an echo server behind the real proxy to check what arrives.
+- **An Auth0 identity links to an existing account only by a VERIFIED email** (`mapJwtToUser`, `src/auth/userMapping.ts`). An unverified address is refused with 403 `email_not_verified` when an account already uses it, and is never stored as a new account's email — otherwise anyone able to register an address at the identity provider could sign in as its owner, admins included (`ADMIN_EMAILS` is matched by email). `email_verified` is read from the JWT claim and from `/userinfo`; if the tenant's Action adds `email` to access tokens it must add `email_verified` too, or an existing account's first JWT sign-in is refused (already-linked accounts are unaffected).
 - **New OAuth scopes need already-connected users to reconnect** — a token keeps the scopes it was minted with. Never seed a scope string the provider does not define: an unknown scope fails the whole consent flow.
-- **Hidden connectors are seeded with `isActive: false` behind `<NAME>_ENABLED`** (strict `=== 'true'`; a restart, not a deploy). Seed rather than skip, so existing connections are not orphaned.
+- **Hidden connectors seed `isActive` from `<NAME>_ENABLED`** — strict `=== 'true'`, so anything else (including unset) means `false`; flipping it is a restart, not a deploy. Seed rather than skip, so existing connections are not orphaned.
 - **Reconnect merges keep any non-empty `providerTokens.accessRules`** (`PRESERVED_ON_RECONNECT`). To clear rules, delete the key — `{}` is non-empty and would survive every reconnect.
 - **`sharedToolsRegistration.test.ts` strips whole-line `//` comments before block comments.** The order is load-bearing: a line comment ending in `/` + `*` would otherwise swallow the registration calls after it.
 

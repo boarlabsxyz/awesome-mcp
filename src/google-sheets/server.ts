@@ -1,5 +1,6 @@
 // src/sheetsServer.ts
 import { FastMCP, UserError } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 import { sheets_v4, drive_v3 } from 'googleapis';
 
@@ -18,11 +19,11 @@ import {
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
-const sheetsServer = new FastMCP<UserSession>({
+const sheetsServer = instrumentServer(new FastMCP<UserSession>({
   name: 'Google Sheets MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'google-sheets'),
-});
+}), 'google-sheets');
 
 registerMintRestBearerForCurl(sheetsServer);
 registerListRestEndpoints(sheetsServer);

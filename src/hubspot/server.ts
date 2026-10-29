@@ -14,6 +14,7 @@
 // directly unit-testable without going through the MCP transport.
 
 import { FastMCP, UserError } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 
 import { UserSession } from '../userSession.js';
@@ -53,11 +54,11 @@ import {
   type RenderedThread,
 } from './apiHelpers.js';
 
-export const hubspotServer = new FastMCP<UserSession>({
+export const hubspotServer = instrumentServer(new FastMCP<UserSession>({
   name: 'HubSpot MCP',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'hubspot'),
-});
+}), 'hubspot');
 
 // REST data-plane companions. Registered because src/restCatalog.ts marks the
 // /api/v1/hubspot endpoints live: without mintRestBearerForCurl the only

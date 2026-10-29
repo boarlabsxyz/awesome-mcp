@@ -9,7 +9,7 @@
 - **Ungranted fields are absent, not null** — `formatPerson` diffs against the documented field list with `in` and names what was withheld; never render a blank.
 - **Writes are additive** — create/update people and org structure only; delete/terminate/activate are not exposed (irreversible). Department/position/job level/location/work type/manager aren't writable in v4, so `personBody` drops them.
 - No per-vacancy API restriction in v4 either.
-- **Hidden unless `PEOPLEFORCE_V4_ENABLED=true`** (strict `=== 'true'`) — seeded every boot with `isActive: false`, filtered by both catalog backends; flipping it is a restart. Seeded, not skipped, so existing connections aren't orphaned (hidden, Copy URL yields `''`); `mcp:peopleforce-v4` stays in `scopeMap.ts`, so they keep working.
+- **Hidden unless `PEOPLEFORCE_V4_ENABLED=true`** (strict `=== 'true'`) — seeded every boot with `isActive` set from that flag (default `false`), filtered by both catalog backends; flipping it is a restart. Seeded, not skipped, so existing connections aren't orphaned (hidden, Copy URL yields `''`); `mcp:peopleforce-v4` stays in `scopeMap.ts`, so they keep working.
 
 ## Source Files
 

@@ -23,6 +23,18 @@ export function looksLikeJwt(token: string): boolean {
   return token.startsWith('eyJ') && (token.match(/\./g) || []).length === 2;
 }
 
+/**
+ * The headers this middleware uses to tell the MCP server behind the proxy who
+ * the caller is. FastMCP trusts them from loopback, and every proxied request
+ * arrives from loopback — so only this middleware may ever set them.
+ */
+export const TRUSTED_IDENTITY_HEADERS = ['x-mcp-user-id', 'x-mcp-user-email', 'x-mcp-user-sub'] as const;
+
+/** Removes any client-supplied identity header. Must run before anything can call next(). */
+export function stripTrustedIdentityHeaders(req: { headers: Record<string, unknown> }): void {
+  for (const h of TRUSTED_IDENTITY_HEADERS) delete req.headers[h];
+}
+
 /** Create the resource server middleware with injectable dependencies. */
 export function createResourceServerMiddleware(deps: MiddlewareDeps = defaultDeps) {
   return async function resourceServerMiddlewareHandler(
@@ -30,6 +42,12 @@ export function createResourceServerMiddleware(deps: MiddlewareDeps = defaultDep
     res: Response,
     next: NextFunction,
   ): Promise<void> {
+    // First, before any path below can call next(): several of them (the
+    // dual-mode API-key paths) pass the request on WITHOUT identifying the
+    // caller, and a client-supplied x-mcp-user-id would then reach the MCP
+    // server as if this middleware had vouched for it.
+    stripTrustedIdentityHeaders(req);
+
     const baseUrl = process.env.BASE_URL || 'http://localhost:8080';
     const dualAuthMode = process.env.DUAL_AUTH_MODE !== 'false';
 
@@ -89,6 +107,11 @@ export function createResourceServerMiddleware(deps: MiddlewareDeps = defaultDep
         next();
       } catch (err: any) {
         console.error('[jwt-auth] User mapping failed:', err.message);
+        // Not a transient failure: retrying cannot help, so do not say "try again".
+        if (err?.name === 'UnverifiedEmailError') {
+          res.status(403).json({ error: 'email_not_verified', message: err.message });
+          return;
+        }
         res.status(503).json({
           error: 'user_mapping_error',
           message: 'Failed to resolve user identity. Please try again.',
@@ -125,6 +148,10 @@ export function createResourceServerMiddleware(deps: MiddlewareDeps = defaultDep
           next();
         } catch (err: any) {
           console.error('[oauth] User mapping failed:', err.message);
+          if (err?.name === 'UnverifiedEmailError') {
+            res.status(403).json({ error: 'email_not_verified', message: err.message });
+            return;
+          }
           res.status(503).json({
             error: 'user_mapping_error',
             message: 'Failed to resolve user identity. Please try again.',

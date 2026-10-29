@@ -3,6 +3,7 @@
 // (tool names, params, and behavior mirror the reference; response shapes are
 // translated to plain text per this repo's tool-pattern conventions.)
 import { FastMCP, UserError } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 
 import { UserSession } from '../userSession.js';
@@ -33,11 +34,11 @@ import {
   updateDocumentFields,
 } from './restOps.js';
 
-export const outlineServer = new FastMCP<UserSession>({
+export const outlineServer = instrumentServer(new FastMCP<UserSession>({
   name: 'Outline Wiki MCP',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'outline'),
-});
+}), 'outline');
 
 // Outline now has a live REST data plane, so an MCP client must be able to mint a
 // short-lived bearer for it and discover what it exposes. Without these two the

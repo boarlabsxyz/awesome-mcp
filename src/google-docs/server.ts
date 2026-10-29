@@ -1,5 +1,6 @@
 // src/server.ts
 import { FastMCP, UserError } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 import { google, docs_v1, drive_v3, sheets_v4 } from 'googleapis';
 import { authorize } from '../auth.js';
@@ -117,6 +118,7 @@ import { hubspotServer } from '../hubspot/server.js';
 import { browserbaseServer }   from '../browserbase/server.js';
 import { pineconeServer }      from '../pinecone/server.js';
 import { supabaseServer }      from '../supabase/server.js';
+import { adminServer }         from '../admin-mcp/server.js';
 import { redmineServer } from '../redmine/server.js';
 import { githubServer } from '../github/server.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
@@ -180,11 +182,11 @@ process.on('unhandledRejection', (reason, promise) => {
 // MCP slug for this server instance (set via environment variable or defaults to google-docs)
 const MCP_SLUG = process.env.MCP_SLUG || 'google-docs';
 
-const server = new FastMCP<UserSession>({
+const server = instrumentServer(new FastMCP<UserSession>({
   name: 'Ultimate Google Docs & Sheets MCP Server',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(MCP_SLUG),
-});
+}), 'google-docs');
 
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
@@ -1539,6 +1541,7 @@ async function startServer() {
           "github":          githubServer,
           "pinecone":        pineconeServer,
           "supabase":        supabaseServer,
+          "admin":           adminServer,
         };
         const mcpToStart = MCP_SERVERS_BY_SLUG[MCP_SLUG] ?? server; // default: google-docs
 

@@ -18,7 +18,7 @@
 - **`batchUpdateSpreadsheet` `appendDimension` / `insertDimension`** make room; indices are 1-based inclusive (like `columnWidth`/`rowHeight`), converted to 0-based half-open. `inheritFromBefore` is refused at index 1.
 - **Size new tabs with `rowCount`/`columnCount`** (`addSpreadsheetSheet`, `addSheet` op) — metadata is read once before a batch runs, so a tab added in a batch can't be named by a later op in the same batch.
 - **Send `gridProperties` only when asked** — `{}` itself resizes. Report the grid Google returned, not the requested one.
-- **Deliberately not built:** `pasteData`, and Drive upload (REST plane is GET-only; a CSV can't be imported without passing through the model).
+- **Deliberately not built:** `pasteData`, and Drive upload (the Drive REST plane is GET-only; a CSV can't be imported without passing through the model).
 
 ## Source Files
 

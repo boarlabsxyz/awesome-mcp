@@ -182,4 +182,16 @@ describe('scopeMap', () => {
       assert.deepEqual(getScopesForSlug('unknown-slug'), ALL_SCOPES);
     });
   });
+
+  describe('admin', () => {
+    it('the Admin MCP service advertises mcp:admin', () => {
+      assert.deepEqual(getScopesForSlug('admin'), ['mcp:admin']);
+    });
+
+    it('puts no scope on the /admin web page or its API', () => {
+      assert.equal(getRequiredScope('/admin'), null);
+      assert.equal(getRequiredScope('/api/admin/usage/overview'), null);
+      assert.ok(!ALL_SCOPES.includes('mcp:admin'));
+    });
+  });
 });

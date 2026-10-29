@@ -40,7 +40,7 @@ REST-plane handlers for this service: see src/website/CLAUDE.md.
 - **Per-project scan total is a FLOOR** — labelled `FLOOR, not a total`, names unreadable projects and why the global list failed. A single named project answered via `projectRoute` is a full total (not a floor), but say it came from the fallback route.
 
 ### Deletes
-- **Permanent, no recycle bin** — `deleteProject` cascades to subprojects' issues, wiki, versions and time entries; `archiveProject` is the reversible option. All seven delete tools carry `destructiveHint: true`.
+- **Permanent, no recycle bin** — `deleteProject` cascades to subprojects' issues, wiki, versions and time entries; `archiveProject` is the reversible option. Every `delete*` tool (and `removeIssueWatcher`) carries `destructiveHint: true`.
 
 ## Source Files
 

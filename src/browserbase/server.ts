@@ -27,6 +27,7 @@
 // reference's global env config, so this is an adaptation, not a port.
 
 import { FastMCP, UserError } from 'fastmcp';
+import { instrumentServer } from '../usage/instrumentServer.js';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
@@ -78,11 +79,11 @@ export {
   forceEndBrowserSessionSchema,
 };
 
-export const browserbaseServer = new FastMCP<UserSession>({
+export const browserbaseServer = instrumentServer(new FastMCP<UserSession>({
   name: 'Browserbase MCP',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'browserbase'),
-});
+}), 'browserbase');
 
 // REST data-plane companions. Registered because src/restCatalog.ts marks the
 // /api/v1/browserbase endpoints live: without mintRestBearerForCurl the only

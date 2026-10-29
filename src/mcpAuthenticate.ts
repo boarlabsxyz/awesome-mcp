@@ -1,11 +1,12 @@
 // src/mcpAuthenticate.ts
 // Shared authenticate handler for all MCP servers.
 import http from 'http';
-import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession, createSlackBotSession, createSlackUserSession, createOutlineSession, createPeopleForceSession, createPeopleForceV4Session, createHubSpotSession, createRedmineSession, createBrowserbaseSession, createGitHubSession, createPineconeSession, createSupabaseSession } from './userSession.js';
+import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession, createSlackBotSession, createSlackUserSession, createOutlineSession, createPeopleForceSession, createPeopleForceV4Session, createHubSpotSession, createRedmineSession, createBrowserbaseSession, createGitHubSession, createPineconeSession, createSupabaseSession, createAdminSession } from './userSession.js';
 import { loadUsers, getUserByApiKey, getUserById } from './userStore.js';
 import { loadClientCredentials } from './auth.js';
 import { getMcpConnection, getMcpConnectionByInstanceId } from './mcpConnectionStore.js';
 import { getMcpCatalog } from './mcpCatalogStore.js';
+import { isAdminEmail } from './auth/admin.js';
 
 /** Dependencies injected for testability. */
 export interface AuthDeps {
@@ -30,6 +31,7 @@ export interface AuthDeps {
   createGitHubSession: (user: any, conn: any) => UserSession;
   createPineconeSession: (user: any, conn: any) => UserSession;
   createSupabaseSession: (user: any, conn: any) => UserSession;
+  createAdminSession: (user: any) => UserSession;
 }
 
 /** Default dependencies wired to real implementations. */
@@ -55,10 +57,17 @@ const defaultDeps: AuthDeps = {
   createGitHubSession,
   createPineconeSession,
   createSupabaseSession,
+  createAdminSession,
 };
 
 /** Create a session from a verified connection. */
 async function sessionFromConnection(user: any, connection: any, deps: AuthDeps): Promise<UserSession> {
+  // An Admin MCP instance id carries no credential and grants nothing: the
+  // Admin MCP itself never reaches here (resolveSession answers it first), so
+  // this is that id being replayed against some other server.
+  if (connection.provider === 'admin' || connection.mcpSlug === 'admin') {
+    throw new Response(null, { status: 400, statusText: 'This connection is for the Admin MCP only.' } as any);
+  }
   if (connection.provider === 'clickup') {
     return deps.createClickUpSession(user, connection);
   }
@@ -104,6 +113,17 @@ async function sessionFromConnection(user: any, connection: any, deps: AuthDeps)
 
 /** Resolve a user + optional instanceId/slug to a session. */
 async function resolveSession(user: any, mcpSlug: string, instanceId: string | undefined, deps: AuthDeps): Promise<UserSession> {
+  // The Admin MCP is decided by WHO is calling, before any other path: the
+  // instanceId path skips ownership, and the global-Google-token fallback
+  // below would hand any Google-connected user a session for any slug. OAuth
+  // scopes cannot stand in for this check — any user can obtain mcp:admin.
+  if (mcpSlug === 'admin') {
+    if (!isAdminEmail(user?.email)) {
+      throw new Response(null, { status: 403, statusText: 'The Admin MCP is for administrators only.' } as any);
+    }
+    return deps.createAdminSession(user);
+  }
+
   if (instanceId) {
     const connection = await deps.getMcpConnectionByInstanceId(instanceId);
     if (!connection) {

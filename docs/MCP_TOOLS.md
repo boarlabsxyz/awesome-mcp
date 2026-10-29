@@ -25,10 +25,11 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [GitHub](#github) (27)
 - [Pinecone](#pinecone) (9)
 - [Supabase](#supabase) (30)
+- [Admin (usage analytics)](#admin-usage-analytics-) (6)
 
 ## Shared (opt-in per server)
 
-Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 16 of 18 servers; not on PeopleForce v4, Supabase).
+Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 16 of 19 servers; not on PeopleForce v4, Supabase, Admin (usage analytics)).
 
 | Tool | Description | REST |
 |---|---|---|
@@ -586,6 +587,19 @@ Source: `src/supabase/server.ts` — 30 tools.
 | `reset_branch` | Resets migrations of a development branch. Any untracked data or schema changes will be lost. | — |
 | `rebase_branch` | Rebases a development branch on production. This will effectively run any newer migrations from production onto this branch to help handle migration drift. | — |
 
+## Admin (usage analytics)
+
+Source: `src/admin-mcp/server.ts` — 6 tools.
+
+| Tool | Description | REST |
+|---|---|---|
+| `getUsageOverview` | Summary of how the MCPs on this platform are used: total calls, active users, error rate, calls per service and per day, client apps (Claude, ChatGPT, Cursor, curl…) and the busiest users. Start here for "how are people using the MCPs". MCP clients never send the user's prompt to a server, so prompts are not recorded; argument values are kept only for search-type fields (query, textToFind, title, …), truncated and with secrets redacted. | — |
+| `listToolUsage` | Per-tool usage: calls, error count and rate, last use, and WHICH users called each tool (busiest first, with their call counts). Sort by errorRate to find broken tools, by calls for the most used, by lastUsed for recent activity. A tool with no calls in the period does not appear. | — |
+| `listTopErrors` | The most frequent failures, grouped by tool, error kind and message (up to 50 groups), with how many calls and users each affected and when it was last seen. Error messages are stored truncated and with secrets redacted. | — |
+| `listRetryLoops` | Bursts of repeated calls to one tool: 4+ MCP calls in one session, each within 60s of the last. Often a model retrying because a response or tool description confused it — but a legitimate batch looks the same, so runs containing failures are listed first. Follow up with getUserActivity to read the calls themselves. | — |
+| `getUserActivity` | One user's recorded calls, newest first, grouped by MCP session: tool, arguments (names, plus values for search-type fields), result or error, and duration. The closest available view of what the user was trying to do. MCP clients never send the user's prompt to a server, so prompts are not recorded; argument values are kept only for search-type fields, truncated and with secrets redacted. | — |
+| `listUsers` | Every account on the platform with its sign-in method, join date and connected MCPs (connector name and, for Google ones, the Google account). Filter by part of an email address or name. | — |
+
 ---
 
-**Grand total: 427 tools across 19 sections.**
+**Grand total: 433 tools across 20 sections.**

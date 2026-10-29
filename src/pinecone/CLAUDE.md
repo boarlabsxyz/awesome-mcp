@@ -3,7 +3,7 @@
 ## Rules and limitations
 
 ### API surface
-- **Reimplements Pinecone's Developer MCP over REST** — it is STDIO-only (the remote Assistant MCP serves no indexes); the 9 tools keep `pinecone-io/pinecone-mcp`'s names and shapes. Spec: `https://docs.pinecone.io/llms.txt` → `pinecone-api@main/2026-07/*.oas.yaml`, read raw.
+- **Reimplements Pinecone's Developer MCP over Pinecone's REST API** — the upstream server is STDIO-only (the remote Assistant MCP serves no indexes). The 9 tools keep `pinecone-io/pinecone-mcp`'s names and shapes, except `llm_provider`/`llm_model`, which are deliberately not ported. Spec: `https://docs.pinecone.io/llms.txt` → `pinecone-api@main/2026-07/*.oas.yaml`, read raw.
 - **`X-Pinecone-Api-Version` is required on every call** — omitting it is rejected. Pinned in `apiHelpers.ts`, not env: it changes the `schema.fields` shape the classifier reads.
 - **Data plane is a per-index host** (`https://{index.host}/…`), learnable only via `GET /indexes/{name}`. `indexCatalog.ts` caches host+kind for 10 min (index properties, unlike `mcpProxyClient`'s uncached sessions).
 - **Upsert body is `application/x-ndjson`**, max 1000 records / 2 MB; `application/json` 400s like a schema error.
