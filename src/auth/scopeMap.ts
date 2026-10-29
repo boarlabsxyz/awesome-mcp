@@ -19,6 +19,7 @@ const ROUTE_SCOPE_MAP: Record<string, string> = {
   browserbase: 'mcp:browserbase',
   github: 'mcp:github',
   pinecone: 'mcp:pinecone',
+  supabase: 'mcp:supabase',
   // 'admin' is deliberately absent: this map is matched against request PATHS,
   // and /admin is the admin web page, not an MCP route. The Admin MCP runs only
   // on its own service, which reads SLUG_SCOPE_MAP.
@@ -46,6 +47,7 @@ const SLUG_SCOPE_MAP: Record<string, string> = {
   'browserbase': 'mcp:browserbase',
   'github': 'mcp:github',
   'pinecone': 'mcp:pinecone',
+  'supabase': 'mcp:supabase',
   // Not a permission boundary: any user can request mcp:admin. Access to the
   // Admin MCP is decided by isAdminEmail (src/auth/admin.ts).
   'admin': 'mcp:admin',

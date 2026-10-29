@@ -9,7 +9,8 @@
 // when only one of them is fixed.
 //
 // Why hand-rolled instead of @modelcontextprotocol/sdk: this needs exactly the
-// initialize / notifications-initialized / tools-call trio, and `src/` carries
+// initialize / notifications-initialized / tools-call trio (or, for a
+// `protocol: 'modern'` target, one enveloped tools/call), and `src/` carries
 // no SDK dependency (the same reasoning as src/mailer.ts using plain fetch).
 // The protocol surface used here is smaller than the adapter around the SDK
 // would be.
@@ -38,6 +39,22 @@
 // ---------------------------------------------------------------------------
 
 const PREFERRED_PROTOCOL = '2025-06-18';
+
+/**
+ * The stateless protocol revision. It has no `initialize` handshake: every
+ * request carries its protocol version, client info and client capabilities in
+ * a per-request `_meta` envelope under these keys, and the method (and, for
+ * `tools/call`, the tool name) is mirrored into `mcp-method` / `mcp-name`
+ * headers. Values read from `@modelcontextprotocol/core` 2.3.1, the SDK the
+ * Supabase server is built on.
+ */
+export const MODERN_PROTOCOL_VERSION = '2026-07-28';
+const PROTOCOL_VERSION_META_KEY = 'io.modelcontextprotocol/protocolVersion';
+const CLIENT_INFO_META_KEY = 'io.modelcontextprotocol/clientInfo';
+const CLIENT_CAPABILITIES_META_KEY = 'io.modelcontextprotocol/clientCapabilities';
+
+/** JSON-RPC code a modern server uses for "I do not speak that protocol version". */
+const UNSUPPORTED_PROTOCOL_VERSION = -32022;
 
 export interface ProxyToolResult {
   /** Joined text blocks. Every hosted tool this is used against answers with text. */
@@ -94,6 +111,20 @@ export interface McpProxyTarget {
    * credential and so cannot reject one.
    */
   explainUnauthorized?: (status: number) => string;
+  /**
+   * Which protocol shape to speak. Omitted means `legacy` — the initialize /
+   * notifications-initialized / tools-call trio every existing caller uses.
+   *
+   * `modern` sends one `tools/call` carrying the 2026-07-28 `_meta` envelope.
+   * It exists because a server built with the v2 SDK and `legacy: 'reject'`
+   * (Supabase's published handler) answers the legacy handshake with 400, so
+   * the trio cannot reach it at all. A modern call that the server answers as
+   * a LEGACY server would — "unsupported protocol version" or "not
+   * initialized" — falls back to the trio once, so a host that has not moved
+   * yet still works; no other failure falls back, because a 400 about the
+   * arguments would only fail the same way twice.
+   */
+  protocol?: 'legacy' | 'modern';
 }
 
 export interface ProxyCallOptions {
@@ -151,17 +182,146 @@ export function textOfResult(result: any): string {
 }
 
 /**
- * Run one hosted tool call: handshake, call, discard.
+ * Run one hosted tool call and discard everything it set up.
  *
- * `initialize` + `notifications/initialized` are re-done every call. That is
- * the price of holding no state, and it is the right trade here — see the
- * header.
+ * Legacy targets re-do `initialize` + `notifications/initialized` every call —
+ * the price of holding no state, and the right trade here (see the header).
+ * Modern targets need no handshake at all: the 2026-07-28 revision is
+ * stateless by design, which is the same contract this module already chose.
  */
 export async function callProxyTool(
   target: McpProxyTarget,
   name: string,
   args: Record<string, unknown>,
   options: ProxyCallOptions = {},
+): Promise<ProxyToolResult> {
+  if (target.protocol !== 'modern') return callLegacyTool(target, name, args, options);
+  try {
+    return await callModernTool(target, name, args, options);
+  } catch (err) {
+    if (err instanceof LegacyOnlyServer) return callLegacyTool(target, name, args, options);
+    throw err;
+  }
+}
+
+/** Thrown by the modern path when the server has said it only speaks the legacy protocol. */
+class LegacyOnlyServer extends Error {}
+
+/**
+ * Does this 400 body say "speak the legacy protocol to me"?
+ *
+ * Two shapes, one per kind of legacy server: a v2 server that lists the
+ * versions it does support (-32022 with `data.supported`), and a stateful 2025
+ * server that refuses any request before `initialize`. Anything else — a bad
+ * argument, a malformed envelope — is a real error and must not be retried.
+ */
+export function isLegacyOnlyAnswer(body: any): boolean {
+  const error = body?.error;
+  if (!error) return false;
+  if (error.code === UNSUPPORTED_PROTOCOL_VERSION) {
+    const supported = error.data?.supported;
+    return !Array.isArray(supported) || !supported.includes(MODERN_PROTOCOL_VERSION);
+  }
+  return /not initialized|no valid session/i.test(String(error.message ?? ''));
+}
+
+/**
+ * One stateless `tools/call`: no handshake, no transport session.
+ *
+ * Capabilities are sent EMPTY on purpose. Declaring `elicitation` would invite
+ * the server to answer with an `input_required` result (a confirmation form)
+ * that this proxy has no user to show — so a server that gates an action on a
+ * form instead takes its no-form path, which the connector documents.
+ */
+async function callModernTool(
+  target: McpProxyTarget,
+  name: string,
+  args: Record<string, unknown>,
+  options: ProxyCallOptions,
+): Promise<ProxyToolResult> {
+  const doFetch = options.fetchImpl ?? fetch;
+  const url = options.url ?? target.url;
+  const clean = (text: string): string => (target.sanitizeText ? target.sanitizeText(text) : text);
+  const id = 1;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), target.timeoutMs);
+  try {
+    const res = await doFetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-protocol-version': MODERN_PROTOCOL_VERSION,
+        'mcp-method': 'tools/call',
+        'mcp-name': name,
+        ...target.headers?.(),
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id,
+        method: 'tools/call',
+        params: {
+          name,
+          arguments: args,
+          _meta: {
+            [PROTOCOL_VERSION_META_KEY]: MODERN_PROTOCOL_VERSION,
+            [CLIENT_INFO_META_KEY]: target.clientInfo,
+            [CLIENT_CAPABILITIES_META_KEY]: {},
+          },
+        },
+      }),
+      signal: controller.signal,
+      // Same reasoning as the legacy path: the request may carry a credential.
+      redirect: 'error',
+    });
+
+    if (res.status === 401 || res.status === 403) {
+      throw new McpProxyHttpError(
+        target.explainUnauthorized?.(res.status) ?? `${target.label} rejected the request (${res.status}).`,
+        res.status,
+      );
+    }
+    if (res.status === 400) {
+      const raw = await res.text().catch(() => '');
+      let body: any;
+      try { body = JSON.parse(raw); } catch { body = undefined; }
+      if (isLegacyOnlyAnswer(body)) throw new LegacyOnlyServer();
+      const detail = body?.error
+        ? `${truncate(clean(String(body.error.message ?? '')))}${body.error.data ? ` — ${truncate(clean(JSON.stringify(body.error.data)))}` : ''}`
+        : truncate(clean(raw));
+      throw new McpProxyHttpError(`${target.label} refused '${name}' (400): ${detail}`, 400);
+    }
+    if (!res.ok) {
+      throw new McpProxyHttpError(
+        `${target.label} returned ${res.status} ${res.statusText}: ${truncate(clean(await res.text().catch(() => '')))}`,
+        res.status,
+      );
+    }
+
+    const body = await readRpcBody(res, id);
+    if (body?.error) {
+      const detail = body.error.data ? ` — ${truncate(clean(JSON.stringify(body.error.data)))}` : '';
+      throw new Error(`${target.label} tools/call failed (${body.error.code}): ${truncate(clean(String(body.error.message ?? '')))}${detail}`);
+    }
+    const result = body?.result;
+    return { text: textOfResult(result), isError: result?.isError === true, raw: result };
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`${target.label} '${name}' timed out after ${target.timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** The initialize / notifications-initialized / tools-call trio. */
+async function callLegacyTool(
+  target: McpProxyTarget,
+  name: string,
+  args: Record<string, unknown>,
+  options: ProxyCallOptions,
 ): Promise<ProxyToolResult> {
   const doFetch = options.fetchImpl ?? fetch;
   const url = options.url ?? target.url;

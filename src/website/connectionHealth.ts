@@ -31,6 +31,7 @@ import { validateRedmineToken } from '../redmine/connectToken.js';
 import { validateBrowserbaseToken } from '../browserbase/connectToken.js';
 import { validateGitHubToken } from '../github/connectToken.js';
 import { validatePineconeToken } from '../pinecone/connectToken.js';
+import { validateSupabaseToken } from '../supabase/connectToken.js';
 import { resolveRedmineAuthMode } from '../redmine/authMode.js';
 
 /**
@@ -454,6 +455,17 @@ export async function checkConnectionHealth(
         return fromValidateResult(await validatePineconeToken({
           token: accessToken, fetchImpl,
         } as any), false);
+      }
+
+      case 'supabase': {
+        if (!accessToken) return { state: 'reauth', reason: 'No Supabase token stored.' };
+        // canSelfHeal follows the refresh token: a pasted personal access token
+        // never refreshes, so its rejection is conclusive; an OAuth access token
+        // is routinely expired at rest and renewed at call time, so its
+        // rejection here says nothing about the grant.
+        return fromValidateResult(await validateSupabaseToken({
+          token: accessToken, fetchImpl,
+        } as any), !!providerTokens.refresh_token);
       }
 
       case 'admin':

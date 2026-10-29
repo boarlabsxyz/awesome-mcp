@@ -1,7 +1,7 @@
 // src/mcpAuthenticate.ts
 // Shared authenticate handler for all MCP servers.
 import http from 'http';
-import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession, createSlackBotSession, createSlackUserSession, createOutlineSession, createPeopleForceSession, createPeopleForceV4Session, createHubSpotSession, createRedmineSession, createBrowserbaseSession, createGitHubSession, createPineconeSession, createAdminSession } from './userSession.js';
+import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession, createSlackBotSession, createSlackUserSession, createOutlineSession, createPeopleForceSession, createPeopleForceV4Session, createHubSpotSession, createRedmineSession, createBrowserbaseSession, createGitHubSession, createPineconeSession, createSupabaseSession, createAdminSession } from './userSession.js';
 import { loadUsers, getUserByApiKey, getUserById } from './userStore.js';
 import { loadClientCredentials } from './auth.js';
 import { getMcpConnection, getMcpConnectionByInstanceId } from './mcpConnectionStore.js';
@@ -30,6 +30,7 @@ export interface AuthDeps {
   createBrowserbaseSession: (user: any, conn: any) => UserSession;
   createGitHubSession: (user: any, conn: any) => UserSession;
   createPineconeSession: (user: any, conn: any) => UserSession;
+  createSupabaseSession: (user: any, conn: any) => UserSession;
   createAdminSession: (user: any) => UserSession;
 }
 
@@ -55,6 +56,7 @@ const defaultDeps: AuthDeps = {
   createBrowserbaseSession,
   createGitHubSession,
   createPineconeSession,
+  createSupabaseSession,
   createAdminSession,
 };
 
@@ -98,6 +100,9 @@ async function sessionFromConnection(user: any, connection: any, deps: AuthDeps)
   }
   if (connection.provider === 'pinecone') {
     return deps.createPineconeSession(user, connection);
+  }
+  if (connection.provider === 'supabase') {
+    return deps.createSupabaseSession(user, connection);
   }
   const mcp = await deps.getMcpCatalog(connection.mcpSlug);
   const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret

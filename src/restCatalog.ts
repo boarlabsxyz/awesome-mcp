@@ -27,7 +27,8 @@ export type RestService =
   | 'redmine'
   | 'browserbase'
   | 'github'
-  | 'pinecone';
+  | 'pinecone'
+  | 'supabase';
 
 /**
  * Which `src/<dir>/server.ts` implements each service's MCP tools.
@@ -56,6 +57,7 @@ export const SERVICE_SERVER_PATH: Record<RestService, string> = {
   browserbase: 'src/browserbase/server.ts',
   github: 'src/github/server.ts',
   pinecone: 'src/pinecone/server.ts',
+  supabase: 'src/supabase/server.ts',
 };
 
 export interface RestEndpoint {
@@ -455,6 +457,24 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'pinecone', method: 'POST', path: '/api/v1/pinecone/rerank', summary: 'Rerank documents you supply against a query', mcpToolName: 'rerank-documents', openapiOperationId: 'rerankPineconeDocuments', status: 'live', notes: 'A read despite the POST, and the large-body case: the caller supplies the documents. Touches no index, so index and namespace rules do not apply. Also takes ?format=text.' },
   { service: 'pinecone', method: 'POST', path: '/api/v1/pinecone/indexes', summary: 'Create an index with integrated embedding', mcpToolName: 'create-index-for-model', openapiOperationId: 'createPineconeIndex', status: 'live', notes: 'Exposed with explicit sign-off: the permanent dashboard API key can create a billable index. 201 when created, 200 with created false when an index of that name already existed and was returned unchanged. Refused when the connection is read-only. The embed field_map name is fixed at creation and every later upsert must carry it.' },
   { service: 'pinecone', method: 'POST', path: '/api/v1/pinecone/indexes/{indexName}/upsert', summary: 'Insert or update records in an index', mcpToolName: 'upsert-records', openapiOperationId: 'upsertPineconeRecords', status: 'live', notes: 'DESTRUCTIVE - a record whose _id already exists is OVERWRITTEN and there is no undo. Exposed with explicit sign-off: a curl has no confirmation affordance and the permanent dashboard API key is accepted here. It is also the bulk-load path the data plane exists for, which is why withholding it would cost more than it saves. Body limit 5mb, at most 1000 records; a larger batch is refused rather than split, because an upsert is not atomic across the body. Pass namespace as __default__ for the default namespace (an empty string is accepted and translated, but Pinecone itself refuses it). Answers accepted, not indexed - embedding is asynchronous.' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/docs/search', summary: 'Search the Supabase documentation with a GraphQL query', mcpToolName: 'search_docs', openapiOperationId: 'searchSupabaseDocs', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/organizations', summary: 'List the organizations this connection reaches', mcpToolName: 'list_organizations', openapiOperationId: 'listSupabaseOrganizations', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/organizations/{organizationId}', summary: 'Get one organization, including its plan', mcpToolName: 'get_organization', openapiOperationId: 'getSupabaseOrganization', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/organizations/{organizationId}/cost', summary: 'Get the cost of a new project or branch in an organization', mcpToolName: 'get_cost', openapiOperationId: 'getSupabaseCost', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects', summary: 'List Supabase projects', mcpToolName: 'list_projects', openapiOperationId: 'listSupabaseProjects', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}', summary: 'Get one Supabase project', mcpToolName: 'get_project', openapiOperationId: 'getSupabaseProject', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}/tables', summary: 'List tables in one or more schemas', mcpToolName: 'list_tables', openapiOperationId: 'listSupabaseTables', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}/extensions', summary: 'List database extensions', mcpToolName: 'list_extensions', openapiOperationId: 'listSupabaseExtensions', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}/migrations', summary: 'List applied migrations', mcpToolName: 'list_migrations', openapiOperationId: 'listSupabaseMigrations', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}/logs', summary: 'Get logs for one service over a window of up to 24 hours', mcpToolName: 'get_logs', openapiOperationId: 'getSupabaseLogs', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}/logs/query', summary: 'Run a read-only SQL query over the unified logs stream', mcpToolName: 'query_logs', openapiOperationId: 'querySupabaseLogs', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}/advisors', summary: 'Get security, performance or health advisories', mcpToolName: 'get_advisors', openapiOperationId: 'getSupabaseAdvisors', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}/url', summary: 'Get the project API URL', mcpToolName: 'get_project_url', openapiOperationId: 'getSupabaseProjectUrl', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}/publishable-keys', summary: 'Get the project publishable and legacy anon keys', mcpToolName: 'get_publishable_keys', openapiOperationId: 'getSupabasePublishableKeys', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}/types', summary: 'Generate TypeScript types for the database schema', mcpToolName: 'generate_typescript_types', openapiOperationId: 'generateSupabaseTypes', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}/functions', summary: 'List Edge Functions', mcpToolName: 'list_edge_functions', openapiOperationId: 'listSupabaseEdgeFunctions', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}/functions/{functionSlug}', summary: 'Get the files of one Edge Function', mcpToolName: 'get_edge_function', openapiOperationId: 'getSupabaseEdgeFunction', status: 'planned' },
+  { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}/branches', summary: 'List development branches', mcpToolName: 'list_branches', openapiOperationId: 'listSupabaseBranches', status: 'planned' },
 ];
 
 /**

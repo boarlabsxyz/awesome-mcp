@@ -337,6 +337,8 @@ import type { GitHubClient } from '../github/apiHelpers.js';
 import type { PineconeRulesState } from '../pinecone/accessRules.js';
 import type { PineconeRestContext } from '../pinecone/restOps.js';
 import { validatePineconeToken, buildPineconeInstanceName, fetchPineconeIndexSummary } from '../pinecone/connectToken.js';
+import { validateSupabaseToken, buildSupabaseInstanceName, fetchSupabaseOrganizationSummary } from '../supabase/connectToken.js';
+import { exchangeSupabaseOauthCode, SUPABASE_TOKEN_URL } from '../supabase/oauthCallback.js';
 // Type-only: erased at compile time, so the REST handlers can still import the
 // clients dynamically and keep them out of the web server's startup graph.
 import type { ClickUpClient } from '../clickup/apiHelpers.js';
@@ -1281,6 +1283,36 @@ async function buildPineconePasteConnection(input: PasteConnectionInput): Promis
 }
 
 /**
+ * Validate a pasted Supabase personal access token and shape the connection.
+ *
+ * A builder rather than connectPasteToken for the Pinecone reason: the probe
+ * (GET /v1/organizations) already returns the organizations the token reaches,
+ * so naming the connection after them costs one best-effort read — and people
+ * commonly hold tokens for a personal and a work organization.
+ */
+async function buildSupabasePasteConnection(input: PasteConnectionInput): Promise<PasteConnectionBuildResult> {
+  const validate = await validateSupabaseToken({ token: input.token });
+  if (!validate.ok) return validate;
+  const summary = await fetchSupabaseOrganizationSummary(input.token);
+  return {
+    ok: true,
+    connection: {
+      provider: 'supabase',
+      serviceLogName: 'Supabase',
+      name: buildSupabaseInstanceName({
+        serviceName: input.serviceName,
+        providedInstanceName: input.instanceName,
+        organizationCount: summary.count,
+        firstOrganizationName: summary.firstName,
+      }),
+      // No baseUrl: the Supabase platform is one API host.
+      providerTokens: { access_token: input.token },
+      providerEmail: null,
+    },
+  };
+}
+
+/**
  * Providers that validate their own credential and build their own connection
  * record. Everything else goes through the simpler connectPasteToken helper,
  * which stores only { access_token }.
@@ -1292,6 +1324,7 @@ const PASTE_CONNECTION_BUILDERS: Record<string, (input: PasteConnectionInput) =>
   browserbase: buildBrowserbasePasteConnection,
   github: buildGitHubPasteConnection,
   pinecone: buildPineconePasteConnection,
+  supabase: buildSupabasePasteConnection,
 };
 
 /**
@@ -2638,6 +2671,54 @@ function registerSharedRoutes(app: express.Express): void {
           'github', githubProviderTokens, exchange.email
         );
         console.error(`User ${user.id} connected GitHub MCP: ${connection.instanceId}`);
+      } else if (provider === 'supabase') {
+        // Supabase OAuth (see src/supabase/oauthCallback.ts). The grant reaches
+        // the ONE organization picked on the consent screen, and access tokens
+        // expire, so the refresh token and expiry are stored for the call-time
+        // refresh in src/supabase/apiHelpers.ts.
+        const exchange = await exchangeSupabaseOauthCode({
+          tokenUrl: mcp.oauthTokenUrl || SUPABASE_TOKEN_URL,
+          code,
+          clientId: client_id,
+          clientSecret: client_secret,
+          redirectUri,
+        });
+        if (!exchange.ok) {
+          console.error(`[MCP Connect] ${exchange.logMessage}`);
+          res.status(exchange.status).send(exchange.userMessage);
+          return;
+        }
+        const supabaseProviderTokens = {
+          access_token: exchange.accessToken,
+          refresh_token: exchange.refreshToken ?? undefined,
+          expiry_date: exchange.expiresIn ? Date.now() + exchange.expiresIn * 1000 : undefined,
+        };
+        if (stateData.reconnectInstanceId) {
+          const reconnected = await applyProviderReconnect(supabaseProviderTokens, 'Supabase');
+          if (!reconnected) return;
+          res.redirect(`/dashboard?reconnected=${encodeURIComponent(reconnected.instanceName || mcpSlug)}`);
+          return;
+        }
+        const supabaseInstanceName = buildSupabaseInstanceName({
+          serviceName: mcp.name.replace(' MCP', '').trim(),
+          providedInstanceName: stateData.instanceName,
+          organizationCount: exchange.organizationCount,
+          firstOrganizationName: exchange.organizationName,
+        });
+        // Same organization twice is the same connection: the name is derived
+        // from the organization, so a match means "use Reconnect", as for Redmine.
+        const existingSupabase = (await getUserConnectedMcps(user.id))
+          .find(c => c.mcpSlug === mcpSlug && c.instanceName === supabaseInstanceName);
+        if (existingSupabase) {
+          res.redirect(`/dashboard?already_exists=` + encodeURIComponent(existingSupabase.instanceName));
+          return;
+        }
+        const emptyGoogleTokensForSupabase = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
+        connection = await createMcpInstance(
+          user.id, mcpSlug, supabaseInstanceName, emptyGoogleTokensForSupabase, null,
+          'supabase', supabaseProviderTokens, null
+        );
+        console.error(`User ${user.id} connected Supabase MCP: ${connection.instanceId}`);
       } else {
         // Google OAuth (default)
         const oauthClient = new OAuth2Client(client_id, client_secret, redirectUri);
@@ -3992,6 +4073,11 @@ function registerSharedRoutes(app: express.Express): void {
       'What issues are assigned to me and still open?',
       'Log 3 hours against issue #1482 for today',
       'Show the wiki page "Release Process" in the platform project',
+    ],
+    'supabase': [
+      'List my Supabase projects, then show the tables in the public schema of the production one',
+      'Check the security advisors for my project and list any tables missing row level security',
+      'Show the Postgres error logs from the last hour and tell me what is failing',
     ],
     'admin': [
       'How were the MCPs used this week? Which services and tools are busiest?',

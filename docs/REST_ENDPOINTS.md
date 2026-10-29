@@ -373,9 +373,32 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `create-index-for-model` | `POST /api/v1/pinecone/indexes` | live | Create an index with integrated embedding — _Exposed with explicit sign-off: the permanent dashboard API key can create a billable index. 201 when created, 200 with created false when an index of that name already existed and was returned unchanged. Refused when the connection is read-only. The embed field_map name is fixed at creation and every later upsert must carry it._ |
 | `upsert-records` | `POST /api/v1/pinecone/indexes/{indexName}/upsert` | live | Insert or update records in an index — _DESTRUCTIVE - a record whose _id already exists is OVERWRITTEN and there is no undo. Exposed with explicit sign-off: a curl has no confirmation affordance and the permanent dashboard API key is accepted here. It is also the bulk-load path the data plane exists for, which is why withholding it would cost more than it saves. Body limit 5mb, at most 1000 records; a larger batch is refused rather than split, because an upsert is not atomic across the body. Pass namespace as __default__ for the default namespace (an empty string is accepted and translated, but Pinecone itself refuses it). Answers accepted, not indexed - embedding is asynchronous._ |
 
+### Supabase (`supabase`)
+
+| MCP tool | REST endpoint | Status | Summary |
+|---|---|---|---|
+| `search_docs` | `GET /api/v1/supabase/docs/search` | planned | Search the Supabase documentation with a GraphQL query |
+| `list_organizations` | `GET /api/v1/supabase/organizations` | planned | List the organizations this connection reaches |
+| `get_organization` | `GET /api/v1/supabase/organizations/{organizationId}` | planned | Get one organization, including its plan |
+| `get_cost` | `GET /api/v1/supabase/organizations/{organizationId}/cost` | planned | Get the cost of a new project or branch in an organization |
+| `list_projects` | `GET /api/v1/supabase/projects` | planned | List Supabase projects |
+| `get_project` | `GET /api/v1/supabase/projects/{projectId}` | planned | Get one Supabase project |
+| `list_tables` | `GET /api/v1/supabase/projects/{projectId}/tables` | planned | List tables in one or more schemas |
+| `list_extensions` | `GET /api/v1/supabase/projects/{projectId}/extensions` | planned | List database extensions |
+| `list_migrations` | `GET /api/v1/supabase/projects/{projectId}/migrations` | planned | List applied migrations |
+| `get_logs` | `GET /api/v1/supabase/projects/{projectId}/logs` | planned | Get logs for one service over a window of up to 24 hours |
+| `query_logs` | `GET /api/v1/supabase/projects/{projectId}/logs/query` | planned | Run a read-only SQL query over the unified logs stream |
+| `get_advisors` | `GET /api/v1/supabase/projects/{projectId}/advisors` | planned | Get security, performance or health advisories |
+| `get_project_url` | `GET /api/v1/supabase/projects/{projectId}/url` | planned | Get the project API URL |
+| `get_publishable_keys` | `GET /api/v1/supabase/projects/{projectId}/publishable-keys` | planned | Get the project publishable and legacy anon keys |
+| `generate_typescript_types` | `GET /api/v1/supabase/projects/{projectId}/types` | planned | Generate TypeScript types for the database schema |
+| `list_edge_functions` | `GET /api/v1/supabase/projects/{projectId}/functions` | planned | List Edge Functions |
+| `get_edge_function` | `GET /api/v1/supabase/projects/{projectId}/functions/{functionSlug}` | planned | Get the files of one Edge Function |
+| `list_branches` | `GET /api/v1/supabase/projects/{projectId}/branches` | planned | List development branches |
+
 ## Status legend
 
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 266 endpoints.
+Catalog size: 284 endpoints.
