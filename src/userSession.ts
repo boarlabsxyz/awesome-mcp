@@ -786,6 +786,29 @@ export function createPineconeSession(
   return session;
 }
 
+/**
+ * Session for the Admin MCP. It carries identity only — no provider
+ * credential, since its data is this server's own Postgres — and is not
+ * cached: building it costs nothing, and the admin check that guards it
+ * (src/admin-mcp) reads the caller's email from here on every call.
+ */
+export function createAdminSession(user: UserRecord): UserSession {
+  return {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: 'admin',
+    // Null placeholders for Google clients (the Admin MCP won't use them)
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
+  };
+}
+
 export function clearSessionCache(apiKey: string): void {
   sessionCache.delete(apiKey);
   // Also clear any MCP-specific sessions for this user

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it, mock, beforeEach } from 'node:test';
-import { mapJwtToUser, isUniqueViolation, type UserMappingDeps } from '../../auth/userMapping.js';
+import { mapJwtToUser, isUniqueViolation, UnverifiedEmailError, type UserMappingDeps } from '../../auth/userMapping.js';
 import type { UserRecord } from '../../userStore.js';
 import type { JwtPayload } from '../../auth/jwtValidator.js';
 
@@ -16,7 +16,7 @@ const fakeEmailUser: UserRecord = {
 };
 
 const payload: JwtPayload = {
-  sub: 'auth0|123', scope: 'mcp:docs', email: 'user@test.com', iss: 'iss', aud: 'aud',
+  sub: 'auth0|123', scope: 'mcp:docs', email: 'user@test.com', emailVerified: true, iss: 'iss', aud: 'aud',
 };
 
 function makeDeps(overrides: Partial<UserMappingDeps> = {}): UserMappingDeps {
@@ -159,5 +159,53 @@ describe('mapJwtToUser', () => {
     });
 
     await assert.rejects(() => mapJwtToUser(payload, deps), (err: any) => err.code === '23505');
+  });
+});
+
+// An unverified email must never link to, or name, an account: ADMIN_EMAILS is
+// matched by email, so either would let anyone who can register an address at
+// the identity provider — without proving they own it — act as that person.
+describe('mapJwtToUser with an unverified email', () => {
+  const unverified: JwtPayload = { ...payload, sub: 'auth0|attacker', email: 'email@test.com', emailVerified: false };
+
+  it('refuses to link to the existing account that uses the address', async () => {
+    const deps = makeDeps({ getUserByEmail: mock.fn(async () => fakeEmailUser) });
+    await assert.rejects(() => mapJwtToUser(unverified, deps), (err: any) => err instanceof UnverifiedEmailError);
+    assert.equal((deps.setAuth0Sub as any).mock.callCount(), 0);
+    assert.equal((deps.createUser as any).mock.callCount(), 0);
+  });
+
+  it('treats a missing email_verified exactly like false', async () => {
+    const noClaim: JwtPayload = { ...unverified };
+    delete noClaim.emailVerified;
+    const deps = makeDeps({ getUserByEmail: mock.fn(async () => fakeEmailUser) });
+    await assert.rejects(() => mapJwtToUser(noClaim, deps), UnverifiedEmailError);
+  });
+
+  it('creates a new account WITHOUT the unverified address', async () => {
+    const deps = makeDeps();
+    await mapJwtToUser(unverified, deps);
+    const args = (deps.createUser as any).mock.calls[0].arguments[0];
+    assert.equal(args.email, 'auth0|attacker@auth0');
+    assert.equal(args.name, 'auth0|attacker');
+  });
+
+  it('never re-fetches by the unverified address after a creation race', async () => {
+    const deps = makeDeps({
+      createUser: mock.fn(async () => { throw makePgError(); }),
+      // A lookup by email would find the victim's account here.
+      getUserByEmail: mock.fn(async () => fakeEmailUser),
+    });
+    // The first email lookup (step 2) finds the account and refuses before any race.
+    await assert.rejects(() => mapJwtToUser(unverified, deps), UnverifiedEmailError);
+
+    const racing = makeDeps({ createUser: mock.fn(async () => { throw makePgError(); }) });
+    await assert.rejects(() => mapJwtToUser(unverified, racing), (err: any) => err.code === '23505');
+    assert.equal((racing.getUserByEmail as any).mock.callCount(), 1, 'only the step-2 lookup, never the race re-fetch');
+  });
+
+  it('still returns an already-linked account by subject, whatever the email says', async () => {
+    const deps = makeDeps({ getUserByAuth0Sub: mock.fn(async () => fakeUser) });
+    assert.equal(await mapJwtToUser(unverified, deps), fakeUser);
   });
 });

@@ -847,6 +847,25 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: pineconeEnabled,
   });
 
+  // Admin MCP: the /admin usage analytics as MCP tools. Active, but shown only
+  // to admins — /api/v1/catalogs filters ADMIN_ONLY_SLUGS per request, because
+  // is_active is global and this row must stay findable for /connect/admin.
+  // The local fallback is /admin-mcp, never /admin: that path is the admin page.
+  await createMcpCatalog({
+    slug: 'admin',
+    name: 'Admin — Usage analytics',
+    description: 'Ask Claude how the MCPs are used: calls, users, errors and retry loops per tool, and any user\'s activity. Read-only, administrators only.',
+    iconUrl: null,
+    mcpUrl: normalizeUrl(process.env.ADMIN_MCP_URL, '/admin-mcp'),
+    provider: 'admin',
+    scopes: [],
+    googleClientId: null,
+    googleClientSecret: null,
+    oauthScopes: [],
+    isLocal: !process.env.ADMIN_MCP_URL,
+    isActive: true,
+  });
+
   await seedRedmineCatalog(normalizeUrl);
   await seedGitHubCatalog(normalizeUrl);
 

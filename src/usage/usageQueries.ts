@@ -36,6 +36,11 @@ export function filterClause(f: UsageFilter, params: unknown[]): string {
 const num = (v: unknown): number => (v === null || v === undefined ? 0 : Number(v));
 const numOrNull = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
 const iso = (v: unknown): string | null => (v ? new Date(v as string).toISOString() : null);
+/**
+ * Rows in the whole result before LIMIT, read from a `count(*) OVER () AS total`
+ * column: a capped list must state its total, and the returned row count is not it.
+ */
+const totalOf = (rows: Array<Record<string, unknown>>): number => (rows.length ? num(rows[0].total) : 0);
 
 export async function usageOverview(pool: UsagePool, f: UsageFilter) {
   const params: unknown[] = [];
@@ -61,7 +66,8 @@ export async function usageOverview(pool: UsagePool, f: UsageFilter) {
     ),
     pool.query(
       `SELECT coalesce(e.client_name, '(unknown)') AS client, e.surface,
-              count(*) AS calls, count(DISTINCT e.user_id) AS users
+              count(*) AS calls, count(DISTINCT e.user_id) AS users,
+              count(*) OVER () AS total
          FROM tool_call_events e WHERE ${where}
         GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20`,
       params,
@@ -69,7 +75,8 @@ export async function usageOverview(pool: UsagePool, f: UsageFilter) {
     pool.query(
       `SELECT e.user_id, u.email, count(*) AS calls,
               count(*) FILTER (WHERE NOT e.ok) AS errors,
-              count(DISTINCT e.tool) AS tools, max(e.ts) AS last_seen
+              count(DISTINCT e.tool) AS tools, max(e.ts) AS last_seen,
+              count(*) OVER () AS total
          FROM tool_call_events e LEFT JOIN users u ON u.id = e.user_id
         WHERE ${where} AND e.user_id IS NOT NULL
         GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 25`,
@@ -99,6 +106,7 @@ export async function usageOverview(pool: UsagePool, f: UsageFilter) {
       calls: num(r.calls),
       users: num(r.users),
     })),
+    clientsTotal: totalOf(clients.rows),
     topUsers: users.rows.map((r) => ({
       userId: num(r.user_id),
       email: (r.email as string | null) ?? null,
@@ -107,6 +115,7 @@ export async function usageOverview(pool: UsagePool, f: UsageFilter) {
       tools: num(r.tools),
       lastSeen: iso(r.last_seen),
     })),
+    topUsersTotal: totalOf(users.rows),
     slugs: slugs.rows.map((r) => r.mcp_slug as string),
   };
 }
@@ -120,7 +129,13 @@ export interface ToolUser {
   calls: number;
 }
 
-/** Per-tool counts plus WHO used each tool, busiest users first. */
+/** The most tools usageToolStats returns; ranked by calls before the cut. */
+export const TOOL_STATS_MAX = 500;
+
+/**
+ * Per-tool counts plus WHO used each tool, busiest users first. At most
+ * TOOL_STATS_MAX tools, the most-called; `total` counts them all.
+ */
 export async function usageToolStats(pool: UsagePool, f: UsageFilter) {
   const params: unknown[] = [];
   const where = filterClause(f, params);
@@ -138,6 +153,7 @@ export async function usageToolStats(pool: UsagePool, f: UsageFilter) {
             count(p.user_id) AS users,
             sum(p.errors) AS errors,
             max(p.last_used) AS last_used,
+            count(*) OVER () AS total,
             coalesce(
               jsonb_agg(jsonb_build_object('userId', p.user_id, 'email', u.email, 'calls', p.calls)
                         ORDER BY p.calls DESC, p.user_id)
@@ -145,10 +161,10 @@ export async function usageToolStats(pool: UsagePool, f: UsageFilter) {
               '[]'::jsonb
             ) AS user_list
        FROM per_user p LEFT JOIN users u ON u.id = p.user_id
-      GROUP BY 1, 2, 3 ORDER BY 4 DESC LIMIT 500`,
+      GROUP BY 1, 2, 3 ORDER BY 4 DESC LIMIT ${TOOL_STATS_MAX}`,
     params,
   );
-  return rows.map((r) => {
+  const tools = rows.map((r) => {
     const calls = num(r.calls);
     const list = (Array.isArray(r.user_list) ? r.user_list : []) as Array<Record<string, unknown>>;
     return {
@@ -167,6 +183,7 @@ export async function usageToolStats(pool: UsagePool, f: UsageFilter) {
       lastUsed: iso(r.last_used),
     };
   });
+  return { tools, total: totalOf(rows) };
 }
 
 export async function usageTopErrors(pool: UsagePool, f: UsageFilter) {
@@ -175,12 +192,13 @@ export async function usageTopErrors(pool: UsagePool, f: UsageFilter) {
   const { rows } = await pool.query(
     `SELECT e.mcp_slug, e.tool, e.error_kind,
             left(coalesce(e.error_message, ''), 200) AS message,
-            count(*) AS calls, count(DISTINCT e.user_id) AS users, max(e.ts) AS last_seen
+            count(*) AS calls, count(DISTINCT e.user_id) AS users, max(e.ts) AS last_seen,
+            count(*) OVER () AS total
        FROM tool_call_events e WHERE ${where} AND NOT e.ok
       GROUP BY 1, 2, 3, 4 ORDER BY 5 DESC LIMIT 50`,
     params,
   );
-  return rows.map((r) => ({
+  const errors = rows.map((r) => ({
     slug: r.mcp_slug as string,
     tool: r.tool as string,
     kind: (r.error_kind as string | null) ?? null,
@@ -189,6 +207,7 @@ export async function usageTopErrors(pool: UsagePool, f: UsageFilter) {
     users: num(r.users),
     lastSeen: iso(r.last_seen),
   }));
+  return { errors, total: totalOf(rows) };
 }
 
 /** A run of calls to one tool, by one user in one session, with gaps under this. */
@@ -227,14 +246,15 @@ export async function usageRetryLoops(pool: UsagePool, f: UsageFilter) {
      )
      SELECT r.user_id, u.email, r.mcp_slug, r.tool, count(*) AS calls,
             count(*) FILTER (WHERE NOT r.ok) AS errors,
-            min(r.ts) AS started, max(r.ts) AS ended
+            min(r.ts) AS started, max(r.ts) AS ended,
+            count(*) OVER () AS total
        FROM runs r LEFT JOIN users u ON u.id = r.user_id
       GROUP BY r.user_id, u.email, r.sid, r.mcp_slug, r.tool, r.run_id
      HAVING count(*) >= ${minParam}
       ORDER BY (count(*) FILTER (WHERE NOT r.ok) > 0) DESC, max(r.ts) DESC LIMIT 50`,
     params,
   );
-  return rows.map((r) => ({
+  const loops = rows.map((r) => ({
     userId: num(r.user_id),
     email: (r.email as string | null) ?? null,
     slug: r.mcp_slug as string,
@@ -244,6 +264,7 @@ export async function usageRetryLoops(pool: UsagePool, f: UsageFilter) {
     started: iso(r.started),
     ended: iso(r.ended),
   }));
+  return { loops, total: totalOf(rows) };
 }
 
 export async function usageUserTimeline(pool: UsagePool, userId: number, q: TimelineQuery) {

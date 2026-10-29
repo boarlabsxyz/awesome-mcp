@@ -117,6 +117,7 @@ import { peopleForceV4Server } from '../peopleforce-v4/server.js';
 import { hubspotServer } from '../hubspot/server.js';
 import { browserbaseServer }   from '../browserbase/server.js';
 import { pineconeServer }      from '../pinecone/server.js';
+import { adminServer }         from '../admin-mcp/server.js';
 import { redmineServer } from '../redmine/server.js';
 import { githubServer } from '../github/server.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
@@ -1538,6 +1539,7 @@ async function startServer() {
           "browserbase":     browserbaseServer,
           "github":          githubServer,
           "pinecone":        pineconeServer,
+          "admin":           adminServer,
         };
         const mcpToStart = MCP_SERVERS_BY_SLUG[MCP_SLUG] ?? server; // default: google-docs
 
