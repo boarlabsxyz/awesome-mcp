@@ -169,11 +169,11 @@ try {
   const catalogSrc = readFileSync(catalogPath, 'utf8');
   const arrayMatch = catalogSrc.match(/REST_CATALOG[\s\S]*?=\s*\[([\s\S]*?)\];/);
   if (arrayMatch) {
-    const entryRe = /\{\s*service:\s*'([^']+)',\s*method:\s*'([^']+)',\s*path:\s*'([^']+)',\s*summary:\s*'([^']+)',\s*mcpToolName:\s*'([^']+)',\s*openapiOperationId:\s*'([^']+)',\s*status:\s*'([^']+)'/g;
+    const entryRe = /\{\s*service:\s*'([^']+)',\s*method:\s*'([^']+)',\s*path:\s*'([^']+)',\s*summary:\s*'([^']+)',\s*mcpToolName:\s*'([^']+)',\s*openapiOperationId:\s*'([^']+)',\s*status:\s*'([^']+)'(?:,\s*notes:\s*'([^']+)')?/g;
     let m;
     let stubs = 0;
     while ((m = entryRe.exec(arrayMatch[1])) !== null) {
-      const [, service, method, rawPath, summary, mcpToolName, opId, status] = m;
+      const [, service, method, rawPath, summary, mcpToolName, opId, status, notes] = m;
       // Strip the query-string template from the path (paths in OpenAPI are
       // the URL path only; query params belong in `parameters`).
       const pathOnly = rawPath.split('?')[0];
@@ -181,17 +181,39 @@ try {
       if (root.paths[pathOnly]?.[method.toLowerCase()]) continue;
       if (status === 'planned') continue; // don't list endpoints that aren't wired yet
       root.paths[pathOnly] ??= {};
+      // OpenAPI requires a declaration for every {param} in the path template.
+      const pathParams = [...pathOnly.matchAll(/\{([^}]+)\}/g)].map(([, name]) => ({
+        name, in: 'path', required: true, schema: { type: 'string' },
+      }));
+      const isWrite = method === 'POST';
+      // A stub knows only the catalog line, so it states what is true of every
+      // route of its kind: a GET can negotiate text, a POST takes and returns
+      // JSON and answers 201 or 200 depending on whether it creates something
+      // (hence the 2XX range rather than a guessed code). The notes carry the
+      // route-specific rules: body limits, idempotency, which bearer it takes.
+      const shape = isWrite
+        ? 'Takes a JSON body and returns JSON.'
+        : 'Returns upstream JSON by default; pass Accept: text/plain for markdown.';
       root.paths[pathOnly][method.toLowerCase()] = {
         operationId: opId,
         summary,
-        description: `${summary}. Mirrors the MCP tool \`${mcpToolName}\`. Returns upstream JSON by default; pass Accept: text/plain for markdown.`,
+        description: `${summary}. Mirrors the MCP tool \`${mcpToolName}\`. ${shape}${notes ? ` ${notes}` : ''}`,
         tags: [service],
-        responses: {
-          '200': { description: 'Success (raw upstream JSON or rendered text)' },
-          '401': { description: 'Missing or invalid bearer token' },
-          '403': { description: 'Permission denied' },
-          '404': { description: 'Resource not found' },
-        },
+        ...(pathParams.length ? { parameters: pathParams } : {}),
+        responses: isWrite
+          ? {
+              '2XX': { description: 'Success (JSON): 201 when the call creates something, 200 otherwise' },
+              '400': { description: 'Invalid request body' },
+              '401': { description: 'Missing or invalid bearer token' },
+              '403': { description: 'Permission denied' },
+              '404': { description: 'Resource not found' },
+            }
+          : {
+              '200': { description: 'Success (raw upstream JSON or rendered text)' },
+              '401': { description: 'Missing or invalid bearer token' },
+              '403': { description: 'Permission denied' },
+              '404': { description: 'Resource not found' },
+            },
       };
       stubs++;
     }
