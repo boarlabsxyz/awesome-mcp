@@ -252,14 +252,7 @@ async function generateFromAI() {
 
   if (parsed.hasUserFacingChanges === false) {
     console.log('Model determined no user-facing changes in this release.');
-    return {
-      primaryTag: 'improvement',
-      sections: [{
-        heading: 'Improvements',
-        items: [{ text: 'Under-the-hood improvements to reliability and performance.', taskIds: [] }],
-      }],
-      empty: true,
-    };
+    return { primaryTag: 'improvement', sections: [], empty: true };
   }
 
   const primaryTag = ['feature', 'fix', 'improvement'].includes(parsed.primaryTag) ? parsed.primaryTag : 'improvement';
@@ -419,6 +412,14 @@ function generateEmail(summary, unlinked) {
 
 // --- Main ---
 const summary = (await generateFromAI()) ?? generateFromCommits();
+
+// Nothing user-facing means nothing to publish. The workflows treat a missing output
+// file as "skip this channel", so write none of them.
+if (summary.empty) {
+  console.log(`No release notes generated for ${tag}: no user-facing changes.`);
+  process.exit(0);
+}
+
 const unlinkedTasks = computeUnlinkedTasks(summary);
 
 mkdirSync(outputDir, { recursive: true });
