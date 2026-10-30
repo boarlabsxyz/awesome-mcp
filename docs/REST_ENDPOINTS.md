@@ -182,8 +182,11 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | MCP tool | REST endpoint | Status | Summary |
 |---|---|---|---|
 | `listChannels` | `GET /api/v1/slack/channels` | live | List Slack channels — _Requires a slack-bot connection (slack-user not supported on REST)._ |
-| `readChannelHistory` | `GET /api/v1/slack/channels/{channelId}/messages` | live | Read recent messages in a channel |
-| `readThreadReplies` | `GET /api/v1/slack/channels/{channelId}/threads/{threadTs}` | live | Read replies in a thread |
+| `readChannelHistory` | `GET /api/v1/slack/channels/{channelId}/messages` | live | Read recent messages in a channel — _Slack message objects with blocks, user or bot_id, edited, reactions and metadata. ?format=text returns the readChannelHistory line format instead._ |
+| `readThreadReplies` | `GET /api/v1/slack/channels/{channelId}/threads/{threadTs}` | live | Read replies in a thread — _Slack message objects with blocks, user or bot_id, edited, reactions and metadata. ?format=text returns the readThreadReplies line format instead._ |
+| `postMessage` | `POST /api/v1/slack/channels/{channelId}/messages` | live | Post a message (text, markdownText or Block Kit blocks) — _Body limit 5mb. Not idempotent: repeating the call posts the message again. Returns ts, channel and the message as Slack stored it. 503 unless the deployment sets SLACK_WRITES_ENABLED. Unknown body keys are refused, so send camelCase tool fields, not Slack field names. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403): posting or editing as the bot is signed off on 2026-10-29 on that condition._ |
+| `replyInThread` | `POST /api/v1/slack/channels/{channelId}/threads/{threadTs}` | live | Reply in a thread, optionally also to the channel — _Body limit 5mb. Not idempotent: repeating the call posts the reply again. broadcast is reported true only when Slack recorded a thread_broadcast, else null. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403): posting or editing as the bot is signed off on 2026-10-29 on that condition._ |
+| `editMessage` | `POST /api/v1/slack/channels/{channelId}/messages/{ts}/edit` | live | Replace the content of a message the bot posted — _Body limit 5mb. Replaces the old content, which the API cannot read back; text without blocks strips existing blocks. The bot can edit only its own messages (403 otherwise). 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403): posting or editing as the bot is signed off on 2026-10-29 on that condition._ |
 | `listUsers` | `GET /api/v1/slack/users` | live | List Slack workspace users |
 
 ### Outline (`outline`)
@@ -401,4 +404,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 284 endpoints.
+Catalog size: 287 endpoints.

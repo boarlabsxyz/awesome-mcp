@@ -12,6 +12,9 @@ import {
 import {
   navigateFields, actFields, observeFields, extractFields,
 } from '../browserbase/schemas.js';
+import {
+  postMessageFields, replyInThreadFields, editMessageFields,
+} from '../slack/helpers.js';
 
 // The REST write plane and the MCP tools must not drift on what is valid. The
 // mechanism is that each write's camelCase fields are declared ONCE, in
@@ -53,6 +56,13 @@ const GROUPS: Record<string, [Record<string, z.ZodTypeAny>, string[]]> = {
   actFields: [actFields as any, ['action']],
   observeFields: [observeFields as any, ['instruction']],
   extractFields: [extractFields as any, ['instruction']],
+  // Slack. Each group is the whole tool minus its ids, and is spread by BOTH
+  // servers (slack-bot and slack-user) as well as the REST route.
+  postMessageFields: [postMessageFields as any, ['text', 'markdownText', 'blocks', 'unfurlLinks', 'unfurlMedia']],
+  replyInThreadFields: [replyInThreadFields as any, [
+    'text', 'markdownText', 'blocks', 'broadcast', 'unfurlLinks', 'unfurlMedia',
+  ]],
+  editMessageFields: [editMessageFields as any, ['text', 'markdownText', 'blocks']],
 };
 
 /** A Zod description, looking through optional/default/nullable wrappers. */
@@ -123,6 +133,9 @@ describe('REST write schema sharing', () => {
       actFields: ['sessionId'],
       observeFields: ['sessionId'],
       extractFields: ['sessionId'],
+      postMessageFields: ['channelId'],
+      replyInThreadFields: ['channelId', 'threadTs'],
+      editMessageFields: ['channelId', 'ts'],
     };
     assert.deepEqual(
       Object.keys(PATH_PARAMS).sort(), Object.keys(GROUPS).sort(),

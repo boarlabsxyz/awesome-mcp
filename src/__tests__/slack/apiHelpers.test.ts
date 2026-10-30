@@ -234,6 +234,8 @@ describe('SlackClient', () => {
       assert.ok(capturedBody.includes('channel=C123'));
       assert.ok(capturedBody.includes('limit=10'));
       assert.ok(capturedBody.includes('oldest=123.0'));
+      // Without it Slack leaves metadata off every message.
+      assert.ok(capturedBody.includes('include_all_metadata=true'));
     });
   });
 
@@ -325,6 +327,16 @@ describe('SlackClient', () => {
       const client = new SlackClient('xoxb-test');
       const result = await client.conversationsReplies('C1', '1.0');
       assert.equal(result.messages.length, 1);
+    });
+
+    it('asks for message metadata', async () => {
+      let capturedBody = '';
+      globalThis.fetch = (async (_url: any, opts: any) => {
+        capturedBody = opts.body;
+        return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ ok: true, messages: [], has_more: false }) };
+      }) as any;
+      await new SlackClient('xoxb-test').conversationsReplies('C1', '1.0');
+      assert.ok(capturedBody.includes('include_all_metadata=true'), capturedBody);
     });
   });
 

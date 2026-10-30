@@ -5,7 +5,7 @@ Access rules, search and org discovery (user-token server): see `src/slack-user/
 ## Rules and limitations
 
 ### Scopes & reconnects
-- **`files:read`, `search:read`, `reactions:read` need a reconnect** for existing connections. Everything using only `chat:write` (posting, editing, unfurl, rich text, broadcast) needs none. No REST sibling for Slack writes (plane is hard-gated).
+- **`files:read`, `search:read`, `reactions:read` need a reconnect** for existing connections. Everything using only `chat:write` (posting, editing, unfurl, rich text, broadcast) needs none.
 
 ### Files
 - **Attachments render as `📎 <name> — <mime>, <size> — file ID: F…`** via `formatFileRef`/`formatFiles` in `formatMessage`. Without `files:read`: stubs with `file_access: 'check_file_info'` ("file hidden"), `files.info` 403s.
@@ -27,6 +27,18 @@ Access rules, search and org discovery (user-token server): see `src/slack-user/
 - **`chat.update` with `text` but no `blocks` strips existing blocks** (descriptions warn). Old text is unrecoverable, so a plain-text edit's confirmation echoes the new text.
 - **`editMessage` is registered on both servers**; on slack-user wrapped in `enforceAccess` like `postMessage`. slack-bot has no `enforceAccess` on any tool. `readOnlyHint: false`, no `destructiveHint` (deletes only). Registry guard: `src/__tests__/slack/tools.test.ts`.
 
+### Reading messages back
+- **`format: 'json'` on `readChannelHistory`/`readThreadReplies` (both servers, `messageFormatParam`) is the only proof a post or edit landed** — once a message has blocks its `text` is only the notification fallback. `projectMessage` returns a documented subset (blocks, user / bot_id / app_id, subtype, edited, reactions, metadata, files without private URLs, permalink); text stays the default and byte-identical.
+- **Both reads always send `include_all_metadata=true`** — without it Slack omits `metadata` from every message.
+
+### REST plane (slack-bot only)
+- **Writes: `POST …/channels/{id}/messages`, `…/threads/{ts}`, `…/messages/{ts}/edit`** — bodies are the tools' own field groups (`postMessageFields` & co., `.strict()` so a Slack-native `unfurl_links` is a 400, not a silent drop); path ids win over same-named body keys. Same `SLACK_WRITES_ENABLED` gate (503). Not idempotent.
+- **Writes take only the 5-minute `mintRestBearerForCurl` bearer** (`requireMintedRestBearer`, 403 for the permanent dashboard key and any other credential) — signed off on that condition: the bot has no channel rules and a curl no confirmation, and minting is an MCP tool call the person's client approves. Body limit 5 MB (`/api/v1/slack/channels` prefix).
+- **Refusals carry a numeric `status`** (`refusal()` in `helpers.ts`) because the rewritten messages no longer contain Slack's code; `slackWriteErrorStatus` reads it first and maps an upstream 401 to 502. The GET routes still use `mapSlackErrorToHttpStatus`, 401 included.
+- **Responses report what Slack echoed** (`projectWriteOutcome`): `message` is Slack's stored object (`null` if none); `broadcast` is `true` only on a `thread_broadcast` subtype, else `null`; unfurl flags come back as `requested` with `confirmed: null`.
+- **GET reads return Slack's raw objects; `?format=text` gives the MCP line format** (history then caps `limit` at 100). slack-user is not on REST (its access rules are not enforced there).
+- **No `public/openapi-slack.json` yet** — the root spec's stubs for the POSTs have no `requestBody`.
+
 ### Channel events (slack-user tools, shared code)
 - **A store you poll, not a push** (`subscribeToChannelEvents` & co.). No per-user Slack subscription API: delivery is app-wide (Request URL + `SLACK_SIGNING_SECRET`), so subscribing only inserts a local filter.
 - **One delivery fans out to N rows** — `findSubscriptionsForChannel` looks up by `(team, channel)` and returns an array.
@@ -42,7 +54,7 @@ Access rules, search and org discovery (user-token server): see `src/slack-user/
 | File | Contains |
 |------|----------|
 | `src/slack/server.ts` | slack-bot tool definitions (`slack-bot` slug, `xoxb-`) |
-| `src/slack/helpers.ts` | Shared handlers/rendering, shared params, `resolveMessageBody`, `renderNote` |
+| `src/slack/helpers.ts` | Shared handlers/rendering, shared params and write field groups, `resolveMessageBody`, `renderNote`, `performPostMessage`/`performEditMessage`, `projectMessage`/`projectWriteOutcome` |
 | `src/slack/apiHelpers.ts` | `SlackClient`, `fileShareTargets`, `channelTeamIds`, `formatScopeDetail` |
 | `src/slack/fileDownload.ts` | `url_private_download` fetch: per-hop SSRF, Slack-only bearer, login-page detection |
 | `src/slack/eventStore.ts` | Postgres: `slack_event_subscriptions`, `slack_channel_events`, `slack_ingest_health` |

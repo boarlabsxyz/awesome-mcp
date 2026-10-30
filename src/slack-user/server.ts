@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { SlackClient } from '../slack/apiHelpers.js';
-import { resolveUsers, getTeamId, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, handleSearchMessages, handleSearchFiles, unfurlParams, richTextParams, broadcastParam, type ChannelFilter } from '../slack/helpers.js';
+import { resolveUsers, getTeamId, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, handleSearchMessages, handleSearchFiles, postMessageFields, replyInThreadFields, editMessageFields, messageFormatParam, type ChannelFilter } from '../slack/helpers.js';
 import {
   CAPTURED_SLACK_EVENTS,
   parseTimestampInput,
@@ -509,13 +509,14 @@ slackUserServer.addTool({
 slackUserServer.addTool({
   name: 'readChannelHistory',
   annotations: { readOnlyHint: true },
-  description: 'Read recent messages from a Slack channel. Access rules are enforced.',
+  description: 'Read recent messages from a Slack channel. Access rules are enforced. Pass format: "json" to read what Slack stored for each message (its blocks, the author user or bot id, and whether it was edited).',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID (e.g., C01234ABCDE).'),
     limit: z.number().optional().default(20).describe('Number of messages to return (1-100, default 20).'),
     oldest: z.string().optional().describe('Only messages after this Unix timestamp.'),
     latest: z.string().optional().describe('Only messages before this Unix timestamp.'),
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
+    ...messageFormatParam,
   }),
   execute: async (args, { session }) => {
     const client = getSlackUserClient(session);
@@ -527,12 +528,13 @@ slackUserServer.addTool({
 slackUserServer.addTool({
   name: 'readThreadReplies',
   annotations: { readOnlyHint: true },
-  description: 'Read replies in a Slack thread. Access rules are enforced.',
+  description: 'Read replies in a Slack thread. Access rules are enforced. Pass format: "json" to read what Slack stored for each message (its blocks, the author user or bot id, and whether it was edited).',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID containing the thread.'),
     threadTs: z.string().describe('The timestamp of the parent message (thread_ts).'),
     limit: z.number().optional().default(50).describe('Number of replies to return (1-200, default 50).'),
     cursor: z.string().optional().describe('Pagination cursor from a previous response.'),
+    ...messageFormatParam,
   }),
   execute: async (args, { session }) => {
     const client = getSlackUserClient(session);
@@ -603,13 +605,7 @@ slackUserServer.addTool({
   description: 'Post a message to a Slack channel. For a bulleted or numbered list use markdownText, not text — Slack mrkdwn has no list syntax, so "- item" in text renders as a literal hyphen. Slack renders a preview card for links in the message; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards.',
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID to post to.'),
-    text: z.string().optional().describe(
-      'Message text as Slack mrkdwn. Supports bold, italic, strikethrough, code and blockquote, ' +
-      'but NOT lists — use markdownText for those. Optional, but pass it alongside blocks as the ' +
-      'notification fallback. Exactly one of text or markdownText.',
-    ),
-    ...richTextParams,
-    ...unfurlParams,
+    ...postMessageFields,
   }),
   execute: async (args, { session }) => {
     const client = getSlackUserClient(session);
@@ -625,14 +621,7 @@ slackUserServer.addTool({
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID containing the thread.'),
     threadTs: z.string().describe('The timestamp of the parent message to reply to.'),
-    text: z.string().optional().describe(
-      'Reply text as Slack mrkdwn. Supports bold, italic, strikethrough, code and blockquote, but ' +
-      'NOT lists — use markdownText for those. Optional, but pass it alongside blocks as the ' +
-      'notification fallback. Exactly one of text or markdownText.',
-    ),
-    ...richTextParams,
-    ...broadcastParam,
-    ...unfurlParams,
+    ...replyInThreadFields,
   }),
   execute: async (args, { session }) => {
     const client = getSlackUserClient(session);
@@ -648,12 +637,7 @@ slackUserServer.addTool({
   parameters: z.object({
     channelId: z.string().describe('The Slack channel ID containing the message.'),
     ts: z.string().describe('Timestamp of the message to edit, from readChannelHistory or readThreadReplies. Timestamps are per-channel.'),
-    text: z.string().optional().describe(
-      'The new message text as Slack mrkdwn, replacing the old content entirely. Does not support ' +
-      'lists — use markdownText for those. Note that sending this alone strips any blocks the ' +
-      'message already had.',
-    ),
-    ...richTextParams,
+    ...editMessageFields,
   }),
   execute: async (args, { log, session }) => {
     const client = getSlackUserClient(session);

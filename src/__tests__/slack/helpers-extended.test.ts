@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import sharp from 'sharp';
-import { resolveUsers, getWorkspaceUrl, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, handleSearchMessages, handleSearchFiles, resolveMessageBody } from '../../slack/helpers.js';
+import { resolveUsers, getWorkspaceUrl, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, handleSearchMessages, handleSearchFiles, resolveMessageBody, performPostMessage, performEditMessage, projectWriteOutcome } from '../../slack/helpers.js';
 import { __setImageBlobPoolForTests } from '../../images/imageBlobStore.js';
 
 /** What the last chatPostMessage call was handed as its options argument. */
@@ -983,5 +983,143 @@ describe('handleSearchFiles', () => {
       () => handleSearchFiles(client, { query: 'x', count: 20 }),
       { message: /search:read.*[Rr]econnect/s },
     );
+  });
+});
+
+// format: "json" on the two reads — the half of a post/edit the confirmation
+// cannot prove: what Slack stored for the message.
+describe('read tools, format: "json"', () => {
+  const stored = {
+    type: 'message', ts: '1792342127.272519', text: 'fallback only', bot_id: 'B1', app_id: 'A1',
+    blocks: [{ type: 'section' }, { type: 'context' }],
+    edited: { user: 'B1', ts: '1792342200.000000' },
+    reactions: [{ name: 'eyes', count: 1, users: ['U2'] }],
+    metadata: { event_type: 'check', event_payload: { id: 7 } },
+    files: [{ id: 'F1', name: 'a.png', mimetype: 'image/png', url_private: 'https://files.slack.com/secret' }],
+  };
+  const human = { type: 'message', ts: '1792342100.000000', text: 'hi', user: 'U9' };
+
+  it('returns blocks, bot_id, edited and metadata for a bot message, oldest first', async () => {
+    const client = mockSlackClient({
+      // Slack answers newest first.
+      conversationsHistory: async () => ({ messages: [stored, human], has_more: true, response_metadata: { next_cursor: 'c2' } }),
+    });
+    const out = JSON.parse(await handleReadChannelHistory(client, 'json-hist-' + Date.now(), 'C0C9', { limit: 20, format: 'json' }));
+    assert.equal(out.channelId, 'C0C9');
+    assert.equal(out.hasMore, true);
+    assert.equal(out.nextCursor, 'c2');
+    assert.deepEqual(out.messages.map((m: any) => m.ts), [human.ts, stored.ts]);
+    const bot = out.messages[1];
+    assert.deepEqual(bot.blocks, stored.blocks);
+    assert.equal(bot.bot_id, 'B1');
+    assert.equal(bot.edited.ts, '1792342200.000000');
+    assert.deepEqual(bot.metadata, stored.metadata);
+    assert.deepEqual(bot.reactions, stored.reactions);
+    assert.equal(bot.user, undefined);
+    // Files keep their identity, not Slack's private download URLs.
+    assert.deepEqual(bot.files, [{ id: 'F1', name: 'a.png', mimetype: 'image/png' }]);
+    assert.match(bot.permalink, /archives\/C0C9\/p1792342127272519$/);
+  });
+
+  it('returns the user id (and resolved name) for a message a person wrote', async () => {
+    const client = mockSlackClient({
+      conversationsReplies: async () => ({ messages: [human], has_more: false, response_metadata: {} }),
+    });
+    const out = JSON.parse(await handleReadThreadReplies(client, 'json-thread-' + Date.now(), 'C0C9', human.ts, { limit: 50, format: 'json' }));
+    assert.equal(out.threadTs, human.ts);
+    assert.equal(out.messages[0].user, 'U9');
+    assert.equal(out.messages[0].userName, 'Display U9');
+    assert.equal(out.messages[0].bot_id, undefined);
+    assert.equal(out.nextCursor, null);
+  });
+
+  it('keeps the JSON shape on an empty page instead of a sentence', async () => {
+    const client = mockSlackClient({
+      conversationsHistory: async () => ({ messages: [], has_more: false }),
+    });
+    const out = JSON.parse(await handleReadChannelHistory(client, 'json-empty', 'C1', { limit: 20, format: 'json' }));
+    assert.deepEqual(out.messages, []);
+    assert.equal(
+      await handleReadChannelHistory(client, 'json-empty', 'C1', { limit: 20, format: 'text' }),
+      'No messages found in this channel.',
+    );
+  });
+
+  it('leaves the default text format unchanged', async () => {
+    const result = await handleReadChannelHistory(mockSlackClient(), 'json-default-' + Date.now(), 'C123', { limit: 20 });
+    assert.equal(result, [
+      '[2021-01-01 00:00:01 UTC] (ts: 1609459201.000000) Display U2: world https://test.slack.com/archives/C123/p1609459201000000',
+      '[2021-01-01 00:00:00 UTC] (ts: 1609459200.000000) Display U1: hello https://test.slack.com/archives/C123/p1609459200000000',
+    ].join('\n'));
+  });
+});
+
+describe('write ops and their REST projection', () => {
+  async function withWrites<T>(fn: () => Promise<T>): Promise<T> {
+    const origEnv = process.env.SLACK_WRITES_ENABLED;
+    process.env.SLACK_WRITES_ENABLED = 'true';
+    try { return await fn(); } finally {
+      if (origEnv === undefined) delete process.env.SLACK_WRITES_ENABLED;
+      else process.env.SLACK_WRITES_ENABLED = origEnv;
+    }
+  }
+
+  it('returns what Slack stored, not what was sent', async () => {
+    await withWrites(async () => {
+      const echo = { text: 'stored', blocks: [{ type: 'section' }] };
+      const client = mockSlackClient({ chatPostMessage: async (channel: string) => ({ ts: '5.5', channel, message: echo }) });
+      const outcome = await performPostMessage(client, 'C1', 'sent', undefined, { blocks: [{ type: 'section' }] });
+      assert.deepEqual(projectWriteOutcome(outcome), { channel: 'C1', ts: '5.5', message: echo });
+    });
+  });
+
+  it('reports broadcast and link previews as unconfirmed rather than echoing the request', async () => {
+    await withWrites(async () => {
+      const client = mockSlackClient({ chatPostMessage: async (channel: string) => ({ ts: '6.6', channel, message: {} }) });
+      const options = { broadcast: true, unfurlLinks: false };
+      const outcome = await performPostMessage(client, 'C1', 'x', '1.0', options);
+      const out = projectWriteOutcome(outcome, { ...options, threadTs: '1.0' });
+      assert.equal(out.threadTs, '1.0');
+      assert.equal(out.broadcast, null);
+      assert.deepEqual(out.linkPreviews, { requested: { unfurlLinks: false, unfurlMedia: undefined }, confirmed: null });
+      assert.equal(out.message && typeof out.message, 'object');
+
+      const confirmed = await performPostMessage(
+        mockSlackClient({ chatPostMessage: async (c: string) => ({ ts: '7', channel: c, message: { subtype: 'thread_broadcast' } }) }),
+        'C1', 'x', '1.0', { broadcast: true },
+      );
+      assert.equal(projectWriteOutcome(confirmed, { broadcast: true }).broadcast, true);
+    });
+  });
+
+  it('answers message: null when Slack echoed none, and carries an edit text', async () => {
+    await withWrites(async () => {
+      const outcome = await performEditMessage(mockSlackClient(), 'C1', '1.0', 'new text');
+      assert.deepEqual(projectWriteOutcome(outcome), { channel: 'C1', ts: '1.0', text: 'new text', message: null });
+    });
+  });
+
+  it('tags each refusal with the HTTP status the REST plane answers', async () => {
+    const statusOf = async (fn: () => Promise<unknown>) => {
+      try { await fn(); } catch (err: any) { return err.status; }
+      return 'resolved';
+    };
+    delete process.env.SLACK_WRITES_ENABLED;
+    assert.equal(await statusOf(() => performPostMessage(mockSlackClient(), 'C1', 'x')), 503);
+    await withWrites(async () => {
+      assert.equal(await statusOf(() => performPostMessage(mockSlackClient(), 'C1', undefined)), 400);
+      const failing = (code: string): any => mockSlackClient({
+        chatUpdate: async () => { throw new Error(`Slack API error (chat.update): ${code}`); },
+        chatPostMessage: async () => { throw new Error(`Slack API error (chat.postMessage): ${code}`); },
+      });
+      assert.equal(await statusOf(() => performEditMessage(failing('cant_update_message'), 'C1', '1', 'x')), 403);
+      assert.equal(await statusOf(() => performEditMessage(failing('edit_window_closed'), 'C1', '1', 'x')), 403);
+      assert.equal(await statusOf(() => performEditMessage(failing('message_not_found'), 'C1', '1', 'x')), 404);
+      assert.equal(await statusOf(() => performEditMessage(failing('msg_too_long'), 'C1', '1', 'x')), 400);
+      assert.equal(await statusOf(() => performEditMessage(failing('missing_scope'), 'C1', '1', 'x')), 403);
+      assert.equal(await statusOf(() => performPostMessage(failing('invalid_blocks'), 'C1', 'x')), 400);
+      // An error nobody rewrote keeps no status, so the mapper reads its code.
+      assert.equal(await statusOf(() => performPostMessage(failing('channel_not_found'), 'C1', 'x')), undefined);
+    });
   });
 });

@@ -40,3 +40,25 @@ export function mapSlackErrorToHttpStatus(err: unknown): number {
   }
   return 500;
 }
+
+/**
+ * The status for a failed Slack WRITE on the REST plane.
+ *
+ * Two differences from the read mapping above:
+ *
+ * - The shared write ops (`performPostMessage` / `performEditMessage`) replace
+ *   Slack's bare codes with instructions, so the code is no longer in the
+ *   message. Those refusals carry a numeric `status` instead, and it wins.
+ * - An upstream 401 becomes 502. On this plane a 401 means the caller's bearer
+ *   was refused; here the bearer was fine and Slack rejected the connection's
+ *   own token, which the caller fixes by reconnecting, not by re-minting.
+ */
+export function slackWriteErrorStatus(err: unknown): number {
+  const tagged = (err as { status?: unknown })?.status;
+  if (typeof tagged === 'number') return tagged;
+  const msg = String((err as { message?: unknown })?.message ?? '').toLowerCase();
+  if (msg.includes('is_archived') || msg.includes('restricted_action')) return 403;
+  if (msg.includes('no_text') || msg.includes('invalid_arguments') || msg.includes('msg_too_long')) return 400;
+  const mapped = mapSlackErrorToHttpStatus(err);
+  return mapped === 401 ? 502 : mapped;
+}
