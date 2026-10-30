@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <title>Troubleshooting &middot; Docs &middot; Awesome MCP</title>
+  <meta name="description" content="Reconnect prompts, refused permissions, silent Slack bots and other common connector failures.">
+  <link rel="canonical" href="https://app.awesome-mcp.xyz/docs/troubleshooting">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body class="docs-body">
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  <header class="header">
+    <div class="header-inner">
+      <button class="docs-menu-toggle" type="button" aria-expanded="false" aria-controls="docs-sidebar">
+        <span class="sr-only">Toggle documentation menu</span>
+        <span aria-hidden="true">&#9776;</span>
+      </button>
+      <h1><a href="/docs" translate="no">Awesome MCP <span class="docs-brand-tag">Docs</span></a></h1>
+      <div class="header-right">
+        <a href="/integrations" class="nav-link">Integrations</a>
+        <a href="/dashboard" class="btn-primary">Dashboard</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" id="docs-sidebar">
+      <nav aria-label="Documentation">
+        <p class="docs-nav-group">Getting started</p>
+        <ul>
+          <li><a href="/docs" class="docs-nav-link">Overview &amp; quickstart</a></li>
+          <li><a href="/docs/connect-a-connector" class="docs-nav-link">Connect a connector</a></li>
+          <li><a href="/docs/add-to-claude" class="docs-nav-link">Add to Claude</a></li>
+          <li><a href="/docs/images" class="docs-nav-link">Images</a></li>
+        </ul>
+        <p class="docs-nav-group">Connectors</p>
+        <ul>
+          <li><a href="/docs/google" class="docs-nav-link">Google Workspace</a></li>
+          <li><a href="/docs/clickup" class="docs-nav-link">ClickUp</a></li>
+          <li><a href="/docs/slack" class="docs-nav-link">Slack</a></li>
+          <li><a href="/docs/outline" class="docs-nav-link">Outline Wiki</a></li>
+          <li><a href="/docs/peopleforce" class="docs-nav-link">PeopleForce</a></li>
+          <li><a href="/docs/hubspot" class="docs-nav-link">HubSpot</a></li>
+        </ul>
+        <p class="docs-nav-group">Reference</p>
+        <ul>
+          <li><a href="/docs/rest-api" class="docs-nav-link">REST API</a></li>
+          <li><a href="/docs/troubleshooting" class="docs-nav-link active" aria-current="page">Troubleshooting</a></li>
+        </ul>
+      </nav>
+    </aside>
+
+    <main id="main" class="docs-content">
+  <p class="docs-eyebrow">Reference</p>
+  <h1>Troubleshooting</h1>
+  <p class="docs-lede">Symptoms and their fixes. Most connector problems are one of two things: a credential that needs renewing, or a permission that did not exist when you connected.</p>
+
+
+  <h2 id="reconnect">The dashboard shows &ldquo;Reconnect&rdquo;</h2>
+  <p>The stored credential can no longer be renewed. This is a Google-specific case &mdash; the other
+  connectors use credentials that do not expire.</p>
+  <p><strong>Fix:</strong> press <strong>Reconnect</strong> and approve again. Your settings, access
+  rules and MCP URL all survive, so there is nothing to change in Claude.</p>
+
+  <h2 id="missing-scope">A connector works, but one feature is refused</h2>
+  <p>Almost always the same cause: that feature needs a permission that did not exist when you
+  connected, and a credential only ever holds the permissions it was granted at the time.</p>
+  <p>The connection looks perfectly healthy, because from the provider&rsquo;s point of view it
+  <em>is</em> &mdash; it simply was not granted that one thing.</p>
+  <p><strong>Fix:</strong> press <strong>Reconnect</strong> on the dashboard and approve again.</p>
+  <div class="docs-table-wrap">
+  <table>
+    <thead><tr><th>Symptom</th><th>Connector</th></tr></thead>
+    <tbody>
+      <tr><td>Deal lookups are refused, while contacts and companies work</td><td>HubSpot</td></tr>
+      <tr><td>Company activity shows meetings and calls but empty emails</td><td>HubSpot</td></tr>
+      <tr><td>Attachments show as &ldquo;file hidden&rdquo; and downloads fail</td><td>Slack</td></tr>
+      <tr><td>Searching messages or files does not work</td><td>Slack</td></tr>
+      <tr><td>Reactions are never captured by a channel subscription</td><td>Slack</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>If it still fails <em>after</em> reconnecting, stop reconnecting &mdash; the permission is missing
+  from the provider-side application or your organization&rsquo;s policy, not from your consent. The
+  error message distinguishes the two: it names both what was needed and what your credential
+  actually holds.</p>
+
+  <h2 id="not-connected">Claude says &ldquo;MCP Not Connected&rdquo;</h2>
+  <p>The connector was added to Claude before it was connected on the dashboard.</p>
+  <p><strong>Fix:</strong> connect that service on the <a href="/dashboard">dashboard</a> first, then
+  retry in Claude.</p>
+
+  <h2 id="clickup-images">Uploading an image to ClickUp fails</h2>
+  <p>Claude is not permitted to fetch from the domain the image is served on.</p>
+  <p><strong>Fix:</strong> in Claude, open <strong>Settings &rarr; Capabilities</strong>, scroll to
+  <strong>Domain allowlist</strong>, and add <code>clickup.awesome-mcp.xyz</code>. This is a setting
+  inside Claude &mdash; nothing on the dashboard can do it for you. See the
+  <a href="/docs/images">images page</a>.</p>
+
+  <h2 id="slack-bot-silent">A Slack bot connector sees nothing</h2>
+  <p>A bot only has access to channels it has been invited to.</p>
+  <p><strong>Fix:</strong> run <code>/invite</code> for the bot in each channel you want it to work
+  in. If you want access to everything you can see without invitations, use the
+  <a href="/docs/slack">Slack MCP</a> connector instead, which acts as you.</p>
+
+  <h2 id="slack-search-empty">Slack search returns fewer results than expected</h2>
+  <p>Results from channels your access rules exclude are removed after Slack has already paged
+  them. A page can therefore come back empty while more matches exist further on. The response
+  says how many results were hidden, so this is distinguishable from Slack finding nothing.</p>
+  <p><strong>Fix:</strong> if the missing results are ones you should be seeing, widen the rules
+  under <strong>Access Rules</strong>. Otherwise ask for the next page.</p>
+
+  <h2 id="token-revoked">A pasted token stopped working</h2>
+  <p>The key was revoked or rotated in the source service.</p>
+  <p><strong>Fix:</strong> create a new key there, then use <strong>Re-enter token</strong> on the
+  connection. This replaces the credential in place, so the URL you already gave Claude keeps
+  working &mdash; do not delete the connection and start over.</p>
+
+  <h2 id="wrong-account">The connector is using the wrong account</h2>
+  <p>You approved with a different account than you meant to.</p>
+  <p><strong>Fix:</strong> delete that connection and add the tool again, choosing the right account
+  at the provider&rsquo;s consent screen. You can also keep both &mdash; each connection gets its own row
+  and its own URL, so you can give Claude whichever you want.</p>
+
+  <h2 id="url-leaked">The MCP URL leaked</h2>
+  <p>The URL contains your credentials.</p>
+  <p><strong>Fix:</strong> delete the connection from the dashboard, which invalidates that URL
+  immediately, then reconnect and give Claude the new one.</p>
+
+  <h2 id="still-stuck">Still stuck</h2>
+  <p>Check <a href="/updates">Updates</a> &mdash; if a connector changed recently, the change is
+  described there. It is also the fastest way to find out whether a permission was added and a
+  reconnect is now expected.</p>
+
+
+  <nav class="docs-prevnext" aria-label="Pagination">
+    <a href="/docs/rest-api" class="docs-prevnext-prev"><span class="docs-prevnext-dir">Previous</span><span class="docs-prevnext-title">REST API</span></a>
+  </nav>
+    </main>
+
+    <aside class="docs-toc" id="docs-toc" aria-labelledby="toc-heading" hidden>
+      <p id="toc-heading" class="docs-toc-title">On this page</p>
+      <nav aria-label="On this page"></nav>
+    </aside>
+  </div>
+
+  <footer class="docs-footer">
+    <p><a href="/dashboard">Dashboard</a> &middot; <a href="/integrations">Integrations</a> &middot; <a href="/updates">Updates</a></p>
+  </footer>
+
+  <script src="/docs/docs.js" defer></script>
+</body>
+</html>
