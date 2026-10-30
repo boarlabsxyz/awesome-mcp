@@ -5,6 +5,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { validateJwt, validateOpaqueToken, hasScope, type JwtPayload } from './jwtValidator.js';
 import { getRequiredScope } from './scopeMap.js';
 import { mapJwtToUser } from './userMapping.js';
+import { resourceMetadataUrl } from '../mcpInstancePath.js';
 import type { UserRecord } from '../userStore.js';
 
 /** Dependencies for the middleware, injectable for testing. */
@@ -52,7 +53,7 @@ export function createResourceServerMiddleware(deps: MiddlewareDeps = defaultDep
     const dualAuthMode = process.env.DUAL_AUTH_MODE !== 'false';
 
     const authHeader = req.headers.authorization;
-    const wwwAuth = `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`;
+    const wwwAuth = `Bearer resource_metadata="${resourceMetadataUrl(baseUrl, req.baseUrl ?? '', req.path ?? '')}"`;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       const apiKey = req.query.apiKey as string | undefined;

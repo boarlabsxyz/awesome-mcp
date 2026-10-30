@@ -26,20 +26,39 @@ function auth0Issuer(): string {
   return domain.startsWith('https://') ? domain : `https://${domain}`;
 }
 
+/** Send an RFC 9728 document. `authServer` is always the bare base URL: AS discovery is resolved against it. */
+function sendProtectedResourceMetadata(res: express.Response, resource: string, authServer: string, scopes: string[]): void {
+  const issuer = auth0Issuer();
+  if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return; }
+  res.json({
+    resource,
+    authorization_servers: [authServer], // Point to ourselves — we proxy OAuth endpoints
+    scopes_supported: scopes,
+    bearer_methods_supported: ['header'],
+  });
+}
+
+/**
+ * RFC 9728 metadata for the instance URLs under `mount` (/mcp/<id>). Mounted per
+ * proxy route so it exists only where the path form is served. Echoes the id
+ * without looking it up: a lookup would tell an unauthenticated caller which
+ * instance ids are real, and an instance id is a credential.
+ */
+function registerInstanceResourceMetadata(app: express.Express, baseUrl: string, scopes: string[], mount: string): void {
+  app.get(instanceResourceMetadataRoute(mount), (req, res) => {
+    const instanceId = instanceIdFromPath(`${mount}/${req.params.instanceId}`, mount);
+    if (!instanceId) { res.status(404).json({ error: 'not_found' }); return; }
+    sendProtectedResourceMetadata(res, `${baseUrl}${mount}/${instanceId}`, baseUrl, scopes);
+  });
+}
+
 /** Register OAuth discovery + proxy endpoints (RFC 9728 + RFC 8414 + /authorize, /token, /register). */
 function registerOAuthProxy(app: express.Express, resource: string, scopes: string[]): void {
   const auth0Audience = process.env.AUTH0_AUDIENCE || '';
 
   // RFC 9728: OAuth Protected Resource Metadata
   app.get('/.well-known/oauth-protected-resource', (_req, res) => {
-    const issuer = auth0Issuer();
-    if (!issuer) { res.status(503).json({ error: 'AUTH0_DOMAIN not configured' }); return; }
-    res.json({
-      resource,
-      authorization_servers: [resource], // Point to ourselves — we proxy OAuth endpoints
-      scopes_supported: scopes,
-      bearer_methods_supported: ['header'],
-    });
+    sendProtectedResourceMetadata(res, resource, resource, scopes);
   });
 
   // RFC 8414: OAuth Authorization Server Metadata
@@ -306,6 +325,7 @@ import { loadUsers, createOrUpdateUser, getUserByGoogleId, getUserByApiKey, getU
 import { normalizeEmail, isValidEmail, validatePassword, hashPassword, verifyPassword } from '../auth/password.js';
 import { loadClientCredentials } from '../auth.js';
 import { getOAuthState, deleteOAuthState, storeAuthCode, storeClient, getClient, exchangeAuthCode } from './oauthServer.js';
+import { instanceIdFromPath, instancePathToQuery, instanceResourceMetadataRoute, resourceMetadataUrl } from '../mcpInstancePath.js';
 import { createSession, getSession, deleteSession, Session } from './sessionStore.js';
 import { consumeLoginAttempt, resetLoginAttempts, RateLimitVerdict, LOGIN_RATE_LIMIT } from './loginRateLimit.js';
 import { sendMail, isMailConfigured, MailNotConfiguredError } from './mailer.js';
@@ -4215,12 +4235,18 @@ export function createWebApp(docsMcpPort: number, calendarMcpPort: number, sheet
         },
       },
     };
+    const mount = prefix ? `/${prefix}` : '/mcp';
     if (prefix) {
       opts.pathFilter = [`/${prefix}`, `/${prefix}-sse`];
-      opts.pathRewrite = { [`^/${prefix}-sse`]: '/sse', [`^/${prefix}`]: '/mcp' };
+      const prefixSse = new RegExp(`^/${prefix}-sse`);
+      const prefixMcp = new RegExp(`^/${prefix}`);
+      opts.pathRewrite = (path: string) =>
+        instancePathToQuery(path, mount).replace(prefixSse, '/sse').replace(prefixMcp, '/mcp');
     } else {
       opts.pathFilter = ['/mcp', '/sse'];
+      opts.pathRewrite = (path: string) => instancePathToQuery(path, mount);
     }
+    registerInstanceResourceMetadata(app, BASE_URL, ALL_SCOPES, mount);
     // Apply JWT auth middleware before proxying to internal MCP servers
     const paths = prefix ? [`/${prefix}`, `/${prefix}-sse`] : ['/mcp', '/sse'];
     app.use(paths, resourceServerMiddleware);
@@ -10258,6 +10284,7 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
   const mcpSlug = process.env.MCP_SLUG || 'google-docs';
   const mcpBaseUrl = process.env.MCP_BASE_URL || BASE_URL;
   registerOAuthProxy(app, mcpBaseUrl, getScopesForSlug(mcpSlug));
+  registerInstanceResourceMetadata(app, mcpBaseUrl, getScopesForSlug(mcpSlug), '/mcp');
 
   // Proxy MCP requests to internal FastMCP server
   // Auth middleware: try JWT/Auth0 first, fall back to apiKey lookup (issued by our OAuth proxy)
@@ -10278,13 +10305,16 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
   // not help". Built from mcpBaseUrl, not BASE_URL: each MCP runs on its own
   // subdomain (gmail.awesome-mcp.xyz), and pointing at the main site's metadata
   // would send the client to the wrong resource.
-  const mcpWwwAuth = `Bearer resource_metadata="${mcpBaseUrl}/.well-known/oauth-protected-resource"`;
+  const mcpWwwAuthFor = (req: express.Request) =>
+    `Bearer resource_metadata="${resourceMetadataUrl(mcpBaseUrl, req.baseUrl, req.path)}"`;
 
   const mcpOnlyMiddleware = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     // Only this middleware may set the identity headers FastMCP trusts from
     // loopback (see stripTrustedIdentityHeaders). jwtMiddleware strips them
     // too; doing it here as well keeps this wrapper safe on its own.
     stripTrustedIdentityHeaders(req);
+
+    const mcpWwwAuth = mcpWwwAuthFor(req);
 
     // Try JWT/Auth0 auth first
     let jwtFailed = false;
@@ -10389,6 +10419,7 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
     changeOrigin: true,
     ws: true,
     pathFilter: ['/mcp', '/sse'],
+    pathRewrite: (path: string) => instancePathToQuery(path),
     proxyTimeout: 0,
     timeout: 0,
     on: {

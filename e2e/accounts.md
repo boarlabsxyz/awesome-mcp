@@ -160,12 +160,12 @@ whichever Google Drive the dashboard user has connected. For each one:
 2. Connect the **Google Docs** and **Google Drive** MCPs (the drive connection is
    what `createDocument` / `deleteFile` / the sweeper go through).
 3. Press **Copy URL** on a connector row. The URL carries the key:
-   `…/mcp?apiKey=<key>.<instanceId>`.
+   `…/mcp/<instanceId>?apiKey=<key>.<instanceId>`.
 
 Take the `apiKey` query value; `E2E_<ACCOUNT>_API_KEY` is the part **before the
 last dot**.
 
-**If the copied URL looks like `…/mcp?instanceId=xxxx` with no `apiKey`**, that
+**If the copied URL looks like `…/mcp/xxxx` with no `apiKey`**, that
 deployment sets `DUAL_AUTH_MODE=false`, so `/api/config` reports `authMode: 'jwt'`
 and the dashboard emits a bare URL for Auth0 clients. There is **no UI toggle** —
 it is server config. Read the key from `/api/me` instead:
