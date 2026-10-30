@@ -283,6 +283,10 @@ jobs:
         run: |
           node -e "
             const fs = require('fs');
+            if (!fs.existsSync('/tmp/release/updates-block.html')) {
+              console.log('No user-facing changes in this release; leaving public/updates.html as is.');
+              process.exit(0);
+            }
             const html = fs.readFileSync('public/updates.html', 'utf8');
             const block = fs.readFileSync('/tmp/release/updates-block.html', 'utf8');
             const marker = '<div id=\"releases\">';
