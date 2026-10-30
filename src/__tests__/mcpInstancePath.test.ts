@@ -78,12 +78,8 @@ describe('instanceIdFromPath', () => {
     assert.equal(instanceIdFromPath('/calendar/abc', '/calendar'), 'abc');
   });
 
-  it('tolerates a trailing slash, which clients normalise freely', () => {
-    assert.equal(instanceIdFromPath('/mcp/abc/', '/mcp'), 'abc');
-  });
-
   it('rejects everything else', () => {
-    for (const pathname of ['/mcp', '/mcp/', '/mcp/a/b', '/mcpx/abc', '/sse/abc', '/mcp/a"b', '/mcp/a%0d%0ab', '/mcp/..']) {
+    for (const pathname of ['/mcp', '/mcp/', '/mcp/abc/', '/mcp/a/b', '/mcpx/abc', '/sse/abc', '/mcp/a"b', '/mcp/a%0d%0ab', '/mcp/..']) {
       assert.equal(instanceIdFromPath(pathname, '/mcp'), null, pathname);
     }
   });
@@ -127,6 +123,8 @@ describe('resourceMetadataUrl', () => {
 
   it('points everything else at the root document', () => {
     assert.equal(resourceMetadataUrl('https://h.test', '/mcp', '/'), root);
+    // A per-instance document here would name /mcp/abc, not the URL called.
+    assert.equal(resourceMetadataUrl('https://h.test', '/mcp', '/abc/'), root);
     assert.equal(resourceMetadataUrl('https://h.test', '/sse', '/abc'), root);
     assert.equal(resourceMetadataUrl('https://h.test', '/calendar-sse', '/abc'), root);
     assert.equal(resourceMetadataUrl('https://h.test', '', ''), root);

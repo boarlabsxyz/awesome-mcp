@@ -16,10 +16,14 @@ const INSTANCE_ID = /^[A-Za-z0-9_-]+$/;
 
 const PROTECTED_RESOURCE_METADATA_PATH = '/.well-known/oauth-protected-resource';
 
-/** The id in `<mount>/<id>` (trailing slash allowed), or null for any other path. */
+/**
+ * The id in `<mount>/<id>`, or null for any other path. A trailing slash is not
+ * the path form: the metadata's `resource` must match the URL called exactly,
+ * and FastMCP refuses /mcp/ the same way.
+ */
 export function instanceIdFromPath(pathname: string, mount: string): string | null {
   if (!mount || !pathname.startsWith(`${mount}/`)) return null;
-  const id = pathname.slice(mount.length + 1).replace(/\/$/, '');
+  const id = pathname.slice(mount.length + 1);
   return INSTANCE_ID.test(id) ? id : null;
 }
 
