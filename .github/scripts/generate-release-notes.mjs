@@ -5,8 +5,8 @@
 // Content strategy:
 //   1. If OPENROUTER_API_KEY is set, send raw commits + ClickUp task titles to Claude (via
 //      OpenRouter) and ask it to produce a user-facing summary (drops chores/refactors/CI/
-//      deps/internal fixes, rewrites commit-speak into plain English). Claude decides
-//      sections + primaryTag.
+//      deps/internal fixes/admin-side changes, rewrites commit-speak into plain English).
+//      Claude decides sections + primaryTag.
 //   2. Otherwise (or on API failure) fall back to conventional-commit categorization so the
 //      workflow never breaks on network hiccups or a missing key.
 //
@@ -126,6 +126,7 @@ async function generateFromAI() {
     '  - Internal refactors, dependency bumps, CI, tests, build tooling, lint fixes',
     '  - Backend plumbing, code cleanup, log-line tweaks, type-safety changes',
     '  - Bug fixes to internal-only or already-invisible behavior',
+    '  - Admin-side changes: the /admin page, the Admin MCP, usage analytics, and any tool, setting, or fix only platform admins can see',
     '  - Anything a user would not have noticed if it were absent from the notes',
     'Rewrite commit messages into plain, friendly English. Never mention commit prefixes (feat/fix/chore), file paths, function names, PR numbers, or CU- ticket ids in the text.',
   ].join('\n');
@@ -156,6 +157,8 @@ async function generateFromAI() {
     'Rules:',
     '- If nothing in the commit list is user-facing, set hasUserFacingChanges to false, primaryTag to "improvement", and sections to an empty array.',
     '- Filter aggressively. Prefer omitting a bullet to including a technical one.',
+    '- Omit every admin-side change, including new features and bug fixes, and treat commits scoped to admin, admin-mcp, or usage as admin-side. If a commit mixes admin-side and user-facing work, describe only the user-facing part.',
+    '- "Admin" here means platform admins only. Keep changes that affect regular users, even if the word appears (e.g. "Fixed Redmine time entries not loading for non-admin accounts").',
     '- primaryTag = "feature" if any new capability, else "fix" if only user-visible bug fixes, else "improvement".',
     '- Group related items under one bullet where sensible (e.g. "Added PDF export and page-break support to Google Docs" rather than two bullets).',
     '- Keep bullets short — one line each, no trailing period required.',
