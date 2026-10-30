@@ -1350,11 +1350,13 @@
         mcpFullUrl = baseUrl + mcpPath;
       }
 
+      // The instance goes in the path, in both auth modes: Claude Code gets its
+      // connector list without query strings and dedups by URL, so instances
+      // told apart only by the query collapse into one (src/mcpInstancePath.ts).
       const url = new URL(mcpFullUrl);
+      url.pathname = url.pathname.replace(/\/$/, '') + '/' + encodeURIComponent(instanceId);
       if (authMode !== 'jwt') {
         url.searchParams.set('apiKey', currentUser.apiKey + '.' + instanceId);
-      } else {
-        url.searchParams.set('instanceId', instanceId);
       }
       return url.toString();
     }

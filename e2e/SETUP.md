@@ -55,7 +55,7 @@ succeeds while the same call **with** a query 403s. Queries use
 
 The dev deployment sets `DUAL_AUTH_MODE=false`, so `/api/config` reports
 `authMode: 'jwt'` and the dashboard's **Copy URL** emits a bare
-`…/mcp?instanceId=…` with no key. There is no UI toggle — it is server config.
+`…/mcp/<instanceId>` with no key. There is no UI toggle — it is server config.
 
 For each account:
 
@@ -302,7 +302,7 @@ credential problem.
 ### The one optional change, which I would skip
 
 `DUAL_AUTH_MODE` on the website service. It is effectively `false` today, which
-is why the dashboard's **Copy URL** emits `?instanceId=…` with no key and step 03
+is why the dashboard's **Copy URL** emits `/mcp/<instanceId>` with no key and step 03
 sends you to `/api/me`. Changing it would put the key back in Copy URL — a
 one-time convenience during setup, in exchange for changing what every user's
 dashboard emits from then on. Not a good trade.
