@@ -2993,7 +2993,13 @@ function registerSharedRoutes(app: express.Express): void {
   }
 
   // GET /api/instances/:instanceId/access-rules - Get current access rules + org info
+  // Answers as NDJSON: `progress` lines while the org sweep runs (it can take a
+  // minute), then one `result` or `error` line. Refusals that come before the
+  // sweep keep their plain status code and JSON body.
   app.get('/api/instances/:instanceId/access-rules', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const sendEvent = (event: Record<string, unknown>) => {
+      if (!res.destroyed) res.write(`${JSON.stringify(event)}\n`);
+    };
     try {
       const instanceId = req.params.instanceId as string;
       const user = await resolveSessionUser((req as any).session);
@@ -3007,6 +3013,11 @@ function registerSharedRoutes(app: express.Express): void {
 
       const accessToken = (connection.providerTokens as any)?.access_token;
       if (!accessToken) { res.status(400).json({ error: 'No Slack token found' }); return; }
+
+      res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders();
 
       const { SlackClient } = await import('../slack/apiHelpers.js');
       const client = new SlackClient(accessToken);
@@ -3043,7 +3054,12 @@ function registerSharedRoutes(app: express.Express): void {
         // access denial has to name an org, and vice versa. Without it the name
         // cache is bypassed entirely and every open of this dialog re-spends the
         // team.info budget.
-        discovery = await discoverConnectedOrgs(client, { currentOrgId: currentOrg.id, savedOrgIds, tokenKey: accessToken });
+        discovery = await discoverConnectedOrgs(client, {
+          currentOrgId: currentOrg.id,
+          savedOrgIds,
+          tokenKey: accessToken,
+          onProgress: progress => sendEvent({ type: 'progress', ...progress }),
+        });
         orgDiscoveryCache.set(cacheKey, { result: discovery, expiresAt: Date.now() + ORG_DISCOVERY_TTL_MS });
         pruneOrgDiscoveryCache();
       }
@@ -3054,18 +3070,19 @@ function registerSharedRoutes(app: express.Express): void {
 
       // Get blacklisted user names for display (sequential to avoid rate limits)
       const blacklistUserDetails: Array<{ id: string; name: string }> = [];
-      if (tokens.accessRules?.blacklistUsers?.length) {
-        for (const uid of tokens.accessRules.blacklistUsers.slice(0, 50)) {
-          try {
-            const { user: u } = await client.usersInfo(uid);
-            blacklistUserDetails.push({ id: uid, name: u.profile?.display_name || u.real_name || u.name });
-          } catch {
-            blacklistUserDetails.push({ id: uid, name: uid });
-          }
+      const blacklistUserIds = (tokens.accessRules?.blacklistUsers || []).slice(0, 50);
+      for (const [index, uid] of blacklistUserIds.entries()) {
+        sendEvent({ type: 'progress', stage: 'blacklistUsers', done: index, total: blacklistUserIds.length });
+        try {
+          const { user: u } = await client.usersInfo(uid);
+          blacklistUserDetails.push({ id: uid, name: u.profile?.display_name || u.real_name || u.name });
+        } catch {
+          blacklistUserDetails.push({ id: uid, name: uid });
         }
       }
 
-      res.json({
+      sendEvent({
+        type: 'result',
         currentRules: tokens.accessRules,
         currentOrg,
         connectedOrgs,
@@ -3075,8 +3092,15 @@ function registerSharedRoutes(app: express.Express): void {
         orgDiscovery: { truncated: discovery.truncated, notes: discovery.notes },
         blacklistUserDetails,
       });
+      res.end();
     } catch (err) {
       console.error('[access-rules] error:', err);
+      // Past flushHeaders the 200 is already sent, so only the stream can say so.
+      if (res.headersSent) {
+        sendEvent({ type: 'error', error: 'Failed to load access rules' });
+        res.end();
+        return;
+      }
       res.status(500).json({ error: 'Failed to load access rules' });
     }
   });

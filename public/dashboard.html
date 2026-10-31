@@ -809,6 +809,52 @@
       max-height: 120px;
       overflow-y: auto;
     }
+    .rules-loading {
+      display: flex;
+      gap: 12px;
+      padding: 4px 0;
+    }
+    .rules-loading-body {
+      flex: 1;
+      min-width: 0;
+    }
+    .rules-loading-label {
+      margin: 0;
+      color: #ededed;
+      font-size: 13px;
+    }
+    .rules-loading-detail {
+      min-height: 16px;
+      margin: 2px 0 8px;
+      color: #888;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .rules-spinner {
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.15);
+      border-top-color: #0070f3;
+      border-radius: 50%;
+      animation: rules-spin 0.8s linear infinite;
+    }
+    @keyframes rules-spin {
+      to { transform: rotate(360deg); }
+    }
+    .rules-progress {
+      display: block;
+      width: 100%;
+      height: 4px;
+      border: none;
+      border-radius: 2px;
+      overflow: hidden;
+      background: rgba(255,255,255,0.1);
+      appearance: none;
+    }
+    .rules-progress::-webkit-progress-bar { background: rgba(255,255,255,0.1); }
+    .rules-progress::-webkit-progress-value { background: #0070f3; transition: width 0.2s; }
+    .rules-progress::-moz-progress-bar { background: #0070f3; }
 
     /* Login overlay */
     .login-overlay {
@@ -2072,6 +2118,68 @@
     let rulesCurrentOrg = { id: '', name: 'Unknown' };
     let rulesConnectedOrgs = [];
     let searchDebounce = null;
+    let rulesLoadAbort = null;
+
+    // Same order the server sweeps them. Stages can be skipped: a cached org
+    // sweep goes straight to blacklistUsers, or to the result.
+    const RULES_LOAD_STEPS = [
+      { stage: 'channels', label: 'Scanning workspace channels' },
+      { stage: 'memberChannels', label: 'Scanning your channels' },
+      { stage: 'dms', label: 'Scanning direct messages' },
+      { stage: 'users', label: 'Scanning users' },
+      { stage: 'channelInfo', label: 'Inspecting shared channels' },
+      { stage: 'dmUsers', label: 'Resolving DM contacts' },
+      { stage: 'names', label: 'Resolving organisation names' },
+      { stage: 'blacklistUsers', label: 'Looking up blacklisted users' },
+    ];
+
+    function renderRulesLoading() {
+      document.getElementById('accessRulesContent').innerHTML = `
+        <div class="rules-loading">
+          <span class="rules-spinner" aria-hidden="true"></span>
+          <div class="rules-loading-body">
+            <p id="rulesLoadLabel" class="rules-loading-label" role="status">Connecting to Slack…</p>
+            <p id="rulesLoadDetail" class="rules-loading-detail"></p>
+            <progress id="rulesLoadBar" class="rules-progress" max="${RULES_LOAD_STEPS.length}" value="0" aria-label="Access rules loading progress"></progress>
+          </div>
+        </div>`;
+    }
+
+    function updateRulesLoading({ stage, done, total }) {
+      const index = RULES_LOAD_STEPS.findIndex(step => step.stage === stage);
+      const label = document.getElementById('rulesLoadLabel');
+      if (index === -1 || !label) return;
+      // Only on a step change: page counts tick too fast to read out loud.
+      const text = `Step ${index + 1} of ${RULES_LOAD_STEPS.length}: ${RULES_LOAD_STEPS[index].label}…`;
+      if (label.textContent !== text) label.textContent = text;
+      let detail = '';
+      if (total) detail = `${done} of ${total}`;
+      else if (total === undefined && done) detail = `${done} ${done === 1 ? 'page' : 'pages'} scanned`;
+      document.getElementById('rulesLoadDetail').textContent = detail;
+      document.getElementById('rulesLoadBar').value = index + (total ? done / total : 0);
+    }
+
+    // The response is NDJSON: progress lines, then one result or error line. A
+    // stream that ends without either was cut off, and must not read as loaded.
+    async function readAccessRulesStream(response, onProgress) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffered = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        buffered += decoder.decode(value, { stream: !done });
+        const lines = buffered.split('\n');
+        buffered = lines.pop();
+        for (const line of lines) {
+          if (!line) continue;
+          const event = JSON.parse(line);
+          if (event.type === 'progress') onProgress(event);
+          else if (event.type === 'error') throw new Error(event.error);
+          else if (event.type === 'result') return event;
+        }
+        if (done) throw new Error('The connection closed before loading finished');
+      }
+    }
 
     async function openAccessRules(instanceId) {
       rulesInstanceId = instanceId;
@@ -2080,12 +2188,19 @@
       if (helpToggle) helpToggle.setAttribute('aria-expanded', 'false');
       document.getElementById('rulesHelp').classList.add('hidden');
       openModal(modal);
-      document.getElementById('accessRulesContent').innerHTML = '<p>Loading…</p>';
+      renderRulesLoading();
+      // rulesState still holds the last instance's rules (or the empty defaults)
+      // until this load lands; saving now would write those over this instance's.
+      const saveBtn = document.getElementById('saveRulesBtn');
+      saveBtn.disabled = true;
+      rulesLoadAbort?.abort();
+      const loadAbort = new AbortController();
+      rulesLoadAbort = loadAbort;
 
       try {
-        const response = await fetch(`/api/instances/${instanceId}/access-rules`, { credentials: 'include' });
+        const response = await fetch(`/api/instances/${instanceId}/access-rules`, { credentials: 'include', signal: loadAbort.signal });
         if (!response.ok) throw new Error('Failed to load');
-        const data = await response.json();
+        const data = await readAccessRulesStream(response, updateRulesLoading);
 
         rulesState = data.currentRules || { allowedOrgs: [], blacklistUsers: [], whitelistChannels: [], blacklistChannels: [], allowPublicOnly: false };
         rulesBlacklistUserDetails = data.blacklistUserDetails || [];
@@ -2094,7 +2209,10 @@
         rulesOrgDiscovery = data.orgDiscovery || { truncated: false, notes: [] };
 
         renderAccessRulesForm(data.currentOrg, data.connectedOrgs);
+        saveBtn.disabled = false;
       } catch (err) {
+        // Closed, or reopened on another instance: nothing here is theirs to see.
+        if (err.name === 'AbortError') return;
         document.getElementById('accessRulesContent').innerHTML = `<p style="color: #dc3545;" role="alert">Error: ${escapeHtml(err.message)}</p>`;
       }
     }
@@ -2906,6 +3024,7 @@
     }
 
     function closeAccessRules() {
+      rulesLoadAbort?.abort();
       closeModal(document.getElementById('accessRulesModal'));
       rulesInstanceId = null;
     }

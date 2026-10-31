@@ -402,3 +402,44 @@ describe('discoverConnectedOrgs — big workspaces', () => {
     );
   });
 });
+
+describe('discoverConnectedOrgs — progress', () => {
+  it('reports the stages in sweep order, counting pages and known item totals', async () => {
+    const seen: Array<{ stage: string; done: number; total?: number }> = [];
+    let page = 0;
+    const client = mockClient({
+      conversationsListAll: async () => {
+        page++;
+        return {
+          channels: page === 1 ? [{ id: 'C1', is_ext_shared: true }, { id: 'C2', is_ext_shared: true }] : [],
+          response_metadata: { next_cursor: page === 1 ? 'next' : '' },
+        };
+      },
+    });
+
+    await discoverConnectedOrgs(client, { currentOrgId: 'T_HOME', onProgress: p => seen.push(p) });
+
+    assert.deepEqual([...new Set(seen.map(p => p.stage))], [
+      'channels', 'memberChannels', 'dms', 'users', 'channelInfo', 'dmUsers', 'names',
+    ]);
+    assert.deepEqual(seen.filter(p => p.stage === 'channels').map(p => p.done), [0, 1, 2]);
+    assert.ok(seen.filter(p => p.stage === 'channels').every(p => p.total === undefined));
+    assert.deepEqual(seen.filter(p => p.stage === 'channelInfo'), [
+      { stage: 'channelInfo', done: 0, total: 2 },
+      { stage: 'channelInfo', done: 1, total: 2 },
+      { stage: 'channelInfo', done: 2, total: 2 },
+    ]);
+  });
+
+  it('counts a failed lookup as done, so the display cannot stall short of the total', async () => {
+    const seen: Array<{ stage: string; done: number; total?: number }> = [];
+    const client = mockClient({
+      conversationsListAll: async () => ({ channels: [{ id: 'C1', is_ext_shared: true }] }),
+      conversationsInfo: async () => { throw new Error('ratelimited'); },
+    });
+
+    await discoverConnectedOrgs(client, { currentOrgId: 'T_HOME', onProgress: p => seen.push(p) });
+
+    assert.deepEqual(seen.filter(p => p.stage === 'channelInfo').at(-1), { stage: 'channelInfo', done: 1, total: 1 });
+  });
+});
