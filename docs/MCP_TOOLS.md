@@ -441,18 +441,18 @@ Source: `src/redmine/server.ts` — 46 tools.
 | `getIssue` | Retrieve one Redmine issue in full. Use `include` to pull in the comment history, subtasks, watchers, or the statuses it may move to. | `GET /api/v1/redmine/issues/{issueId}` |
 | `createIssue` | Create a Redmine issue in a project. Only projectId and subject are required; every other field falls back to the project/tracker default. | `POST /api/v1/redmine/issues` |
 | `updateIssue` | Update a Redmine issue and/or add a comment. Pass `notes` to append a comment; `description` REPLACES the body instead. Fields you omit are left untouched. | `POST /api/v1/redmine/issues/{issueId}` |
-| `deleteIssue` | Permanently delete a Redmine issue, along with its comments, time entries and subtasks. Redmine has no recycle bin — this cannot be undone. | — |
-| `addIssueWatcher` | Add a user as a watcher on a Redmine issue so they receive its notifications. | — |
-| `removeIssueWatcher` | Remove a watcher from a Redmine issue. | — |
+| `deleteIssue` | Permanently delete a Redmine issue, along with its comments, time entries and subtasks. Redmine has no recycle bin — this cannot be undone. | `POST /api/v1/redmine/issues/{issueId}/delete` |
+| `addIssueWatcher` | Add a user as a watcher on a Redmine issue so they receive its notifications. | `POST /api/v1/redmine/issues/{issueId}/watchers` |
+| `removeIssueWatcher` | Remove a watcher from a Redmine issue. | `POST /api/v1/redmine/issues/{issueId}/watchers/{userId}/remove` |
 | `listIssueRelations` | List the relations (blocks, precedes, duplicates, …) attached to a Redmine issue. | `GET /api/v1/redmine/issues/{issueId}/relations` |
-| `createIssueRelation` | Link two Redmine issues with a relation such as blocks, precedes or duplicates. | — |
-| `deleteIssueRelation` | Delete a Redmine issue relation by its relation ID (from listIssueRelations — NOT an issue ID). | — |
+| `createIssueRelation` | Link two Redmine issues with a relation such as blocks, precedes or duplicates. | `POST /api/v1/redmine/issues/{issueId}/relations` |
+| `deleteIssueRelation` | Delete a Redmine issue relation by its relation ID (from listIssueRelations — NOT an issue ID). | `POST /api/v1/redmine/relations/{relationId}/delete` |
 | `listProjects` | List the Redmine projects visible to the connected account, newest page first. Returns one page and reports the total. | `GET /api/v1/redmine/projects` |
 | `getProject` | Retrieve one Redmine project, optionally with its trackers, categories and enabled modules. | `GET /api/v1/redmine/projects/{projectId}` |
-| `createProject` | Create a Redmine project. Requires administrator rights on most instances. | — |
-| `updateProject` | Update a Redmine project. Fields you omit are left untouched. | — |
-| `archiveProject` | Archive a Redmine project. It becomes read-only and hidden from project lists, but nothing is deleted — unarchiveProject reverses it. | — |
-| `unarchiveProject` | Restore a previously archived Redmine project to active status. | — |
+| `createProject` | Create a Redmine project. Requires administrator rights on most instances. | `POST /api/v1/redmine/projects` |
+| `updateProject` | Update a Redmine project. Fields you omit are left untouched. | `POST /api/v1/redmine/projects/{projectId}` |
+| `archiveProject` | Archive a Redmine project. It becomes read-only and hidden from project lists, but nothing is deleted — unarchiveProject reverses it. | `POST /api/v1/redmine/projects/{projectId}/archive` |
+| `unarchiveProject` | Restore a previously archived Redmine project to active status. | `POST /api/v1/redmine/projects/{projectId}/unarchive` |
 | `deleteProject` | Permanently delete a Redmine project AND every issue, wiki page, version and time entry inside it, including subprojects. There is no recycle bin. Prefer archiveProject unless the data is genuinely meant to be destroyed. | — |
 | `listUsers` | List Redmine users. Requires administrator rights — a non-admin account gets a permission error, which is a Redmine restriction, not a connection problem. | `GET /api/v1/redmine/users` |
 | `getUser` | Retrieve one Redmine user by ID, optionally with their group and project memberships. | `GET /api/v1/redmine/users/{userId}` |
@@ -460,23 +460,23 @@ Source: `src/redmine/server.ts` — 46 tools.
 | `listTimeEntries` | List Redmine time entries (spent time), filterable by project, issue, user, activity and date range. Set allPages=true whenever you are SUMMING hours — Redmine caps a page at 100 entries, so a per-person or per-project total from one page is silently short, and only that mode reports a total for the whole set. Billable vs non-billable is modelled as the time-tracking activity on most instances (names prefixed "B:" / "NB:"), so listTimeEntryActivities then activityId is how you split them. If this fails with a redirect, read the reported target: a different host means an SSO or access proxy this server cannot authenticate to, while the sign-in page on the same host means this one route is blocked even though the credential is fine. Some instances block /time_entries.json alone; when a projectId is given the call retries that project on its own route and says so, so prefer naming a project over filtering a workspace-wide read. A 403 here does NOT establish that the account lacks view_time_entries — Redmine answers 403 for a disabled project module and for a proxy or plugin rule on this route too; if the same account can see the data in the Redmine web UI, the permission is not the problem. | `GET /api/v1/redmine/time-entries` |
 | `getTimeEntry` | Retrieve one Redmine time entry by ID. | `GET /api/v1/redmine/time-entries/{timeEntryId}` |
 | `createTimeEntry` | Log time against a Redmine issue or project. Pass exactly one of issueId or projectId. Most instances require activityId — call listTimeEntryActivities if you do not have it. | `POST /api/v1/redmine/time-entries` |
-| `updateTimeEntry` | Update an existing Redmine time entry. Fields you omit are left untouched. | — |
-| `deleteTimeEntry` | Permanently delete a Redmine time entry. This cannot be undone. | — |
+| `updateTimeEntry` | Update an existing Redmine time entry. Fields you omit are left untouched. | `POST /api/v1/redmine/time-entries/{timeEntryId}` |
+| `deleteTimeEntry` | Permanently delete a Redmine time entry. This cannot be undone. | `POST /api/v1/redmine/time-entries/{timeEntryId}/delete` |
 | `listWikiPages` | List the titles in a Redmine project's wiki. Page bodies are not included — call getWikiPage for one. | `GET /api/v1/redmine/projects/{projectId}/wiki` |
 | `getWikiPage` | Retrieve one Redmine wiki page with its full text. Pass `version` to read a historical revision. | `GET /api/v1/redmine/projects/{projectId}/wiki/{title}` |
 | `updateWikiPage` | Create or replace a Redmine wiki page. Redmine uses one endpoint for both — a title that does not exist yet is created. `text` REPLACES the whole page body, so read it first if you mean to edit rather than overwrite. | `POST /api/v1/redmine/projects/{projectId}/wiki/{title}` |
-| `deleteWikiPage` | Permanently delete a Redmine wiki page and every revision of it. Child pages are attached to its parent rather than deleted. | — |
+| `deleteWikiPage` | Permanently delete a Redmine wiki page and every revision of it. Child pages are attached to its parent rather than deleted. | `POST /api/v1/redmine/projects/{projectId}/wiki/{title}/delete` |
 | `listVersions` | List the versions (milestones / target releases) of a Redmine project, including versions shared from other projects. | `GET /api/v1/redmine/projects/{projectId}/versions` |
 | `getVersion` | Retrieve one Redmine version by ID. | `GET /api/v1/redmine/versions/{versionId}` |
-| `createVersion` | Create a version (milestone / target release) in a Redmine project. | — |
-| `updateVersion` | Update a Redmine version. Fields you omit are left untouched. | — |
-| `deleteVersion` | Permanently delete a Redmine version. Issues targeting it are not deleted — their target version is cleared. | — |
+| `createVersion` | Create a version (milestone / target release) in a Redmine project. | `POST /api/v1/redmine/projects/{projectId}/versions` |
+| `updateVersion` | Update a Redmine version. Fields you omit are left untouched. | `POST /api/v1/redmine/versions/{versionId}` |
+| `deleteVersion` | Permanently delete a Redmine version. Issues targeting it are not deleted — their target version is cleared. | `POST /api/v1/redmine/versions/{versionId}/delete` |
 | `listIssueCategories` | List the issue categories defined on a Redmine project. Their IDs are what createIssue/updateIssue take as categoryId. | `GET /api/v1/redmine/projects/{projectId}/issue-categories` |
-| `createIssueCategory` | Create an issue category in a Redmine project. | — |
-| `deleteIssueCategory` | Delete a Redmine issue category. Issues in it are not deleted — pass reassignToId to move them to another category, otherwise their category is cleared. | — |
+| `createIssueCategory` | Create an issue category in a Redmine project. | `POST /api/v1/redmine/projects/{projectId}/issue-categories` |
+| `deleteIssueCategory` | Delete a Redmine issue category. Issues in it are not deleted — pass reassignToId to move them to another category, otherwise their category is cleared. | `POST /api/v1/redmine/issue-categories/{categoryId}/delete` |
 | `listMemberships` | List the members of a Redmine project with their roles. This is the reliable way to find user IDs for assignment without administrator rights, since listUsers is admin-only. | `GET /api/v1/redmine/projects/{projectId}/memberships` |
-| `createMembership` | Add a user or group to a Redmine project with one or more roles. | — |
-| `deleteMembership` | Remove a member from a Redmine project by membership ID (from listMemberships — NOT a user ID). | — |
+| `createMembership` | Add a user or group to a Redmine project with one or more roles. | `POST /api/v1/redmine/projects/{projectId}/memberships` |
+| `deleteMembership` | Remove a member from a Redmine project by membership ID (from listMemberships — NOT a user ID). | `POST /api/v1/redmine/memberships/{membershipId}/delete` |
 | `listTrackers` | List the Redmine trackers (Bug, Feature, Support, …). Their IDs are what createIssue takes as trackerId. | `GET /api/v1/redmine/trackers` |
 | `listIssueStatuses` | List every Redmine issue status, flagging which ones count as closed. Their IDs are what updateIssue takes as statusId. | `GET /api/v1/redmine/issue-statuses` |
 | `listIssuePriorities` | List the Redmine issue priorities (Low, Normal, High, …), flagging the default. Their IDs are what createIssue takes as priorityId. | `GET /api/v1/redmine/issue-priorities` |

@@ -323,6 +323,25 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `updateIssue` | `POST /api/v1/redmine/issues/{issueId}` | live | Update a Redmine issue or append a comment — _POST rather than PUT because the catalog scope is GET and POST; Redmine itself takes a PUT here. Body limit 5mb. notes appends a comment, description REPLACES the body. Returns 200 with the issue re-read, since Redmine answers the write with 204 and no body._ |
 | `createTimeEntry` | `POST /api/v1/redmine/time-entries` | live | Log time against a Redmine issue or project — _201 with the created entry. Provide issueId or projectId, not neither. Not idempotent - repeating the call logs the hours twice._ |
 | `updateWikiPage` | `POST /api/v1/redmine/projects/{projectId}/wiki/{title}` | live | Create or replace a Redmine wiki page — _Body limit 5mb - the clearest large-body case here, since text replaces the whole page. A title that does not exist yet is created. Pass version for optimistic locking so a concurrent edit is rejected rather than clobbered. Returns 200 with the page re-read._ |
+| `deleteIssue` | `POST /api/v1/redmine/issues/{issueId}/delete` | live | Permanently delete a Redmine issue — _DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Takes the comments, time entries and subtasks with it._ |
+| `addIssueWatcher` | `POST /api/v1/redmine/issues/{issueId}/watchers` | live | Add a watcher to a Redmine issue — _Body takes userId. watching re-reads the issue: true, false, or null when the account cannot read watchers._ |
+| `removeIssueWatcher` | `POST /api/v1/redmine/issues/{issueId}/watchers/{userId}/remove` | live | Remove a watcher from a Redmine issue — _DESTRUCTIVE. Exposed with explicit sign-off. Redmine answers 204 even for a user who was not watching, so watching re-reads the issue: true, false, or null when the account cannot read watchers._ |
+| `createIssueRelation` | `POST /api/v1/redmine/issues/{issueId}/relations` | live | Link two Redmine issues — _201 with the created relation. Read as issueId relationType issueToId._ |
+| `deleteIssueRelation` | `POST /api/v1/redmine/relations/{relationId}/delete` | live | Delete a Redmine issue relation — _DESTRUCTIVE. Exposed with explicit sign-off. Takes a relation ID from GET /issues/{issueId}/relations, NOT an issue ID._ |
+| `createProject` | `POST /api/v1/redmine/projects` | live | Create a Redmine project — _201 with the created project. Body limit 5mb._ |
+| `updateProject` | `POST /api/v1/redmine/projects/{projectId}` | live | Update a Redmine project — _POST rather than PUT because the catalog scope is GET and POST. Body limit 5mb. Returns 200 with the project re-read from Redmine, which answers the write with 204. 400 when no field is given._ |
+| `archiveProject` | `POST /api/v1/redmine/projects/{projectId}/archive` | live | Archive a Redmine project — _Reversible with /unarchive. Requires a Redmine administrator and Redmine 5.0 or later. deleteProject has no REST sibling, so this is the way to retire a project over REST._ |
+| `unarchiveProject` | `POST /api/v1/redmine/projects/{projectId}/unarchive` | live | Restore an archived Redmine project — _Requires a Redmine administrator and Redmine 5.0 or later._ |
+| `updateTimeEntry` | `POST /api/v1/redmine/time-entries/{timeEntryId}` | live | Update a Redmine time entry — _POST rather than PUT because the catalog scope is GET and POST. Returns 200 with the entry re-read from Redmine. 400 when no field is given._ |
+| `deleteTimeEntry` | `POST /api/v1/redmine/time-entries/{timeEntryId}/delete` | live | Permanently delete a Redmine time entry — _DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource._ |
+| `deleteWikiPage` | `POST /api/v1/redmine/projects/{projectId}/wiki/{title}/delete` | live | Permanently delete a Redmine wiki page — _DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Takes every revision of the page; child pages move to its parent._ |
+| `createVersion` | `POST /api/v1/redmine/projects/{projectId}/versions` | live | Create a Redmine version — _201 with the created version. Body limit 5mb._ |
+| `updateVersion` | `POST /api/v1/redmine/versions/{versionId}` | live | Update a Redmine version — _POST rather than PUT because the catalog scope is GET and POST. Returns 200 with the version re-read from Redmine. 400 when no field is given._ |
+| `deleteVersion` | `POST /api/v1/redmine/versions/{versionId}/delete` | live | Permanently delete a Redmine version — _DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Issues that targeted it are left with no target version._ |
+| `createIssueCategory` | `POST /api/v1/redmine/projects/{projectId}/issue-categories` | live | Create a Redmine issue category — _201 with the created category. Body limit 5mb._ |
+| `deleteIssueCategory` | `POST /api/v1/redmine/issue-categories/{categoryId}/delete` | live | Permanently delete a Redmine issue category — _DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Pass reassignToId to move its issues to another category, or they are left with none._ |
+| `createMembership` | `POST /api/v1/redmine/projects/{projectId}/memberships` | live | Add a user or group to a Redmine project — _201 with the created membership. Grants the given roles, so this widens who can reach the project._ |
+| `deleteMembership` | `POST /api/v1/redmine/memberships/{membershipId}/delete` | live | Remove a member from a Redmine project — _DESTRUCTIVE. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource._ |
 
 ### Browserbase (`browserbase`)
 
@@ -404,4 +423,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 287 endpoints.
+Catalog size: 306 endpoints.

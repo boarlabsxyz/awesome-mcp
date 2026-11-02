@@ -353,6 +353,7 @@ import { validateGitHubToken, buildGitHubInstanceName, fetchGitHubUser, uniqueGi
 import { exchangeGitHubOauthCode, GITHUB_TOKEN_URL } from '../github/oauthCallback.js';
 import { GITHUB_READ_ROUTES, GITHUB_WRITE_ROUTES, writeArgs as githubWriteArgs } from '../github/restRoutes.js';
 import { PINECONE_READ_ROUTES, PINECONE_WRITE_ROUTES, writeArgs as pineconeWriteArgs } from '../pinecone/restRoutes.js';
+import { REDMINE_WRITE_ROUTES, writeArgs as redmineWriteArgs } from '../redmine/restRoutes.js';
 import type { GitHubClient } from '../github/apiHelpers.js';
 import type { PineconeRulesState } from '../pinecone/accessRules.js';
 import type { PineconeRestContext } from '../pinecone/restOps.js';
@@ -10022,10 +10023,10 @@ function registerRestApiRoutes(app: express.Express): void {
 
   // --- Redmine writes ---
   // Same schema-reuse rule as the HubSpot writes, and the same consequence: the
-  // PERMANENT dashboard API key now reaches them. Deliberately absent are all
-  // seven delete tools, archiveProject, and the project/version/category/
-  // membership admin creates — Redmine has no recycle bin, deleteProject
-  // cascades into subprojects, and a curl has no confirmation affordance.
+  // PERMANENT dashboard API key reaches them. The deletes were exposed with
+  // explicit sign-off (see the catalog notes) even though Redmine has no recycle
+  // bin and a curl has no confirmation affordance. deleteProject alone stays
+  // MCP-only because it cascades into subprojects.
   //
   // Path params are merged OVER the body so a URL and a mismatched body key
   // cannot disagree about which record is being written.
@@ -10136,6 +10137,31 @@ function registerRestApiRoutes(app: express.Express): void {
       await sendRedmineError(res, err, { fallback: 'Failed to save wiki page', permission: 'edit_wiki_pages', baseUrl: req.userSession?.redmineBaseUrl });
     }
   });
+
+  // The rest of the Redmine writes, from the table in src/redmine/restRoutes.ts.
+  for (const route of REDMINE_WRITE_ROUTES) {
+    app.post(route.path, requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const parsed = route.schema.safeParse(redmineWriteArgs(route, req));
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const client = await redmineRestClient(req, res);
+        if (!client) return;
+        const result = await route.run(client, parsed.data);
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        console.error(`Error in Redmine ${route.tool}:`, err);
+        await sendRedmineError(res, err, {
+          fallback: route.fallback,
+          permission: route.permission,
+          adminOnly: route.adminOnly,
+          baseUrl: req.userSession?.redmineBaseUrl,
+        });
+      }
+    });
+  }
 
   // === GitHub ===
   // Both tables live in src/github/restRoutes.ts, where each descriptor maps a

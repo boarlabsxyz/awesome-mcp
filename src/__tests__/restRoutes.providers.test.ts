@@ -751,6 +751,53 @@ describe('REST data plane: HubSpot and Redmine handler bodies', () => {
       assert.equal(res.status, 400);
       assert.equal(calls.length, 0);
     });
+    // The table in src/redmine/restRoutes.ts, through the real handler.
+    it('deletes an issue through a POST action path', async () => {
+      reset();
+      fallback = { status: 204 };
+      const res = await request(app).post('/api/v1/redmine/issues/42/delete').set(auth()).expect(200);
+      assert.deepEqual(res.body, { deleted: true, issueId: '42' });
+      assert.equal(lastCall().method, 'DELETE');
+      assert.ok(lastCall().url.endsWith('/issues/42.json'));
+    });
+
+    it('creates a project with Redmine field names', async () => {
+      reset();
+      when('/projects.json', { json: { project: { id: 1, identifier: 'p-1' } } });
+      const res = await request(app).post('/api/v1/redmine/projects').set(auth())
+        .send({ name: 'P', identifier: 'p-1', isPublic: false }).expect(201);
+      assert.equal(res.body.project.id, 1);
+      assert.deepEqual((lastCall().body as any).project, { name: 'P', identifier: 'p-1', is_public: false });
+    });
+
+    it('400s a body the tool schema rejects, before Redmine is called', async () => {
+      reset();
+      const res = await request(app).post('/api/v1/redmine/projects').set(auth()).send({ name: 'P', identifier: 'NOT VALID' });
+      assert.equal(res.status, 400);
+      assert.ok(res.body.issues.fieldErrors.identifier);
+      assert.equal(calls.length, 0);
+    });
+
+    it('takes the record from the URL, not a mismatched body key', async () => {
+      reset();
+      fallback = { status: 204 };
+      await request(app).post('/api/v1/redmine/projects/from-path/archive').set(auth()).send({ projectId: 'from-body' }).expect(200);
+      assert.ok(lastCall().url.includes('/projects/from-path/archive.json'));
+    });
+
+    it('maps a Redmine 404 through the shared error contract', async () => {
+      reset();
+      fallback = { status: 404, json: {} };
+      const res = await request(app).post('/api/v1/redmine/versions/9/delete').set(auth());
+      assert.equal(res.status, 404);
+    });
+
+    it('has no route that deletes a project', async () => {
+      reset();
+      const res = await request(app).post('/api/v1/redmine/projects/p/delete').set(auth());
+      assert.equal(res.status, 404);
+      assert.equal(calls.length, 0);
+    });
   });
 
   // ======================= Redmine errors =======================
