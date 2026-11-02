@@ -6157,19 +6157,8 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
-  // POST /api/v1/clickup/tasks/:taskId/move - Move task
-  app.post('/api/v1/clickup/tasks/:taskId/move', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { listId } = req.body;
-      if (!listId) { res.status(400).json({ error: 'listId is required' }); return; }
-      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
-      const client = new ClickUpClient(req.userSession!.clickUpAccessToken!);
-      const result = await client.moveTask(req.params.taskId as string, listId);
-      res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to move task' });
-    }
-  });
+  // POST /api/v1/clickup/tasks/:taskId/move lives in CLICKUP_WRITE_ROUTES below:
+  // its body is the moveTask tool's own schema.
 
   // GET /api/v1/clickup/lists/:listId/fields - Get custom fields
   app.get('/api/v1/clickup/lists/:listId/fields', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
@@ -8164,6 +8153,13 @@ function registerRestApiRoutes(app: express.Express): void {
       fallback: 'Failed to update task',
       schema: (m) => m.updateTaskRestSchema,
       run: (m, client, args, p) => m.performUpdateTask(client, p.taskId, args),
+    },
+    {
+      path: '/api/v1/clickup/tasks/:taskId/move',
+      notFound: 'Task or list not found',
+      fallback: 'Failed to move task',
+      schema: (m) => m.moveTaskRestSchema,
+      run: (m, client, args, p) => m.performMoveTask(client, p.taskId, args),
     },
     {
       path: '/api/v1/clickup/tasks/:taskId/delete',

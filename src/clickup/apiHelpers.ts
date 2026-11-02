@@ -530,8 +530,21 @@ export class ClickUpClient {
     return this.request('DELETE', `/task/${taskId}`);
   }
 
-  async moveTask(taskId: string, listId: string): Promise<any> {
-    return this.request('POST', `/task/${taskId}`, { list_id: listId });
+  // Change a task's HOME list. v2 has no route for this -- `POST /task/{id}`
+  // answers 405, which is what this method used to send -- so it is v3 only,
+  // addressed by workspace. Answers `{ data: { task_id, new_list_id } }`; see
+  // performMoveTask for why that echo is not taken as proof of the move.
+  async moveTask(workspaceId: string, taskId: string, listId: string, body: {
+    move_custom_fields?: boolean;
+    custom_fields_to_move?: string[];
+    status_mappings?: Array<{ source_status_id: string; destination_status_id: string }>;
+  }): Promise<any> {
+    return this.request(
+      'PUT',
+      `/workspaces/${encodeURIComponent(workspaceId)}/tasks/${encodeURIComponent(taskId)}/home_list/${encodeURIComponent(listId)}`,
+      body,
+      CLICKUP_API_V3_BASE,
+    );
   }
 
   // === Tasks in Multiple Lists ===

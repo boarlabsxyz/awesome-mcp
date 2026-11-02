@@ -270,6 +270,50 @@ describe('REST data plane: ClickUp and Outline handler bodies', () => {
       assert.equal(calls.length, 0, 'validation must run before any upstream call');
     });
 
+    it('moves a task through the v3 home_list PUT and reports a re-read that disagrees', async () => {
+      reset();
+      when('/home_list/', { json: { data: { task_id: 'task-1', new_list_id: 'list-2' } } });
+      when('/list/list-2', { json: { id: 'list-2', name: 'Sprint', statuses: [{ id: 's1', status: 'open' }] } });
+      // Pre-flight and re-read both hit /task/task-1 and get the same payload,
+      // i.e. a 200 that left the task where it was.
+      when('/task/task-1', { json: { id: 'task-1', team_id: '9015', status: { id: 'o1', status: 'open' }, list: { id: 'list-1' } } });
+      const res = await request(app).post('/api/v1/clickup/tasks/task-1/move').set(auth()).send({ listId: 'list-2' });
+      assert.equal(res.status, 200);
+      const put = callsTo('/home_list/')[0];
+      assert.equal(put.method, 'PUT');
+      assert.equal(put.url, 'https://api.clickup.com/api/v3/workspaces/9015/tasks/task-1/home_list/list-2');
+      assert.equal((put.body as any).move_custom_fields, true);
+      assert.equal(res.body.confirmed, false, 'a 200 echo is not proof the home list changed');
+      assert.equal(res.body.fromList.id, 'list-1');
+    });
+
+    it('rejects a move without listId with 400 and flattened issues', async () => {
+      reset();
+      const res = await request(app).post('/api/v1/clickup/tasks/task-1/move').set(auth()).send({});
+      assert.equal(res.status, 400);
+      assert.ok(res.body.issues);
+      assert.equal(calls.length, 0);
+    });
+
+    it('answers 400 when the destination lacks the task status, with nothing written', async () => {
+      reset();
+      when('/list/list-2', { json: { id: 'list-2', name: 'Sprint', statuses: [{ id: 's1', status: 'todo' }] } });
+      when('/task/task-1', { json: { id: 'task-1', team_id: '9015', status: { id: 'o1', status: 'open' }, list: { id: 'list-1' } } });
+      const res = await request(app).post('/api/v1/clickup/tasks/task-1/move').set(auth()).send({ listId: 'list-2' });
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /destinationStatus/);
+      assert.equal(callsTo('/home_list/').length, 0);
+    });
+
+    it('maps an upstream 404 on the move to 404', async () => {
+      reset();
+      when('/home_list/', { status: 404, json: { message: 'not found' } });
+      when('/list/list-2', { json: { id: 'list-2', statuses: [{ id: 's1', status: 'open' }] } });
+      when('/task/task-1', { json: { id: 'task-1', team_id: '9015', status: { id: 'o1', status: 'open' }, list: { id: 'list-1' } } });
+      const res = await request(app).post('/api/v1/clickup/tasks/task-1/move').set(auth()).send({ listId: 'list-2' });
+      assert.equal(res.status, 404);
+    });
+
     it('maps camelCase list fields onto ClickUp native keys', async () => {
       reset();
       when('/list/list-1', { json: { id: 'list-1', name: 'Renamed' } });
