@@ -2193,6 +2193,7 @@
       // until this load lands; saving now would write those over this instance's.
       const saveBtn = document.getElementById('saveRulesBtn');
       saveBtn.disabled = true;
+      saveBtn.textContent = 'Save Rules';
       rulesLoadAbort?.abort();
       const loadAbort = new AbortController();
       rulesLoadAbort = loadAbort;
@@ -3058,6 +3059,10 @@
       const btn = document.getElementById('saveRulesBtn');
       btn.disabled = true;
       btn.textContent = 'Saving…';
+      // The modal may be closed and reopened before this answers. Each open gets
+      // its own controller, and a newer one owns the modal and the button: closing
+      // would abort its load, and enabling would allow a save before that load lands.
+      const saveSession = rulesLoadAbort;
 
       try {
         const response = await fetch(`/api/instances/${rulesInstanceId}/access-rules`, {
@@ -3070,14 +3075,16 @@
           const err = await response.json();
           throw new Error(err.error || 'Failed to save');
         }
-        closeAccessRules();
+        if (rulesLoadAbort === saveSession) closeAccessRules();
         const user = await loadUserData();
         if (user) { currentUser = user; instances = user.connections || []; renderInstances(); }
       } catch (err) {
         alert('Failed to save: ' + err.message);
       } finally {
-        btn.disabled = false;
-        btn.textContent = 'Save Rules';
+        if (rulesLoadAbort === saveSession) {
+          btn.disabled = false;
+          btn.textContent = 'Save Rules';
+        }
       }
     }
 
