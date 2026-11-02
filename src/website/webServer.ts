@@ -353,6 +353,7 @@ import { validateGitHubToken, buildGitHubInstanceName, fetchGitHubUser, uniqueGi
 import { exchangeGitHubOauthCode, GITHUB_TOKEN_URL } from '../github/oauthCallback.js';
 import { GITHUB_READ_ROUTES, GITHUB_WRITE_ROUTES, writeArgs as githubWriteArgs } from '../github/restRoutes.js';
 import { PINECONE_READ_ROUTES, PINECONE_WRITE_ROUTES, writeArgs as pineconeWriteArgs } from '../pinecone/restRoutes.js';
+import { HUBSPOT_WRITE_ROUTES, hubspotPassthroughStatus, writeArgs as hubspotWriteArgs } from '../hubspot/restRoutes.js';
 import { GMAIL_WRITE_ROUTES, gmailPassthroughStatus, writeArgs as gmailWriteArgs } from '../google-gmail/restRoutes.js';
 import { REDMINE_WRITE_ROUTES, writeArgs as redmineWriteArgs } from '../redmine/restRoutes.js';
 import type { GitHubClient } from '../github/apiHelpers.js';
@@ -1362,6 +1363,7 @@ const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
   '/api/v1/redmine/issues',   // createIssue / updateIssue — description and notes are full issue bodies
   '/api/v1/redmine/projects', // updateWikiPage — `text` replaces an entire wiki page
   '/api/v1/hubspot/notes',    // createNote — free text
+  '/api/v1/hubspot/tasks',    // createTask — free text
   '/api/v1/hubspot/calls',    // logCall — can be a whole transcript
   '/api/v1/hubspot/meetings', // logMeeting — can be full minutes
   '/api/v1/pinecone/indexes', // upsert-records — a bulk record load, up to Pinecone's 2 MB body limit
@@ -9357,16 +9359,16 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
-  // Notes, calls and meetings share one handler: the only differences are the
+  // Notes, tasks, calls and meetings share one handler: the only differences are the
   // engagement type, the schema, and which properties the body maps onto. Each
   // is registered from the table below so the two-step create-then-associate
   // contract — and the honesty about a failed association — lives in one place.
   const HUBSPOT_ENGAGEMENT_ROUTES: ReadonlyArray<{
     path: string;
-    type: 'notes' | 'calls' | 'meetings';
+    type: 'notes' | 'tasks' | 'calls' | 'meetings';
     label: string;
-    schemaName: 'createNoteSchema' | 'logCallSchema' | 'logMeetingSchema';
-    properties: (args: any) => Record<string, unknown>;
+    schemaName: 'createNoteSchema' | 'createTaskSchema' | 'logCallSchema' | 'logMeetingSchema';
+    properties: (args: any, hubspot: typeof import('../hubspot/server.js')) => Record<string, unknown>;
     fallback: string;
   }> = [
     {
@@ -9376,6 +9378,14 @@ function registerRestApiRoutes(app: express.Express): void {
       schemaName: 'createNoteSchema',
       properties: a => ({ hs_note_body: a.body }),
       fallback: 'Failed to create note',
+    },
+    {
+      path: '/api/v1/hubspot/tasks',
+      type: 'tasks',
+      label: 'task',
+      schemaName: 'createTaskSchema',
+      properties: (a, hubspot) => hubspot.taskProperties(a),
+      fallback: 'Failed to create task',
     },
     {
       path: '/api/v1/hubspot/calls',
@@ -9421,7 +9431,7 @@ function registerRestApiRoutes(app: express.Express): void {
           client,
           route.type,
           route.label,
-          route.properties(args),
+          route.properties(args, hubspot),
           args,
         );
         // 201 even when the association failed: the engagement WAS created, and
@@ -9432,6 +9442,31 @@ function registerRestApiRoutes(app: express.Express): void {
       } catch (err: any) {
         console.error(`Error on HubSpot ${route.path}:`, err);
         await sendHubSpotError(req, res, err, { notFound: 'Record to associate not found', fallback: route.fallback });
+      }
+    });
+  }
+
+  // The HubSpot updates, property writes and engagement delete, from the table
+  // in src/hubspot/restRoutes.ts. The module is imported here, once per request
+  // and not at startup, because src/hubspot/server.ts constructs an MCP server.
+  for (const route of HUBSPOT_WRITE_ROUTES) {
+    app.post(route.path, requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const client = await hubspotRestClient(req, res);
+        if (!client) return;
+        const hubspot = await import('../hubspot/server.js');
+        const parsed = route.schema(hubspot).safeParse(hubspotWriteArgs(route, req));
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const result = await route.run(hubspot, client, parsed.data);
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        console.error(`Error in HubSpot ${route.tool}:`, err);
+        const status = hubspotPassthroughStatus(err);
+        if (status) { res.status(status).json({ error: err.message || route.fallback }); return; }
+        await sendHubSpotError(req, res, err, { notFound: route.notFound, fallback: route.fallback });
       }
     });
   }
@@ -10153,9 +10188,10 @@ function registerRestApiRoutes(app: express.Express): void {
   // shared by every route: auth, validation, refresh, status and error mapping.
   //
   // WRITES were exposed with explicit sign-off (see the catalog notes): the
-  // permanent dashboard API key is accepted here, so it can now create issues
-  // and comments, commit files and merge pull requests on every repository the
-  // connected GitHub account can write to.
+  // permanent dashboard API key is accepted here, so it can now create
+  // repositories, forks, branches, issues, comments and pull requests, submit
+  // reviews, commit files and merge on every repository the connected GitHub
+  // account can write to.
 
   /**
    * Refresh, then build a client — or answer 403 and return null. The refresh

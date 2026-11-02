@@ -112,6 +112,7 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   // Redmine. /users/current is listed alongside /users/:userId on purpose: both
   // are one segment under /users, so the only thing keeping "current" from being
   // read as a user ID is the registration order in webServer.ts.
+  '/api/v1/github/organizations',
   '/api/v1/redmine/issues',
   '/api/v1/redmine/issues/123',
   '/api/v1/redmine/issues/123/relations',
@@ -239,6 +240,22 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/redmine/issue-categories/12/delete',
   '/api/v1/redmine/projects/my-project/memberships',
   '/api/v1/redmine/memberships/30/delete',
+  // GitHub
+  '/api/v1/github/repos',
+  '/api/v1/github/repos/octo/app/forks',
+  '/api/v1/github/repos/octo/app/branches',
+  '/api/v1/github/repos/octo/app/issues/1',
+  '/api/v1/github/repos/octo/app/pulls',
+  '/api/v1/github/repos/octo/app/pulls/1/reviews',
+  '/api/v1/github/repos/octo/app/pulls/1/update-branch',
+  // HubSpot updates sit on the same paths as the single-record GETs.
+  '/api/v1/hubspot/tasks',
+  '/api/v1/hubspot/companies/c-1',
+  '/api/v1/hubspot/contacts/c-1',
+  '/api/v1/hubspot/deals/d-1',
+  '/api/v1/hubspot/properties/companies',
+  '/api/v1/hubspot/properties/companies/plan',
+  '/api/v1/hubspot/engagements/notes/n-1/delete',
   // Gmail. /labels is in both arrays: GET lists, POST creates.
   '/api/v1/gmail/messages/send',
   '/api/v1/gmail/messages/batch-modify',

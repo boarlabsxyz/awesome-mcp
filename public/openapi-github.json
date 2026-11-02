@@ -1684,6 +1684,201 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "updateGitHubIssue",
+        "summary": "Update or close an issue",
+        "description": "Exposed with explicit sign-off. body, labels and assignees REPLACE what is there. POST rather than PATCH because the catalog scope is GET and POST. notApplied names fields GitHub silently dropped for an account without push access. 400 when no field is given. Mirrors the MCP tool `updateIssue`.",
+        "tags": [
+          "github"
+        ],
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository owner — a user or organization login, e.g. \"octocat\" (the part after github.com/)."
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository name without the owner, e.g. \"hello-world\"."
+          },
+          {
+            "name": "issueNumber",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Issue number — the #N shown on GitHub. Pull requests share this numbering."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "description": "New title."
+                  },
+                  "body": {
+                    "type": "string",
+                    "description": "New body. Replaces the whole body."
+                  },
+                  "assignees": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "The COMPLETE set of assignees — replaces the current set; [] clears them."
+                  },
+                  "milestone": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Milestone NUMBER, or null to remove the milestone."
+                  },
+                  "labels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "The COMPLETE set of labels — replaces the current set; [] clears them."
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "closed"
+                    ],
+                    "description": "Open or close the issue."
+                  },
+                  "stateReason": {
+                    "type": "string",
+                    "enum": [
+                      "completed",
+                      "not_planned",
+                      "reopened"
+                    ],
+                    "description": "Why the state changed. Use with state: closed → completed / not_planned; open → reopened."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/github/repos/{owner}/{repo}/pulls": {
@@ -1860,6 +2055,174 @@
           },
           "404": {
             "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createGitHubPullRequest",
+        "summary": "Open a pull request",
+        "description": "Exposed with explicit sign-off. 201 with the pull request. Not idempotent - a repeat fails with 422 while the first is open. Mirrors the MCP tool `createPullRequest`.",
+        "tags": [
+          "github"
+        ],
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository owner — a user or organization login, e.g. \"octocat\" (the part after github.com/)."
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository name without the owner, e.g. \"hello-world\"."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "head",
+                  "base"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Pull request title."
+                  },
+                  "body": {
+                    "type": "string",
+                    "description": "Pull request description (GitHub Markdown)."
+                  },
+                  "head": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Branch with the changes. For a branch in a fork, \"user:branch\"."
+                  },
+                  "base": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Branch to merge into, e.g. \"main\"."
+                  },
+                  "draft": {
+                    "type": "boolean",
+                    "description": "Open as a draft."
+                  },
+                  "maintainerCanModify": {
+                    "type": "boolean",
+                    "description": "Let maintainers of the base repository push to the head branch."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
             "content": {
               "application/json": {
                 "schema": {
@@ -2674,6 +3037,213 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "createGitHubPullRequestReview",
+        "summary": "Submit a pull request review",
+        "description": "Exposed with explicit sign-off: the permanent dashboard API key can APPROVE as the connected account, which can satisfy a required review. body is required unless event is APPROVE. 201 with {review, inlineComments}. Mirrors the MCP tool `createPullRequestReview`.",
+        "tags": [
+          "github"
+        ],
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository owner — a user or organization login, e.g. \"octocat\" (the part after github.com/)."
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository name without the owner, e.g. \"hello-world\"."
+          },
+          {
+            "name": "pullNumber",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pull request number — the #N shown on GitHub."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "event"
+                ],
+                "properties": {
+                  "event": {
+                    "type": "string",
+                    "enum": [
+                      "APPROVE",
+                      "REQUEST_CHANGES",
+                      "COMMENT"
+                    ],
+                    "description": "The review verdict to submit."
+                  },
+                  "body": {
+                    "type": "string",
+                    "description": "Review summary. Required for REQUEST_CHANGES and COMMENT."
+                  },
+                  "commitId": {
+                    "type": "string",
+                    "description": "SHA of the commit being reviewed. Defaults to the PR's latest commit."
+                  },
+                  "comments": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "File path the comment is on, relative to the repository root."
+                        },
+                        "body": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Comment text."
+                        },
+                        "line": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "description": "Line number in the file. Give this OR position."
+                        },
+                        "side": {
+                          "type": "string",
+                          "enum": [
+                            "LEFT",
+                            "RIGHT"
+                          ],
+                          "description": "With line: RIGHT for the new version (default), LEFT for the old."
+                        },
+                        "position": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "description": "Legacy: line offset within the diff hunk. Give this OR line."
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "body"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "Inline comments to attach to the review."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/github/repos/{owner}/{repo}/issues/{issueNumber}/comments": {
@@ -3122,6 +3692,704 @@
               "application/json": {
                 "schema": {
                   "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/organizations": {
+      "get": {
+        "operationId": "listGitHubOrganizations",
+        "summary": "List the organizations the connected account reaches",
+        "description": "Says how many repositories of each this connection can read and whether the access rules allow it. truncated true means those counts are floors. Mirrors the MCP tool `listOrganizations`.",
+        "tags": [
+          "github"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requested data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/repos": {
+      "post": {
+        "operationId": "createGitHubRepository",
+        "summary": "Create a repository under the connected account",
+        "description": "Exposed with explicit sign-off: the permanent dashboard API key can create repositories. GitHub defaults to public, so pass private true when that is not wanted. 201 with the repository. Not idempotent - a repeat fails with 422. Mirrors the MCP tool `createRepository`.",
+        "tags": [
+          "github"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Name of the new repository."
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Repository description."
+                  },
+                  "private": {
+                    "type": "boolean",
+                    "description": "Create it private. GitHub defaults to public."
+                  },
+                  "autoInit": {
+                    "type": "boolean",
+                    "description": "Create an initial commit with an empty README, so the repository has a default branch straight away."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/repos/{owner}/{repo}/forks": {
+      "post": {
+        "operationId": "forkGitHubRepository",
+        "summary": "Fork a repository",
+        "description": "Exposed with explicit sign-off. 202 with {fork, preExisting} because GitHub forks asynchronously; 200 with preExisting true when GitHub returned a fork that already existed and made nothing new. The organization in the body is checked against the access rules too. Mirrors the MCP tool `forkRepository`.",
+        "tags": [
+          "github"
+        ],
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository owner — a user or organization login, e.g. \"octocat\" (the part after github.com/)."
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository name without the owner, e.g. \"hello-world\"."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "organization": {
+                    "type": "string",
+                    "description": "Organization to fork into. Defaults to the connected account."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "It already existed; nothing was created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted; GitHub finishes this asynchronously.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/repos/{owner}/{repo}/branches": {
+      "post": {
+        "operationId": "createGitHubBranch",
+        "summary": "Create a branch",
+        "description": "Exposed with explicit sign-off. 201 with the branch, source and SHA. fromBranch defaults to the default branch. 404 for a missing source branch, 409 when the branch already exists. Mirrors the MCP tool `createBranch`.",
+        "tags": [
+          "github"
+        ],
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository owner — a user or organization login, e.g. \"octocat\" (the part after github.com/)."
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository name without the owner, e.g. \"hello-world\"."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "branch"
+                ],
+                "properties": {
+                  "branch": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Name of the new branch, e.g. \"feature/login\"."
+                  },
+                  "fromBranch": {
+                    "type": "string",
+                    "description": "Branch to start from. Defaults to the repository's default branch."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/update-branch": {
+      "post": {
+        "operationId": "updateGitHubPullRequestBranch",
+        "summary": "Bring a pull request branch up to date with its base",
+        "description": "Exposed with explicit sign-off. 202 because GitHub only queues this: accepted does not mean the branch has moved yet. Pass expectedHeadSha to refuse a stale head. Mirrors the MCP tool `updatePullRequestBranch`.",
+        "tags": [
+          "github"
+        ],
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository owner — a user or organization login, e.g. \"octocat\" (the part after github.com/)."
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository name without the owner, e.g. \"hello-world\"."
+          },
+          {
+            "name": "pullNumber",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pull request number — the #N shown on GitHub."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedHeadSha": {
+                    "type": "string",
+                    "description": "Only update if the PR head is still this SHA."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted; GitHub finishes this asynchronously.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
                 }
               }
             }

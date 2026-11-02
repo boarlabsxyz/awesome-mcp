@@ -409,27 +409,27 @@ Source: `src/hubspot/server.ts` — 23 tools.
 |---|---|---|
 | `createCompany` | Create a new company in HubSpot (skips creation if a company with the same name already exists). | `POST /api/v1/hubspot/companies` |
 | `getCompany` | Get a specific company by ID from HubSpot. | `GET /api/v1/hubspot/companies/{companyId}` |
-| `updateCompany` | Update an existing company record in HubSpot. | — |
+| `updateCompany` | Update an existing company record in HubSpot. | `POST /api/v1/hubspot/companies/{companyId}` |
 | `getCompanyActivity` | Get activity/engagement history (notes, emails, calls, meetings, tasks) for a specific company. | `GET /api/v1/hubspot/companies/{companyId}/activity` |
 | `createContact` | Create a new contact in HubSpot (skips creation if a matching contact already exists). | `POST /api/v1/hubspot/contacts` |
 | `getContact` | Get a specific contact by ID from HubSpot. | `GET /api/v1/hubspot/contacts/{contactId}` |
-| `updateContact` | Update an existing contact record in HubSpot. | — |
+| `updateContact` | Update an existing contact record in HubSpot. | `POST /api/v1/hubspot/contacts/{contactId}` |
 | `getCompanyDeals` | List the deals associated with a company, with amount, stage, pipeline, and close date. Use this to go from a company ID to its deal IDs — getDeal needs an ID no other tool returns. | `GET /api/v1/hubspot/companies/{companyId}/deals` |
 | `getDeal` | Get a specific deal by ID from HubSpot. | `GET /api/v1/hubspot/deals/{dealId}` |
 | `createDeal` | Create a new deal in HubSpot. Set dealstage/pipeline via properties (use listPipelines to resolve stage IDs). | `POST /api/v1/hubspot/deals` |
-| `updateDeal` | Update an existing deal record in HubSpot (e.g. move stage, change amount). | — |
+| `updateDeal` | Update an existing deal record in HubSpot (e.g. move stage, change amount). | `POST /api/v1/hubspot/deals/{dealId}` |
 | `listPipelines` | List HubSpot deal pipelines and their stages (with stage IDs), so deal stage IDs can be resolved to human-readable names. | `GET /api/v1/hubspot/pipelines` |
 | `getRecentConversations` | Get recent conversation threads from HubSpot with their messages. | `GET /api/v1/hubspot/conversations` |
 | `getTickets` | Get tickets from HubSpot based on configurable selection criteria. | `GET /api/v1/hubspot/tickets` |
 | `getTicketConversationThreads` | Get conversation threads (and their messages) associated with a specific ticket. | `GET /api/v1/hubspot/tickets/{ticketId}/conversation-threads` |
 | `getProperty` | Get details of a specific HubSpot property definition. | `GET /api/v1/hubspot/properties/{objectType}/{propertyName}` |
-| `updateProperty` | Update a HubSpot property definition (e.g., add dropdown options). | — |
-| `createProperty` | Create a new custom property in HubSpot. | — |
+| `updateProperty` | Update a HubSpot property definition (e.g., add dropdown options). | `POST /api/v1/hubspot/properties/{objectType}/{propertyName}` |
+| `createProperty` | Create a new custom property in HubSpot. | `POST /api/v1/hubspot/properties/{objectType}` |
 | `createNote` | Create a note and optionally attach it to a company, contact, or deal so it appears on that record's timeline. | `POST /api/v1/hubspot/notes` |
-| `createTask` | Create a task and optionally attach it to a company, contact, or deal. | — |
+| `createTask` | Create a task and optionally attach it to a company, contact, or deal. | `POST /api/v1/hubspot/tasks` |
 | `logCall` | Log a call activity and optionally attach it to a company, contact, or deal. | `POST /api/v1/hubspot/calls` |
 | `logMeeting` | Log a meeting activity and optionally attach it to a company, contact, or deal. | `POST /api/v1/hubspot/meetings` |
-| `deleteEngagement` | Delete a note, task, call, or meeting by ID — the cleanup counterpart to createNote/createTask/logCall/logMeeting. | — |
+| `deleteEngagement` | Delete a note, task, call, or meeting by ID — the cleanup counterpart to createNote/createTask/logCall/logMeeting. | `POST /api/v1/hubspot/engagements/{engagementType}/{engagementId}/delete` |
 
 ## Redmine
 
@@ -507,30 +507,30 @@ Source: `src/github/server.ts` — 27 tools.
 | Tool | Description | REST |
 |---|---|---|
 | `searchRepositories` | Search for GitHub repositories. Uses GitHub search syntax (e.g. "language:go stars:>500", "org:github", "user:octocat") and returns at most the first 1,000 matches across pages. | `GET /api/v1/github/search/repositories?q={query}` |
-| `createRepository` | Create a new GitHub repository in your account. Always created under the connected account, never an organization; public unless private is set. | — |
-| `forkRepository` | Fork a GitHub repository to your account or specified organization. GitHub forks asynchronously, and returns the existing fork if there already is one. | — |
+| `createRepository` | Create a new GitHub repository in your account. Always created under the connected account, never an organization; public unless private is set. | `POST /api/v1/github/repos` |
+| `forkRepository` | Fork a GitHub repository to your account or specified organization. GitHub forks asynchronously, and returns the existing fork if there already is one. | `POST /api/v1/github/repos/{owner}/{repo}/forks` |
 | `getFileContents` | Get the contents of a file or directory from a GitHub repository. Returns the file's blob SHA (needed to update it safely); files over 1 MB and binary files are described rather than returned, and long text is truncated at 100,000 characters. | `GET /api/v1/github/repos/{owner}/{repo}/contents/{path}` |
 | `createOrUpdateFile` | Create or update a single file in a GitHub repository, as one commit on an existing branch. Replaces the whole file. Pass the sha from getFileContents to fail instead of overwriting if the file changed; without it the current version is overwritten. | `POST /api/v1/github/repos/{owner}/{repo}/contents/{path}` |
 | `pushFiles` | Push multiple files to a GitHub repository in a single commit, on an existing branch. Never force-pushes: if the branch moves meanwhile, nothing is pushed. Keeps existing executable bits; cannot delete files or write .github/workflows/. | `POST /api/v1/github/repos/{owner}/{repo}/push` |
-| `createBranch` | Create a new branch in a GitHub repository, from fromBranch or (by default) the repository's actual default branch. | — |
+| `createBranch` | Create a new branch in a GitHub repository, from fromBranch or (by default) the repository's actual default branch. | `POST /api/v1/github/repos/{owner}/{repo}/branches` |
 | `listCommits` | Get list of commits of a branch in a GitHub repository, newest first, optionally only those touching a path or by an author. Paginated. | `GET /api/v1/github/repos/{owner}/{repo}/commits` |
 | `listIssues` | List issues in a GitHub repository with filtering options. GitHub includes pull requests in this list; they are marked [PR]. Paginated. | `GET /api/v1/github/repos/{owner}/{repo}/issues` |
 | `getIssue` | Get details of a specific issue in a GitHub repository: state, labels, assignees, milestone and body. The comment count is included, the comment text is not. | `GET /api/v1/github/repos/{owner}/{repo}/issues/{issueNumber}` |
 | `createIssue` | Create a new issue in a GitHub repository. Labels, assignees and milestone are only applied for accounts with push access — GitHub drops them silently otherwise, and the response says when that happened. | `POST /api/v1/github/repos/{owner}/{repo}/issues` |
-| `updateIssue` | Update an existing issue in a GitHub repository. labels and assignees REPLACE the current set (pass [] to clear); omitted fields are left alone. Also opens/closes, with a reason. | — |
+| `updateIssue` | Update an existing issue in a GitHub repository. labels and assignees REPLACE the current set (pass [] to clear); omitted fields are left alone. Also opens/closes, with a reason. | `POST /api/v1/github/repos/{owner}/{repo}/issues/{issueNumber}` |
 | `addIssueComment` | Add a comment to an existing issue. Works for pull requests too (it posts to the main conversation, not as an inline review comment). | `POST /api/v1/github/repos/{owner}/{repo}/issues/{issueNumber}/comments` |
 | `searchCode` | Search for code across GitHub repositories, with matching fragments. Covers default branches only; GitHub limits code search to 10 requests a minute. | `GET /api/v1/github/search/code?q={query}` |
 | `searchIssues` | Search for issues and pull requests across GitHub repositories, e.g. "repo:o/r is:pr is:open" or "is:issue assignee:@me". Returns at most the first 1,000 matches. | `GET /api/v1/github/search/issues?q={query}` |
 | `searchUsers` | Search for users on GitHub (and organizations, with type:org). | `GET /api/v1/github/search/users?q={query}` |
-| `listOrganizations` | List the organizations the connected GitHub account belongs to, how many repositories of each this connection can read, and whether this connector's access rules allow each. Use it when an organization seems missing: an organization you are a member of with no visible repositories usually restricts OAuth Apps and has not approved this app, and the output says how to request approval. | — |
+| `listOrganizations` | List the organizations the connected GitHub account belongs to, how many repositories of each this connection can read, and whether this connector's access rules allow each. Use it when an organization seems missing: an organization you are a member of with no visible repositories usually restricts OAuth Apps and has not approved this app, and the output says how to request approval. | `GET /api/v1/github/organizations` |
 | `listPullRequests` | List and filter repository pull requests. Paginated. | `GET /api/v1/github/repos/{owner}/{repo}/pulls` |
 | `getPullRequest` | Get details of a specific pull request: state, head/base and their SHAs, mergeability, size, reviewers and description. | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}` |
-| `createPullRequest` | Create a new pull request in a GitHub repository, from head into base. Both branches must already exist and differ. | — |
-| `createPullRequestReview` | Create a review on a pull request: APPROVE, REQUEST_CHANGES or COMMENT, optionally with inline comments. Submitted immediately; GitHub does not let you approve your own pull request. | — |
+| `createPullRequest` | Create a new pull request in a GitHub repository, from head into base. Both branches must already exist and differ. | `POST /api/v1/github/repos/{owner}/{repo}/pulls` |
+| `createPullRequestReview` | Create a review on a pull request: APPROVE, REQUEST_CHANGES or COMMENT, optionally with inline comments. Submitted immediately; GitHub does not let you approve your own pull request. | `POST /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/reviews` |
 | `mergePullRequest` | Merge a pull request. Pass expectedHeadSha (from getPullRequest) so the merge is refused if new commits were pushed after you looked. An already-merged pull request is reported as such (with its merge commit) and nothing is merged; a closed, unmerged one is refused. | `POST /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/merge` |
 | `getPullRequestFiles` | Get the list of files changed in a pull request, with each file's diff (capped per file) unless includePatch is false. Paginated. | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/files` |
 | `getPullRequestStatus` | Get the combined status of all status checks for a pull request — both GitHub Actions/app check runs and legacy commit statuses — with an overall passing/failing/pending verdict. | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/status` |
-| `updatePullRequestBranch` | Update a pull request branch with the latest changes from the base branch (a merge commit on the PR branch). Runs asynchronously on GitHub. | — |
+| `updatePullRequestBranch` | Update a pull request branch with the latest changes from the base branch (a merge commit on the PR branch). Runs asynchronously on GitHub. | `POST /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/update-branch` |
 | `getPullRequestComments` | Get the review comments on a pull request — the inline comments on diff lines. The main conversation thread is not included. Paginated. | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/comments` |
 | `getPullRequestReviews` | Get the reviews on a pull request: each reviewer's verdict (approved, changes requested, commented) and summary. Paginated. | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/reviews` |
 

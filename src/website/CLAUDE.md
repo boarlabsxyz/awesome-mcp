@@ -26,8 +26,8 @@
 - **`GET /hubspot/tickets` clamps `maxRetries`/`retryDelay` to 3/2** — retries sleep `retryDelay * (2^maxRetries - 1)` s and would strand the socket; MCP stays unbounded.
 - **Don't re-derive mappings in `webServer.ts`** — use `issueListQuery`/`projectListQuery`/`userListQuery`/`timeEntryListQuery`/`searchQuery`/`issueBody`/`timeEntryBody`/`wikiPageBody` from `src/redmine/ops.ts` and `fetchCompanyActivity`/`fetchCompanyDeals`+`renderCompanyDeals`/`fetchTickets`/`fetchRecentConversations`/`fetchTicketConversationThreads`/`performCreate{Company,Contact,Engagement}` from `src/hubspot/server.ts`.
 - **Shapes** — Redmine lists `{ items, page }`, HubSpot raw JSON; `?format=text` on reads. `performCreateCompany`/`Contact` return `created` (201 vs 200: no-op on an existing match). `performCreateEngagement` returns the association outcome; `attempted && !attached` is an orphan, still 201.
-- **MCP-only writes, on purpose** — Redmine: only `deleteProject` (it cascades into subprojects and curl can't confirm); every other Redmine write is exposed, the destructive ones with sign-off in the catalog notes. HubSpot exposed: `createCompany`/`createContact`/`createDeal`/`createNote`/`logCall`/`logMeeting`. Not exposed: HubSpot `deleteEngagement`, one-field `update*`s, property-schema writes.
-- **Security: `createServiceAuth` accepts the permanent dashboard API key** — it can mutate HubSpot CRM and, in Redmine, issues, projects, memberships, versions, time and wiki, including permanent deletes.
+- **MCP-only writes, on purpose** — on this plane's Redmine and HubSpot routes, only Redmine `deleteProject` (it cascades into subprojects and curl can't confirm). Every other write is exposed, the destructive ones with sign-off in the catalog notes.
+- **Security: `createServiceAuth` accepts the permanent dashboard API key** — it can mutate HubSpot CRM records and the portal's property schema and, in Redmine, issues, projects, memberships, versions, time and wiki, including permanent deletes.
 - **`POST /api/v1/redmine/issues/{issueId}` is an update** — catalog methods are `GET | POST` only.
 
 ### Body parsing

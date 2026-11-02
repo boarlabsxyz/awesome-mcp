@@ -86,6 +86,13 @@ async function rawJson(client: GitHubClient, read: ops.GitHubRead) {
 // segment count at the same position, so order only matters within a group.
 export const GITHUB_READ_ROUTES: ReadonlyArray<GitHubReadRoute> = [
   {
+    path: '/api/v1/github/organizations', tool: 'listOrganizations', schema: schemas.listOrganizationsSchema,
+    args: () => ({}),
+    json: (c, a) => ops.performListOrganizations(c, a),
+    text: (c, a) => ops.opListOrganizations(c, a),
+    fallback: 'Failed to list organizations',
+  },
+  {
     path: '/api/v1/github/search/repositories', tool: 'searchRepositories', schema: schemas.searchRepositoriesSchema,
     args: req => ({ query: str(req.query.q), ...paging(req) }),
     json: (c, a) => searchJson(c, ops.READS.searchRepositories(a)), text: ops.opSearchRepositories,
@@ -178,6 +185,54 @@ export const GITHUB_READ_ROUTES: ReadonlyArray<GitHubReadRoute> = [
 ];
 
 export const GITHUB_WRITE_ROUTES: ReadonlyArray<GitHubWriteRoute> = [
+  {
+    path: '/api/v1/github/repos', tool: 'createRepository', schema: schemas.createRepositorySchema,
+    params: () => ({}),
+    run: async (c, a) => ({ status: 201, body: await ops.performCreateRepository(c, a) }),
+    fallback: 'Failed to create repository',
+  },
+  {
+    path: `${REPO}/forks`, tool: 'forkRepository', schema: schemas.forkRepositorySchema,
+    params: repo,
+    run: async (c, a) => {
+      const result = await ops.performForkRepository(c, a);
+      // GitHub forks asynchronously, and answers with the old fork if there is
+      // one, so a 201 would claim something that has not happened.
+      return { status: result.preExisting ? 200 : 202, body: result };
+    },
+    fallback: 'Failed to fork repository',
+  },
+  {
+    path: `${REPO}/branches`, tool: 'createBranch', schema: schemas.createBranchSchema,
+    params: repo,
+    run: async (c, a) => ({ status: 201, body: await ops.performCreateBranch(c, a) }),
+    fallback: 'Failed to create branch',
+  },
+  {
+    path: `${REPO}/issues/:issueNumber`, tool: 'updateIssue', schema: schemas.updateIssueSchema,
+    params: req => ({ ...repo(req), issueNumber: num(req, 'issueNumber') }),
+    run: async (c, a) => ({ status: 200, body: await ops.performUpdateIssue(c, a) }),
+    fallback: 'Failed to update issue',
+  },
+  {
+    path: `${REPO}/pulls`, tool: 'createPullRequest', schema: schemas.createPullRequestSchema,
+    params: repo,
+    run: async (c, a) => ({ status: 201, body: await ops.performCreatePullRequest(c, a) }),
+    fallback: 'Failed to create pull request',
+  },
+  {
+    path: `${REPO}/pulls/:pullNumber/reviews`, tool: 'createPullRequestReview', schema: schemas.createPullRequestReviewSchema,
+    params: req => ({ ...repo(req), pullNumber: num(req, 'pullNumber') }),
+    run: async (c, a) => ({ status: 201, body: await ops.performCreatePullRequestReview(c, a) }),
+    fallback: 'Failed to submit review',
+  },
+  {
+    path: `${REPO}/pulls/:pullNumber/update-branch`, tool: 'updatePullRequestBranch', schema: schemas.updatePullRequestBranchSchema,
+    params: req => ({ ...repo(req), pullNumber: num(req, 'pullNumber') }),
+    // 202 because GitHub only queues this; the branch has not moved yet.
+    run: async (c, a) => ({ status: 202, body: { accepted: true, ...(await ops.performUpdatePullRequestBranch(c, a)) } }),
+    fallback: 'Failed to update the pull request branch',
+  },
   {
     path: `${REPO}/issues`, tool: 'createIssue', schema: schemas.createIssueSchema,
     params: repo,
