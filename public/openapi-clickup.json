@@ -1151,8 +1151,8 @@
     "/api/v1/clickup/tasks/{taskId}/move": {
       "post": {
         "operationId": "moveTask",
-        "summary": "Move a task",
-        "description": "Moves a task to a different list.",
+        "summary": "Move a task to a different list",
+        "description": "Changes the task's HOME list through ClickUp's v3 home_list endpoint; lists the task is additionally shared into are left alone, and its parent task never changes. The task and destination list are read first: if the destination has no status named like the task's current one, the call answers 400 with nothing written unless destinationStatus is given. The task is re-read afterwards, because a 200 is not proof the move happened: confirmed is three-valued.",
         "parameters": [
           {
             "name": "taskId",
@@ -1176,7 +1176,23 @@
                 "properties": {
                   "listId": {
                     "type": "string",
-                    "description": "The destination list ID"
+                    "description": "The destination list ID. It becomes the task's home list."
+                  },
+                  "destinationStatus": {
+                    "type": "string",
+                    "description": "Status (name or ID) the task takes in the destination list. Required only when the destination list has no status named like the task's current one."
+                  },
+                  "moveCustomFields": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Add the source list's Custom Fields to the destination list so the task's values come along. Changes the destination list's field set."
+                  },
+                  "customFieldsToMove": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Bring only these Custom Field IDs. Cannot be combined with moveCustomFields: false."
                   }
                 }
               }
@@ -1185,17 +1201,99 @@
         },
         "responses": {
           "200": {
-            "description": "Task moved successfully",
+            "description": "Move attempted; read confirmed for the outcome",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Task"
+                  "type": "object",
+                  "properties": {
+                    "taskId": {
+                      "type": "string"
+                    },
+                    "workspaceId": {
+                      "type": "string"
+                    },
+                    "fromList": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      }
+                    },
+                    "toList": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      }
+                    },
+                    "alreadyInList": {
+                      "type": "boolean",
+                      "description": "The task was already homed in the destination list, so nothing was sent."
+                    },
+                    "confirmed": {
+                      "type": "boolean",
+                      "nullable": true,
+                      "description": "true = the re-read task is homed in the destination list. false = ClickUp answered 200 but the task did NOT move. null = the re-read failed, so this is the requested state only."
+                    },
+                    "statusChange": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "from": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "to": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "customFields": {
+                      "description": "\"all\", \"none\", or the field IDs brought along.",
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "all",
+                            "none"
+                          ]
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    },
+                    "parentBefore": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "The task's parent before the move; compare with task.parent."
+                    },
+                    "task": {
+                      "$ref": "#/components/schemas/Task"
+                    }
+                  }
                 }
               }
             }
           },
           "400": {
-            "description": "Bad request - missing required fields",
+            "description": "Invalid body, a status mapping is needed (pass destinationStatus), or ClickUp rejected the move",
             "content": {
               "application/json": {
                 "schema": {
@@ -1216,6 +1314,16 @@
           },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Task or list not found",
             "content": {
               "application/json": {
                 "schema": {

@@ -862,14 +862,136 @@ describe('ClickUp server tools', () => {
   });
 
   describe('moveTask', () => {
-    it('moves task and returns confirmation', async () => {
-      const { calls } = mockFetch([{ status: 200, text: '' }]);
+    const task = {
+      id: 't1', name: 'Ship it', team_id: '9015', status: { id: 'st-open', status: 'open' },
+      list: { id: 'l1', name: 'Backlog' },
+    };
+    const destList = { id: 'l2', name: 'Sprint', statuses: [{ id: 'd-open', status: 'Open' }, { id: 'd-done', status: 'done' }] };
+    const moved = { ...task, list: { id: 'l2', name: 'Sprint' } };
+
+    it('moves through the v3 home_list PUT and confirms by re-reading', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: task },
+        { status: 200, body: destList },
+        { status: 200, body: { data: { task_id: 't1', new_list_id: 'l2' } } },
+        { status: 200, body: moved },
+      ]);
       const result = await callTool('moveTask', { taskId: 't1', listId: 'l2' });
-      assert.ok(result.includes('t1'));
-      assert.ok(result.includes('l2'));
-      assert.equal(calls[0].method, 'POST');
+      // v2 POST /task/{id} answers 405 for every task — the reported bug.
+      assert.equal(calls[2].method, 'PUT');
+      assert.equal(calls[2].url, 'https://api.clickup.com/api/v3/workspaces/9015/tasks/t1/home_list/l2');
+      const sent = JSON.parse(calls[2].body!);
+      assert.equal(sent.move_custom_fields, true, 'custom fields come along by default');
+      assert.equal(sent.status_mappings, undefined, 'matching status name needs no mapping');
       // moveTask changes the LIST only. Re-parenting lives on updateTask.
-      assert.equal(JSON.parse(calls[0].body!).parent, undefined);
+      assert.equal(sent.parent, undefined);
+      assert.match(result, /Task moved — confirmed/);
+      assert.match(result, /From: "Backlog" \(l1\)/);
+      assert.match(result, /To: "Sprint" \(l2\)/);
+    });
+
+    it('reports a 200 that left the task in place as NOT moved', async () => {
+      mockFetch([
+        { status: 200, body: task },
+        { status: 200, body: destList },
+        { status: 200, body: { data: { task_id: 't1', new_list_id: 'l2' } } },
+        { status: 200, body: task },
+      ]);
+      const result = await callTool('moveTask', { taskId: 't1', listId: 'l2' });
+      assert.match(result, /did NOT take effect/);
+      assert.ok(!result.includes('confirmed by re-reading'));
+    });
+
+    it('reports a failed re-read as unconfirmed, not as success or failure', async () => {
+      mockFetch([
+        { status: 200, body: task },
+        { status: 200, body: destList },
+        { status: 200, body: { data: {} } },
+        { status: 500, text: 'boom' },
+      ]);
+      const result = await callTool('moveTask', { taskId: 't1', listId: 'l2' });
+      assert.match(result, /requested state, not a confirmed one/);
+    });
+
+    it('refuses before writing when the destination lacks the current status', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: { ...task, status: { id: 'st-rev', status: 'in review' } } },
+        { status: 200, body: destList },
+      ]);
+      await assert.rejects(
+        () => callTool('moveTask', { taskId: 't1', listId: 'l2' }),
+        (err: any) => {
+          assert.ok(err instanceof UserError);
+          assert.match(err.message, /no "in review" status/);
+          assert.match(err.message, /"Open", "done"/);
+          return true;
+        },
+      );
+      assert.equal(calls.length, 2, 'nothing may be written');
+    });
+
+    it('maps the current status to destinationStatus by name', async () => {
+      const { calls } = mockFetch([
+        { status: 200, body: { ...task, status: { id: 'st-rev', status: 'in review' } } },
+        { status: 200, body: destList },
+        { status: 200, body: { data: {} } },
+        { status: 200, body: { ...moved, status: { id: 'd-done', status: 'done' } } },
+      ]);
+      const result = await callTool('moveTask', { taskId: 't1', listId: 'l2', destinationStatus: 'DONE' });
+      assert.deepEqual(JSON.parse(calls[2].body!).status_mappings, [{ source_status_id: 'st-rev', destination_status_id: 'd-done' }]);
+      assert.match(result, /Status: "in review" → "done"/);
+    });
+
+    it('refuses customFieldsToMove with moveCustomFields: false before any call', async () => {
+      const { calls } = mockFetch([{ status: 200, body: task }]);
+      await assert.rejects(
+        () => callTool('moveTask', { taskId: 't1', listId: 'l2', moveCustomFields: false, customFieldsToMove: ['f1'] }),
+        /cannot be combined/,
+      );
+      assert.equal(calls.length, 0);
+    });
+
+    it('does not write when the task is already homed in the destination', async () => {
+      const { calls } = mockFetch([{ status: 200, body: task }, { status: 200, body: { id: 'l1', name: 'Backlog' } }]);
+      const result = await callTool('moveTask', { taskId: 't1', listId: 'l1' });
+      assert.match(result, /already in list "Backlog"/);
+      assert.equal(calls.length, 2);
+    });
+
+    it('says a refused move did not happen, with a subtask hint on 400', async () => {
+      mockFetch([
+        { status: 200, body: { ...task, parent: 'p1' } },
+        { status: 200, body: destList },
+        { status: 400, text: '{"message":"nope"}' },
+      ]);
+      await assert.rejects(
+        () => callTool('moveTask', { taskId: 't1', listId: 'l2' }),
+        (err: any) => {
+          assert.match(err.message, /refused .* \(HTTP 400\); the task was not moved/);
+          assert.match(err.message, /subtask of p1/);
+          return true;
+        },
+      );
+    });
+
+    it('calls a 5xx on the write UNKNOWN rather than not-moved', async () => {
+      mockFetch([
+        { status: 200, body: task },
+        { status: 200, body: destList },
+        { status: 502, text: 'bad gateway' },
+      ]);
+      await assert.rejects(() => callTool('moveTask', { taskId: 't1', listId: 'l2' }), /outcome is UNKNOWN/);
+    });
+
+    it('reports a subtask still has its parent after the move', async () => {
+      mockFetch([
+        { status: 200, body: { ...task, parent: 'p1' } },
+        { status: 200, body: destList },
+        { status: 200, body: { data: {} } },
+        { status: 200, body: { ...moved, parent: 'p1' } },
+      ]);
+      const result = await callTool('moveTask', { taskId: 't1', listId: 'l2' });
+      assert.match(result, /Still a subtask of p1/);
     });
   });
 

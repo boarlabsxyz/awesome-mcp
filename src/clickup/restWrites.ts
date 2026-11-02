@@ -27,7 +27,7 @@
 // above become indistinguishable at the call site.
 import { UserError } from 'fastmcp';
 import { z } from 'zod';
-import { parseTimestampInput } from './apiHelpers.js';
+import { clickUpErrorStatus, clickUpErrorWasAnswered, parseTimestampInput } from './apiHelpers.js';
 import type { ClickUpClient } from './apiHelpers.js';
 import { getImagePublicBaseUrl } from '../images/imageBlobStore.js';
 import { assertOneImageSource, isImageUrlOnOurHost, storeImageFromArgs } from './docImageIngest.js';
@@ -424,6 +424,199 @@ export async function performTaskListMembership(
     confirmed: present === null ? null : (direction === 'add' ? present : !present),
     homeListId: task?.list?.id != null ? String(task.list.id) : null,
     locations,
+  };
+}
+
+// === Moving a task to another list ===
+//
+// ONE op for the MCP tool and the REST route, pre-flight included, because the
+// pre-flight is not message polish here: the v3 endpoint is addressed by
+// workspace, and the only place a bare task ID yields its workspace is the
+// task's own `team_id`. The same read gives the source list and the current
+// status, and the destination list read gives the status set the move has to
+// land in — so a move that needs a status mapping is refused before anything is
+// written, naming the statuses that would work, instead of relaying ClickUp's
+// 400. The write is then confirmed by re-reading the task, as the re-parent path
+// does: a 200 echo is not evidence that the home list changed.
+
+export const moveTaskFields = {
+  listId: z.string().describe(
+    'The destination list ID. It becomes the task\'s HOME list. Lists the task is additionally shared into '
+    + '(Tasks in Multiple Lists) are left as they are.',
+  ),
+  destinationStatus: z.string().optional().describe(
+    'Status to give the task in the destination list, by name or status ID. Required only when the destination '
+    + 'list has no status named like the task\'s current one; the move is refused before anything is written if it '
+    + 'is missing then, listing the destination\'s statuses. Omit to keep the current status.',
+  ),
+  moveCustomFields: z.boolean().optional().describe(
+    'Default true: ClickUp adds the source list\'s Custom Fields to the destination list, so the task\'s values for '
+    + 'them come along. This changes the destination LIST\'s field set, not just the task. Pass false to leave the '
+    + 'destination list\'s fields unchanged.',
+  ),
+  customFieldsToMove: z.array(z.string()).optional().describe(
+    'Bring only these Custom Field IDs along instead of all of them. Cannot be combined with moveCustomFields: false.',
+  ),
+} as const;
+
+/** Body of POST /api/v1/clickup/tasks/{taskId}/move (path supplies taskId). */
+export const moveTaskRestSchema = z.object(moveTaskFields);
+export type MoveTaskArgs = z.infer<typeof moveTaskRestSchema>;
+
+export interface MoveTaskOutcome {
+  taskId: string;
+  workspaceId: string;
+  fromList: { id: string; name: string | null } | null;
+  toList: { id: string; name: string | null };
+  /** The task was already homed in the destination list, so nothing was sent. */
+  alreadyInList: boolean;
+  /** Re-read home list is the destination: true, false (ClickUp ignored it), null (the re-read failed). */
+  confirmed: boolean | null;
+  statusChange: { from: string | null; to: string } | null;
+  customFields: 'all' | 'none' | string[];
+  /** Parent before the move, so a caller can see a subtask stayed one. */
+  parentBefore: string | null;
+  /** The re-read task, or the pre-flight one when nothing was sent or the re-read failed. */
+  task: any;
+}
+
+/**
+ * A refusal raised with ClickUp's status carried on `.code`, which the REST
+ * plane routes on (404/403, else 500). A 400 is left untagged so the plane
+ * answers 400: it is the caller's request ClickUp rejected, and a 500 would
+ * report a bug where the fix is the body.
+ */
+function moveError(message: string, cause: unknown, fallbackStatus?: number): UserError {
+  const err = new UserError(message);
+  const status = clickUpErrorStatus(cause) ?? fallbackStatus;
+  if (status !== undefined && status !== 400) (err as any).code = status;
+  return err;
+}
+
+const sameStatusName = (a: unknown, b: unknown) =>
+  String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+
+export async function performMoveTask(client: ClickUpClient, taskId: string, args: MoveTaskArgs): Promise<MoveTaskOutcome> {
+  const listId = args.listId.trim();
+  if (!listId) throw new UserError('listId must be a non-empty ClickUp list ID.');
+  const moveAll = args.moveCustomFields ?? true;
+  if (args.customFieldsToMove !== undefined) {
+    if (!moveAll) {
+      throw new UserError('customFieldsToMove cannot be combined with moveCustomFields: false — pick one. Nothing was changed.');
+    }
+    if (args.customFieldsToMove.length === 0) {
+      throw new UserError('customFieldsToMove is empty. Omit it to bring all Custom Fields, or pass moveCustomFields: false to bring none.');
+    }
+  }
+
+  let task: any;
+  try {
+    task = await client.getTask(taskId);
+  } catch (err) {
+    throw moveError(
+      `Cannot move: task ${taskId} was not found or is not visible to this connection, so nothing was changed. `
+      + 'ClickUp reports an unknown task ID as 401 "Team not authorized"/OAUTH_027, which reads like an auth failure '
+      + `but is not if other ClickUp tools work. Custom task IDs are not supported. ClickUp said: ${(err as any)?.message || err}`,
+      err,
+    );
+  }
+  const workspaceId = task?.team_id != null ? String(task.team_id) : '';
+  if (!workspaceId) {
+    throw new UserError(`Cannot move: ClickUp's payload for task ${taskId} carries no workspace (team_id), which the move endpoint is addressed by. Nothing was changed.`);
+  }
+  const fromList = task.list?.id != null ? { id: String(task.list.id), name: task.list.name ?? null } : null;
+  const parentBefore = task.parent ? String(task.parent) : null;
+
+  let list: any;
+  try {
+    list = await client.getList(listId);
+  } catch (err) {
+    throw moveError(
+      `Cannot move: destination list ${listId} was not found or is not visible to this connection, so task ${taskId} `
+      + `was not moved. ClickUp said: ${(err as any)?.message || err}`,
+      err,
+    );
+  }
+  const toList = { id: listId, name: list?.name ?? null };
+
+  const base = { taskId, workspaceId, fromList, toList, parentBefore };
+  const customFields: MoveTaskOutcome['customFields'] = moveAll ? (args.customFieldsToMove ?? 'all') : 'none';
+
+  if (fromList?.id === listId) {
+    if (args.destinationStatus !== undefined) {
+      throw new UserError(`Task ${taskId} is already in list ${listId}, so there is no move to map a status for. Use updateTask to change its status.`);
+    }
+    return { ...base, alreadyInList: true, confirmed: true, statusChange: null, customFields: 'none', task };
+  }
+
+  // Only the task's CURRENT status needs mapping, so one destination status is
+  // the whole of ClickUp's status_mappings for a single-task move. Matched by
+  // name: statuses in different lists are different objects, and ClickUp's own
+  // rule ("not available in the new List") is what a person would call the same
+  // status. If ClickUp matches differently it answers 400, relayed below.
+  const statuses: any[] | null = Array.isArray(list?.statuses) ? list.statuses : null;
+  const statusNames = () => statuses!.map((s) => `"${s.status}"`).join(', ');
+  const current = task.status ?? null;
+  let statusChange: MoveTaskOutcome['statusChange'] = null;
+  const body: Parameters<ClickUpClient['moveTask']>[3] = { move_custom_fields: moveAll };
+  if (moveAll && args.customFieldsToMove) body.custom_fields_to_move = args.customFieldsToMove;
+
+  if (args.destinationStatus !== undefined) {
+    const wanted = args.destinationStatus.trim();
+    if (!wanted) throw new UserError('destinationStatus must be a status name or ID. Omit it to keep the current status.');
+    const match = statuses?.find((s) => s.id === wanted) ?? statuses?.find((s) => sameStatusName(s.status, wanted));
+    if (statuses && !match) {
+      throw new UserError(`List "${toList.name ?? listId}" has no status "${wanted}". Its statuses are: ${statusNames()}. Nothing was changed.`);
+    }
+    // No status set in the list payload: the caller's value can only be sent as an ID.
+    const destinationId = match ? match.id : wanted;
+    if (!destinationId) {
+      throw new UserError(`ClickUp returned no status IDs for list "${toList.name ?? listId}", so "${wanted}" cannot be mapped. Pass the status ID instead. Nothing was changed.`);
+    }
+    if (!current?.id) {
+      throw new UserError(`ClickUp's payload for task ${taskId} carries no status ID, so its status cannot be mapped to "${wanted}". Nothing was changed.`);
+    }
+    body.status_mappings = [{ source_status_id: String(current.id), destination_status_id: String(destinationId) }];
+    statusChange = { from: current.status ?? null, to: match?.status ?? wanted };
+  } else if (statuses && current?.status && !statuses.some((s) => sameStatusName(s.status, current.status))) {
+    throw new UserError(
+      `List "${toList.name ?? listId}" has no "${current.status}" status, so ClickUp needs to be told which status the `
+      + `task takes there. Pass destinationStatus: one of ${statusNames()}. Nothing was changed.`,
+    );
+  }
+
+  try {
+    await client.moveTask(workspaceId, taskId, listId, body);
+  } catch (err) {
+    const raw = String((err as any)?.message || err);
+    const status = clickUpErrorStatus(err);
+    if (!(clickUpErrorWasAnswered(err) && status !== undefined && status < 500)) {
+      throw moveError(
+        `Moving task ${taskId} to list ${listId} ${status === undefined ? 'failed before ClickUp answered' : `was answered with ${status}`}, `
+        + `so the outcome is UNKNOWN — the move may have been applied. Call getTask("${taskId}") and check its list `
+        + `before retrying. ClickUp said: ${raw}`,
+        err,
+        500,
+      );
+    }
+    // Hint only: ClickUp's docs do not say whether a subtask can change list
+    // on its own, so this is offered as a cause to check, not asserted.
+    const subtaskHint = parentBefore && status === 400
+      ? ` This task is a subtask of ${parentBefore}; if ClickUp does not move subtasks independently, move the parent instead.`
+      : '';
+    throw moveError(`ClickUp refused moving task ${taskId} to list ${listId} (HTTP ${status}); the task was not moved.${subtaskHint} ClickUp said: ${raw}`, err);
+  }
+
+  let verified: any = null;
+  try { verified = await client.getTask(taskId); } catch { /* reported as unconfirmed */ }
+  const homeAfter = verified?.list?.id != null ? String(verified.list.id) : null;
+  return {
+    ...base,
+    alreadyInList: false,
+    confirmed: homeAfter === null ? null : homeAfter === listId,
+    statusChange,
+    customFields,
+    task: verified ?? task,
   };
 }
 

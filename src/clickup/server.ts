@@ -40,6 +40,8 @@ import {
   editPageFields,
   insertImageFields,
   listUpdateFields,
+  moveTaskFields,
+  performMoveTask,
   resolveDueDateUpdate,
   taskHasDueDate,
   taskUpdateFields,
@@ -615,17 +617,58 @@ clickUpServer.addTool({
 clickUpServer.addTool({
   name: 'moveTask',
   annotations: { readOnlyHint: false },
-  description: 'Move a task to a different LIST. This does NOT change the task\'s parent: a subtask moved to '
-    + 'another list stays a subtask of the same parent task. To re-parent a task (move a subtask under a different '
-    + 'parent task), use updateTask with parentTaskId instead.',
+  description: 'Move a task to a different LIST: the destination becomes its home list. Lists the task is additionally '
+    + 'shared into (Tasks in Multiple Lists) are left as they are — use addTaskToList/removeTaskFromList for those. '
+    + 'This does NOT change the task\'s parent; to re-parent a task, use updateTask with parentTaskId. '
+    + 'If the destination list has no status named like the task\'s current one, pass destinationStatus; without it '
+    + 'the move is refused before anything is written, listing the statuses that would work. Custom Fields come along '
+    + 'by default (moveCustomFields), which adds the source list\'s fields to the destination list. '
+    + 'The move is verified: the tool re-reads the task and reports the confirmed list, and if ClickUp ignored the '
+    + 'move it says so instead of claiming success. For a subtask it reports the parent before and after.',
   parameters: z.object({
     taskId: z.string().describe('The task ID to move.'),
-    listId: z.string().describe('The destination list ID.'),
+    ...moveTaskFields,
   }),
-  execute: async (args, { session }) => {
+  execute: async (args, { session, log }) => {
     const client = getClickUpClient(session);
-    await client.moveTask(args.taskId, args.listId);
-    return `Task ${args.taskId} moved to list ${args.listId}.`;
+    const { taskId, ...moveArgs } = args;
+    const out = await performMoveTask(client, taskId, moveArgs);
+    const listLabel = (l: { id: string; name: string | null } | null) => (l ? `"${l.name ?? 'unknown'}" (${l.id})` : 'unknown');
+    const taskLabel = `"${out.task?.name ?? taskId}" (${taskId})`;
+
+    if (out.alreadyInList) return `Task ${taskLabel} is already in list ${listLabel(out.toList)}; nothing was moved.`;
+
+    // Operator breadcrumb: echo-free evidence of what the re-read saw, which is
+    // what anyone needs before considering dropping the verification read.
+    log.info(
+      `[clickup-move] task=${taskId} workspace=${out.workspaceId} from=${String(out.fromList?.id)} to=${out.toList.id} `
+      + `readList=${String(out.task?.list?.id)} confirmed=${String(out.confirmed)}`,
+    );
+
+    const details = [
+      `  From: ${listLabel(out.fromList)}`,
+      `  To: ${listLabel(out.toList)}`,
+      ...(out.statusChange ? [`  Status: "${out.statusChange.from ?? 'unknown'}" → "${out.statusChange.to}"`] : []),
+      `  Custom Fields brought along: ${Array.isArray(out.customFields) ? out.customFields.join(', ') : out.customFields}`,
+    ];
+    if (out.parentBefore && out.confirmed !== null) {
+      const parentAfter = out.task?.parent ? String(out.task.parent) : null;
+      details.push(parentAfter === out.parentBefore
+        ? `  Still a subtask of ${out.parentBefore}.`
+        : `  ⚠ Parent changed: was ${out.parentBefore}, now ${parentAfter ?? 'none (top-level)'}.`);
+    }
+    const summary = details.join('\n');
+
+    if (out.confirmed === null) {
+      return `ClickUp accepted moving task ${taskLabel}, but the follow-up verification read failed — this is the `
+        + `requested state, not a confirmed one. Call getTask("${taskId}") to confirm.\n${summary}`;
+    }
+    if (!out.confirmed) {
+      return `⚠ Move did NOT take effect. ClickUp accepted the request but task ${taskLabel} is still homed in list `
+        + `${listLabel(out.task?.list?.id != null ? { id: String(out.task.list.id), name: out.task.list.name ?? null } : null)}, `
+        + `not ${listLabel(out.toList)}. Do not treat the move as done.\n${summary}`;
+    }
+    return `Task moved — confirmed by re-reading the task.\n${summary}\n\n${formatTask(out.task)}`;
   },
 });
 
