@@ -120,6 +120,34 @@ describe('REST data plane: GitHub handler bodies', () => {
       assert.equal(calls.length, 0);
     });
 
+    it('refuses a fork into an excluded organization, which only the body names', async () => {
+      const res = await request(app).post(`${G}/forks`).set(auth()).send({ organization: 'elsewhere' });
+      assert.equal(res.status, 403);
+      assert.equal(calls.length, 0);
+    });
+
+    for (const path of ['pulls', 'branches', 'issues/1', 'pulls/1/reviews', 'pulls/1/update-branch']) {
+      it(`refuses POST ${path} into an excluded owner`, async () => {
+        const res = await request(app).post(`/api/v1/github/repos/elsewhere/app/${path}`).set(auth())
+          .send({ title: 't', head: 'h', base: 'b', branch: 'x', event: 'APPROVE', state: 'closed' });
+        assert.equal(res.status, 403);
+        assert.equal(calls.length, 0);
+      });
+    }
+
+    it('reports the rules alongside the organizations they exclude', async () => {
+      when('GET', 'api.github.com/user/orgs', { json: [{ login: 'octo' }, { login: 'elsewhere' }] });
+      when('GET', 'api.github.com/users/me/orgs', { json: [] });
+      when('GET', 'api.github.com/user/repos', { json: [] });
+      when('GET', 'api.github.com/user', { json: { login: 'me' } });
+      const res = await request(app).get('/api/v1/github/organizations').set(auth());
+      assert.equal(res.status, 200);
+      assert.deepEqual(res.body.accessRules, ['octo']);
+      const allowed = Object.fromEntries(res.body.organizations.map((o: any) => [o.login, o.allowed]));
+      assert.equal(allowed.elsewhere, false);
+      assert.equal(allowed.octo, true);
+    });
+
     it('still serves an allowed owner', async () => {
       when('GET', `${UP}/issues/1`, { json: { number: 1 } });
       assert.equal((await request(app).get(`${G}/issues/1`).set(auth())).status, 200);
@@ -205,6 +233,33 @@ describe('REST data plane: GitHub handler bodies', () => {
         assert.ok(res.body.issues, path);
       }
       assert.equal(calls.length, 0);
+    });
+  });
+
+  describe('organizations', () => {
+    const stubOrganizations = () => {
+      when('GET', 'api.github.com/user/orgs', { json: [{ login: 'octo' }] });
+      when('GET', 'api.github.com/users/me/orgs', { json: [] });
+      when('GET', 'api.github.com/user/repos', { json: [{ owner: { login: 'octo', type: 'Organization' } }] });
+      when('GET', 'api.github.com/user', { json: { login: 'me' } });
+    };
+
+    it('answers JSON with no rules on an unrestricted connection', async () => {
+      stubOrganizations();
+      const res = await request(app).get('/api/v1/github/organizations').set(auth());
+      assert.equal(res.status, 200);
+      assert.equal(res.body.account, 'me');
+      assert.equal(res.body.accessRules, null);
+      assert.equal(res.body.organizations[0].login, 'octo');
+      assert.equal(res.body.organizations[0].allowed, true);
+      assert.equal(typeof res.body.truncated, 'boolean');
+    });
+
+    it('answers with the MCP tool text on ?format=text', async () => {
+      stubOrganizations();
+      const res = await request(app).get('/api/v1/github/organizations?format=text').set(auth());
+      assert.equal(res.status, 200);
+      assert.match(res.text, /GitHub account: me/);
     });
   });
 
@@ -336,6 +391,96 @@ describe('REST data plane: GitHub handler bodies', () => {
       const traversal = await request(app).post(`${G}/push`).set(auth()).send({ branch: 'main', message: 'm', files: [{ path: '../x', content: '' }] });
       assert.equal(traversal.status, 400);
       assert.match(traversal.body.error, /not a clean repository path/);
+      assert.equal(calls.length, 0);
+    });
+
+    it('creates a repository (201)', async () => {
+      when('POST', '/user/repos', { status: 201, json: { full_name: 'me/new', private: true } });
+      const res = await request(app).post('/api/v1/github/repos').set(auth()).send({ name: 'new', private: true, autoInit: true });
+      assert.equal(res.status, 201);
+      assert.equal(res.body.full_name, 'me/new');
+      assert.deepEqual(calls[0].body, { name: 'new', private: true, auto_init: true });
+    });
+
+    it('answers 202 for a new fork, since GitHub has only queued it', async () => {
+      when('POST', `${UP}/forks`, { status: 202, json: { full_name: 'me/app', created_at: new Date().toISOString() } });
+      const res = await request(app).post(`${G}/forks`).set(auth()).send({});
+      assert.equal(res.status, 202);
+      assert.equal(res.body.preExisting, false);
+    });
+
+    it('answers 200 for a fork that already existed, which made nothing', async () => {
+      when('POST', `${UP}/forks`, { status: 202, json: { full_name: 'me/app', created_at: '2020-01-01T00:00:00Z' } });
+      const res = await request(app).post(`${G}/forks`).set(auth()).send({});
+      assert.equal(res.status, 200);
+      assert.equal(res.body.preExisting, true);
+    });
+
+    it('creates a branch from the default branch (201)', async () => {
+      when('GET', `${UP}/git/ref/heads/main`, { json: { object: { sha: 'abc123' } } });
+      when('GET', UP, { json: { default_branch: 'main' } });
+      when('POST', `${UP}/git/refs`, { status: 201, json: {} });
+      const res = await request(app).post(`${G}/branches`).set(auth()).send({ branch: 'feature/x' });
+      assert.equal(res.status, 201);
+      assert.deepEqual(res.body, { branch: 'feature/x', from: 'main', sha: 'abc123' });
+      assert.equal(calls.at(-1)!.body.ref, 'refs/heads/feature/x');
+    });
+
+    it('answers 409 for a branch that already exists', async () => {
+      when('GET', `${UP}/git/ref/heads/main`, { json: { object: { sha: 'abc123' } } });
+      when('POST', `${UP}/git/refs`, { status: 422, json: { message: 'Reference already exists' } });
+      const res = await request(app).post(`${G}/branches`).set(auth()).send({ branch: 'x', fromBranch: 'main' });
+      assert.equal(res.status, 409);
+    });
+
+    it('updates an issue, reporting what changed and what GitHub dropped', async () => {
+      when('PATCH', `${UP}/issues/7`, { json: { number: 7, state: 'closed', title: 'T', labels: [], assignees: [], html_url: 'h' } });
+      const res = await request(app).post(`${G}/issues/7`).set(auth()).send({ state: 'closed', labels: ['bug'] });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.issue.state, 'closed');
+      assert.deepEqual(res.body.changed, ['labels', 'state']);
+      assert.deepEqual(res.body.notApplied, ['labels [bug]']);
+    });
+
+    it('400s an issue update with nothing in it, before GitHub is called', async () => {
+      const res = await request(app).post(`${G}/issues/7`).set(auth()).send({});
+      assert.equal(res.status, 400);
+      assert.equal(calls.length, 0);
+    });
+
+    it('opens a pull request (201)', async () => {
+      when('POST', `${UP}/pulls`, { status: 201, json: { number: 3, title: 'T', head: { ref: 'h' }, base: { ref: 'b' } } });
+      const res = await request(app).post(`${G}/pulls`).set(auth()).send({ title: 'T', head: 'h', base: 'b', maintainerCanModify: true });
+      assert.equal(res.status, 201);
+      assert.equal(res.body.number, 3);
+      assert.equal(calls[0].body.maintainer_can_modify, true);
+    });
+
+    it('submits a review (201) and counts its inline comments', async () => {
+      when('POST', `${UP}/pulls/3/reviews`, { json: { id: 1, state: 'COMMENTED', html_url: 'h' } });
+      const res = await request(app).post(`${G}/pulls/3/reviews`).set(auth())
+        .send({ event: 'COMMENT', body: 'see', comments: [{ path: 'a.ts', body: 'x', line: 2 }] });
+      assert.equal(res.status, 201);
+      assert.equal(res.body.inlineComments, 1);
+    });
+
+    it('400s a review the op refuses, before GitHub is called', async () => {
+      const res = await request(app).post(`${G}/pulls/3/reviews`).set(auth()).send({ event: 'REQUEST_CHANGES' });
+      assert.equal(res.status, 400);
+      assert.equal(calls.length, 0);
+    });
+
+    it('answers 202 for a branch update, since GitHub has only queued it', async () => {
+      when('PUT', `${UP}/pulls/3/update-branch`, { status: 202, json: { message: 'Updating pull request branch.' } });
+      const res = await request(app).post(`${G}/pulls/3/update-branch`).set(auth()).send({ expectedHeadSha: 'abc' });
+      assert.equal(res.status, 202);
+      assert.equal(res.body.accepted, true);
+      assert.equal(calls[0].body.expected_head_sha, 'abc');
+    });
+
+    it('rejects a non-numeric pull number from the path', async () => {
+      const res = await request(app).post(`${G}/pulls/abc/update-branch`).set(auth()).send({});
+      assert.equal(res.status, 400);
       assert.equal(calls.length, 0);
     });
   });

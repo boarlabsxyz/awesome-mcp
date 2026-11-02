@@ -231,6 +231,61 @@ export const logMeetingSchema = z
   })
   .refine(bothOrNeitherTarget, { message: TARGET_MSG });
 
+const updatedProperties = z.record(z.string(), z.any())
+  .refine(o => Object.keys(o).length > 0, { message: 'Provide at least one property to update.' })
+  .describe('Object containing the properties to update (at least one).');
+
+export const updateCompanySchema = z.object({
+  companyId: z.string().describe('HubSpot company ID to update.'),
+  properties: updatedProperties,
+});
+
+export const updateContactSchema = z.object({
+  contactId: z.string().describe('HubSpot contact ID to update.'),
+  properties: updatedProperties,
+});
+
+export const updateDealSchema = z.object({
+  dealId: z.string().describe('HubSpot deal ID to update.'),
+  properties: updatedProperties,
+});
+
+export const updatePropertySchema = z.object({
+  objectType: objectTypeParam,
+  propertyName: z.string().describe('Name of the property.'),
+  options: z.array(propertyOption).describe('Array of option objects for dropdown fields.'),
+  label: z.string().optional().describe('Optional new display label.'),
+  description: z.string().optional().describe('Optional new description.'),
+});
+
+export const createPropertySchema = z.object({
+  objectType: objectTypeParam,
+  name: z.string().describe('Internal name of the property.'),
+  label: z.string().describe('Display label for the property.'),
+  type: z.string().describe('Data type (string, number, date, enumeration, etc.).'),
+  fieldType: z.string().describe('Field type (text, textarea, select, number, date, etc.).'),
+  groupName: z.string().describe('Property group name.'),
+  options: z.array(propertyOption).optional().describe('Array of option objects for dropdown fields.'),
+  description: z.string().optional().describe('Property description.'),
+});
+
+export const createTaskSchema = z
+  .object({
+    subject: z.string().optional().describe('Task title (hs_task_subject).'),
+    body: z.string().optional().describe('Task notes/body (hs_task_body).'),
+    status: z.string().optional().describe('Task status, e.g. NOT_STARTED, IN_PROGRESS, WAITING, COMPLETED, DEFERRED (hs_task_status).'),
+    priority: z.string().optional().describe('Task priority, e.g. LOW, MEDIUM, HIGH (hs_task_priority).'),
+    ...engagementAssociationShape,
+  })
+  .refine(bothOrNeitherTarget, { message: TARGET_MSG });
+
+export const deleteEngagementSchema = z.object({
+  engagementType: z
+    .enum(['notes', 'tasks', 'calls', 'meetings'])
+    .describe('Type of engagement to delete (plural, matching the tool that created it).'),
+  engagementId: z.string().describe('HubSpot ID of the engagement (returned when it was created).'),
+});
+
 // Cap on how many engagement detail records getCompanyActivity fetches.
 const MAX_ACTIVITY_FETCH = 100;
 
@@ -339,15 +394,21 @@ export async function opGetCompany(client: HubSpotClient, args: { companyId: str
 }
 
 // company_handler.py:245
+export async function performUpdateCompany(
+  client: HubSpotClient,
+  args: { companyId: string; properties: Record<string, unknown> },
+) {
+  await client.updateCompany(args.companyId, args.properties);
+  // Re-read so the response is the same shape as getCompany — HubSpot's PATCH
+  // echo returns only internal/changed fields and omits populated name/domain.
+  return client.getCompany(args.companyId);
+}
+
 export async function opUpdateCompany(
   client: HubSpotClient,
   args: { companyId: string; properties: Record<string, unknown> },
 ): Promise<string> {
-  await client.updateCompany(args.companyId, args.properties);
-  // Re-read so the response is the same shape as getCompany — HubSpot's PATCH
-  // echo returns only internal/changed fields and omits populated name/domain.
-  const fresh = await client.getCompany(args.companyId);
-  return `Updated company.\n\n${formatCompany(fresh)}`;
+  return `Updated company.\n\n${formatCompany(await performUpdateCompany(client, args))}`;
 }
 
 /**
@@ -438,14 +499,20 @@ export async function opGetContact(client: HubSpotClient, args: { contactId: str
 }
 
 // contact_handler.py:231
+export async function performUpdateContact(
+  client: HubSpotClient,
+  args: { contactId: string; properties: Record<string, unknown> },
+) {
+  await client.updateContact(args.contactId, args.properties);
+  // Re-read for a consistent read shape (see performUpdateCompany).
+  return client.getContact(args.contactId);
+}
+
 export async function opUpdateContact(
   client: HubSpotClient,
   args: { contactId: string; properties: Record<string, unknown> },
 ): Promise<string> {
-  await client.updateContact(args.contactId, args.properties);
-  // Re-read for a consistent read shape (see opUpdateCompany).
-  const obj = await client.getContact(args.contactId);
-  return `Updated contact.\n\n${formatContact(obj)}`;
+  return `Updated contact.\n\n${formatContact(await performUpdateContact(client, args))}`;
 }
 
 // --- Deal ops ---
@@ -549,14 +616,20 @@ export async function opCreateDeal(
   return `Created deal.\n\n${formatDeal(created)}`;
 }
 
+export async function performUpdateDeal(
+  client: HubSpotClient,
+  args: { dealId: string; properties: Record<string, unknown> },
+) {
+  await client.updateDeal(args.dealId, args.properties);
+  // Re-read for a consistent read shape (see performUpdateCompany).
+  return client.getDeal(args.dealId);
+}
+
 export async function opUpdateDeal(
   client: HubSpotClient,
   args: { dealId: string; properties: Record<string, unknown> },
 ): Promise<string> {
-  await client.updateDeal(args.dealId, args.properties);
-  // Re-read for a consistent read shape (see opUpdateCompany).
-  const fresh = await client.getDeal(args.dealId);
-  return `Updated deal.\n\n${formatDeal(fresh)}`;
+  return `Updated deal.\n\n${formatDeal(await performUpdateDeal(client, args))}`;
 }
 
 // Resolve stage IDs to human-readable names: one GET returns every pipeline
@@ -675,17 +748,24 @@ export async function opCreateNote(
   return opCreateEngagement(client, 'notes', 'note', { hs_note_body: args.body }, args, nowMs);
 }
 
-export async function opCreateTask(
-  client: HubSpotClient,
-  args: EngagementArgs & { subject?: string; body?: string; status?: string; priority?: string },
-  nowMs: number = Date.now(),
-): Promise<string> {
+/** HubSpot properties for a task; both surfaces build them here. */
+export function taskProperties(
+  args: { subject?: string; body?: string; status?: string; priority?: string },
+): Record<string, unknown> {
   const props: Record<string, unknown> = {};
   if (args.subject !== undefined) props.hs_task_subject = args.subject;
   if (args.body !== undefined) props.hs_task_body = args.body;
   if (args.status !== undefined) props.hs_task_status = args.status;
   if (args.priority !== undefined) props.hs_task_priority = args.priority;
-  return opCreateEngagement(client, 'tasks', 'task', props, args, nowMs);
+  return props;
+}
+
+export async function opCreateTask(
+  client: HubSpotClient,
+  args: EngagementArgs & { subject?: string; body?: string; status?: string; priority?: string },
+  nowMs: number = Date.now(),
+): Promise<string> {
+  return opCreateEngagement(client, 'tasks', 'task', taskProperties(args), args, nowMs);
 }
 
 export async function opLogCall(
@@ -831,25 +911,30 @@ export async function opGetProperty(
 }
 
 // property_handler.py:157
+export function performUpdateProperty(
+  client: HubSpotClient,
+  args: { objectType: HubSpotObjectType; propertyName: string; options: unknown[]; label?: string; description?: string },
+) {
+  const body: Record<string, unknown> = { options: args.options };
+  if (args.label !== undefined) body.label = args.label;
+  if (args.description !== undefined) body.description = args.description;
+  return client.updateProperty(args.objectType, args.propertyName, body);
+}
+
 export async function opUpdateProperty(
   client: HubSpotClient,
   args: { objectType: HubSpotObjectType; propertyName: string; options: unknown[]; label?: string; description?: string },
 ): Promise<string> {
-  const body: Record<string, unknown> = { options: args.options };
-  if (args.label !== undefined) body.label = args.label;
-  if (args.description !== undefined) body.description = args.description;
-  const prop = await client.updateProperty(args.objectType, args.propertyName, body);
-  return `Updated property.\n\n${formatProperty(prop)}`;
+  return `Updated property.\n\n${formatProperty(await performUpdateProperty(client, args))}`;
 }
 
 // property_handler.py:180
-export async function opCreateProperty(
-  client: HubSpotClient,
-  args: {
-    objectType: HubSpotObjectType; name: string; label: string; type: string;
-    fieldType: string; groupName: string; options?: unknown[]; description?: string;
-  },
-): Promise<string> {
+type CreatePropertyArgs = {
+  objectType: HubSpotObjectType; name: string; label: string; type: string;
+  fieldType: string; groupName: string; options?: unknown[]; description?: string;
+};
+
+export function performCreateProperty(client: HubSpotClient, args: CreatePropertyArgs) {
   const body: Record<string, unknown> = {
     name: args.name,
     label: args.label,
@@ -859,7 +944,11 @@ export async function opCreateProperty(
   };
   if (args.options !== undefined) body.options = args.options;
   if (args.description !== undefined) body.description = args.description;
-  return `Created property.\n\n${formatProperty(await client.createProperty(args.objectType, body))}`;
+  return client.createProperty(args.objectType, body);
+}
+
+export async function opCreateProperty(client: HubSpotClient, args: CreatePropertyArgs): Promise<string> {
+  return `Created property.\n\n${formatProperty(await performCreateProperty(client, args))}`;
 }
 
 // ===========================================================================
@@ -910,12 +999,7 @@ hubspotServer.addTool({
   name: 'updateCompany',
   annotations: { readOnlyHint: false },
   description: 'Update an existing company record in HubSpot.',
-  parameters: z.object({
-    companyId: z.string().describe('HubSpot company ID to update.'),
-    properties: z.record(z.string(), z.any())
-      .refine(o => Object.keys(o).length > 0, { message: 'Provide at least one property to update.' })
-      .describe('Object containing the properties to update (at least one).'),
-  }),
+  parameters: updateCompanySchema,
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to update company', session, log, (client) => {
       log.info(`updateCompany id=${args.companyId}`);
@@ -981,12 +1065,7 @@ hubspotServer.addTool({
   name: 'updateContact',
   annotations: { readOnlyHint: false },
   description: 'Update an existing contact record in HubSpot.',
-  parameters: z.object({
-    contactId: z.string().describe('HubSpot contact ID to update.'),
-    properties: z.record(z.string(), z.any())
-      .refine(o => Object.keys(o).length > 0, { message: 'Provide at least one property to update.' })
-      .describe('Object containing the properties to update (at least one).'),
-  }),
+  parameters: updateContactSchema,
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to update contact', session, log, (client) => {
       log.info(`updateContact id=${args.contactId}`);
@@ -1065,12 +1144,7 @@ hubspotServer.addTool({
   name: 'updateDeal',
   annotations: { readOnlyHint: false },
   description: 'Update an existing deal record in HubSpot (e.g. move stage, change amount).',
-  parameters: z.object({
-    dealId: z.string().describe('HubSpot deal ID to update.'),
-    properties: z.record(z.string(), z.any())
-      .refine(o => Object.keys(o).length > 0, { message: 'Provide at least one property to update.' })
-      .describe('Object containing the properties to update (at least one).'),
-  }),
+  parameters: updateDealSchema,
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to update deal', session, log, (client) => {
       log.info(`updateDeal id=${args.dealId}`);
@@ -1165,13 +1239,7 @@ hubspotServer.addTool({
   name: 'updateProperty',
   annotations: { readOnlyHint: false },
   description: 'Update a HubSpot property definition (e.g., add dropdown options).',
-  parameters: z.object({
-    objectType: objectTypeParam,
-    propertyName: z.string().describe('Name of the property.'),
-    options: z.array(propertyOption).describe('Array of option objects for dropdown fields.'),
-    label: z.string().optional().describe('Optional new display label.'),
-    description: z.string().optional().describe('Optional new description.'),
-  }),
+  parameters: updatePropertySchema,
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to update property', session, log, (client) => {
       log.info(`updateProperty ${args.objectType}.${args.propertyName}`);
@@ -1183,16 +1251,7 @@ hubspotServer.addTool({
   name: 'createProperty',
   annotations: { readOnlyHint: false },
   description: 'Create a new custom property in HubSpot.',
-  parameters: z.object({
-    objectType: objectTypeParam,
-    name: z.string().describe('Internal name of the property.'),
-    label: z.string().describe('Display label for the property.'),
-    type: z.string().describe('Data type (string, number, date, enumeration, etc.).'),
-    fieldType: z.string().describe('Field type (text, textarea, select, number, date, etc.).'),
-    groupName: z.string().describe('Property group name.'),
-    options: z.array(propertyOption).optional().describe('Array of option objects for dropdown fields.'),
-    description: z.string().optional().describe('Property description.'),
-  }),
+  parameters: createPropertySchema,
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to create property', session, log, (client) => {
       log.info(`createProperty ${args.objectType}.${args.name}`);
@@ -1221,15 +1280,7 @@ hubspotServer.addTool({
   name: 'createTask',
   annotations: { readOnlyHint: false },
   description: 'Create a task and optionally attach it to a company, contact, or deal.',
-  parameters: z
-    .object({
-      subject: z.string().optional().describe('Task title (hs_task_subject).'),
-      body: z.string().optional().describe('Task notes/body (hs_task_body).'),
-      status: z.string().optional().describe('Task status, e.g. NOT_STARTED, IN_PROGRESS, WAITING, COMPLETED, DEFERRED (hs_task_status).'),
-      priority: z.string().optional().describe('Task priority, e.g. LOW, MEDIUM, HIGH (hs_task_priority).'),
-      ...engagementAssociationShape,
-    })
-    .refine(bothOrNeitherTarget, { message: TARGET_MSG }),
+  parameters: createTaskSchema,
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to create task', session, log, (client) => {
       log.info(`createTask associate=${args.associateToObjectType ?? 'none'}`);
@@ -1266,12 +1317,7 @@ hubspotServer.addTool({
   annotations: { readOnlyHint: false, destructiveHint: true },
   description:
     'Delete a note, task, call, or meeting by ID — the cleanup counterpart to createNote/createTask/logCall/logMeeting.',
-  parameters: z.object({
-    engagementType: z
-      .enum(['notes', 'tasks', 'calls', 'meetings'])
-      .describe('Type of engagement to delete (plural, matching the tool that created it).'),
-    engagementId: z.string().describe('HubSpot ID of the engagement (returned when it was created).'),
-  }),
+  parameters: deleteEngagementSchema,
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to delete engagement', session, log, (client) => {
       log.info(`deleteEngagement type=${args.engagementType} id=${args.engagementId}`);

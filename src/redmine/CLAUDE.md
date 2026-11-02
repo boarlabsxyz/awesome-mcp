@@ -42,6 +42,12 @@ REST-plane handlers for this service: see src/website/CLAUDE.md.
 ### Deletes
 - **Permanent, no recycle bin** — `deleteProject` cascades to subprojects' issues, wiki, versions and time entries; `archiveProject` is the reversible option. Every `delete*` tool (and `removeIssueWatcher`) carries `destructiveHint: true`.
 
+### REST plane
+- **Every write has a REST sibling except `deleteProject`, with explicit sign-off** — the permanent dashboard API key can delete issues, wiki pages, time entries, versions, categories, memberships and relations, and add members. `deleteProject` stays MCP-only because one call cascades into subprojects; `POST /projects/{id}/archive` is the reversible way over REST, and a test pins the absence.
+- **`restRoutes.ts` is a table** driven by one handler in `webServer.ts`; bodies come from the same builders in `ops.ts` as the tools. The original four writes (`createIssue`, `updateIssue`, `createTimeEntry`, `updateWikiPage`) are still hand-written there.
+- **Watcher writes report `watching` as `true` / `false` / `null`** — Redmine answers 204 even when the list did not change, and hides watchers from accounts without `view_issue_watchers`. UNVERIFIED against a live instance, like the other new routes.
+- **`/archive` and `/unarchive` need Redmine 5.0+ and an administrator.** Their answer rests on Redmine's status, not a re-read, on the assumption (UNVERIFIED) that an archived project refuses reads.
+
 ## Source Files
 
 | File | Contains |
@@ -50,6 +56,7 @@ REST-plane handlers for this service: see src/website/CLAUDE.md.
 | `src/redmine/apiHelpers.ts` | `RedmineClient` (API-key/Bearer), all formatters, OAuth refresh |
 | `src/redmine/ops.ts` | One exported `op*` per tool body (testable against a stub client) |
 | `src/redmine/schemas.ts` | Zod schemas; separate from `server.ts` to avoid an import cycle with `ops.ts` |
+| `src/redmine/restRoutes.ts` | `REDMINE_WRITE_ROUTES` — the REST write table, one descriptor per endpoint |
 | `src/redmine/authMode.ts` | `resolveRedmineAuthMode`, shared by client and health probe |
 | `src/redmine/connectToken.ts` | `validateRedmineToken` against `GET <base>/users/current.json` |
 | `src/redmine/oauthCallback.ts` | Doorkeeper code exchange + refresh grant |

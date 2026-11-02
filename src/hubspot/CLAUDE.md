@@ -26,11 +26,18 @@ REST-plane handlers for this service: see src/website/CLAUDE.md.
 - **Dates** — `getCompanyActivity` outputs ISO-8601 (upstream epoch ms); `getTickets` filters `closedate`/`hs_lastmodifieddate` with epoch millis (search API 400s on ISO).
 - **`searchData` is deliberately omitted** — the reference used a local FAISS index this repo doesn't have; `searchCompanies`/`searchContacts` cover CRM search.
 
+### REST plane
+- **Every tool has a REST sibling, with explicit sign-off for `deleteEngagement`** — the permanent dashboard API key can rewrite CRM records, delete engagements, and change the portal's property schema for everyone in it.
+- **`restRoutes.ts` takes `server.ts` as an argument, by type only** — `server.ts` constructs an MCP server on import, so `webServer.ts` imports it per request. The original creates stay hand-written there; `createTask` joined the engagement table.
+- **`POST /properties/{objectType}/{propertyName}` needs the COMPLETE `options` list** — HubSpot treats it as the whole set, so sending only the new option drops the others. UNVERIFIED against a live portal.
+- **400, 409 and 429 keep their status** (`hubspotPassthroughStatus`) — `sendUpstreamError` would turn them into 500.
+
 ## Source Files
 
 | File | Contains |
 |------|----------|
 | `src/hubspot/server.ts` | Tool definitions (`HUBSPOT_BASE_URL`, default api.hubapi.com) |
 | `src/hubspot/apiHelpers.ts` | `HubSpotClient` (CRM v3), scope-error parsing, OAuth refresh |
+| `src/hubspot/restRoutes.ts` | `HUBSPOT_WRITE_ROUTES` — the REST write table, one descriptor per endpoint |
 | `src/hubspot/connectToken.ts` | `validateHubSpotToken` for the paste-token path |
 | `src/hubspot/oauthCallback.ts` | `exchangeHubSpotOauthCode`, `refreshHubSpotToken` |

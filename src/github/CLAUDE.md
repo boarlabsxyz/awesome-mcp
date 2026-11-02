@@ -42,7 +42,8 @@ Tools come from `modelcontextprotocol/servers-archived` (`src/github`); the Go `
 - **Only `gho_`/`ghu_` tokens are revocable**; PAT users are told to delete it on GitHub. Best-effort, never blocks. Org-owner approvals are per app and survive.
 
 ### REST plane (`/api/v1/github/*`, `restRoutes.ts`)
-- **14 GETs + 5 POSTs (`createIssue`, `addIssueComment`, `pushFiles`, `createOrUpdateFile`, `mergePullRequest`), explicit sign-off** — the permanent dashboard API key can commit and merge anywhere the account can write.
+- **Every tool has a REST sibling, explicit sign-off** — the permanent dashboard API key can commit, merge, approve a pull request as the connected account, and create repositories, forks and branches anywhere the account can write.
+- **`/forks` and `/pulls/{n}/update-branch` answer 202** — GitHub only queues them, so a 201 or a plain 200 would claim work that has not happened. A fork that already existed answers 200 with `preExisting: true`.
 - **Same schemas and `READS`/`perform*` as tools; `public/openapi-github.json` generated from them.**
 - **`githubRestError`, not `sendUpstreamError`**: rate limit 429 + Retry-After; rejected stored credential 502 (never 401 — that means the caller's bearer); op refusals 400 unless they carry a status (missing branch 404, push race 409); GitHub `merged: false` → 409.
 - **REST uses the OLDEST GitHub connector** (`getMcpConnection` … `ORDER BY connected_at ASC LIMIT 1`) regardless of which minted the bearer. Documented once in `REST_SERVICE_NOTES` (not per entry: Sonar duplication); not fixed.

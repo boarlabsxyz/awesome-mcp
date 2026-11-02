@@ -353,6 +353,9 @@ import { validateGitHubToken, buildGitHubInstanceName, fetchGitHubUser, uniqueGi
 import { exchangeGitHubOauthCode, GITHUB_TOKEN_URL } from '../github/oauthCallback.js';
 import { GITHUB_READ_ROUTES, GITHUB_WRITE_ROUTES, writeArgs as githubWriteArgs } from '../github/restRoutes.js';
 import { PINECONE_READ_ROUTES, PINECONE_WRITE_ROUTES, writeArgs as pineconeWriteArgs } from '../pinecone/restRoutes.js';
+import { HUBSPOT_WRITE_ROUTES, hubspotPassthroughStatus, writeArgs as hubspotWriteArgs } from '../hubspot/restRoutes.js';
+import { GMAIL_WRITE_ROUTES, gmailPassthroughStatus, writeArgs as gmailWriteArgs } from '../google-gmail/restRoutes.js';
+import { REDMINE_WRITE_ROUTES, writeArgs as redmineWriteArgs } from '../redmine/restRoutes.js';
 import type { GitHubClient } from '../github/apiHelpers.js';
 import type { PineconeRulesState } from '../pinecone/accessRules.js';
 import type { PineconeRestContext } from '../pinecone/restOps.js';
@@ -1355,9 +1358,12 @@ const PASTE_CONNECTION_BUILDERS: Record<string, (input: PasteConnectionInput) =>
  * prefixes, so each covers the collection POST and every by-id POST under it.
  */
 const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
+  '/api/v1/gmail/messages/send', // sendEmail — a whole message body, possibly HTML
+  '/api/v1/gmail/drafts',     // draftEmail — same body as sendEmail
   '/api/v1/redmine/issues',   // createIssue / updateIssue — description and notes are full issue bodies
   '/api/v1/redmine/projects', // updateWikiPage — `text` replaces an entire wiki page
   '/api/v1/hubspot/notes',    // createNote — free text
+  '/api/v1/hubspot/tasks',    // createTask — free text
   '/api/v1/hubspot/calls',    // logCall — can be a whole transcript
   '/api/v1/hubspot/meetings', // logMeeting — can be full minutes
   '/api/v1/pinecone/indexes', // upsert-records — a bulk record load, up to Pinecone's 2 MB body limit
@@ -5805,47 +5811,27 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
-  // POST /api/v1/gmail/messages/send - Send email
-  app.post('/api/v1/gmail/messages/send', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { to, subject, body, cc, bcc, isHtml } = req.body;
-      if (!to || !subject || !body) { res.status(400).json({ error: 'to, subject, and body are required' }); return; }
-      const gmail = req.userSession!.googleGmail;
-      const mimeLines = [
-        `To: ${to}`, `Subject: ${subject}`,
-        ...(cc ? [`Cc: ${cc}`] : []),
-        ...(bcc ? [`Bcc: ${bcc}`] : []),
-        `Content-Type: ${isHtml ? 'text/html' : 'text/plain'}; charset=utf-8`,
-        '', body,
-      ];
-      const raw = Buffer.from(mimeLines.join('\r\n')).toString('base64url');
-      const result = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
-      res.json({ id: result.data.id, threadId: result.data.threadId });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to send email' });
-    }
-  });
-
-  // POST /api/v1/gmail/drafts - Create draft
-  app.post('/api/v1/gmail/drafts', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { to, subject, body, cc, bcc, isHtml } = req.body;
-      if (!to || !subject || !body) { res.status(400).json({ error: 'to, subject, and body are required' }); return; }
-      const gmail = req.userSession!.googleGmail;
-      const mimeLines = [
-        `To: ${to}`, `Subject: ${subject}`,
-        ...(cc ? [`Cc: ${cc}`] : []),
-        ...(bcc ? [`Bcc: ${bcc}`] : []),
-        `Content-Type: ${isHtml ? 'text/html' : 'text/plain'}; charset=utf-8`,
-        '', body,
-      ];
-      const raw = Buffer.from(mimeLines.join('\r\n')).toString('base64url');
-      const result = await gmail.users.drafts.create({ userId: 'me', requestBody: { message: { raw } } });
-      res.json({ id: result.data.id, messageId: result.data.message?.id });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to create draft' });
-    }
-  });
+  // The Gmail writes, from the table in src/google-gmail/restRoutes.ts. A table
+  // entry's Gmail failure keeps its status: 400 and 409 are the caller's to fix
+  // and 429 is theirs to wait out, none of which sendUpstreamError can say.
+  for (const route of GMAIL_WRITE_ROUTES) {
+    app.post(route.path, requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const parsed = route.schema.safeParse(gmailWriteArgs(route, req));
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const result = await route.run(req.userSession!.googleGmail, parsed.data);
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        console.error(`Error in Gmail ${route.tool}:`, err);
+        const status = gmailPassthroughStatus(err);
+        if (status) { res.status(status).json({ error: err.message || route.fallback }); return; }
+        sendUpstreamError(res, err, { notFound: route.notFound, fallback: route.fallback });
+      }
+    });
+  }
 
   // PATCH /api/v1/gmail/messages/:messageId - Modify labels
   app.patch('/api/v1/gmail/messages/:messageId', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
@@ -9373,16 +9359,16 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
-  // Notes, calls and meetings share one handler: the only differences are the
+  // Notes, tasks, calls and meetings share one handler: the only differences are the
   // engagement type, the schema, and which properties the body maps onto. Each
   // is registered from the table below so the two-step create-then-associate
   // contract — and the honesty about a failed association — lives in one place.
   const HUBSPOT_ENGAGEMENT_ROUTES: ReadonlyArray<{
     path: string;
-    type: 'notes' | 'calls' | 'meetings';
+    type: 'notes' | 'tasks' | 'calls' | 'meetings';
     label: string;
-    schemaName: 'createNoteSchema' | 'logCallSchema' | 'logMeetingSchema';
-    properties: (args: any) => Record<string, unknown>;
+    schemaName: 'createNoteSchema' | 'createTaskSchema' | 'logCallSchema' | 'logMeetingSchema';
+    properties: (args: any, hubspot: typeof import('../hubspot/server.js')) => Record<string, unknown>;
     fallback: string;
   }> = [
     {
@@ -9392,6 +9378,14 @@ function registerRestApiRoutes(app: express.Express): void {
       schemaName: 'createNoteSchema',
       properties: a => ({ hs_note_body: a.body }),
       fallback: 'Failed to create note',
+    },
+    {
+      path: '/api/v1/hubspot/tasks',
+      type: 'tasks',
+      label: 'task',
+      schemaName: 'createTaskSchema',
+      properties: (a, hubspot) => hubspot.taskProperties(a),
+      fallback: 'Failed to create task',
     },
     {
       path: '/api/v1/hubspot/calls',
@@ -9437,7 +9431,7 @@ function registerRestApiRoutes(app: express.Express): void {
           client,
           route.type,
           route.label,
-          route.properties(args),
+          route.properties(args, hubspot),
           args,
         );
         // 201 even when the association failed: the engagement WAS created, and
@@ -9448,6 +9442,31 @@ function registerRestApiRoutes(app: express.Express): void {
       } catch (err: any) {
         console.error(`Error on HubSpot ${route.path}:`, err);
         await sendHubSpotError(req, res, err, { notFound: 'Record to associate not found', fallback: route.fallback });
+      }
+    });
+  }
+
+  // The HubSpot updates, property writes and engagement delete, from the table
+  // in src/hubspot/restRoutes.ts. The module is imported here, once per request
+  // and not at startup, because src/hubspot/server.ts constructs an MCP server.
+  for (const route of HUBSPOT_WRITE_ROUTES) {
+    app.post(route.path, requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const client = await hubspotRestClient(req, res);
+        if (!client) return;
+        const hubspot = await import('../hubspot/server.js');
+        const parsed = route.schema(hubspot).safeParse(hubspotWriteArgs(route, req));
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const result = await route.run(hubspot, client, parsed.data);
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        console.error(`Error in HubSpot ${route.tool}:`, err);
+        const status = hubspotPassthroughStatus(err);
+        if (status) { res.status(status).json({ error: err.message || route.fallback }); return; }
+        await sendHubSpotError(req, res, err, { notFound: route.notFound, fallback: route.fallback });
       }
     });
   }
@@ -10022,10 +10041,10 @@ function registerRestApiRoutes(app: express.Express): void {
 
   // --- Redmine writes ---
   // Same schema-reuse rule as the HubSpot writes, and the same consequence: the
-  // PERMANENT dashboard API key now reaches them. Deliberately absent are all
-  // seven delete tools, archiveProject, and the project/version/category/
-  // membership admin creates — Redmine has no recycle bin, deleteProject
-  // cascades into subprojects, and a curl has no confirmation affordance.
+  // PERMANENT dashboard API key reaches them. The deletes were exposed with
+  // explicit sign-off (see the catalog notes) even though Redmine has no recycle
+  // bin and a curl has no confirmation affordance. deleteProject alone stays
+  // MCP-only because it cascades into subprojects.
   //
   // Path params are merged OVER the body so a URL and a mismatched body key
   // cannot disagree about which record is being written.
@@ -10137,6 +10156,31 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // The rest of the Redmine writes, from the table in src/redmine/restRoutes.ts.
+  for (const route of REDMINE_WRITE_ROUTES) {
+    app.post(route.path, requireRedmineApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const parsed = route.schema.safeParse(redmineWriteArgs(route, req));
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const client = await redmineRestClient(req, res);
+        if (!client) return;
+        const result = await route.run(client, parsed.data);
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        console.error(`Error in Redmine ${route.tool}:`, err);
+        await sendRedmineError(res, err, {
+          fallback: route.fallback,
+          permission: route.permission,
+          adminOnly: route.adminOnly,
+          baseUrl: req.userSession?.redmineBaseUrl,
+        });
+      }
+    });
+  }
+
   // === GitHub ===
   // Both tables live in src/github/restRoutes.ts, where each descriptor maps a
   // request onto the MCP tool's own schema and the same READS builder or
@@ -10144,9 +10188,10 @@ function registerRestApiRoutes(app: express.Express): void {
   // shared by every route: auth, validation, refresh, status and error mapping.
   //
   // WRITES were exposed with explicit sign-off (see the catalog notes): the
-  // permanent dashboard API key is accepted here, so it can now create issues
-  // and comments, commit files and merge pull requests on every repository the
-  // connected GitHub account can write to.
+  // permanent dashboard API key is accepted here, so it can now create
+  // repositories, forks, branches, issues, comments and pull requests, submit
+  // reviews, commit files and merge on every repository the connected GitHub
+  // account can write to.
 
   /**
    * Refresh, then build a client — or answer 403 and return null. The refresh

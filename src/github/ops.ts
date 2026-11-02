@@ -359,13 +359,18 @@ export async function opSearchRepositories(client: GitHubClient, args: SearchRep
   return lines.join('\n');
 }
 
-export async function opCreateRepository(client: GitHubClient, args: CreateRepositoryArgs): Promise<string> {
+export async function performCreateRepository(client: GitHubClient, args: CreateRepositoryArgs): Promise<GhRepo> {
   const { data } = await client.post<GhRepo>('/user/repos', {
     name: args.name,
     description: args.description,
     private: args.private,
     auto_init: args.autoInit,
   });
+  return data;
+}
+
+export async function opCreateRepository(client: GitHubClient, args: CreateRepositoryArgs): Promise<string> {
+  const data = await performCreateRepository(client, args);
   const lines = [
     `Created repository ${data.full_name} (${data.private ? 'private' : 'public'}).`,
     `  URL: ${data.html_url}`,
@@ -381,12 +386,16 @@ export async function opCreateRepository(client: GitHubClient, args: CreateRepos
 /** A fork older than this when GitHub answers was already there, not just made. */
 const FRESH_FORK_MS = 2 * 60_000;
 
-export async function opForkRepository(client: GitHubClient, args: ForkRepositoryArgs): Promise<string> {
+export async function performForkRepository(client: GitHubClient, args: ForkRepositoryArgs): Promise<{ fork: GhRepo; preExisting: boolean }> {
   const { data } = await client.post<GhRepo>(`${repoPath(args.owner, args.repo)}/forks`, {
     ...(args.organization ? { organization: args.organization } : {}),
   });
   const created = data.created_at ? Date.parse(data.created_at) : NaN;
-  const preExisting = Number.isFinite(created) && Date.now() - created > FRESH_FORK_MS;
+  return { fork: data, preExisting: Number.isFinite(created) && Date.now() - created > FRESH_FORK_MS };
+}
+
+export async function opForkRepository(client: GitHubClient, args: ForkRepositoryArgs): Promise<string> {
+  const { fork: data, preExisting } = await performForkRepository(client, args);
   const lines = [
     preExisting
       ? `A fork already existed, so GitHub returned it: ${data.full_name} (created ${day(data.created_at)}). Nothing new was created.`
@@ -654,7 +663,7 @@ export async function opPushFiles(client: GitHubClient, args: PushFilesArgs): Pr
   return lines.join('\n');
 }
 
-export async function opCreateBranch(client: GitHubClient, args: CreateBranchArgs): Promise<string> {
+export async function performCreateBranch(client: GitHubClient, args: CreateBranchArgs): Promise<{ branch: string; from: string; sha: string }> {
   const rp = repoPath(args.owner, args.repo);
   let from = args.fromBranch;
   if (!from) {
@@ -677,6 +686,11 @@ export async function opCreateBranch(client: GitHubClient, args: CreateBranchArg
     }
     throw error;
   }
+  return { branch: args.branch, from, sha };
+}
+
+export async function opCreateBranch(client: GitHubClient, args: CreateBranchArgs): Promise<string> {
+  const { from, sha } = await performCreateBranch(client, args);
   return `Created branch ${args.branch} in ${args.owner}/${args.repo} from ${from} (${short(sha)}).`;
 }
 
@@ -798,7 +812,10 @@ export async function opCreateIssue(client: GitHubClient, args: CreateIssueArgs)
   ].join('\n');
 }
 
-export async function opUpdateIssue(client: GitHubClient, args: UpdateIssueArgs): Promise<string> {
+export async function performUpdateIssue(
+  client: GitHubClient,
+  args: UpdateIssueArgs,
+): Promise<{ issue: GhIssue; changed: string[]; notApplied: string[] }> {
   if (args.stateReason && !args.state) {
     throw new UserError('stateReason only takes effect together with state (closed → completed / not_planned, open → reopened). Nothing was changed.');
   }
@@ -818,12 +835,17 @@ export async function opUpdateIssue(client: GitHubClient, args: UpdateIssueArgs)
     throw new UserError('Nothing to update: pass at least one of title, body, assignees, milestone, labels, state.');
   }
   const { data } = await client.patch<GhIssue>(`${repoPath(args.owner, args.repo)}/issues/${args.issueNumber}`, body);
+  return { issue: data, changed: Object.keys(body), notApplied: droppedIssueFields(args, data) };
+}
+
+export async function opUpdateIssue(client: GitHubClient, args: UpdateIssueArgs): Promise<string> {
+  const { issue: data, changed, notApplied } = await performUpdateIssue(client, args);
   return [
-    `Updated #${data.number} in ${args.owner}/${args.repo} (${Object.keys(body).join(', ')}).`,
+    `Updated #${data.number} in ${args.owner}/${args.repo} (${changed.join(', ')}).`,
     `  Now: [${data.state}${data.state_reason ? `, ${data.state_reason}` : ''}] ${data.title}`,
     `  Labels: ${data.labels.length ? data.labels.map(labelName).join(', ') : 'none'} · Assignees: ${data.assignees?.length ? data.assignees.map(who).join(', ') : 'none'}`,
     `  URL: ${data.html_url}`,
-    ...droppedNote(droppedIssueFields(args, data)),
+    ...droppedNote(notApplied),
   ].join('\n');
 }
 
@@ -883,6 +905,14 @@ export async function opSearchUsers(client: GitHubClient, args: SearchUsersArgs)
 
 // ---- Organizations ----
 
+/** One discovery scan, with the connector's rules alongside it. */
+async function scanOrganizations(client: GitHubClient) {
+  const policy = client.allowedOwners;
+  const found = await discoverGitHubOwners(client, { savedOwners: policy ? [...policy] : [] });
+  const allowed = (login: string) => !policy || policy.has(login.toLowerCase());
+  return { policy, found, allowed };
+}
+
 /**
  * Which organizations the connected account belongs to, which of them this
  * connection can actually read, and which its access rules allow. The answer
@@ -892,9 +922,7 @@ export async function opSearchUsers(client: GitHubClient, args: SearchUsersArgs)
  * unlisted), or this connector's own rules exclude it.
  */
 export async function opListOrganizations(client: GitHubClient, _args: ListOrganizationsArgs = {}): Promise<string> {
-  const policy = client.allowedOwners;
-  const found = await discoverGitHubOwners(client, { savedOwners: policy ? [...policy] : [] });
-  const allowed = (login: string) => !policy || policy.has(login.toLowerCase());
+  const { policy, found, allowed } = await scanOrganizations(client);
   const blockedLooking = found.owners.filter(o => o.member && o.repos === 0);
 
   const lines = [
@@ -922,6 +950,20 @@ export async function opListOrganizations(client: GitHubClient, _args: ListOrgan
   }
   if (found.notes.length) lines.push('', ...found.notes.map(n => `Note: ${n}`));
   return lines.join('\n');
+}
+
+/** The JSON answer for listOrganizations. `truncated` means the repository counts are floors. */
+export async function performListOrganizations(client: GitHubClient, _args: ListOrganizationsArgs = {}) {
+  const { policy, found, allowed } = await scanOrganizations(client);
+  return {
+    account: found.self,
+    accountRepos: found.selfRepos,
+    accessRules: policy ? [...policy].sort((a, b) => a.localeCompare(b)) : null,
+    organizations: found.owners.map(o => ({ ...o, allowed: allowed(o.login) })),
+    membership: found.membership,
+    truncated: found.truncated,
+    notes: found.notes,
+  };
 }
 
 // ---- Pull requests ----
@@ -977,7 +1019,7 @@ export async function opGetPullRequest(client: GitHubClient, args: GetPullReques
   return lines.join('\n');
 }
 
-export async function opCreatePullRequest(client: GitHubClient, args: CreatePullRequestArgs): Promise<string> {
+export async function performCreatePullRequest(client: GitHubClient, args: CreatePullRequestArgs): Promise<GhPull> {
   const { data } = await client.post<GhPull>(`${repoPath(args.owner, args.repo)}/pulls`, {
     title: args.title,
     body: args.body,
@@ -986,6 +1028,11 @@ export async function opCreatePullRequest(client: GitHubClient, args: CreatePull
     draft: args.draft,
     maintainer_can_modify: args.maintainerCanModify,
   });
+  return data;
+}
+
+export async function opCreatePullRequest(client: GitHubClient, args: CreatePullRequestArgs): Promise<string> {
+  const data = await performCreatePullRequest(client, args);
   return [
     `Created ${data.draft ? 'draft ' : ''}pull request #${data.number} in ${args.owner}/${args.repo}: ${data.title}`,
     `  ${data.head.label ?? data.head.ref} → ${data.base.ref}`,
@@ -993,7 +1040,10 @@ export async function opCreatePullRequest(client: GitHubClient, args: CreatePull
   ].join('\n');
 }
 
-export async function opCreatePullRequestReview(client: GitHubClient, args: CreatePullRequestReviewArgs): Promise<string> {
+export async function performCreatePullRequestReview(
+  client: GitHubClient,
+  args: CreatePullRequestReviewArgs,
+): Promise<{ review: { id: number; state: string; html_url: string }; inlineComments: number }> {
   if (args.event !== 'APPROVE' && !args.body?.trim()) {
     throw new UserError(`A ${args.event} review needs a body. Nothing was submitted.`);
   }
@@ -1010,8 +1060,13 @@ export async function opCreatePullRequestReview(client: GitHubClient, args: Crea
     `${repoPath(args.owner, args.repo)}/pulls/${args.pullNumber}/reviews`,
     { event: args.event, body: args.body, commit_id: args.commitId, ...(comments.length ? { comments } : {}) },
   );
+  return { review: data, inlineComments: comments.length };
+}
+
+export async function opCreatePullRequestReview(client: GitHubClient, args: CreatePullRequestReviewArgs): Promise<string> {
+  const { review: data, inlineComments } = await performCreatePullRequestReview(client, args);
   return [
-    `Submitted a review on #${args.pullNumber} in ${args.owner}/${args.repo}: ${data.state}${comments.length ? ` with ${comments.length} inline comment(s)` : ''}.`,
+    `Submitted a review on #${args.pullNumber} in ${args.owner}/${args.repo}: ${data.state}${inlineComments ? ` with ${inlineComments} inline comment(s)` : ''}.`,
     `  URL: ${data.html_url}`,
   ].join('\n');
 }
@@ -1213,11 +1268,16 @@ export async function opGetPullRequestStatus(client: GitHubClient, args: GetPull
   return lines.join('\n').trimEnd();
 }
 
-export async function opUpdatePullRequestBranch(client: GitHubClient, args: UpdatePullRequestBranchArgs): Promise<string> {
+export async function performUpdatePullRequestBranch(client: GitHubClient, args: UpdatePullRequestBranchArgs): Promise<{ message?: string }> {
   const { data } = await client.put<{ message?: string }>(
     `${repoPath(args.owner, args.repo)}/pulls/${args.pullNumber}/update-branch`,
     args.expectedHeadSha ? { expected_head_sha: args.expectedHeadSha } : {},
   );
+  return data ?? {};
+}
+
+export async function opUpdatePullRequestBranch(client: GitHubClient, args: UpdatePullRequestBranchArgs): Promise<string> {
+  const data = await performUpdatePullRequestBranch(client, args);
   return `GitHub accepted the request to bring #${args.pullNumber}'s branch up to date with its base${data?.message ? ` (“${data.message}”)` : ''}. It runs asynchronously: the new head appears shortly, and a merge conflict makes it fail without changing the branch — check getPullRequest afterwards.`;
 }
 

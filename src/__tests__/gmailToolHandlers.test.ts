@@ -38,7 +38,7 @@ function mockGmail(overrides: any = {}) {
         list: mock.fn(async () => ({ data: { labels: [{ id: 'L1', name: 'MyLabel', type: 'user' }] } })),
         get: mock.fn(async () => ({ data: { id: 'L1', name: 'MyLabel', type: 'user', messagesTotal: 5, messagesUnread: 2 } })),
         create: mock.fn(async () => ({ data: { id: 'L2', name: 'NewLabel', type: 'user' } })),
-        update: mock.fn(async () => ({ data: { id: 'L1', name: 'Updated' } })),
+        patch: mock.fn(async () => ({ data: { id: 'L1', name: 'Updated' } })),
         delete: mock.fn(async () => ({})),
         ...overrides.labels,
       },
@@ -171,6 +171,35 @@ describe('handleBatchDeleteEmails', () => {
     assert.ok(result.includes('3 email(s)'));
     assert.equal(gmail.users.messages.trash.mock.calls.length, 3);
   });
+
+  const failingFor = (bad: string[]) => mock.fn(async ({ id }: { id: string }) => {
+    if (bad.includes(id)) { const e: any = new Error('Forbidden'); e.code = 403; throw e; }
+    return {};
+  });
+
+  it('says which messages went when some fail', async () => {
+    const gmail = mockGmail({ messages: { trash: failingFor(['b']) } });
+    await assert.rejects(
+      () => handleBatchDeleteEmails(gmail, { messageIds: ['a', 'b', 'c'] }, noopLog),
+      { message: /Moved 2 of 3 email\(s\) to trash\. Failed: b\./ },
+    );
+  });
+
+  it('reports a total failure the way any other Gmail failure reads', async () => {
+    const gmail = mockGmail({ messages: { trash: failingFor(['a']) } });
+    await assert.rejects(() => handleBatchDeleteEmails(gmail, { messageIds: ['a'] }, noopLog), { message: /Permission denied/ });
+  });
+
+  it('stops after a batch that failed outright and counts the rest', async () => {
+    const ids = Array.from({ length: 25 }, (_, n) => `m${n}`);
+    const trash = failingFor(ids.slice(10, 20));
+    const gmail = mockGmail({ messages: { trash } });
+    await assert.rejects(
+      () => handleBatchDeleteEmails(gmail, { messageIds: ids }, noopLog),
+      { message: /Moved 10 of 25.*Not attempted: 5\./ },
+    );
+    assert.equal(trash.mock.calls.length, 20);
+  });
 });
 
 // === Label Management ===
@@ -224,8 +253,17 @@ describe('handleUpdateLabel', () => {
     assert.ok(result.includes('Updated'));
   });
 
+  // labels.update is a full replacement, so a partial body there could reset
+  // whatever the caller did not mention.
+  it('patches only the fields named', async () => {
+    const gmail = mockGmail();
+    await handleUpdateLabel(gmail, { labelId: 'L1', name: 'Updated' }, noopLog);
+    const call = gmail.users.labels.patch.mock.calls[0].arguments[0];
+    assert.deepEqual(call, { userId: 'me', id: 'L1', requestBody: { name: 'Updated' } });
+  });
+
   it('throws UserError on 404', async () => {
-    const gmail = mockGmail({ labels: { update: mock.fn(async () => { const e: any = new Error('Not found'); e.code = 404; throw e; }) } });
+    const gmail = mockGmail({ labels: { patch: mock.fn(async () => { const e: any = new Error('Not found'); e.code = 404; throw e; }) } });
     await assert.rejects(() => handleUpdateLabel(gmail, { labelId: 'bad' }, noopLog), { message: /Label not found/ });
   });
 });

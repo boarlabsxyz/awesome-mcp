@@ -411,6 +411,109 @@ describe('REST data plane: HubSpot and Redmine handler bodies', () => {
       assert.equal(res.status, 400);
       assert.equal(calls.length, 0);
     });
+    // The table in src/hubspot/restRoutes.ts, through the real handler.
+    const updates: Array<[string, string, string]> = [
+      ['company', '/api/v1/hubspot/companies/c1', '/objects/companies/c1'],
+      ['contact', '/api/v1/hubspot/contacts/c1', '/objects/contacts/c1'],
+      ['deal', '/api/v1/hubspot/deals/c1', '/objects/deals/c1'],
+    ];
+    for (const [label, path, upstream] of updates) {
+      it(`updates a ${label} and answers with the re-read record`, async () => {
+        reset();
+        when(upstream, { json: { id: 'c1', properties: { name: 'Fresh' } } });
+        const res = await request(app).post(path).set(auth()).send({ properties: { name: 'Fresh' } });
+        assert.equal(res.status, 200);
+        assert.equal(res.body.properties.name, 'Fresh');
+        assert.deepEqual(calls.map(c => c.method), ['PATCH', 'GET'], 'the PATCH echo omits populated fields');
+      });
+
+      it(`400s a ${label} update with no properties, before HubSpot is called`, async () => {
+        reset();
+        const res = await request(app).post(path).set(auth()).send({ properties: {} });
+        assert.equal(res.status, 400);
+        assert.equal(calls.length, 0);
+      });
+    }
+
+    it('maps a missing record to 404', async () => {
+      reset();
+      fallback = { status: 404, json: { message: 'gone' } };
+      const res = await request(app).post('/api/v1/hubspot/deals/missing').set(auth()).send({ properties: { amount: 1 } });
+      assert.equal(res.status, 404);
+      assert.equal(res.body.error, 'Deal not found');
+    });
+
+    it('takes the record from the URL, not a mismatched body key', async () => {
+      reset();
+      when('/objects/companies/from-path', { json: { id: 'from-path', properties: {} } });
+      await request(app).post('/api/v1/hubspot/companies/from-path').set(auth())
+        .send({ companyId: 'from-body', properties: { name: 'x' } }).expect(200);
+      assert.ok(calls.every(c => c.url.includes('from-path')));
+    });
+
+    it('creates a property, and keeps a 409 for a name already taken', async () => {
+      reset();
+      when('/crm/v3/properties/companies', { json: { name: 'plan', label: 'Plan', type: 'string' } });
+      const body = { name: 'plan', label: 'Plan', type: 'string', fieldType: 'text', groupName: 'companyinformation' };
+      const res = await request(app).post('/api/v1/hubspot/properties/companies').set(auth()).send(body);
+      assert.equal(res.status, 201);
+      assert.equal(res.body.name, 'plan');
+
+      reset();
+      fallback = { status: 409, json: { message: 'already exists' } };
+      const taken = await request(app).post('/api/v1/hubspot/properties/companies').set(auth()).send(body);
+      assert.equal(taken.status, 409, 'sendUpstreamError alone would call this a 500');
+    });
+
+    it('updates a property with its complete option list', async () => {
+      reset();
+      when('/crm/v3/properties/companies/plan', { json: { name: 'plan', options: [] } });
+      const options = [{ label: 'A', value: 'a' }];
+      const res = await request(app).post('/api/v1/hubspot/properties/companies/plan').set(auth()).send({ options });
+      assert.equal(res.status, 200);
+      assert.equal(lastCall().method, 'PATCH');
+      assert.equal((lastCall().body as any).options.length, 1);
+    });
+
+    it('400s a property update with no options, and an unknown object type', async () => {
+      reset();
+      assert.equal((await request(app).post('/api/v1/hubspot/properties/companies/plan').set(auth()).send({})).status, 400);
+      assert.equal((await request(app).post('/api/v1/hubspot/properties/widgets/plan').set(auth()).send({ options: [] })).status, 400);
+      assert.equal(calls.length, 0);
+    });
+
+    it('creates a task with HubSpot property names and a timestamp', async () => {
+      reset();
+      when('/objects/tasks', { json: { id: 't1' } });
+      const res = await request(app).post('/api/v1/hubspot/tasks').set(auth()).send({ subject: 'Call back', priority: 'HIGH' });
+      assert.equal(res.status, 201);
+      const sent = (lastCall().body as any).properties;
+      assert.equal(sent.hs_task_subject, 'Call back');
+      assert.equal(sent.hs_task_priority, 'HIGH');
+      assert.ok(sent.hs_timestamp, 'hs_timestamp is the most common create failure');
+    });
+
+    it('400s a task with half an association target', async () => {
+      reset();
+      const res = await request(app).post('/api/v1/hubspot/tasks').set(auth()).send({ subject: 's', associateToObjectType: 'deals' });
+      assert.equal(res.status, 400);
+      assert.equal(calls.length, 0);
+    });
+
+    it('deletes an engagement through a POST action path', async () => {
+      reset();
+      fallback = { status: 204 };
+      const res = await request(app).post('/api/v1/hubspot/engagements/notes/n1/delete').set(auth()).expect(200);
+      assert.deepEqual(res.body, { deleted: true, engagementType: 'notes', engagementId: 'n1' });
+      assert.equal(lastCall().method, 'DELETE');
+    });
+
+    it('400s an engagement type that is not one of the four', async () => {
+      reset();
+      const res = await request(app).post('/api/v1/hubspot/engagements/companies/1/delete').set(auth());
+      assert.equal(res.status, 400);
+      assert.equal(calls.length, 0);
+    });
   });
 
   // ======================= HubSpot errors =======================
@@ -749,6 +852,53 @@ describe('REST data plane: HubSpot and Redmine handler bodies', () => {
       reset();
       const res = await request(app).post('/api/v1/redmine/projects/p/wiki/Home').set(auth()).send({ comments: 'oops' });
       assert.equal(res.status, 400);
+      assert.equal(calls.length, 0);
+    });
+    // The table in src/redmine/restRoutes.ts, through the real handler.
+    it('deletes an issue through a POST action path', async () => {
+      reset();
+      fallback = { status: 204 };
+      const res = await request(app).post('/api/v1/redmine/issues/42/delete').set(auth()).expect(200);
+      assert.deepEqual(res.body, { deleted: true, issueId: '42' });
+      assert.equal(lastCall().method, 'DELETE');
+      assert.ok(lastCall().url.endsWith('/issues/42.json'));
+    });
+
+    it('creates a project with Redmine field names', async () => {
+      reset();
+      when('/projects.json', { json: { project: { id: 1, identifier: 'p-1' } } });
+      const res = await request(app).post('/api/v1/redmine/projects').set(auth())
+        .send({ name: 'P', identifier: 'p-1', isPublic: false }).expect(201);
+      assert.equal(res.body.project.id, 1);
+      assert.deepEqual((lastCall().body as any).project, { name: 'P', identifier: 'p-1', is_public: false });
+    });
+
+    it('400s a body the tool schema rejects, before Redmine is called', async () => {
+      reset();
+      const res = await request(app).post('/api/v1/redmine/projects').set(auth()).send({ name: 'P', identifier: 'NOT VALID' });
+      assert.equal(res.status, 400);
+      assert.ok(res.body.issues.fieldErrors.identifier);
+      assert.equal(calls.length, 0);
+    });
+
+    it('takes the record from the URL, not a mismatched body key', async () => {
+      reset();
+      fallback = { status: 204 };
+      await request(app).post('/api/v1/redmine/projects/from-path/archive').set(auth()).send({ projectId: 'from-body' }).expect(200);
+      assert.ok(lastCall().url.includes('/projects/from-path/archive.json'));
+    });
+
+    it('maps a Redmine 404 through the shared error contract', async () => {
+      reset();
+      fallback = { status: 404, json: {} };
+      const res = await request(app).post('/api/v1/redmine/versions/9/delete').set(auth());
+      assert.equal(res.status, 404);
+    });
+
+    it('has no route that deletes a project', async () => {
+      reset();
+      const res = await request(app).post('/api/v1/redmine/projects/p/delete').set(auth());
+      assert.equal(res.status, 404);
       assert.equal(calls.length, 0);
     });
   });

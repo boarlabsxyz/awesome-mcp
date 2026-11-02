@@ -67,6 +67,7 @@ describe('REST data plane: Google Sheets and Calendar write validation', () => {
     await createMcpInstance(USER_ID, 'google-docs', 'Test Docs', dummyGoogleTokens, null);
     await createMcpInstance(USER_ID, 'google-sheets', 'Test Sheets', dummyGoogleTokens, null);
     await createMcpInstance(USER_ID, 'google-calendar', 'Test Calendar', dummyGoogleTokens, null);
+    await createMcpInstance(USER_ID, 'google-gmail', 'Test Gmail', dummyGoogleTokens, null);
   });
 
   const auth = () => ({ Authorization: `Bearer ${bearer}` });
@@ -344,6 +345,30 @@ describe('REST data plane: Google Sheets and Calendar write validation', () => {
 
     it('validates the cancel body — sendUpdates decides whether attendees are emailed', async () => {
       await expectInvalid('/api/v1/calendars/primary/events/evt-1/cancel', { sendUpdates: 'everyone' }, 'sendUpdates');
+    });
+  });
+  describe('Gmail', () => {
+    it('refuses a header injection in a piped-in subject', async () => {
+      await expectInvalid('/api/v1/gmail/messages/send', { to: 'a@b.c', subject: 'Hi\r\nBcc: spy@evil.test', body: 'x' }, 'subject');
+    });
+
+    it('refuses a send with no recipient, as the legacy route did', async () => {
+      await expectInvalid('/api/v1/gmail/messages/send', { subject: 'Hi', body: 'x' }, 'to');
+    });
+
+    it('refuses a draft with no body, as the legacy route did', async () => {
+      await expectInvalid('/api/v1/gmail/drafts', { to: 'a@b.c', subject: 'Hi' }, 'body');
+    });
+
+    it('refuses a batch past the 1000-message cap', async () => {
+      const messageIds = Array.from({ length: 1001 }, (_, n) => `m${n}`);
+      await expectInvalid('/api/v1/gmail/messages/batch-trash', { messageIds }, 'messageIds');
+    });
+
+    it('accepts a message body past the global 100 kb limit', async () => {
+      const res = await request(app).post('/api/v1/gmail/messages/send').set(auth())
+        .send({ to: 'bad\nline', subject: 'Hi', body: 'x'.repeat(300_000) });
+      assert.equal(res.status, 400, `expected validation, not 413; got ${res.status}`);
     });
   });
 });

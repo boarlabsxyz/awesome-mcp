@@ -266,6 +266,88 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "updateHubSpotCompany",
+        "summary": "Update a HubSpot company",
+        "description": "Only the named properties change. POST rather than PATCH because the catalog scope is GET and POST. 200 with the company re-read from HubSpot, whose PATCH echo omits populated fields. 400 when properties is empty. Mirrors the MCP tool `updateCompany`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "companyId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot company ID to update."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCompanyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/hubspot/companies/{companyId}/activity": {
@@ -710,6 +792,88 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "updateHubSpotContact",
+        "summary": "Update a HubSpot contact",
+        "description": "Only the named properties change. POST rather than PATCH because the catalog scope is GET and POST. 200 with the contact re-read from HubSpot. 400 when properties is empty. Mirrors the MCP tool `updateContact`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "contactId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot contact ID to update."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateContactRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/hubspot/deals": {
@@ -909,6 +1073,88 @@
         "responses": {
           "200": {
             "description": "The raw HubSpot deal object, or its rendering."
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "updateHubSpotDeal",
+        "summary": "Update a HubSpot deal",
+        "description": "Only the named properties change, such as moving a stage. POST rather than PATCH because the catalog scope is GET and POST. 200 with the deal re-read from HubSpot. 400 when properties is empty. Mirrors the MCP tool `updateDeal`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "dealId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot deal ID to update."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDealRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -1417,6 +1663,97 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "updateHubSpotProperty",
+        "summary": "Update a HubSpot property definition",
+        "description": "Changes the portal schema for every user of the portal. options is required and is the COMPLETE list - send every option to keep, not only the new one. Mirrors the MCP tool `updateProperty`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Type of CRM object."
+          },
+          {
+            "name": "propertyName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Name of the property."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePropertyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/hubspot/notes": {
@@ -1591,6 +1928,246 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EngagementResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/tasks": {
+      "post": {
+        "operationId": "createHubSpotTask",
+        "summary": "Create a HubSpot task and optionally attach it to a record",
+        "description": "Body limit 5mb. 201 even if attaching it failed: association.attached false marks an orphaned task, so do not retry. Not idempotent. Mirrors the MCP tool `createTask`.",
+        "tags": [
+          "hubspot"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTaskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/properties/{objectType}": {
+      "post": {
+        "operationId": "createHubSpotProperty",
+        "summary": "Create a HubSpot custom property",
+        "description": "Changes the portal schema for every user of the portal. 201 with the property. 409 when the name is taken. Mirrors the MCP tool `createProperty`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Type of CRM object."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePropertyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/engagements/{engagementType}/{engagementId}/delete": {
+      "post": {
+        "operationId": "deleteHubSpotEngagement",
+        "summary": "Delete a HubSpot note, task, call or meeting",
+        "description": "DESTRUCTIVE. Exposed with explicit sign-off. Archives it to the HubSpot recycling bin, so it leaves every timeline but can be restored from HubSpot. engagementType is notes, tasks, calls or meetings. POST to an action path rather than DELETE on the resource. Mirrors the MCP tool `deleteEngagement`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "engagementType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Type of engagement to delete (plural, matching the tool that created it)."
+          },
+          {
+            "name": "engagementId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot ID of the engagement (returned when it was created)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
                 }
               }
             }
@@ -2052,6 +2629,198 @@
           "nextAfter": {
             "type": "string",
             "description": "Cursor for the next page, when there is one."
+          }
+        }
+      },
+      "CreateTaskRequest": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "Task title (hs_task_subject)."
+          },
+          "body": {
+            "type": "string",
+            "description": "Task notes/body (hs_task_body)."
+          },
+          "status": {
+            "type": "string",
+            "description": "Task status, e.g. NOT_STARTED, IN_PROGRESS, WAITING, COMPLETED, DEFERRED (hs_task_status)."
+          },
+          "priority": {
+            "type": "string",
+            "description": "Task priority, e.g. LOW, MEDIUM, HIGH (hs_task_priority)."
+          },
+          "hs_timestamp": {
+            "type": [
+              "string",
+              "number"
+            ],
+            "description": "Activity time as ISO-8601 or epoch milliseconds. Defaults to now."
+          },
+          "associateToObjectType": {
+            "type": "string",
+            "enum": [
+              "companies",
+              "contacts",
+              "deals"
+            ],
+            "description": "Record type to attach this activity to (companies, contacts, or deals), so it shows on that timeline."
+          },
+          "associateToObjectId": {
+            "type": "string",
+            "description": "ID of the record to attach this activity to."
+          }
+        }
+      },
+      "UpdateCompanyRequest": {
+        "type": "object",
+        "required": [
+          "properties"
+        ],
+        "properties": {
+          "properties": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Object containing the properties to update (at least one)."
+          }
+        }
+      },
+      "UpdateContactRequest": {
+        "type": "object",
+        "required": [
+          "properties"
+        ],
+        "properties": {
+          "properties": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Object containing the properties to update (at least one)."
+          }
+        }
+      },
+      "UpdateDealRequest": {
+        "type": "object",
+        "required": [
+          "properties"
+        ],
+        "properties": {
+          "properties": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Object containing the properties to update (at least one)."
+          }
+        }
+      },
+      "CreatePropertyRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "label",
+          "type",
+          "fieldType",
+          "groupName"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Internal name of the property."
+          },
+          "label": {
+            "type": "string",
+            "description": "Display label for the property."
+          },
+          "type": {
+            "type": "string",
+            "description": "Data type (string, number, date, enumeration, etc.)."
+          },
+          "fieldType": {
+            "type": "string",
+            "description": "Field type (text, textarea, select, number, date, etc.)."
+          },
+          "groupName": {
+            "type": "string",
+            "description": "Property group name."
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "description": "Display label for the option."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "Internal value for the option."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Optional description for the option."
+                },
+                "displayOrder": {
+                  "type": "integer",
+                  "description": "Optional sort order for the option."
+                }
+              },
+              "required": [
+                "label",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Array of option objects for dropdown fields."
+          },
+          "description": {
+            "type": "string",
+            "description": "Property description."
+          }
+        }
+      },
+      "UpdatePropertyRequest": {
+        "type": "object",
+        "required": [
+          "options"
+        ],
+        "properties": {
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "description": "Display label for the option."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "Internal value for the option."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Optional description for the option."
+                },
+                "displayOrder": {
+                  "type": "integer",
+                  "description": "Optional sort order for the option."
+                }
+              },
+              "required": [
+                "label",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Array of option objects for dropdown fields."
+          },
+          "label": {
+            "type": "string",
+            "description": "Optional new display label."
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional new description."
           }
         }
       }

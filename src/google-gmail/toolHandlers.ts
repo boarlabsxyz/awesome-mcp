@@ -20,18 +20,35 @@ function handleGmailError(error: any, log: LogLike, operation: string, codeMessa
   throw new UserError(`Failed to ${operation}: ${error.message || 'Unknown error'}`);
 }
 
+type EmailArgs = { to: string; subject: string; body: string; cc?: string; bcc?: string; isHtml?: boolean };
+
+/** Send a message. Throws Gmail's own error, so a REST route keeps the status. */
+export async function performSendEmail(gmail: gmail_v1.Gmail, args: EmailArgs): Promise<gmail_v1.Schema$Message> {
+  const raw = createRawEmail(args.to, args.subject, args.body, {
+    cc: args.cc, bcc: args.bcc, isHtml: args.isHtml,
+  });
+  const response = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+  return response.data;
+}
+
+/** Create a draft. Throws Gmail's own error, so a REST route keeps the status. */
+export async function performDraftEmail(gmail: gmail_v1.Gmail, args: EmailArgs): Promise<gmail_v1.Schema$Draft> {
+  const raw = createRawEmail(args.to, args.subject, args.body, {
+    cc: args.cc, bcc: args.bcc, isHtml: args.isHtml,
+  });
+  const response = await gmail.users.drafts.create({ userId: 'me', requestBody: { message: { raw } } });
+  return response.data;
+}
+
 export async function handleSendEmail(
   gmail: gmail_v1.Gmail,
-  args: { to: string; subject: string; body: string; cc?: string; bcc?: string; isHtml?: boolean },
+  args: EmailArgs,
   log: LogLike
 ): Promise<string> {
   log.info(`Sending email to: ${args.to}`);
   try {
-    const raw = createRawEmail(args.to, args.subject, args.body, {
-      cc: args.cc, bcc: args.bcc, isHtml: args.isHtml,
-    });
-    const response = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
-    return `Email sent successfully!\n\n**Message ID:** ${response.data.id}\n**Thread ID:** ${response.data.threadId}\n**To:** ${args.to}`;
+    const sent = await performSendEmail(gmail, args);
+    return `Email sent successfully!\n\n**Message ID:** ${sent.id}\n**Thread ID:** ${sent.threadId}\n**To:** ${args.to}`;
   } catch (error: any) {
     handleGmailError(error, log, 'sending email', {
       403: "Permission denied. Make sure you have granted Gmail send access.",
@@ -41,16 +58,13 @@ export async function handleSendEmail(
 
 export async function handleDraftEmail(
   gmail: gmail_v1.Gmail,
-  args: { to: string; subject: string; body: string; cc?: string; bcc?: string; isHtml?: boolean },
+  args: EmailArgs,
   log: LogLike
 ): Promise<string> {
   log.info(`Creating draft email to: ${args.to}`);
   try {
-    const raw = createRawEmail(args.to, args.subject, args.body, {
-      cc: args.cc, bcc: args.bcc, isHtml: args.isHtml,
-    });
-    const response = await gmail.users.drafts.create({ userId: 'me', requestBody: { message: { raw } } });
-    return `Draft created successfully!\n\n**Draft ID:** ${response.data.id}\n**Message ID:** ${response.data.message?.id}\n**To:** ${args.to}`;
+    const draft = await performDraftEmail(gmail, args);
+    return `Draft created successfully!\n\n**Draft ID:** ${draft.id}\n**Message ID:** ${draft.message?.id}\n**To:** ${args.to}`;
   } catch (error: any) {
     handleGmailError(error, log, 'creating draft', {
       403: "Permission denied. Make sure you have granted Gmail access.",
@@ -115,6 +129,18 @@ export async function handleSearchEmails(
   }
 }
 
+/** Change one message's labels. Throws Gmail's own error. */
+export async function performModifyEmail(
+  gmail: gmail_v1.Gmail,
+  args: { messageId: string; addLabelIds?: string[]; removeLabelIds?: string[] },
+): Promise<gmail_v1.Schema$Message> {
+  const response = await gmail.users.messages.modify({
+    userId: 'me', id: args.messageId,
+    requestBody: { addLabelIds: args.addLabelIds, removeLabelIds: args.removeLabelIds },
+  });
+  return response.data;
+}
+
 export async function handleModifyEmail(
   gmail: gmail_v1.Gmail,
   args: { messageId: string; addLabelIds?: string[]; removeLabelIds?: string[] },
@@ -122,11 +148,8 @@ export async function handleModifyEmail(
 ): Promise<string> {
   log.info(`Modifying email labels: ${args.messageId}`);
   try {
-    const response = await gmail.users.messages.modify({
-      userId: 'me', id: args.messageId,
-      requestBody: { addLabelIds: args.addLabelIds, removeLabelIds: args.removeLabelIds },
-    });
-    return `Email labels modified successfully!\n\n**Message ID:** ${response.data.id}\n**Current Labels:** ${response.data.labelIds?.join(', ') || 'none'}`;
+    const message = await performModifyEmail(gmail, args);
+    return `Email labels modified successfully!\n\n**Message ID:** ${message.id}\n**Current Labels:** ${message.labelIds?.join(', ') || 'none'}`;
   } catch (error: any) {
     handleGmailError(error, log, 'modifying email', {
       404: `Email not found (ID: ${args.messageId}).`,
@@ -152,6 +175,17 @@ export async function handleDeleteEmail(
   }
 }
 
+/** Change labels on many messages in one request. Gmail answers 204 with no per-message result. */
+export async function performBatchModifyEmails(
+  gmail: gmail_v1.Gmail,
+  args: { messageIds: string[]; addLabelIds?: string[]; removeLabelIds?: string[] },
+): Promise<void> {
+  await gmail.users.messages.batchModify({
+    userId: 'me',
+    requestBody: { ids: args.messageIds, addLabelIds: args.addLabelIds, removeLabelIds: args.removeLabelIds },
+  });
+}
+
 export async function handleBatchModifyEmails(
   gmail: gmail_v1.Gmail,
   args: { messageIds: string[]; addLabelIds?: string[]; removeLabelIds?: string[] },
@@ -159,10 +193,7 @@ export async function handleBatchModifyEmails(
 ): Promise<string> {
   log.info(`Batch modifying ${args.messageIds.length} emails`);
   try {
-    await gmail.users.messages.batchModify({
-      userId: 'me',
-      requestBody: { ids: args.messageIds, addLabelIds: args.addLabelIds, removeLabelIds: args.removeLabelIds },
-    });
+    await performBatchModifyEmails(gmail, args);
     return `Successfully modified labels on ${args.messageIds.length} email(s).\n` +
       (args.addLabelIds?.length ? `**Added labels:** ${args.addLabelIds.join(', ')}\n` : '') +
       (args.removeLabelIds?.length ? `**Removed labels:** ${args.removeLabelIds.join(', ')}` : '');
@@ -171,22 +202,54 @@ export async function handleBatchModifyEmails(
   }
 }
 
+const TRASH_BATCH_SIZE = 10;
+
+export interface BatchTrashResult {
+  trashed: string[];
+  failed: Array<{ id: string; error: any }>;
+  /** Left untouched: a whole batch failed, so the rest would have too. */
+  notAttempted: string[];
+}
+
+/**
+ * Trash messages a batch at a time. There is no batch endpoint for this, so a
+ * failure part way leaves some messages trashed; the result says exactly which,
+ * rather than one error hiding the ones that went.
+ */
+export async function performBatchTrashEmails(gmail: gmail_v1.Gmail, messageIds: string[]): Promise<BatchTrashResult> {
+  const result: BatchTrashResult = { trashed: [], failed: [], notAttempted: [] };
+  for (let i = 0; i < messageIds.length; i += TRASH_BATCH_SIZE) {
+    const batch = messageIds.slice(i, i + TRASH_BATCH_SIZE);
+    const settled = await Promise.allSettled(batch.map(id => gmail.users.messages.trash({ userId: 'me', id })));
+    settled.forEach((outcome, n) => {
+      if (outcome.status === 'fulfilled') result.trashed.push(batch[n]);
+      else result.failed.push({ id: batch[n], error: outcome.reason });
+    });
+    if (settled.every(outcome => outcome.status === 'rejected')) {
+      result.notAttempted = messageIds.slice(i + TRASH_BATCH_SIZE);
+      break;
+    }
+  }
+  return result;
+}
+
 export async function handleBatchDeleteEmails(
   gmail: gmail_v1.Gmail,
   args: { messageIds: string[] },
   log: LogLike
 ): Promise<string> {
   log.info(`Batch trashing ${args.messageIds.length} emails`);
-  try {
-    const BATCH_SIZE = 10;
-    for (let i = 0; i < args.messageIds.length; i += BATCH_SIZE) {
-      const batch = args.messageIds.slice(i, i + BATCH_SIZE);
-      await Promise.all(batch.map(id => gmail.users.messages.trash({ userId: 'me', id })));
-    }
-    return `Successfully moved ${args.messageIds.length} email(s) to trash.`;
-  } catch (error: any) {
-    handleGmailError(error, log, 'batch trashing emails', { 403: "Permission denied." });
+  const { trashed, failed, notAttempted } = await performBatchTrashEmails(gmail, args.messageIds);
+  if (failed.length === 0) return `Successfully moved ${trashed.length} email(s) to trash.`;
+  if (trashed.length === 0) {
+    handleGmailError(failed[0].error, log, 'batch trashing emails', { 403: "Permission denied." });
   }
+  log.error(`Batch trash partly failed: ${failed.length} failed, ${notAttempted.length} not attempted`);
+  throw new UserError(
+    `Moved ${trashed.length} of ${args.messageIds.length} email(s) to trash. `
+    + `Failed: ${failed.map(f => f.id).join(', ')}.`
+    + (notAttempted.length ? ` Not attempted: ${notAttempted.length}.` : ''),
+  );
 }
 
 export async function handleListLabels(
@@ -217,6 +280,22 @@ export async function handleListLabels(
   }
 }
 
+/** Create a label. Throws Gmail's own error, so 409 for a duplicate name survives. */
+export async function performCreateLabel(
+  gmail: gmail_v1.Gmail,
+  args: { name: string; labelListVisibility?: string; messageListVisibility?: string },
+): Promise<gmail_v1.Schema$Label> {
+  const response = await gmail.users.labels.create({
+    userId: 'me',
+    requestBody: {
+      name: args.name,
+      labelListVisibility: args.labelListVisibility,
+      messageListVisibility: args.messageListVisibility,
+    },
+  });
+  return response.data;
+}
+
 export async function handleCreateLabel(
   gmail: gmail_v1.Gmail,
   args: { name: string; labelListVisibility?: string; messageListVisibility?: string },
@@ -224,21 +303,34 @@ export async function handleCreateLabel(
 ): Promise<string> {
   log.info(`Creating label: ${args.name}`);
   try {
-    const response = await gmail.users.labels.create({
-      userId: 'me',
-      requestBody: {
-        name: args.name,
-        labelListVisibility: args.labelListVisibility,
-        messageListVisibility: args.messageListVisibility,
-      },
-    });
-    return `Label created successfully!\n\n**Name:** ${response.data.name}\n**ID:** ${response.data.id}\n**Type:** ${response.data.type}`;
+    const label = await performCreateLabel(gmail, args);
+    return `Label created successfully!\n\n**Name:** ${label.name}\n**ID:** ${label.id}\n**Type:** ${label.type}`;
   } catch (error: any) {
     handleGmailError(error, log, 'creating label', {
       409: `Label "${args.name}" already exists.`,
       403: "Permission denied.",
     });
   }
+}
+
+/** The label fields a caller named; omitted ones must stay out of the request. */
+export function labelChanges(
+  args: { name?: string; labelListVisibility?: string; messageListVisibility?: string },
+): gmail_v1.Schema$Label {
+  const requestBody: gmail_v1.Schema$Label = {};
+  if (args.name !== undefined) requestBody.name = args.name;
+  if (args.labelListVisibility !== undefined) requestBody.labelListVisibility = args.labelListVisibility;
+  if (args.messageListVisibility !== undefined) requestBody.messageListVisibility = args.messageListVisibility;
+  return requestBody;
+}
+
+/** labels.patch, not labels.update: update is a full replacement and these are partial. */
+export async function performUpdateLabel(
+  gmail: gmail_v1.Gmail,
+  args: { labelId: string; name?: string; labelListVisibility?: string; messageListVisibility?: string },
+): Promise<gmail_v1.Schema$Label> {
+  const response = await gmail.users.labels.patch({ userId: 'me', id: args.labelId, requestBody: labelChanges(args) });
+  return response.data;
 }
 
 export async function handleUpdateLabel(
@@ -248,13 +340,8 @@ export async function handleUpdateLabel(
 ): Promise<string> {
   log.info(`Updating label: ${args.labelId}`);
   try {
-    const requestBody: gmail_v1.Schema$Label = {};
-    if (args.name !== undefined) requestBody.name = args.name;
-    if (args.labelListVisibility !== undefined) requestBody.labelListVisibility = args.labelListVisibility;
-    if (args.messageListVisibility !== undefined) requestBody.messageListVisibility = args.messageListVisibility;
-
-    const response = await gmail.users.labels.update({ userId: 'me', id: args.labelId, requestBody });
-    return `Label updated successfully!\n\n**Name:** ${response.data.name}\n**ID:** ${response.data.id}`;
+    const label = await performUpdateLabel(gmail, args);
+    return `Label updated successfully!\n\n**Name:** ${label.name}\n**ID:** ${label.id}`;
   } catch (error: any) {
     handleGmailError(error, log, 'updating label', {
       404: `Label not found (ID: ${args.labelId}).`,
@@ -263,15 +350,18 @@ export async function handleUpdateLabel(
   }
 }
 
+const SYSTEM_LABELS = ['INBOX', 'SENT', 'DRAFT', 'TRASH', 'SPAM', 'STARRED', 'UNREAD', 'IMPORTANT',
+  'CATEGORY_PERSONAL', 'CATEGORY_SOCIAL', 'CATEGORY_PROMOTIONS', 'CATEGORY_UPDATES', 'CATEGORY_FORUMS'];
+
+export const isSystemLabel = (labelId: string): boolean => SYSTEM_LABELS.includes(labelId);
+
 export async function handleDeleteLabel(
   gmail: gmail_v1.Gmail,
   args: { labelId: string },
   log: LogLike
 ): Promise<string> {
   log.info(`Deleting label: ${args.labelId}`);
-  const systemLabels = ['INBOX', 'SENT', 'DRAFT', 'TRASH', 'SPAM', 'STARRED', 'UNREAD', 'IMPORTANT',
-    'CATEGORY_PERSONAL', 'CATEGORY_SOCIAL', 'CATEGORY_PROMOTIONS', 'CATEGORY_UPDATES', 'CATEGORY_FORUMS'];
-  if (systemLabels.includes(args.labelId)) {
+  if (isSystemLabel(args.labelId)) {
     throw new UserError(`Cannot delete system label: ${args.labelId}`);
   }
   try {
@@ -285,6 +375,20 @@ export async function handleDeleteLabel(
   }
 }
 
+/** Find a label by name, case-insensitively, or create it; `created` says which happened. */
+export async function performGetOrCreateLabel(
+  gmail: gmail_v1.Gmail,
+  args: { name: string },
+): Promise<{ label: gmail_v1.Schema$Label; created: boolean }> {
+  const listResponse = await gmail.users.labels.list({ userId: 'me' });
+  const existing = listResponse.data.labels?.find(
+    l => l.name?.toLowerCase() === args.name.toLowerCase()
+  );
+  if (existing) return { label: existing, created: false };
+  const response = await gmail.users.labels.create({ userId: 'me', requestBody: { name: args.name } });
+  return { label: response.data, created: true };
+}
+
 export async function handleGetOrCreateLabel(
   gmail: gmail_v1.Gmail,
   args: { name: string },
@@ -292,15 +396,8 @@ export async function handleGetOrCreateLabel(
 ): Promise<string> {
   log.info(`Getting or creating label: ${args.name}`);
   try {
-    const listResponse = await gmail.users.labels.list({ userId: 'me' });
-    const existing = listResponse.data.labels?.find(
-      l => l.name?.toLowerCase() === args.name.toLowerCase()
-    );
-    if (existing) {
-      return `Label found!\n\n**Name:** ${existing.name}\n**ID:** ${existing.id}\n**Type:** ${existing.type}`;
-    }
-    const response = await gmail.users.labels.create({ userId: 'me', requestBody: { name: args.name } });
-    return `Label created!\n\n**Name:** ${response.data.name}\n**ID:** ${response.data.id}\n**Type:** ${response.data.type}`;
+    const { label, created } = await performGetOrCreateLabel(gmail, args);
+    return `Label ${created ? 'created' : 'found'}!\n\n**Name:** ${label.name}\n**ID:** ${label.id}\n**Type:** ${label.type}`;
   } catch (error: any) {
     handleGmailError(error, log, 'getting/creating label', { 403: "Permission denied." });
   }

@@ -10759,6 +10759,201 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "updateGitHubIssue",
+        "summary": "Update or close an issue",
+        "description": "Exposed with explicit sign-off. body, labels and assignees REPLACE what is there. POST rather than PATCH because the catalog scope is GET and POST. notApplied names fields GitHub silently dropped for an account without push access. 400 when no field is given. Mirrors the MCP tool `updateIssue`.",
+        "tags": [
+          "github"
+        ],
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository owner — a user or organization login, e.g. \"octocat\" (the part after github.com/)."
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository name without the owner, e.g. \"hello-world\"."
+          },
+          {
+            "name": "issueNumber",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Issue number — the #N shown on GitHub. Pull requests share this numbering."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "description": "New title."
+                  },
+                  "body": {
+                    "type": "string",
+                    "description": "New body. Replaces the whole body."
+                  },
+                  "assignees": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "The COMPLETE set of assignees — replaces the current set; [] clears them."
+                  },
+                  "milestone": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Milestone NUMBER, or null to remove the milestone."
+                  },
+                  "labels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "The COMPLETE set of labels — replaces the current set; [] clears them."
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "closed"
+                    ],
+                    "description": "Open or close the issue."
+                  },
+                  "stateReason": {
+                    "type": "string",
+                    "enum": [
+                      "completed",
+                      "not_planned",
+                      "reopened"
+                    ],
+                    "description": "Why the state changed. Use with state: closed → completed / not_planned; open → reopened."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/github/repos/{owner}/{repo}/pulls": {
@@ -10935,6 +11130,174 @@
           },
           "404": {
             "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createGitHubPullRequest",
+        "summary": "Open a pull request",
+        "description": "Exposed with explicit sign-off. 201 with the pull request. Not idempotent - a repeat fails with 422 while the first is open. Mirrors the MCP tool `createPullRequest`.",
+        "tags": [
+          "github"
+        ],
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository owner — a user or organization login, e.g. \"octocat\" (the part after github.com/)."
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository name without the owner, e.g. \"hello-world\"."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "head",
+                  "base"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Pull request title."
+                  },
+                  "body": {
+                    "type": "string",
+                    "description": "Pull request description (GitHub Markdown)."
+                  },
+                  "head": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Branch with the changes. For a branch in a fork, \"user:branch\"."
+                  },
+                  "base": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Branch to merge into, e.g. \"main\"."
+                  },
+                  "draft": {
+                    "type": "boolean",
+                    "description": "Open as a draft."
+                  },
+                  "maintainerCanModify": {
+                    "type": "boolean",
+                    "description": "Let maintainers of the base repository push to the head branch."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
             "content": {
               "application/json": {
                 "schema": {
@@ -11749,6 +12112,213 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "createGitHubPullRequestReview",
+        "summary": "Submit a pull request review",
+        "description": "Exposed with explicit sign-off: the permanent dashboard API key can APPROVE as the connected account, which can satisfy a required review. body is required unless event is APPROVE. 201 with {review, inlineComments}. Mirrors the MCP tool `createPullRequestReview`.",
+        "tags": [
+          "github"
+        ],
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository owner — a user or organization login, e.g. \"octocat\" (the part after github.com/)."
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository name without the owner, e.g. \"hello-world\"."
+          },
+          {
+            "name": "pullNumber",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pull request number — the #N shown on GitHub."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "event"
+                ],
+                "properties": {
+                  "event": {
+                    "type": "string",
+                    "enum": [
+                      "APPROVE",
+                      "REQUEST_CHANGES",
+                      "COMMENT"
+                    ],
+                    "description": "The review verdict to submit."
+                  },
+                  "body": {
+                    "type": "string",
+                    "description": "Review summary. Required for REQUEST_CHANGES and COMMENT."
+                  },
+                  "commitId": {
+                    "type": "string",
+                    "description": "SHA of the commit being reviewed. Defaults to the PR's latest commit."
+                  },
+                  "comments": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "File path the comment is on, relative to the repository root."
+                        },
+                        "body": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Comment text."
+                        },
+                        "line": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "description": "Line number in the file. Give this OR position."
+                        },
+                        "side": {
+                          "type": "string",
+                          "enum": [
+                            "LEFT",
+                            "RIGHT"
+                          ],
+                          "description": "With line: RIGHT for the new version (default), LEFT for the old."
+                        },
+                        "position": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "description": "Legacy: line offset within the diff hunk. Give this OR line."
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "body"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "Inline comments to attach to the review."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/github/repos/{owner}/{repo}/issues/{issueNumber}/comments": {
@@ -12197,6 +12767,704 @@
               "application/json": {
                 "schema": {
                   "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/organizations": {
+      "get": {
+        "operationId": "listGitHubOrganizations",
+        "summary": "List the organizations the connected account reaches",
+        "description": "Says how many repositories of each this connection can read and whether the access rules allow it. truncated true means those counts are floors. Mirrors the MCP tool `listOrganizations`.",
+        "tags": [
+          "github"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requested data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/repos": {
+      "post": {
+        "operationId": "createGitHubRepository",
+        "summary": "Create a repository under the connected account",
+        "description": "Exposed with explicit sign-off: the permanent dashboard API key can create repositories. GitHub defaults to public, so pass private true when that is not wanted. 201 with the repository. Not idempotent - a repeat fails with 422. Mirrors the MCP tool `createRepository`.",
+        "tags": [
+          "github"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Name of the new repository."
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Repository description."
+                  },
+                  "private": {
+                    "type": "boolean",
+                    "description": "Create it private. GitHub defaults to public."
+                  },
+                  "autoInit": {
+                    "type": "boolean",
+                    "description": "Create an initial commit with an empty README, so the repository has a default branch straight away."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/repos/{owner}/{repo}/forks": {
+      "post": {
+        "operationId": "forkGitHubRepository",
+        "summary": "Fork a repository",
+        "description": "Exposed with explicit sign-off. 202 with {fork, preExisting} because GitHub forks asynchronously; 200 with preExisting true when GitHub returned a fork that already existed and made nothing new. The organization in the body is checked against the access rules too. Mirrors the MCP tool `forkRepository`.",
+        "tags": [
+          "github"
+        ],
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository owner — a user or organization login, e.g. \"octocat\" (the part after github.com/)."
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository name without the owner, e.g. \"hello-world\"."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "organization": {
+                    "type": "string",
+                    "description": "Organization to fork into. Defaults to the connected account."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "It already existed; nothing was created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted; GitHub finishes this asynchronously.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/repos/{owner}/{repo}/branches": {
+      "post": {
+        "operationId": "createGitHubBranch",
+        "summary": "Create a branch",
+        "description": "Exposed with explicit sign-off. 201 with the branch, source and SHA. fromBranch defaults to the default branch. 404 for a missing source branch, 409 when the branch already exists. Mirrors the MCP tool `createBranch`.",
+        "tags": [
+          "github"
+        ],
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository owner — a user or organization login, e.g. \"octocat\" (the part after github.com/)."
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository name without the owner, e.g. \"hello-world\"."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "branch"
+                ],
+                "properties": {
+                  "branch": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Name of the new branch, e.g. \"feature/login\"."
+                  },
+                  "fromBranch": {
+                    "type": "string",
+                    "description": "Branch to start from. Defaults to the repository's default branch."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by the MCP tool schema, or refused by the op before any call to GitHub",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unknown bearer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No GitHub connection, or GitHub refused (permission, SAML SSO, missing scope or fine-grained permission — the message names which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Does not exist OR the connected account cannot see it (GitHub answers 404 for both)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: the branch moved, the file changed since its sha, or GitHub answered merged false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GitHub rate limit used up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until the limit resets"
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub rejected the stored credential (reconnect), GitHub errored, or it could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/update-branch": {
+      "post": {
+        "operationId": "updateGitHubPullRequestBranch",
+        "summary": "Bring a pull request branch up to date with its base",
+        "description": "Exposed with explicit sign-off. 202 because GitHub only queues this: accepted does not mean the branch has moved yet. Pass expectedHeadSha to refuse a stale head. Mirrors the MCP tool `updatePullRequestBranch`.",
+        "tags": [
+          "github"
+        ],
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository owner — a user or organization login, e.g. \"octocat\" (the part after github.com/)."
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository name without the owner, e.g. \"hello-world\"."
+          },
+          {
+            "name": "pullNumber",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pull request number — the #N shown on GitHub."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedHeadSha": {
+                    "type": "string",
+                    "description": "Only update if the PR head is still this SHA."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted; GitHub finishes this asynchronously.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
                 }
               }
             }
@@ -12824,6 +14092,763 @@
         }
       }
     },
+    "/api/v1/gmail/messages/batch-modify": {
+      "post": {
+        "operationId": "batchModifyGmailMessages",
+        "summary": "Change labels on up to 1000 emails",
+        "description": "Gmail answers 204 with no per-message result, so confirmed is always null: requested counts the IDs sent, not the messages changed. 400 when no label is named. Mirrors the MCP tool `batchModifyEmails`.",
+        "tags": [
+          "gmail"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "messageIds"
+                ],
+                "properties": {
+                  "messageIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 1000,
+                    "description": "Array of Gmail message IDs to modify (max 1000)."
+                  },
+                  "addLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Label IDs to add to all messages."
+                  },
+                  "removeLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Label IDs to remove from all messages."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/messages/batch-trash": {
+      "post": {
+        "operationId": "batchTrashGmailMessages",
+        "summary": "Move up to 1000 emails to the trash",
+        "description": "DESTRUCTIVE. Exposed with explicit sign-off. Moves messages to Trash, recoverable for 30 days. Gmail has no batch trash, so a failure part way is reported per message: trashed, failed and notAttempted. 200 unless nothing was trashed. Mirrors the MCP tool `batchDeleteEmails`.",
+        "tags": [
+          "gmail"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "messageIds"
+                ],
+                "properties": {
+                  "messageIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 1000,
+                    "description": "Array of Gmail message IDs to trash (max 1000)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/messages/{messageId}/modify": {
+      "post": {
+        "operationId": "modifyGmailMessage",
+        "summary": "Change labels on one email",
+        "description": "POST sibling of the older PATCH on the message, which stays for existing callers. 400 when no label is named. Mirrors the MCP tool `modifyEmail`.",
+        "tags": [
+          "gmail"
+        ],
+        "parameters": [
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Gmail message ID to modify."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "addLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Label IDs to add to the message."
+                  },
+                  "removeLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Label IDs to remove from the message."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/messages/{messageId}/trash": {
+      "post": {
+        "operationId": "trashGmailMessage",
+        "summary": "Move one email to the trash",
+        "description": "DESTRUCTIVE. Exposed with explicit sign-off, though the older DELETE on the message already reached this. Moves it to Trash, recoverable for 30 days. Mirrors the MCP tool `deleteEmail`.",
+        "tags": [
+          "gmail"
+        ],
+        "parameters": [
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Gmail message ID to trash."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/labels/get-or-create": {
+      "post": {
+        "operationId": "getOrCreateGmailLabel",
+        "summary": "Find a label by name or create it",
+        "description": "201 with created true when the label was made, 200 with created false when it already existed. Matches the name case-insensitively. Mirrors the MCP tool `getOrCreateLabel`.",
+        "tags": [
+          "gmail"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The label name to find or create."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "It already existed; nothing was created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/labels": {
+      "post": {
+        "operationId": "createGmailLabel",
+        "summary": "Create a Gmail label",
+        "description": "201 with the created label. 409 when the name is taken. Mirrors the MCP tool `createLabel`.",
+        "tags": [
+          "gmail"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The display name for the new label."
+                  },
+                  "labelListVisibility": {
+                    "type": "string",
+                    "enum": [
+                      "labelShow",
+                      "labelShowIfUnread",
+                      "labelHide"
+                    ],
+                    "default": "labelShow",
+                    "description": "Whether the label is shown in the label list."
+                  },
+                  "messageListVisibility": {
+                    "type": "string",
+                    "enum": [
+                      "show",
+                      "hide"
+                    ],
+                    "default": "show",
+                    "description": "Whether messages with this label are shown in the message list."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listLabels",
+        "summary": "List Gmail labels",
+        "description": "List Gmail labels. Mirrors the MCP tool `listLabels`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "gmail"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/labels/{labelId}": {
+      "post": {
+        "operationId": "updateGmailLabel",
+        "summary": "Update a Gmail label",
+        "description": "Only the named fields change. 400 when no field is given. Mirrors the MCP tool `updateLabel`.",
+        "tags": [
+          "gmail"
+        ],
+        "parameters": [
+          {
+            "name": "labelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The label ID to update."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "New display name for the label."
+                  },
+                  "labelListVisibility": {
+                    "type": "string",
+                    "enum": [
+                      "labelShow",
+                      "labelShowIfUnread",
+                      "labelHide"
+                    ],
+                    "description": "Whether the label is shown in the label list."
+                  },
+                  "messageListVisibility": {
+                    "type": "string",
+                    "enum": [
+                      "show",
+                      "hide"
+                    ],
+                    "description": "Whether messages with this label are shown in the message list."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/labels/{labelId}/delete": {
+      "post": {
+        "operationId": "deleteGmailLabel",
+        "summary": "Permanently delete a Gmail label",
+        "description": "DESTRUCTIVE and permanent. Exposed with explicit sign-off. The label comes off every message; the messages stay. System labels are refused with 400. Mirrors the MCP tool `deleteLabel`.",
+        "tags": [
+          "gmail"
+        ],
+        "parameters": [
+          {
+            "name": "labelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The label ID to delete."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/hubspot/companies": {
       "get": {
         "operationId": "getHubSpotActiveCompanies",
@@ -13031,6 +15056,88 @@
         "responses": {
           "200": {
             "description": "The raw HubSpot company object, or its rendering when text was requested."
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "updateHubSpotCompany",
+        "summary": "Update a HubSpot company",
+        "description": "Only the named properties change. POST rather than PATCH because the catalog scope is GET and POST. 200 with the company re-read from HubSpot, whose PATCH echo omits populated fields. 400 when properties is empty. Mirrors the MCP tool `updateCompany`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "companyId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot company ID to update."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCompanyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -13517,6 +15624,88 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "updateHubSpotContact",
+        "summary": "Update a HubSpot contact",
+        "description": "Only the named properties change. POST rather than PATCH because the catalog scope is GET and POST. 200 with the contact re-read from HubSpot. 400 when properties is empty. Mirrors the MCP tool `updateContact`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "contactId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot contact ID to update."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateContactRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/hubspot/deals": {
@@ -13716,6 +15905,88 @@
         "responses": {
           "200": {
             "description": "The raw HubSpot deal object, or its rendering."
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "updateHubSpotDeal",
+        "summary": "Update a HubSpot deal",
+        "description": "Only the named properties change, such as moving a stage. POST rather than PATCH because the catalog scope is GET and POST. 200 with the deal re-read from HubSpot. 400 when properties is empty. Mirrors the MCP tool `updateDeal`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "dealId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot deal ID to update."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDealRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -14224,6 +16495,97 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "updateHubSpotProperty",
+        "summary": "Update a HubSpot property definition",
+        "description": "Changes the portal schema for every user of the portal. options is required and is the COMPLETE list - send every option to keep, not only the new one. Mirrors the MCP tool `updateProperty`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Type of CRM object."
+          },
+          {
+            "name": "propertyName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Name of the property."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePropertyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/hubspot/notes": {
@@ -14398,6 +16760,246 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EngagementResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/tasks": {
+      "post": {
+        "operationId": "createHubSpotTask",
+        "summary": "Create a HubSpot task and optionally attach it to a record",
+        "description": "Body limit 5mb. 201 even if attaching it failed: association.attached false marks an orphaned task, so do not retry. Not idempotent. Mirrors the MCP tool `createTask`.",
+        "tags": [
+          "hubspot"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTaskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/properties/{objectType}": {
+      "post": {
+        "operationId": "createHubSpotProperty",
+        "summary": "Create a HubSpot custom property",
+        "description": "Changes the portal schema for every user of the portal. 201 with the property. 409 when the name is taken. Mirrors the MCP tool `createProperty`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Type of CRM object."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePropertyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/engagements/{engagementType}/{engagementId}/delete": {
+      "post": {
+        "operationId": "deleteHubSpotEngagement",
+        "summary": "Delete a HubSpot note, task, call or meeting",
+        "description": "DESTRUCTIVE. Exposed with explicit sign-off. Archives it to the HubSpot recycling bin, so it leaves every timeline but can be restored from HubSpot. engagementType is notes, tasks, calls or meetings. POST to an action path rather than DELETE on the resource. Mirrors the MCP tool `deleteEngagement`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "engagementType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Type of engagement to delete (plural, matching the tool that created it)."
+          },
+          {
+            "name": "engagementId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot ID of the engagement (returned when it was created)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
                 }
               }
             }
@@ -22700,6 +25302,107 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "createRedmineIssueRelation",
+        "summary": "Link two Redmine issues",
+        "description": "201 with the created relation. Read as issueId relationType issueToId. Mirrors the MCP tool `createIssueRelation`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "issueId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The issue ID (the number after # in Redmine, e.g. 1234)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIssueRelationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/redmine/projects": {
@@ -22827,6 +25530,96 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "createRedmineProject",
+        "summary": "Create a Redmine project",
+        "description": "201 with the created project. Body limit 5mb. Mirrors the MCP tool `createProject`.",
+        "tags": [
+          "redmine"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/redmine/projects/{projectId}": {
@@ -22873,6 +25666,107 @@
         "responses": {
           "200": {
             "description": "Redmine { project } payload, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "updateRedmineProject",
+        "summary": "Update a Redmine project",
+        "description": "POST rather than PUT because the catalog scope is GET and POST. Body limit 5mb. Returns 200 with the project re-read from Redmine, which answers the write with 204. 400 when no field is given. Mirrors the MCP tool `updateProject`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project numeric ID or identifier (the slug in the project URL, e.g. \"my-project\")."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
             "content": {
               "application/json": {
                 "schema": {
@@ -23392,6 +26286,107 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "createRedmineVersion",
+        "summary": "Create a Redmine version",
+        "description": "201 with the created version. Body limit 5mb. Mirrors the MCP tool `createVersion`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project numeric ID or identifier (the slug in the project URL, e.g. \"my-project\")."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/redmine/projects/{projectId}/issue-categories": {
@@ -23434,6 +26429,107 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RedmineListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRedmineIssueCategory",
+        "summary": "Create a Redmine issue category",
+        "description": "201 with the created category. Body limit 5mb. Mirrors the MCP tool `createIssueCategory`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project numeric ID or identifier (the slug in the project URL, e.g. \"my-project\")."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIssueCategoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
                 }
               }
             }
@@ -23562,6 +26658,107 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RedmineListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRedmineMembership",
+        "summary": "Add a user or group to a Redmine project",
+        "description": "201 with the created membership. Grants the given roles, so this widens who can reach the project. Mirrors the MCP tool `createMembership`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project numeric ID or identifier (the slug in the project URL, e.g. \"my-project\")."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMembershipRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
                 }
               }
             }
@@ -24363,6 +27560,107 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "updateRedmineTimeEntry",
+        "summary": "Update a Redmine time entry",
+        "description": "POST rather than PUT because the catalog scope is GET and POST. Returns 200 with the entry re-read from Redmine. 400 when no field is given. Mirrors the MCP tool `updateTimeEntry`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "timeEntryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The time-entry ID to update."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTimeEntryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/redmine/versions/{versionId}": {
@@ -24401,6 +27699,107 @@
         "responses": {
           "200": {
             "description": "Redmine { version } payload, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "updateRedmineVersion",
+        "summary": "Update a Redmine version",
+        "description": "POST rather than PUT because the catalog scope is GET and POST. Returns 200 with the version re-read from Redmine. 400 when no field is given. Mirrors the MCP tool `updateVersion`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "versionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The version ID to update."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateVersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
             "content": {
               "application/json": {
                 "schema": {
@@ -25092,6 +28491,1067 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RedmineListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/issues/{issueId}/delete": {
+      "post": {
+        "operationId": "deleteRedmineIssue",
+        "summary": "Permanently delete a Redmine issue",
+        "description": "DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Takes the comments, time entries and subtasks with it. Mirrors the MCP tool `deleteIssue`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "issueId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The issue ID (the number after # in Redmine, e.g. 1234)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/issues/{issueId}/watchers": {
+      "post": {
+        "operationId": "addRedmineIssueWatcher",
+        "summary": "Add a watcher to a Redmine issue",
+        "description": "Body takes userId. watching re-reads the issue: true, false, or null when the account cannot read watchers. Mirrors the MCP tool `addIssueWatcher`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "issueId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The issue ID (the number after # in Redmine, e.g. 1234)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddIssueWatcherRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/issues/{issueId}/watchers/{userId}/remove": {
+      "post": {
+        "operationId": "removeRedmineIssueWatcher",
+        "summary": "Remove a watcher from a Redmine issue",
+        "description": "DESTRUCTIVE. Exposed with explicit sign-off. Redmine answers 204 even for a user who was not watching, so watching re-reads the issue: true, false, or null when the account cannot read watchers. Mirrors the MCP tool `removeIssueWatcher`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "issueId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The issue ID (the number after # in Redmine, e.g. 1234)."
+          },
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "User ID to remove from the watcher list."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/relations/{relationId}/delete": {
+      "post": {
+        "operationId": "deleteRedmineIssueRelation",
+        "summary": "Delete a Redmine issue relation",
+        "description": "DESTRUCTIVE. Exposed with explicit sign-off. Takes a relation ID from GET /issues/{issueId}/relations, NOT an issue ID. Mirrors the MCP tool `deleteIssueRelation`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "relationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The relation ID from listIssueRelations."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/projects/{projectId}/archive": {
+      "post": {
+        "operationId": "archiveRedmineProject",
+        "summary": "Archive a Redmine project",
+        "description": "Reversible with /unarchive. Requires a Redmine administrator and Redmine 5.0 or later. deleteProject has no REST sibling, so this is the way to retire a project over REST. Mirrors the MCP tool `archiveProject`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project numeric ID or identifier (the slug in the project URL, e.g. \"my-project\")."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/projects/{projectId}/unarchive": {
+      "post": {
+        "operationId": "unarchiveRedmineProject",
+        "summary": "Restore an archived Redmine project",
+        "description": "Requires a Redmine administrator and Redmine 5.0 or later. Mirrors the MCP tool `unarchiveProject`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project numeric ID or identifier (the slug in the project URL, e.g. \"my-project\")."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/time-entries/{timeEntryId}/delete": {
+      "post": {
+        "operationId": "deleteRedmineTimeEntry",
+        "summary": "Permanently delete a Redmine time entry",
+        "description": "DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Mirrors the MCP tool `deleteTimeEntry`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "timeEntryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The time-entry ID to delete."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/projects/{projectId}/wiki/{title}/delete": {
+      "post": {
+        "operationId": "deleteRedmineWikiPage",
+        "summary": "Permanently delete a Redmine wiki page",
+        "description": "DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Takes every revision of the page; child pages move to its parent. Mirrors the MCP tool `deleteWikiPage`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project numeric ID or identifier (the slug in the project URL, e.g. \"my-project\")."
+          },
+          {
+            "name": "title",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Page title to delete."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/versions/{versionId}/delete": {
+      "post": {
+        "operationId": "deleteRedmineVersion",
+        "summary": "Permanently delete a Redmine version",
+        "description": "DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Issues that targeted it are left with no target version. Mirrors the MCP tool `deleteVersion`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "versionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The version ID to delete."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/issue-categories/{categoryId}/delete": {
+      "post": {
+        "operationId": "deleteRedmineIssueCategory",
+        "summary": "Permanently delete a Redmine issue category",
+        "description": "DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Pass reassignToId to move its issues to another category, or they are left with none. Mirrors the MCP tool `deleteIssueCategory`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "categoryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The category ID to delete, from listIssueCategories."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteIssueCategoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query or body parameters failed the MCP tool schema. `issues` carries the flattened Zod field errors. Redmine silently ignores filters it does not recognise, so these are rejected here rather than forwarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token for THIS API. A rejected Redmine credential answers 502, not 401 — see that response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Redmine connection on the account, the connection has no instance URL, or Redmine denied the call (a missing permission, or an administrator-only endpoint).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found. Redmine also answers 404 for records the account is not allowed to see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Redmine rejected the values. The message carries Redmine own `errors` list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The Redmine instance was unreachable, redirected the request away from the configured host, or rejected the stored credential. The request to this API was authenticated; the upstream call was not.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redmine/memberships/{membershipId}/delete": {
+      "post": {
+        "operationId": "deleteRedmineMembership",
+        "summary": "Remove a member from a Redmine project",
+        "description": "DESTRUCTIVE. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Mirrors the MCP tool `deleteMembership`.",
+        "tags": [
+          "redmine"
+        ],
+        "parameters": [
+          {
+            "name": "membershipId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The membership ID from listMemberships."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedmineObjectResponse"
                 }
               }
             }
@@ -26745,30 +31205,6 @@
               "type": "string"
             }
           }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/gmail/labels": {
-      "get": {
-        "operationId": "listLabels",
-        "summary": "List Gmail labels",
-        "description": "List Gmail labels. Mirrors the MCP tool `listLabels`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "gmail"
         ],
         "responses": {
           "200": {
@@ -28800,6 +33236,198 @@
           }
         }
       },
+      "CreateTaskRequest": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "Task title (hs_task_subject)."
+          },
+          "body": {
+            "type": "string",
+            "description": "Task notes/body (hs_task_body)."
+          },
+          "status": {
+            "type": "string",
+            "description": "Task status, e.g. NOT_STARTED, IN_PROGRESS, WAITING, COMPLETED, DEFERRED (hs_task_status)."
+          },
+          "priority": {
+            "type": "string",
+            "description": "Task priority, e.g. LOW, MEDIUM, HIGH (hs_task_priority)."
+          },
+          "hs_timestamp": {
+            "type": [
+              "string",
+              "number"
+            ],
+            "description": "Activity time as ISO-8601 or epoch milliseconds. Defaults to now."
+          },
+          "associateToObjectType": {
+            "type": "string",
+            "enum": [
+              "companies",
+              "contacts",
+              "deals"
+            ],
+            "description": "Record type to attach this activity to (companies, contacts, or deals), so it shows on that timeline."
+          },
+          "associateToObjectId": {
+            "type": "string",
+            "description": "ID of the record to attach this activity to."
+          }
+        }
+      },
+      "UpdateCompanyRequest": {
+        "type": "object",
+        "required": [
+          "properties"
+        ],
+        "properties": {
+          "properties": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Object containing the properties to update (at least one)."
+          }
+        }
+      },
+      "UpdateContactRequest": {
+        "type": "object",
+        "required": [
+          "properties"
+        ],
+        "properties": {
+          "properties": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Object containing the properties to update (at least one)."
+          }
+        }
+      },
+      "UpdateDealRequest": {
+        "type": "object",
+        "required": [
+          "properties"
+        ],
+        "properties": {
+          "properties": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Object containing the properties to update (at least one)."
+          }
+        }
+      },
+      "CreatePropertyRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "label",
+          "type",
+          "fieldType",
+          "groupName"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Internal name of the property."
+          },
+          "label": {
+            "type": "string",
+            "description": "Display label for the property."
+          },
+          "type": {
+            "type": "string",
+            "description": "Data type (string, number, date, enumeration, etc.)."
+          },
+          "fieldType": {
+            "type": "string",
+            "description": "Field type (text, textarea, select, number, date, etc.)."
+          },
+          "groupName": {
+            "type": "string",
+            "description": "Property group name."
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "description": "Display label for the option."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "Internal value for the option."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Optional description for the option."
+                },
+                "displayOrder": {
+                  "type": "integer",
+                  "description": "Optional sort order for the option."
+                }
+              },
+              "required": [
+                "label",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Array of option objects for dropdown fields."
+          },
+          "description": {
+            "type": "string",
+            "description": "Property description."
+          }
+        }
+      },
+      "UpdatePropertyRequest": {
+        "type": "object",
+        "required": [
+          "options"
+        ],
+        "properties": {
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "description": "Display label for the option."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "Internal value for the option."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Optional description for the option."
+                },
+                "displayOrder": {
+                  "type": "integer",
+                  "description": "Optional sort order for the option."
+                }
+              },
+              "required": [
+                "label",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Array of option objects for dropdown fields."
+          },
+          "label": {
+            "type": "string",
+            "description": "Optional new display label."
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional new description."
+          }
+        }
+      },
       "Document": {
         "type": "object",
         "properties": {
@@ -29276,6 +33904,316 @@
           "version": {
             "type": "integer",
             "description": "Version being edited, for optimistic locking. A mismatch is rejected by Redmine instead of clobbering a concurrent edit."
+          }
+        }
+      },
+      "AddIssueWatcherRequest": {
+        "type": "object",
+        "required": [
+          "userId"
+        ],
+        "properties": {
+          "userId": {
+            "type": "integer",
+            "description": "User ID to add. Get it from listUsers or listMemberships."
+          }
+        }
+      },
+      "CreateIssueRelationRequest": {
+        "type": "object",
+        "required": [
+          "issueToId"
+        ],
+        "properties": {
+          "issueToId": {
+            "type": "integer",
+            "description": "The other issue ID this relation points at."
+          },
+          "relationType": {
+            "type": "string",
+            "enum": [
+              "relates",
+              "duplicates",
+              "duplicated",
+              "blocks",
+              "blocked",
+              "precedes",
+              "follows",
+              "copied_to",
+              "copied_from"
+            ],
+            "default": "relates",
+            "description": "Relation type, read as \"<issueId> <type> <issueToId>\"."
+          },
+          "delay": {
+            "type": "integer",
+            "description": "Days of delay. Only meaningful for precedes/follows."
+          }
+        }
+      },
+      "CreateProjectRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "identifier"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Display name."
+          },
+          "identifier": {
+            "type": "string",
+            "pattern": "^[a-z0-9-_]+$",
+            "description": "URL slug, lowercase. Cannot be changed after creation on older Redmine versions."
+          },
+          "description": {
+            "type": "string",
+            "description": "Project description."
+          },
+          "homepage": {
+            "type": "string",
+            "description": "Project homepage URL."
+          },
+          "isPublic": {
+            "type": "boolean",
+            "description": "Whether the project is visible to all users. Redmine defaults this to true."
+          },
+          "parentId": {
+            "type": "integer",
+            "description": "Parent project ID, to nest this project."
+          },
+          "inheritMembers": {
+            "type": "boolean",
+            "description": "Inherit members from the parent project."
+          },
+          "trackerIds": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "Tracker IDs to enable, from listTrackers."
+          },
+          "enabledModuleNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Modules to enable, e.g. [\"issue_tracking\",\"time_tracking\",\"wiki\"]."
+          }
+        }
+      },
+      "UpdateProjectRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "New display name."
+          },
+          "description": {
+            "type": "string",
+            "description": "New description."
+          },
+          "homepage": {
+            "type": "string",
+            "description": "New homepage URL."
+          },
+          "isPublic": {
+            "type": "boolean",
+            "description": "Change public visibility."
+          },
+          "parentId": {
+            "type": "integer",
+            "description": "Move under a different parent project."
+          },
+          "inheritMembers": {
+            "type": "boolean",
+            "description": "Change member inheritance."
+          },
+          "trackerIds": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "Replace the enabled tracker IDs."
+          },
+          "enabledModuleNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Replace the enabled module names."
+          }
+        }
+      },
+      "UpdateTimeEntryRequest": {
+        "type": "object",
+        "properties": {
+          "hours": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "New hours value."
+          },
+          "spentOn": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "New date (YYYY-MM-DD)."
+          },
+          "activityId": {
+            "type": "integer",
+            "description": "New activity ID from listTimeEntryActivities."
+          },
+          "comments": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "New comment text."
+          },
+          "issueId": {
+            "type": [
+              "string",
+              "number"
+            ],
+            "description": "Move the entry onto a different issue."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "Move the entry onto a different project."
+          }
+        }
+      },
+      "CreateVersionRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Version name, e.g. \"2.1.0\" or \"Sprint 14\"."
+          },
+          "description": {
+            "type": "string",
+            "description": "Version description."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "locked",
+              "closed"
+            ],
+            "description": "Version status. \"open\" accepts new issues; \"locked\" and \"closed\" do not."
+          },
+          "dueDate": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "Target date (YYYY-MM-DD)."
+          },
+          "sharing": {
+            "type": "string",
+            "enum": [
+              "none",
+              "descendants",
+              "hierarchy",
+              "tree",
+              "system"
+            ],
+            "description": "Which other projects may assign issues to this version."
+          },
+          "wikiPageTitle": {
+            "type": "string",
+            "description": "Wiki page title to associate with this version."
+          }
+        }
+      },
+      "UpdateVersionRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "New name."
+          },
+          "description": {
+            "type": "string",
+            "description": "New description."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "locked",
+              "closed"
+            ],
+            "description": "New status."
+          },
+          "dueDate": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "New target date (YYYY-MM-DD)."
+          },
+          "sharing": {
+            "type": "string",
+            "enum": [
+              "none",
+              "descendants",
+              "hierarchy",
+              "tree",
+              "system"
+            ],
+            "description": "New sharing mode."
+          },
+          "wikiPageTitle": {
+            "type": "string",
+            "description": "New associated wiki page title."
+          }
+        }
+      },
+      "CreateIssueCategoryRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Category name."
+          },
+          "assignedToId": {
+            "type": "integer",
+            "description": "User ID that issues in this category are auto-assigned to."
+          }
+        }
+      },
+      "DeleteIssueCategoryRequest": {
+        "type": "object",
+        "properties": {
+          "reassignToId": {
+            "type": "integer",
+            "description": "Category ID to move affected issues into. Omit to leave them with no category."
+          }
+        }
+      },
+      "CreateMembershipRequest": {
+        "type": "object",
+        "required": [
+          "userId",
+          "roleIds"
+        ],
+        "properties": {
+          "userId": {
+            "type": "integer",
+            "description": "User OR group ID to add. Redmine uses the same field for both."
+          },
+          "roleIds": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "description": "Role IDs to grant. At least one is required."
           }
         }
       },

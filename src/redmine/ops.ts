@@ -225,14 +225,19 @@ export async function opListIssueRelations(client: RedmineClient, args: z.infer<
   return formatRelationList(res.items, res.page);
 }
 
-/** Body of the `createIssueRelation` tool. */
-export async function opCreateIssueRelation(client: RedmineClient, args: z.infer<typeof createIssueRelationSchema>, log: RedmineToolLog): Promise<string> {
-  log.info(`Relating Redmine issue ${args.issueId} ${args.relationType} ${args.issueToId}`);
-  const res = await client.createIssueRelation(args.issueId, compact({
+/** Redmine body for `createIssueRelation`. */
+export function relationBody(args: z.infer<typeof createIssueRelationSchema>): Record<string, unknown> {
+  return compact({
     issue_to_id: args.issueToId,
     relation_type: args.relationType,
     delay: args.delay,
-  }));
+  });
+}
+
+/** Body of the `createIssueRelation` tool. */
+export async function opCreateIssueRelation(client: RedmineClient, args: z.infer<typeof createIssueRelationSchema>, log: RedmineToolLog): Promise<string> {
+  log.info(`Relating Redmine issue ${args.issueId} ${args.relationType} ${args.issueToId}`);
+  const res = await client.createIssueRelation(args.issueId, relationBody(args));
   return `Created relation #${res?.relation?.id ?? '?'}: issue #${args.issueId} ${args.relationType} issue #${args.issueToId}.`;
 }
 
@@ -263,10 +268,9 @@ export async function opGetProject(client: RedmineClient, args: z.infer<typeof g
   return formatProject(res.project, args.include);
 }
 
-/** Body of the `createProject` tool. */
-export async function opCreateProject(client: RedmineClient, args: z.infer<typeof createProjectSchema>, log: RedmineToolLog): Promise<string> {
-  log.info(`Creating Redmine project ${args.identifier}`);
-  const res = await client.createProject(compact({
+/** Redmine body shared by `createProject` and `updateProject`; undefined keys are dropped. */
+export function projectBody(args: Partial<z.infer<typeof createProjectSchema>>): Record<string, unknown> {
+  return compact({
     name: args.name,
     identifier: args.identifier,
     description: args.description,
@@ -276,22 +280,19 @@ export async function opCreateProject(client: RedmineClient, args: z.infer<typeo
     inherit_members: args.inheritMembers,
     tracker_ids: args.trackerIds,
     enabled_module_names: args.enabledModuleNames,
-  }));
+  });
+}
+
+/** Body of the `createProject` tool. */
+export async function opCreateProject(client: RedmineClient, args: z.infer<typeof createProjectSchema>, log: RedmineToolLog): Promise<string> {
+  log.info(`Creating Redmine project ${args.identifier}`);
+  const res = await client.createProject(projectBody(args));
   return res?.project ? formatProject(res.project) : `Created project ${args.identifier}.`;
 }
 
 /** Body of the `updateProject` tool. */
 export async function opUpdateProject(client: RedmineClient, args: z.infer<typeof updateProjectSchema>, log: RedmineToolLog): Promise<string> {
-  const body = compact({
-    name: args.name,
-    description: args.description,
-    homepage: args.homepage,
-    is_public: args.isPublic,
-    parent_id: args.parentId,
-    inherit_members: args.inheritMembers,
-    tracker_ids: args.trackerIds,
-    enabled_module_names: args.enabledModuleNames,
-  });
+  const body = projectBody(args);
   if (Object.keys(body).length === 0) throw new UserError('Nothing to update — pass at least one field to change.');
   log.info(`Updating Redmine project ${args.projectId} (${Object.keys(body).join(', ')})`);
   await client.updateProject(args.projectId, body);
@@ -836,9 +837,9 @@ export async function opCreateTimeEntry(client: RedmineClient, args: z.infer<typ
     : `Logged ${args.hours}h.`;
 }
 
-/** Body of the `updateTimeEntry` tool. */
-export async function opUpdateTimeEntry(client: RedmineClient, args: z.infer<typeof updateTimeEntrySchema>, log: RedmineToolLog): Promise<string> {
-  const body = compact({
+/** Redmine body for `updateTimeEntry`; undefined keys are dropped. */
+export function timeEntryUpdateBody(args: z.infer<typeof updateTimeEntrySchema>): Record<string, unknown> {
+  return compact({
     hours: args.hours,
     spent_on: args.spentOn,
     activity_id: args.activityId,
@@ -846,6 +847,11 @@ export async function opUpdateTimeEntry(client: RedmineClient, args: z.infer<typ
     issue_id: args.issueId,
     project_id: args.projectId,
   });
+}
+
+/** Body of the `updateTimeEntry` tool. */
+export async function opUpdateTimeEntry(client: RedmineClient, args: z.infer<typeof updateTimeEntrySchema>, log: RedmineToolLog): Promise<string> {
+  const body = timeEntryUpdateBody(args);
   if (Object.keys(body).length === 0) throw new UserError('Nothing to update — pass at least one field to change.');
   log.info(`Updating Redmine time entry ${args.timeEntryId} (${Object.keys(body).join(', ')})`);
   await client.updateTimeEntry(args.timeEntryId, body);
@@ -914,23 +920,9 @@ export async function opGetVersion(client: RedmineClient, args: z.infer<typeof g
   return formatVersion(res.version);
 }
 
-/** Body of the `createVersion` tool. */
-export async function opCreateVersion(client: RedmineClient, args: z.infer<typeof createVersionSchema>, log: RedmineToolLog): Promise<string> {
-  log.info(`Creating Redmine version "${args.name}" in project ${args.projectId}`);
-  const res = await client.createVersion(args.projectId, compact({
-    name: args.name,
-    description: args.description,
-    status: args.status,
-    due_date: args.dueDate,
-    sharing: args.sharing,
-    wiki_page_title: args.wikiPageTitle,
-  }));
-  return res?.version ? formatVersion(res.version) : `Created version "${args.name}".`;
-}
-
-/** Body of the `updateVersion` tool. */
-export async function opUpdateVersion(client: RedmineClient, args: z.infer<typeof updateVersionSchema>, log: RedmineToolLog): Promise<string> {
-  const body = compact({
+/** Redmine body shared by `createVersion` and `updateVersion`; undefined keys are dropped. */
+export function versionBody(args: Partial<z.infer<typeof createVersionSchema>>): Record<string, unknown> {
+  return compact({
     name: args.name,
     description: args.description,
     status: args.status,
@@ -938,6 +930,18 @@ export async function opUpdateVersion(client: RedmineClient, args: z.infer<typeo
     sharing: args.sharing,
     wiki_page_title: args.wikiPageTitle,
   });
+}
+
+/** Body of the `createVersion` tool. */
+export async function opCreateVersion(client: RedmineClient, args: z.infer<typeof createVersionSchema>, log: RedmineToolLog): Promise<string> {
+  log.info(`Creating Redmine version "${args.name}" in project ${args.projectId}`);
+  const res = await client.createVersion(args.projectId, versionBody(args));
+  return res?.version ? formatVersion(res.version) : `Created version "${args.name}".`;
+}
+
+/** Body of the `updateVersion` tool. */
+export async function opUpdateVersion(client: RedmineClient, args: z.infer<typeof updateVersionSchema>, log: RedmineToolLog): Promise<string> {
+  const body = versionBody(args);
   if (Object.keys(body).length === 0) throw new UserError('Nothing to update — pass at least one field to change.');
   log.info(`Updating Redmine version ${args.versionId} (${Object.keys(body).join(', ')})`);
   await client.updateVersion(args.versionId, body);
@@ -959,13 +963,15 @@ export async function opListIssueCategories(client: RedmineClient, args: z.infer
   return formatCategoryList(res.items, res.page);
 }
 
+/** Redmine body for `createIssueCategory`. */
+export function categoryBody(args: z.infer<typeof createIssueCategorySchema>): Record<string, unknown> {
+  return compact({ name: args.name, assigned_to_id: args.assignedToId });
+}
+
 /** Body of the `createIssueCategory` tool. */
 export async function opCreateIssueCategory(client: RedmineClient, args: z.infer<typeof createIssueCategorySchema>, log: RedmineToolLog): Promise<string> {
   log.info(`Creating Redmine issue category "${args.name}" in project ${args.projectId}`);
-  const res = await client.createIssueCategory(args.projectId, compact({
-    name: args.name,
-    assigned_to_id: args.assignedToId,
-  }));
+  const res = await client.createIssueCategory(args.projectId, categoryBody(args));
   return `Created issue category "${args.name}" (ID: ${res?.issue_category?.id ?? '?'}).`;
 }
 
@@ -984,13 +990,15 @@ export async function opListMemberships(client: RedmineClient, args: z.infer<typ
   return formatMembershipList(res.items, res.page);
 }
 
+/** Redmine body for `createMembership`. */
+export function membershipBody(args: z.infer<typeof createMembershipSchema>): Record<string, unknown> {
+  return { user_id: args.userId, role_ids: args.roleIds };
+}
+
 /** Body of the `createMembership` tool. */
 export async function opCreateMembership(client: RedmineClient, args: z.infer<typeof createMembershipSchema>, log: RedmineToolLog): Promise<string> {
   log.info(`Adding member ${args.userId} to Redmine project ${args.projectId}`);
-  const res = await client.createMembership(args.projectId, {
-    user_id: args.userId,
-    role_ids: args.roleIds,
-  });
+  const res = await client.createMembership(args.projectId, membershipBody(args));
   return `Added user/group #${args.userId} to project ${args.projectId} (membership #${res?.membership?.id ?? '?'}).`;
 }
 

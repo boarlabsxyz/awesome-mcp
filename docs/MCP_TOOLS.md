@@ -141,19 +141,19 @@ Source: `src/google-gmail/server.ts` — 14 tools.
 
 | Tool | Description | REST |
 |---|---|---|
-| `sendEmail` | Send an email message. | — |
-| `draftEmail` | Create a draft email without sending it. | — |
+| `sendEmail` | Send an email message. | `POST /api/v1/gmail/messages/send` |
+| `draftEmail` | Create a draft email without sending it. | `POST /api/v1/gmail/drafts` |
 | `readEmail` | Read the full content of an email by its message ID. | `GET /api/v1/gmail/messages/{messageId}` |
 | `searchEmails` | Search emails using Gmail query syntax (e.g., "from:user@example.com", "subject:hello", "is:unread", "newer_than:2d"). | `GET /api/v1/gmail/messages?q={query}` |
-| `modifyEmail` | Modify labels on a single email message (add or remove labels). For more than one message, prefer batchModifyEmails. | — |
-| `deleteEmail` | Move an email message to the trash. | — |
-| `batchModifyEmails` | Modify labels on multiple email messages at once (single atomic request). For a single message, modifyEmail is simpler. Limit: 1000 message IDs per call. | — |
-| `batchDeleteEmails` | Move multiple email messages to the trash. | — |
+| `modifyEmail` | Modify labels on a single email message (add or remove labels). For more than one message, prefer batchModifyEmails. | `POST /api/v1/gmail/messages/{messageId}/modify` |
+| `deleteEmail` | Move an email message to the trash. | `POST /api/v1/gmail/messages/{messageId}/trash` |
+| `batchModifyEmails` | Modify labels on multiple email messages at once (single atomic request). For a single message, modifyEmail is simpler. Limit: 1000 message IDs per call. | `POST /api/v1/gmail/messages/batch-modify` |
+| `batchDeleteEmails` | Move multiple email messages to the trash. | `POST /api/v1/gmail/messages/batch-trash` |
 | `listLabels` | List all Gmail labels with their message and thread counts. | `GET /api/v1/gmail/labels` |
-| `createLabel` | Create a new Gmail label. | — |
-| `updateLabel` | Update an existing Gmail label name or visibility settings. | — |
-| `deleteLabel` | Delete a Gmail label. System labels (INBOX, SENT, etc.) cannot be deleted. | — |
-| `getOrCreateLabel` | Get a label by name, creating it if it does not exist. Returns the label ID. | — |
+| `createLabel` | Create a new Gmail label. | `POST /api/v1/gmail/labels` |
+| `updateLabel` | Update an existing Gmail label name or visibility settings. | `POST /api/v1/gmail/labels/{labelId}` |
+| `deleteLabel` | Delete a Gmail label. System labels (INBOX, SENT, etc.) cannot be deleted. | `POST /api/v1/gmail/labels/{labelId}/delete` |
+| `getOrCreateLabel` | Get a label by name, creating it if it does not exist. Returns the label ID. | `POST /api/v1/gmail/labels/get-or-create` |
 | `getAttachment` | Download an email attachment. Returns the content as base64-encoded data. | `GET /api/v1/gmail/messages/{messageId}/attachments/{attachmentId}` |
 
 ## Google Slides
@@ -409,27 +409,27 @@ Source: `src/hubspot/server.ts` — 23 tools.
 |---|---|---|
 | `createCompany` | Create a new company in HubSpot (skips creation if a company with the same name already exists). | `POST /api/v1/hubspot/companies` |
 | `getCompany` | Get a specific company by ID from HubSpot. | `GET /api/v1/hubspot/companies/{companyId}` |
-| `updateCompany` | Update an existing company record in HubSpot. | — |
+| `updateCompany` | Update an existing company record in HubSpot. | `POST /api/v1/hubspot/companies/{companyId}` |
 | `getCompanyActivity` | Get activity/engagement history (notes, emails, calls, meetings, tasks) for a specific company. | `GET /api/v1/hubspot/companies/{companyId}/activity` |
 | `createContact` | Create a new contact in HubSpot (skips creation if a matching contact already exists). | `POST /api/v1/hubspot/contacts` |
 | `getContact` | Get a specific contact by ID from HubSpot. | `GET /api/v1/hubspot/contacts/{contactId}` |
-| `updateContact` | Update an existing contact record in HubSpot. | — |
+| `updateContact` | Update an existing contact record in HubSpot. | `POST /api/v1/hubspot/contacts/{contactId}` |
 | `getCompanyDeals` | List the deals associated with a company, with amount, stage, pipeline, and close date. Use this to go from a company ID to its deal IDs — getDeal needs an ID no other tool returns. | `GET /api/v1/hubspot/companies/{companyId}/deals` |
 | `getDeal` | Get a specific deal by ID from HubSpot. | `GET /api/v1/hubspot/deals/{dealId}` |
 | `createDeal` | Create a new deal in HubSpot. Set dealstage/pipeline via properties (use listPipelines to resolve stage IDs). | `POST /api/v1/hubspot/deals` |
-| `updateDeal` | Update an existing deal record in HubSpot (e.g. move stage, change amount). | — |
+| `updateDeal` | Update an existing deal record in HubSpot (e.g. move stage, change amount). | `POST /api/v1/hubspot/deals/{dealId}` |
 | `listPipelines` | List HubSpot deal pipelines and their stages (with stage IDs), so deal stage IDs can be resolved to human-readable names. | `GET /api/v1/hubspot/pipelines` |
 | `getRecentConversations` | Get recent conversation threads from HubSpot with their messages. | `GET /api/v1/hubspot/conversations` |
 | `getTickets` | Get tickets from HubSpot based on configurable selection criteria. | `GET /api/v1/hubspot/tickets` |
 | `getTicketConversationThreads` | Get conversation threads (and their messages) associated with a specific ticket. | `GET /api/v1/hubspot/tickets/{ticketId}/conversation-threads` |
 | `getProperty` | Get details of a specific HubSpot property definition. | `GET /api/v1/hubspot/properties/{objectType}/{propertyName}` |
-| `updateProperty` | Update a HubSpot property definition (e.g., add dropdown options). | — |
-| `createProperty` | Create a new custom property in HubSpot. | — |
+| `updateProperty` | Update a HubSpot property definition (e.g., add dropdown options). | `POST /api/v1/hubspot/properties/{objectType}/{propertyName}` |
+| `createProperty` | Create a new custom property in HubSpot. | `POST /api/v1/hubspot/properties/{objectType}` |
 | `createNote` | Create a note and optionally attach it to a company, contact, or deal so it appears on that record's timeline. | `POST /api/v1/hubspot/notes` |
-| `createTask` | Create a task and optionally attach it to a company, contact, or deal. | — |
+| `createTask` | Create a task and optionally attach it to a company, contact, or deal. | `POST /api/v1/hubspot/tasks` |
 | `logCall` | Log a call activity and optionally attach it to a company, contact, or deal. | `POST /api/v1/hubspot/calls` |
 | `logMeeting` | Log a meeting activity and optionally attach it to a company, contact, or deal. | `POST /api/v1/hubspot/meetings` |
-| `deleteEngagement` | Delete a note, task, call, or meeting by ID — the cleanup counterpart to createNote/createTask/logCall/logMeeting. | — |
+| `deleteEngagement` | Delete a note, task, call, or meeting by ID — the cleanup counterpart to createNote/createTask/logCall/logMeeting. | `POST /api/v1/hubspot/engagements/{engagementType}/{engagementId}/delete` |
 
 ## Redmine
 
@@ -441,18 +441,18 @@ Source: `src/redmine/server.ts` — 46 tools.
 | `getIssue` | Retrieve one Redmine issue in full. Use `include` to pull in the comment history, subtasks, watchers, or the statuses it may move to. | `GET /api/v1/redmine/issues/{issueId}` |
 | `createIssue` | Create a Redmine issue in a project. Only projectId and subject are required; every other field falls back to the project/tracker default. | `POST /api/v1/redmine/issues` |
 | `updateIssue` | Update a Redmine issue and/or add a comment. Pass `notes` to append a comment; `description` REPLACES the body instead. Fields you omit are left untouched. | `POST /api/v1/redmine/issues/{issueId}` |
-| `deleteIssue` | Permanently delete a Redmine issue, along with its comments, time entries and subtasks. Redmine has no recycle bin — this cannot be undone. | — |
-| `addIssueWatcher` | Add a user as a watcher on a Redmine issue so they receive its notifications. | — |
-| `removeIssueWatcher` | Remove a watcher from a Redmine issue. | — |
+| `deleteIssue` | Permanently delete a Redmine issue, along with its comments, time entries and subtasks. Redmine has no recycle bin — this cannot be undone. | `POST /api/v1/redmine/issues/{issueId}/delete` |
+| `addIssueWatcher` | Add a user as a watcher on a Redmine issue so they receive its notifications. | `POST /api/v1/redmine/issues/{issueId}/watchers` |
+| `removeIssueWatcher` | Remove a watcher from a Redmine issue. | `POST /api/v1/redmine/issues/{issueId}/watchers/{userId}/remove` |
 | `listIssueRelations` | List the relations (blocks, precedes, duplicates, …) attached to a Redmine issue. | `GET /api/v1/redmine/issues/{issueId}/relations` |
-| `createIssueRelation` | Link two Redmine issues with a relation such as blocks, precedes or duplicates. | — |
-| `deleteIssueRelation` | Delete a Redmine issue relation by its relation ID (from listIssueRelations — NOT an issue ID). | — |
+| `createIssueRelation` | Link two Redmine issues with a relation such as blocks, precedes or duplicates. | `POST /api/v1/redmine/issues/{issueId}/relations` |
+| `deleteIssueRelation` | Delete a Redmine issue relation by its relation ID (from listIssueRelations — NOT an issue ID). | `POST /api/v1/redmine/relations/{relationId}/delete` |
 | `listProjects` | List the Redmine projects visible to the connected account, newest page first. Returns one page and reports the total. | `GET /api/v1/redmine/projects` |
 | `getProject` | Retrieve one Redmine project, optionally with its trackers, categories and enabled modules. | `GET /api/v1/redmine/projects/{projectId}` |
-| `createProject` | Create a Redmine project. Requires administrator rights on most instances. | — |
-| `updateProject` | Update a Redmine project. Fields you omit are left untouched. | — |
-| `archiveProject` | Archive a Redmine project. It becomes read-only and hidden from project lists, but nothing is deleted — unarchiveProject reverses it. | — |
-| `unarchiveProject` | Restore a previously archived Redmine project to active status. | — |
+| `createProject` | Create a Redmine project. Requires administrator rights on most instances. | `POST /api/v1/redmine/projects` |
+| `updateProject` | Update a Redmine project. Fields you omit are left untouched. | `POST /api/v1/redmine/projects/{projectId}` |
+| `archiveProject` | Archive a Redmine project. It becomes read-only and hidden from project lists, but nothing is deleted — unarchiveProject reverses it. | `POST /api/v1/redmine/projects/{projectId}/archive` |
+| `unarchiveProject` | Restore a previously archived Redmine project to active status. | `POST /api/v1/redmine/projects/{projectId}/unarchive` |
 | `deleteProject` | Permanently delete a Redmine project AND every issue, wiki page, version and time entry inside it, including subprojects. There is no recycle bin. Prefer archiveProject unless the data is genuinely meant to be destroyed. | — |
 | `listUsers` | List Redmine users. Requires administrator rights — a non-admin account gets a permission error, which is a Redmine restriction, not a connection problem. | `GET /api/v1/redmine/users` |
 | `getUser` | Retrieve one Redmine user by ID, optionally with their group and project memberships. | `GET /api/v1/redmine/users/{userId}` |
@@ -460,23 +460,23 @@ Source: `src/redmine/server.ts` — 46 tools.
 | `listTimeEntries` | List Redmine time entries (spent time), filterable by project, issue, user, activity and date range. Set allPages=true whenever you are SUMMING hours — Redmine caps a page at 100 entries, so a per-person or per-project total from one page is silently short, and only that mode reports a total for the whole set. Billable vs non-billable is modelled as the time-tracking activity on most instances (names prefixed "B:" / "NB:"), so listTimeEntryActivities then activityId is how you split them. If this fails with a redirect, read the reported target: a different host means an SSO or access proxy this server cannot authenticate to, while the sign-in page on the same host means this one route is blocked even though the credential is fine. Some instances block /time_entries.json alone; when a projectId is given the call retries that project on its own route and says so, so prefer naming a project over filtering a workspace-wide read. A 403 here does NOT establish that the account lacks view_time_entries — Redmine answers 403 for a disabled project module and for a proxy or plugin rule on this route too; if the same account can see the data in the Redmine web UI, the permission is not the problem. | `GET /api/v1/redmine/time-entries` |
 | `getTimeEntry` | Retrieve one Redmine time entry by ID. | `GET /api/v1/redmine/time-entries/{timeEntryId}` |
 | `createTimeEntry` | Log time against a Redmine issue or project. Pass exactly one of issueId or projectId. Most instances require activityId — call listTimeEntryActivities if you do not have it. | `POST /api/v1/redmine/time-entries` |
-| `updateTimeEntry` | Update an existing Redmine time entry. Fields you omit are left untouched. | — |
-| `deleteTimeEntry` | Permanently delete a Redmine time entry. This cannot be undone. | — |
+| `updateTimeEntry` | Update an existing Redmine time entry. Fields you omit are left untouched. | `POST /api/v1/redmine/time-entries/{timeEntryId}` |
+| `deleteTimeEntry` | Permanently delete a Redmine time entry. This cannot be undone. | `POST /api/v1/redmine/time-entries/{timeEntryId}/delete` |
 | `listWikiPages` | List the titles in a Redmine project's wiki. Page bodies are not included — call getWikiPage for one. | `GET /api/v1/redmine/projects/{projectId}/wiki` |
 | `getWikiPage` | Retrieve one Redmine wiki page with its full text. Pass `version` to read a historical revision. | `GET /api/v1/redmine/projects/{projectId}/wiki/{title}` |
 | `updateWikiPage` | Create or replace a Redmine wiki page. Redmine uses one endpoint for both — a title that does not exist yet is created. `text` REPLACES the whole page body, so read it first if you mean to edit rather than overwrite. | `POST /api/v1/redmine/projects/{projectId}/wiki/{title}` |
-| `deleteWikiPage` | Permanently delete a Redmine wiki page and every revision of it. Child pages are attached to its parent rather than deleted. | — |
+| `deleteWikiPage` | Permanently delete a Redmine wiki page and every revision of it. Child pages are attached to its parent rather than deleted. | `POST /api/v1/redmine/projects/{projectId}/wiki/{title}/delete` |
 | `listVersions` | List the versions (milestones / target releases) of a Redmine project, including versions shared from other projects. | `GET /api/v1/redmine/projects/{projectId}/versions` |
 | `getVersion` | Retrieve one Redmine version by ID. | `GET /api/v1/redmine/versions/{versionId}` |
-| `createVersion` | Create a version (milestone / target release) in a Redmine project. | — |
-| `updateVersion` | Update a Redmine version. Fields you omit are left untouched. | — |
-| `deleteVersion` | Permanently delete a Redmine version. Issues targeting it are not deleted — their target version is cleared. | — |
+| `createVersion` | Create a version (milestone / target release) in a Redmine project. | `POST /api/v1/redmine/projects/{projectId}/versions` |
+| `updateVersion` | Update a Redmine version. Fields you omit are left untouched. | `POST /api/v1/redmine/versions/{versionId}` |
+| `deleteVersion` | Permanently delete a Redmine version. Issues targeting it are not deleted — their target version is cleared. | `POST /api/v1/redmine/versions/{versionId}/delete` |
 | `listIssueCategories` | List the issue categories defined on a Redmine project. Their IDs are what createIssue/updateIssue take as categoryId. | `GET /api/v1/redmine/projects/{projectId}/issue-categories` |
-| `createIssueCategory` | Create an issue category in a Redmine project. | — |
-| `deleteIssueCategory` | Delete a Redmine issue category. Issues in it are not deleted — pass reassignToId to move them to another category, otherwise their category is cleared. | — |
+| `createIssueCategory` | Create an issue category in a Redmine project. | `POST /api/v1/redmine/projects/{projectId}/issue-categories` |
+| `deleteIssueCategory` | Delete a Redmine issue category. Issues in it are not deleted — pass reassignToId to move them to another category, otherwise their category is cleared. | `POST /api/v1/redmine/issue-categories/{categoryId}/delete` |
 | `listMemberships` | List the members of a Redmine project with their roles. This is the reliable way to find user IDs for assignment without administrator rights, since listUsers is admin-only. | `GET /api/v1/redmine/projects/{projectId}/memberships` |
-| `createMembership` | Add a user or group to a Redmine project with one or more roles. | — |
-| `deleteMembership` | Remove a member from a Redmine project by membership ID (from listMemberships — NOT a user ID). | — |
+| `createMembership` | Add a user or group to a Redmine project with one or more roles. | `POST /api/v1/redmine/projects/{projectId}/memberships` |
+| `deleteMembership` | Remove a member from a Redmine project by membership ID (from listMemberships — NOT a user ID). | `POST /api/v1/redmine/memberships/{membershipId}/delete` |
 | `listTrackers` | List the Redmine trackers (Bug, Feature, Support, …). Their IDs are what createIssue takes as trackerId. | `GET /api/v1/redmine/trackers` |
 | `listIssueStatuses` | List every Redmine issue status, flagging which ones count as closed. Their IDs are what updateIssue takes as statusId. | `GET /api/v1/redmine/issue-statuses` |
 | `listIssuePriorities` | List the Redmine issue priorities (Low, Normal, High, …), flagging the default. Their IDs are what createIssue takes as priorityId. | `GET /api/v1/redmine/issue-priorities` |
@@ -507,30 +507,30 @@ Source: `src/github/server.ts` — 27 tools.
 | Tool | Description | REST |
 |---|---|---|
 | `searchRepositories` | Search for GitHub repositories. Uses GitHub search syntax (e.g. "language:go stars:>500", "org:github", "user:octocat") and returns at most the first 1,000 matches across pages. | `GET /api/v1/github/search/repositories?q={query}` |
-| `createRepository` | Create a new GitHub repository in your account. Always created under the connected account, never an organization; public unless private is set. | — |
-| `forkRepository` | Fork a GitHub repository to your account or specified organization. GitHub forks asynchronously, and returns the existing fork if there already is one. | — |
+| `createRepository` | Create a new GitHub repository in your account. Always created under the connected account, never an organization; public unless private is set. | `POST /api/v1/github/repos` |
+| `forkRepository` | Fork a GitHub repository to your account or specified organization. GitHub forks asynchronously, and returns the existing fork if there already is one. | `POST /api/v1/github/repos/{owner}/{repo}/forks` |
 | `getFileContents` | Get the contents of a file or directory from a GitHub repository. Returns the file's blob SHA (needed to update it safely); files over 1 MB and binary files are described rather than returned, and long text is truncated at 100,000 characters. | `GET /api/v1/github/repos/{owner}/{repo}/contents/{path}` |
 | `createOrUpdateFile` | Create or update a single file in a GitHub repository, as one commit on an existing branch. Replaces the whole file. Pass the sha from getFileContents to fail instead of overwriting if the file changed; without it the current version is overwritten. | `POST /api/v1/github/repos/{owner}/{repo}/contents/{path}` |
 | `pushFiles` | Push multiple files to a GitHub repository in a single commit, on an existing branch. Never force-pushes: if the branch moves meanwhile, nothing is pushed. Keeps existing executable bits; cannot delete files or write .github/workflows/. | `POST /api/v1/github/repos/{owner}/{repo}/push` |
-| `createBranch` | Create a new branch in a GitHub repository, from fromBranch or (by default) the repository's actual default branch. | — |
+| `createBranch` | Create a new branch in a GitHub repository, from fromBranch or (by default) the repository's actual default branch. | `POST /api/v1/github/repos/{owner}/{repo}/branches` |
 | `listCommits` | Get list of commits of a branch in a GitHub repository, newest first, optionally only those touching a path or by an author. Paginated. | `GET /api/v1/github/repos/{owner}/{repo}/commits` |
 | `listIssues` | List issues in a GitHub repository with filtering options. GitHub includes pull requests in this list; they are marked [PR]. Paginated. | `GET /api/v1/github/repos/{owner}/{repo}/issues` |
 | `getIssue` | Get details of a specific issue in a GitHub repository: state, labels, assignees, milestone and body. The comment count is included, the comment text is not. | `GET /api/v1/github/repos/{owner}/{repo}/issues/{issueNumber}` |
 | `createIssue` | Create a new issue in a GitHub repository. Labels, assignees and milestone are only applied for accounts with push access — GitHub drops them silently otherwise, and the response says when that happened. | `POST /api/v1/github/repos/{owner}/{repo}/issues` |
-| `updateIssue` | Update an existing issue in a GitHub repository. labels and assignees REPLACE the current set (pass [] to clear); omitted fields are left alone. Also opens/closes, with a reason. | — |
+| `updateIssue` | Update an existing issue in a GitHub repository. labels and assignees REPLACE the current set (pass [] to clear); omitted fields are left alone. Also opens/closes, with a reason. | `POST /api/v1/github/repos/{owner}/{repo}/issues/{issueNumber}` |
 | `addIssueComment` | Add a comment to an existing issue. Works for pull requests too (it posts to the main conversation, not as an inline review comment). | `POST /api/v1/github/repos/{owner}/{repo}/issues/{issueNumber}/comments` |
 | `searchCode` | Search for code across GitHub repositories, with matching fragments. Covers default branches only; GitHub limits code search to 10 requests a minute. | `GET /api/v1/github/search/code?q={query}` |
 | `searchIssues` | Search for issues and pull requests across GitHub repositories, e.g. "repo:o/r is:pr is:open" or "is:issue assignee:@me". Returns at most the first 1,000 matches. | `GET /api/v1/github/search/issues?q={query}` |
 | `searchUsers` | Search for users on GitHub (and organizations, with type:org). | `GET /api/v1/github/search/users?q={query}` |
-| `listOrganizations` | List the organizations the connected GitHub account belongs to, how many repositories of each this connection can read, and whether this connector's access rules allow each. Use it when an organization seems missing: an organization you are a member of with no visible repositories usually restricts OAuth Apps and has not approved this app, and the output says how to request approval. | — |
+| `listOrganizations` | List the organizations the connected GitHub account belongs to, how many repositories of each this connection can read, and whether this connector's access rules allow each. Use it when an organization seems missing: an organization you are a member of with no visible repositories usually restricts OAuth Apps and has not approved this app, and the output says how to request approval. | `GET /api/v1/github/organizations` |
 | `listPullRequests` | List and filter repository pull requests. Paginated. | `GET /api/v1/github/repos/{owner}/{repo}/pulls` |
 | `getPullRequest` | Get details of a specific pull request: state, head/base and their SHAs, mergeability, size, reviewers and description. | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}` |
-| `createPullRequest` | Create a new pull request in a GitHub repository, from head into base. Both branches must already exist and differ. | — |
-| `createPullRequestReview` | Create a review on a pull request: APPROVE, REQUEST_CHANGES or COMMENT, optionally with inline comments. Submitted immediately; GitHub does not let you approve your own pull request. | — |
+| `createPullRequest` | Create a new pull request in a GitHub repository, from head into base. Both branches must already exist and differ. | `POST /api/v1/github/repos/{owner}/{repo}/pulls` |
+| `createPullRequestReview` | Create a review on a pull request: APPROVE, REQUEST_CHANGES or COMMENT, optionally with inline comments. Submitted immediately; GitHub does not let you approve your own pull request. | `POST /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/reviews` |
 | `mergePullRequest` | Merge a pull request. Pass expectedHeadSha (from getPullRequest) so the merge is refused if new commits were pushed after you looked. An already-merged pull request is reported as such (with its merge commit) and nothing is merged; a closed, unmerged one is refused. | `POST /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/merge` |
 | `getPullRequestFiles` | Get the list of files changed in a pull request, with each file's diff (capped per file) unless includePatch is false. Paginated. | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/files` |
 | `getPullRequestStatus` | Get the combined status of all status checks for a pull request — both GitHub Actions/app check runs and legacy commit statuses — with an overall passing/failing/pending verdict. | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/status` |
-| `updatePullRequestBranch` | Update a pull request branch with the latest changes from the base branch (a merge commit on the PR branch). Runs asynchronously on GitHub. | — |
+| `updatePullRequestBranch` | Update a pull request branch with the latest changes from the base branch (a merge commit on the PR branch). Runs asynchronously on GitHub. | `POST /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/update-branch` |
 | `getPullRequestComments` | Get the review comments on a pull request — the inline comments on diff lines. The main conversation thread is not included. Paginated. | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/comments` |
 | `getPullRequestReviews` | Get the reviews on a pull request: each reviewer's verdict (approved, changes requested, commented) and summary. Paginated. | `GET /api/v1/github/repos/{owner}/{repo}/pulls/{pullNumber}/reviews` |
 
