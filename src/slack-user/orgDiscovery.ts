@@ -49,6 +49,18 @@ export interface DiscoveredOrg {
 
 export type OrgSource = 'current' | 'channel' | 'channel-info' | 'user' | 'dm' | 'saved';
 
+/** A step of the sweep, in the order the sweep runs them. */
+export type OrgDiscoveryStage =
+  | 'channels' | 'memberChannels' | 'dms' | 'users' | 'channelInfo' | 'dmUsers' | 'names';
+
+export interface OrgDiscoveryProgress {
+  stage: OrgDiscoveryStage;
+  /** Pages or items finished in this stage so far. */
+  done: number;
+  /** Set only on per-item stages: a paged sweep cannot know its size up front. */
+  total?: number;
+}
+
 export interface OrgDiscoveryResult {
   orgs: DiscoveredOrg[];
   /** True when any cap below was hit, i.e. the list may still be short. */
@@ -116,6 +128,8 @@ export interface OrgDiscoveryOptions {
    * which is what tests do, and what keeps names from crossing tenants.
    */
   tokenKey?: string;
+  /** Called as the sweep advances, so a caller can show where it has got to. */
+  onProgress?: (progress: OrgDiscoveryProgress) => void;
 }
 
 interface Accumulator {
@@ -209,6 +223,7 @@ export async function discoverConnectedOrgs(
 ): Promise<OrgDiscoveryResult> {
   const acc: Accumulator = { ids: new Map(), notes: [], truncated: false };
   const { currentOrgId, savedOrgIds = [] } = options;
+  const report = options.onProgress ?? (() => {});
 
   add(acc, currentOrgId, 'current');
 
@@ -217,6 +232,7 @@ export async function discoverConnectedOrgs(
   // for free and only queue a conversations.info call for shared channels that
   // came back without any.
   const needsInfo = new Map<string, InfoTarget>();
+  report({ stage: 'channels', done: 0 });
   try {
     let cursor: string | undefined;
     let pages = 0;
@@ -231,6 +247,7 @@ export async function discoverConnectedOrgs(
       }
       cursor = result.response_metadata?.next_cursor || undefined;
       pages++;
+      report({ stage: 'channels', done: pages });
       if (cursor && pages >= LIST_MAX_PAGES) {
         cap(acc, `Stopped after ${LIST_MAX_PAGES} pages of channels; orgs reachable only through channels beyond that are not listed.`);
         break;
@@ -251,6 +268,7 @@ export async function discoverConnectedOrgs(
   // *private* shared channel necessarily lives (membership is the only way to
   // see one). Running it makes the common case independent of the cap above.
   // Overlap with the pass above is free: `add` is idempotent per (id, source).
+  report({ stage: 'memberChannels', done: 0 });
   try {
     let cursor: string | undefined;
     let pages = 0;
@@ -266,6 +284,7 @@ export async function discoverConnectedOrgs(
       }
       cursor = result.response_metadata?.next_cursor || undefined;
       pages++;
+      report({ stage: 'memberChannels', done: pages });
       if (cursor && pages >= MEMBER_LIST_MAX_PAGES) {
         cap(acc, `Stopped after ${MEMBER_LIST_MAX_PAGES} pages of your own channels; orgs reachable only through channels beyond that are not listed.`);
         break;
@@ -280,6 +299,7 @@ export async function discoverConnectedOrgs(
   // not see a Slack Connect DM at all — yet allowedOrgs is enforced on DMs. Use
   // users.conversations, which is member-scoped and does return them.
   const dmUserIds: string[] = [];
+  report({ stage: 'dms', done: 0 });
   try {
     let cursor: string | undefined;
     let pages = 0;
@@ -291,6 +311,7 @@ export async function discoverConnectedOrgs(
       }
       cursor = result.response_metadata?.next_cursor || undefined;
       pages++;
+      report({ stage: 'dms', done: pages });
       if (cursor && pages >= DM_LIST_MAX_PAGES) {
         cap(acc, `Stopped after ${DM_LIST_MAX_PAGES} pages of DMs; orgs reachable only through a DM beyond that are not listed.`);
         break;
@@ -305,6 +326,7 @@ export async function discoverConnectedOrgs(
   // Connect counterparts. One paged sweep resolves most external orgs and the
   // DM counterparts collected above without a lookup each.
   const userTeams = new Map<string, string>();
+  report({ stage: 'users', done: 0 });
   try {
     let cursor: string | undefined;
     let pages = 0;
@@ -316,6 +338,7 @@ export async function discoverConnectedOrgs(
       }
       cursor = result.response_metadata?.next_cursor || undefined;
       pages++;
+      report({ stage: 'users', done: pages });
       if (cursor && pages >= USER_LIST_MAX_PAGES) {
         cap(acc, `Stopped after ${USER_LIST_MAX_PAGES} pages of users; orgs represented only by users beyond that are not listed.`);
         break;
@@ -338,8 +361,10 @@ export async function discoverConnectedOrgs(
       ? `${skipped.length} shared channel(s) beyond the first ${CHANNEL_INFO_MAX} were not inspected, including ${skippedMember} you are a member of; an org shared only through those is not listed.`
       : `${skipped.length} shared channel(s) you are not a member of were not inspected (the budget of ${CHANNEL_INFO_MAX} went to your own channels first); an org shared only through those is not listed.`);
   }
+  const infoBatch = infoTargets.slice(0, CHANNEL_INFO_MAX);
+  report({ stage: 'channelInfo', done: 0, total: infoBatch.length });
   let infoFailures = 0;
-  for (const [channelId] of infoTargets.slice(0, CHANNEL_INFO_MAX)) {
+  for (const [index, [channelId]] of infoBatch.entries()) {
     try {
       const { channel } = await client.conversationsInfo(channelId);
       for (const tid of channelTeamIds(channel, { includePending: true })) add(acc, tid, 'channel-info');
@@ -349,6 +374,7 @@ export async function discoverConnectedOrgs(
       // that never happened is indistinguishable from an org that is not there.
       infoFailures++;
     }
+    report({ stage: 'channelInfo', done: index + 1, total: infoBatch.length });
   }
   if (infoFailures > 0) {
     cap(acc, `${infoFailures} shared channel(s) could not be inspected (Slack rate limit, or no access); an org shared only through those is not listed. Reopening this dialog in a minute may find more.`);
@@ -359,11 +385,14 @@ export async function discoverConnectedOrgs(
   if (unresolvedDmUsers.length > USER_INFO_MAX) {
     cap(acc, `${unresolvedDmUsers.length - USER_INFO_MAX} DM counterpart(s) were not resolved; an org you only DM may be missing.`);
   }
-  for (const userId of unresolvedDmUsers.slice(0, USER_INFO_MAX)) {
+  const dmUserBatch = unresolvedDmUsers.slice(0, USER_INFO_MAX);
+  report({ stage: 'dmUsers', done: 0, total: dmUserBatch.length });
+  for (const [index, userId] of dmUserBatch.entries()) {
     try {
       const { user } = await client.usersInfo(userId);
       add(acc, user.team_id, 'dm');
     } catch { /* skip */ }
+    report({ stage: 'dmUsers', done: index + 1, total: dmUserBatch.length });
   }
 
   // --- 6. Saved orgs -------------------------------------------------------
@@ -373,6 +402,7 @@ export async function discoverConnectedOrgs(
 
   // --- 7. Names ------------------------------------------------------------
   const orgIds = [...acc.ids.keys()].filter(id => id && id !== currentOrgId);
+  report({ stage: 'names', done: 0 });
   const names = await resolveOrgNames(client, orgIds, acc, options.tokenKey);
 
   const orgs: DiscoveredOrg[] = orgIds.map(id => {
