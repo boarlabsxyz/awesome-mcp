@@ -353,6 +353,7 @@ import { validateGitHubToken, buildGitHubInstanceName, fetchGitHubUser, uniqueGi
 import { exchangeGitHubOauthCode, GITHUB_TOKEN_URL } from '../github/oauthCallback.js';
 import { GITHUB_READ_ROUTES, GITHUB_WRITE_ROUTES, writeArgs as githubWriteArgs } from '../github/restRoutes.js';
 import { PINECONE_READ_ROUTES, PINECONE_WRITE_ROUTES, writeArgs as pineconeWriteArgs } from '../pinecone/restRoutes.js';
+import { GMAIL_WRITE_ROUTES, gmailPassthroughStatus, writeArgs as gmailWriteArgs } from '../google-gmail/restRoutes.js';
 import { REDMINE_WRITE_ROUTES, writeArgs as redmineWriteArgs } from '../redmine/restRoutes.js';
 import type { GitHubClient } from '../github/apiHelpers.js';
 import type { PineconeRulesState } from '../pinecone/accessRules.js';
@@ -1356,6 +1357,8 @@ const PASTE_CONNECTION_BUILDERS: Record<string, (input: PasteConnectionInput) =>
  * prefixes, so each covers the collection POST and every by-id POST under it.
  */
 const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
+  '/api/v1/gmail/messages/send', // sendEmail — a whole message body, possibly HTML
+  '/api/v1/gmail/drafts',     // draftEmail — same body as sendEmail
   '/api/v1/redmine/issues',   // createIssue / updateIssue — description and notes are full issue bodies
   '/api/v1/redmine/projects', // updateWikiPage — `text` replaces an entire wiki page
   '/api/v1/hubspot/notes',    // createNote — free text
@@ -5806,47 +5809,27 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
-  // POST /api/v1/gmail/messages/send - Send email
-  app.post('/api/v1/gmail/messages/send', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { to, subject, body, cc, bcc, isHtml } = req.body;
-      if (!to || !subject || !body) { res.status(400).json({ error: 'to, subject, and body are required' }); return; }
-      const gmail = req.userSession!.googleGmail;
-      const mimeLines = [
-        `To: ${to}`, `Subject: ${subject}`,
-        ...(cc ? [`Cc: ${cc}`] : []),
-        ...(bcc ? [`Bcc: ${bcc}`] : []),
-        `Content-Type: ${isHtml ? 'text/html' : 'text/plain'}; charset=utf-8`,
-        '', body,
-      ];
-      const raw = Buffer.from(mimeLines.join('\r\n')).toString('base64url');
-      const result = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
-      res.json({ id: result.data.id, threadId: result.data.threadId });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to send email' });
-    }
-  });
-
-  // POST /api/v1/gmail/drafts - Create draft
-  app.post('/api/v1/gmail/drafts', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { to, subject, body, cc, bcc, isHtml } = req.body;
-      if (!to || !subject || !body) { res.status(400).json({ error: 'to, subject, and body are required' }); return; }
-      const gmail = req.userSession!.googleGmail;
-      const mimeLines = [
-        `To: ${to}`, `Subject: ${subject}`,
-        ...(cc ? [`Cc: ${cc}`] : []),
-        ...(bcc ? [`Bcc: ${bcc}`] : []),
-        `Content-Type: ${isHtml ? 'text/html' : 'text/plain'}; charset=utf-8`,
-        '', body,
-      ];
-      const raw = Buffer.from(mimeLines.join('\r\n')).toString('base64url');
-      const result = await gmail.users.drafts.create({ userId: 'me', requestBody: { message: { raw } } });
-      res.json({ id: result.data.id, messageId: result.data.message?.id });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to create draft' });
-    }
-  });
+  // The Gmail writes, from the table in src/google-gmail/restRoutes.ts. A table
+  // entry's Gmail failure keeps its status: 400 and 409 are the caller's to fix
+  // and 429 is theirs to wait out, none of which sendUpstreamError can say.
+  for (const route of GMAIL_WRITE_ROUTES) {
+    app.post(route.path, requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const parsed = route.schema.safeParse(gmailWriteArgs(route, req));
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const result = await route.run(req.userSession!.googleGmail, parsed.data);
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        console.error(`Error in Gmail ${route.tool}:`, err);
+        const status = gmailPassthroughStatus(err);
+        if (status) { res.status(status).json({ error: err.message || route.fallback }); return; }
+        sendUpstreamError(res, err, { notFound: route.notFound, fallback: route.fallback });
+      }
+    });
+  }
 
   // PATCH /api/v1/gmail/messages/:messageId - Modify labels
   app.patch('/api/v1/gmail/messages/:messageId', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {

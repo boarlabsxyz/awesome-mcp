@@ -7,6 +7,12 @@ import { gmail_v1 } from 'googleapis';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 
+import {
+  sendEmailSchema, draftEmailSchema, modifyEmailSchema, deleteEmailSchema,
+  batchModifyEmailsSchema, batchDeleteEmailsSchema, createLabelSchema, updateLabelSchema,
+  deleteLabelSchema, getOrCreateLabelSchema,
+} from './schemas.js';
+
 // Tool handlers
 import {
   handleSendEmail, handleDraftEmail, handleReadEmail, handleSearchEmails,
@@ -38,14 +44,7 @@ gmailServer.addTool({
   name: 'sendEmail',
   annotations: { readOnlyHint: false },
   description: 'Send an email message.',
-  parameters: z.object({
-    to: z.string().describe('Recipient email address(es), comma-separated for multiple.'),
-    subject: z.string().describe('Email subject line.'),
-    body: z.string().describe('Email body content.'),
-    cc: z.string().optional().describe('CC recipients, comma-separated.'),
-    bcc: z.string().optional().describe('BCC recipients, comma-separated.'),
-    isHtml: z.boolean().optional().default(false).describe('Whether the body is HTML content.'),
-  }),
+  parameters: sendEmailSchema,
   execute: async (args, { log, session }) => handleSendEmail(getGmailClient(session), args, log),
 });
 
@@ -53,14 +52,7 @@ gmailServer.addTool({
   name: 'draftEmail',
   annotations: { readOnlyHint: false },
   description: 'Create a draft email without sending it.',
-  parameters: z.object({
-    to: z.string().describe('Recipient email address(es), comma-separated for multiple.'),
-    subject: z.string().describe('Email subject line.'),
-    body: z.string().describe('Email body content.'),
-    cc: z.string().optional().describe('CC recipients, comma-separated.'),
-    bcc: z.string().optional().describe('BCC recipients, comma-separated.'),
-    isHtml: z.boolean().optional().default(false).describe('Whether the body is HTML content.'),
-  }),
+  parameters: draftEmailSchema,
   execute: async (args, { log, session }) => handleDraftEmail(getGmailClient(session), args, log),
 });
 
@@ -92,11 +84,7 @@ gmailServer.addTool({
   name: 'modifyEmail',
   annotations: { readOnlyHint: false },
   description: 'Modify labels on a single email message (add or remove labels). For more than one message, prefer batchModifyEmails.',
-  parameters: z.object({
-    messageId: z.string().describe('The Gmail message ID to modify.'),
-    addLabelIds: z.array(z.string()).optional().describe('Label IDs to add to the message.'),
-    removeLabelIds: z.array(z.string()).optional().describe('Label IDs to remove from the message.'),
-  }),
+  parameters: modifyEmailSchema,
   execute: async (args, { log, session }) => handleModifyEmail(getGmailClient(session), args, log),
 });
 
@@ -104,9 +92,7 @@ gmailServer.addTool({
   name: 'deleteEmail',
   annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Move an email message to the trash.',
-  parameters: z.object({
-    messageId: z.string().describe('The Gmail message ID to trash.'),
-  }),
+  parameters: deleteEmailSchema,
   execute: async (args, { log, session }) => handleDeleteEmail(getGmailClient(session), args, log),
 });
 
@@ -116,11 +102,7 @@ gmailServer.addTool({
   name: 'batchModifyEmails',
   annotations: { readOnlyHint: false },
   description: 'Modify labels on multiple email messages at once (single atomic request). For a single message, modifyEmail is simpler. Limit: 1000 message IDs per call.',
-  parameters: z.object({
-    messageIds: z.array(z.string()).max(1000).describe('Array of Gmail message IDs to modify (max 1000).'),
-    addLabelIds: z.array(z.string()).optional().describe('Label IDs to add to all messages.'),
-    removeLabelIds: z.array(z.string()).optional().describe('Label IDs to remove from all messages.'),
-  }),
+  parameters: batchModifyEmailsSchema,
   execute: async (args, { log, session }) => handleBatchModifyEmails(getGmailClient(session), args, log),
 });
 
@@ -128,9 +110,7 @@ gmailServer.addTool({
   name: 'batchDeleteEmails',
   annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Move multiple email messages to the trash.',
-  parameters: z.object({
-    messageIds: z.array(z.string()).max(1000).describe('Array of Gmail message IDs to trash (max 1000).'),
-  }),
+  parameters: batchDeleteEmailsSchema,
   execute: async (args, { log, session }) => handleBatchDeleteEmails(getGmailClient(session), args, log),
 });
 
@@ -148,13 +128,7 @@ gmailServer.addTool({
   name: 'createLabel',
   annotations: { readOnlyHint: false },
   description: 'Create a new Gmail label.',
-  parameters: z.object({
-    name: z.string().describe('The display name for the new label.'),
-    labelListVisibility: z.enum(['labelShow', 'labelShowIfUnread', 'labelHide']).optional()
-      .default('labelShow').describe('Whether the label is shown in the label list.'),
-    messageListVisibility: z.enum(['show', 'hide']).optional()
-      .default('show').describe('Whether messages with this label are shown in the message list.'),
-  }),
+  parameters: createLabelSchema,
   execute: async (args, { log, session }) => handleCreateLabel(getGmailClient(session), args, log),
 });
 
@@ -162,14 +136,7 @@ gmailServer.addTool({
   name: 'updateLabel',
   annotations: { readOnlyHint: false },
   description: 'Update an existing Gmail label name or visibility settings.',
-  parameters: z.object({
-    labelId: z.string().describe('The label ID to update.'),
-    name: z.string().optional().describe('New display name for the label.'),
-    labelListVisibility: z.enum(['labelShow', 'labelShowIfUnread', 'labelHide']).optional()
-      .describe('Whether the label is shown in the label list.'),
-    messageListVisibility: z.enum(['show', 'hide']).optional()
-      .describe('Whether messages with this label are shown in the message list.'),
-  }),
+  parameters: updateLabelSchema,
   execute: async (args, { log, session }) => handleUpdateLabel(getGmailClient(session), args, log),
 });
 
@@ -177,9 +144,7 @@ gmailServer.addTool({
   name: 'deleteLabel',
   annotations: { readOnlyHint: false, destructiveHint: true },
   description: 'Delete a Gmail label. System labels (INBOX, SENT, etc.) cannot be deleted.',
-  parameters: z.object({
-    labelId: z.string().describe('The label ID to delete.'),
-  }),
+  parameters: deleteLabelSchema,
   execute: async (args, { log, session }) => handleDeleteLabel(getGmailClient(session), args, log),
 });
 
@@ -187,9 +152,7 @@ gmailServer.addTool({
   name: 'getOrCreateLabel',
   annotations: { readOnlyHint: false },
   description: 'Get a label by name, creating it if it does not exist. Returns the label ID.',
-  parameters: z.object({
-    name: z.string().describe('The label name to find or create.'),
-  }),
+  parameters: getOrCreateLabelSchema,
   execute: async (args, { log, session }) => handleGetOrCreateLabel(getGmailClient(session), args, log),
 });
 

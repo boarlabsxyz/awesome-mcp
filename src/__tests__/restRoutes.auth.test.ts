@@ -239,6 +239,17 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/redmine/issue-categories/12/delete',
   '/api/v1/redmine/projects/my-project/memberships',
   '/api/v1/redmine/memberships/30/delete',
+  // Gmail. /labels is in both arrays: GET lists, POST creates.
+  '/api/v1/gmail/messages/send',
+  '/api/v1/gmail/messages/batch-modify',
+  '/api/v1/gmail/messages/batch-trash',
+  '/api/v1/gmail/messages/m-1/modify',
+  '/api/v1/gmail/messages/m-1/trash',
+  '/api/v1/gmail/drafts',
+  '/api/v1/gmail/labels',
+  '/api/v1/gmail/labels/get-or-create',
+  '/api/v1/gmail/labels/L1',
+  '/api/v1/gmail/labels/L1/delete',
   // Google Docs writes — one per write tool. Note '/api/v1/docs/{id}/comments'
   // is in both arrays: GET lists the comments, POST adds one.
   '/api/v1/docs/import',

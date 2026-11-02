@@ -141,19 +141,19 @@ Source: `src/google-gmail/server.ts` — 14 tools.
 
 | Tool | Description | REST |
 |---|---|---|
-| `sendEmail` | Send an email message. | — |
-| `draftEmail` | Create a draft email without sending it. | — |
+| `sendEmail` | Send an email message. | `POST /api/v1/gmail/messages/send` |
+| `draftEmail` | Create a draft email without sending it. | `POST /api/v1/gmail/drafts` |
 | `readEmail` | Read the full content of an email by its message ID. | `GET /api/v1/gmail/messages/{messageId}` |
 | `searchEmails` | Search emails using Gmail query syntax (e.g., "from:user@example.com", "subject:hello", "is:unread", "newer_than:2d"). | `GET /api/v1/gmail/messages?q={query}` |
-| `modifyEmail` | Modify labels on a single email message (add or remove labels). For more than one message, prefer batchModifyEmails. | — |
-| `deleteEmail` | Move an email message to the trash. | — |
-| `batchModifyEmails` | Modify labels on multiple email messages at once (single atomic request). For a single message, modifyEmail is simpler. Limit: 1000 message IDs per call. | — |
-| `batchDeleteEmails` | Move multiple email messages to the trash. | — |
+| `modifyEmail` | Modify labels on a single email message (add or remove labels). For more than one message, prefer batchModifyEmails. | `POST /api/v1/gmail/messages/{messageId}/modify` |
+| `deleteEmail` | Move an email message to the trash. | `POST /api/v1/gmail/messages/{messageId}/trash` |
+| `batchModifyEmails` | Modify labels on multiple email messages at once (single atomic request). For a single message, modifyEmail is simpler. Limit: 1000 message IDs per call. | `POST /api/v1/gmail/messages/batch-modify` |
+| `batchDeleteEmails` | Move multiple email messages to the trash. | `POST /api/v1/gmail/messages/batch-trash` |
 | `listLabels` | List all Gmail labels with their message and thread counts. | `GET /api/v1/gmail/labels` |
-| `createLabel` | Create a new Gmail label. | — |
-| `updateLabel` | Update an existing Gmail label name or visibility settings. | — |
-| `deleteLabel` | Delete a Gmail label. System labels (INBOX, SENT, etc.) cannot be deleted. | — |
-| `getOrCreateLabel` | Get a label by name, creating it if it does not exist. Returns the label ID. | — |
+| `createLabel` | Create a new Gmail label. | `POST /api/v1/gmail/labels` |
+| `updateLabel` | Update an existing Gmail label name or visibility settings. | `POST /api/v1/gmail/labels/{labelId}` |
+| `deleteLabel` | Delete a Gmail label. System labels (INBOX, SENT, etc.) cannot be deleted. | `POST /api/v1/gmail/labels/{labelId}/delete` |
+| `getOrCreateLabel` | Get a label by name, creating it if it does not exist. Returns the label ID. | `POST /api/v1/gmail/labels/get-or-create` |
 | `getAttachment` | Download an email attachment. Returns the content as base64-encoded data. | `GET /api/v1/gmail/messages/{messageId}/attachments/{attachmentId}` |
 
 ## Google Slides

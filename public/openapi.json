@@ -12824,6 +12824,763 @@
         }
       }
     },
+    "/api/v1/gmail/messages/batch-modify": {
+      "post": {
+        "operationId": "batchModifyGmailMessages",
+        "summary": "Change labels on up to 1000 emails",
+        "description": "Gmail answers 204 with no per-message result, so confirmed is always null: requested counts the IDs sent, not the messages changed. 400 when no label is named. Mirrors the MCP tool `batchModifyEmails`.",
+        "tags": [
+          "gmail"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "messageIds"
+                ],
+                "properties": {
+                  "messageIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 1000,
+                    "description": "Array of Gmail message IDs to modify (max 1000)."
+                  },
+                  "addLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Label IDs to add to all messages."
+                  },
+                  "removeLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Label IDs to remove from all messages."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/messages/batch-trash": {
+      "post": {
+        "operationId": "batchTrashGmailMessages",
+        "summary": "Move up to 1000 emails to the trash",
+        "description": "DESTRUCTIVE. Exposed with explicit sign-off. Moves messages to Trash, recoverable for 30 days. Gmail has no batch trash, so a failure part way is reported per message: trashed, failed and notAttempted. 200 unless nothing was trashed. Mirrors the MCP tool `batchDeleteEmails`.",
+        "tags": [
+          "gmail"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "messageIds"
+                ],
+                "properties": {
+                  "messageIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 1000,
+                    "description": "Array of Gmail message IDs to trash (max 1000)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/messages/{messageId}/modify": {
+      "post": {
+        "operationId": "modifyGmailMessage",
+        "summary": "Change labels on one email",
+        "description": "POST sibling of the older PATCH on the message, which stays for existing callers. 400 when no label is named. Mirrors the MCP tool `modifyEmail`.",
+        "tags": [
+          "gmail"
+        ],
+        "parameters": [
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Gmail message ID to modify."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "addLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Label IDs to add to the message."
+                  },
+                  "removeLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Label IDs to remove from the message."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/messages/{messageId}/trash": {
+      "post": {
+        "operationId": "trashGmailMessage",
+        "summary": "Move one email to the trash",
+        "description": "DESTRUCTIVE. Exposed with explicit sign-off, though the older DELETE on the message already reached this. Moves it to Trash, recoverable for 30 days. Mirrors the MCP tool `deleteEmail`.",
+        "tags": [
+          "gmail"
+        ],
+        "parameters": [
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Gmail message ID to trash."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/labels/get-or-create": {
+      "post": {
+        "operationId": "getOrCreateGmailLabel",
+        "summary": "Find a label by name or create it",
+        "description": "201 with created true when the label was made, 200 with created false when it already existed. Matches the name case-insensitively. Mirrors the MCP tool `getOrCreateLabel`.",
+        "tags": [
+          "gmail"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The label name to find or create."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "It already existed; nothing was created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/labels": {
+      "post": {
+        "operationId": "createGmailLabel",
+        "summary": "Create a Gmail label",
+        "description": "201 with the created label. 409 when the name is taken. Mirrors the MCP tool `createLabel`.",
+        "tags": [
+          "gmail"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The display name for the new label."
+                  },
+                  "labelListVisibility": {
+                    "type": "string",
+                    "enum": [
+                      "labelShow",
+                      "labelShowIfUnread",
+                      "labelHide"
+                    ],
+                    "default": "labelShow",
+                    "description": "Whether the label is shown in the label list."
+                  },
+                  "messageListVisibility": {
+                    "type": "string",
+                    "enum": [
+                      "show",
+                      "hide"
+                    ],
+                    "default": "show",
+                    "description": "Whether messages with this label are shown in the message list."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listLabels",
+        "summary": "List Gmail labels",
+        "description": "List Gmail labels. Mirrors the MCP tool `listLabels`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "gmail"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/labels/{labelId}": {
+      "post": {
+        "operationId": "updateGmailLabel",
+        "summary": "Update a Gmail label",
+        "description": "Only the named fields change. 400 when no field is given. Mirrors the MCP tool `updateLabel`.",
+        "tags": [
+          "gmail"
+        ],
+        "parameters": [
+          {
+            "name": "labelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The label ID to update."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "New display name for the label."
+                  },
+                  "labelListVisibility": {
+                    "type": "string",
+                    "enum": [
+                      "labelShow",
+                      "labelShowIfUnread",
+                      "labelHide"
+                    ],
+                    "description": "Whether the label is shown in the label list."
+                  },
+                  "messageListVisibility": {
+                    "type": "string",
+                    "enum": [
+                      "show",
+                      "hide"
+                    ],
+                    "description": "Whether messages with this label are shown in the message list."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/labels/{labelId}/delete": {
+      "post": {
+        "operationId": "deleteGmailLabel",
+        "summary": "Permanently delete a Gmail label",
+        "description": "DESTRUCTIVE and permanent. Exposed with explicit sign-off. The label comes off every message; the messages stay. System labels are refused with 400. Mirrors the MCP tool `deleteLabel`.",
+        "tags": [
+          "gmail"
+        ],
+        "parameters": [
+          {
+            "name": "labelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The label ID to delete."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The outcome of the write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid label IDs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/hubspot/companies": {
       "get": {
         "operationId": "getHubSpotActiveCompanies",
@@ -28603,30 +29360,6 @@
               "type": "string"
             }
           }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/gmail/labels": {
-      "get": {
-        "operationId": "listLabels",
-        "summary": "List Gmail labels",
-        "description": "List Gmail labels. Mirrors the MCP tool `listLabels`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "gmail"
         ],
         "responses": {
           "200": {
