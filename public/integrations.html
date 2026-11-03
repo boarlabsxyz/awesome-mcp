@@ -488,7 +488,9 @@
     async function load() {
       const grid = document.getElementById('grid');
       try {
-        const res = await fetch('/api/v1/catalogs');
+        // No cookie: an admin's session would add the admin-only catalogs,
+        // which have no place on this public page.
+        const res = await fetch('/api/v1/catalogs', { credentials: 'omit' });
         if (!res.ok) throw new Error('Catalog request failed: ' + res.status);
         const data = await res.json();
         const items = (data.catalogs || []).slice().sort((a, b) => a.name.localeCompare(b.name));
