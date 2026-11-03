@@ -4082,7 +4082,7 @@ function registerSharedRoutes(app: express.Express): void {
     'google-slides': [
       'Add a title slide to the kickoff deck',
       'Replace "OLD_LOGO" with our new logo in every slide',
-      'Read the speaker notes from slide 5',
+      'Summarize the text on every slide of the kickoff deck',
     ],
     'google-drive': [
       'Find the latest version of the pricing memo',
@@ -4092,7 +4092,7 @@ function registerSharedRoutes(app: express.Express): void {
     'clickup': [
       'Create a task in the "Backlog" list with today\'s sync notes',
       'What\'s assigned to me and due this week?',
-      'Comment on CU-86c9mr5kd with the latest status',
+      'Find the "Fix login timeout" task and comment with the latest status',
     ],
     'slack': [
       'Summarize what I missed in #eng-platform today',
@@ -4102,7 +4102,7 @@ function registerSharedRoutes(app: express.Express): void {
     'slack-bot': [
       'Post the daily standup template to #standup',
       'List the last 20 messages from #incidents',
-      'Pin the runbook link in #oncall',
+      'Reply in the latest #oncall thread with a link to the runbook',
     ],
     'outline': [
       'Find the onboarding doc in the Engineering collection',
@@ -4133,11 +4133,6 @@ function registerSharedRoutes(app: express.Express): void {
       'List my Supabase projects, then show the tables in the public schema of the production one',
       'Check the security advisors for my project and list any tables missing row level security',
       'Show the Postgres error logs from the last hour and tell me what is failing',
-    ],
-    'admin': [
-      'How were the MCPs used this week? Which services and tools are busiest?',
-      'Which tools fail most often in the last 30 days, and with what errors?',
-      'Show me what ana@example.com did yesterday and where the model got stuck retrying',
     ],
     'pinecone': [
       'List my Pinecone indexes and tell me which namespaces each one has and how many records',
