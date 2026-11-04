@@ -50,6 +50,10 @@ export function registerListRestEndpoints(server: FastMCP<UserSession>): void {
           count: entries.length,
           ...(Object.keys(serviceNotes).length ? { serviceNotes } : {}),
           auth: 'Authorization: Bearer <token from mintRestBearerForCurl>',
+          multipleConnections:
+            'The bearer serves the account of the connector that minted it — mint it from the connector you mean. ' +
+            'To pick another connection to the same service, send X-Instance-Id: <instanceId>. ' +
+            'A 409 lists the instance ids when the bearer came from another service and several connections match.',
           endpoints: entries.map(e => ({
             service: e.service,
             method: e.method,

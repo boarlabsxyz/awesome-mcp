@@ -30,6 +30,12 @@
 - **Security: `createServiceAuth` accepts the permanent dashboard API key** — it can mutate HubSpot CRM records and the portal's property schema and, in Redmine, issues, projects, memberships, versions, time and wiki, including permanent deletes.
 - **`POST /api/v1/redmine/issues/{issueId}` is an update** — catalog methods are `GET | POST` only.
 
+### REST plane: which connection serves a call
+
+- **A minted bearer carries the instance that minted it** (`RestTokenRecord.instanceId`), and `createServiceAuth` serves that connection — a slug lookup alone always picks the first, so a user with two Google accounts on Sheets got the wrong one. Order: `X-Instance-Id` request header (must be the caller's own connection with the exact `primarySlug`, else 404) → minted instance (exact slug) → first connection for the slug.
+- **Never fall back silently when the choice is ambiguous** — a bearer minted on another service, for a user with several connections to this one, is a 409 listing `instances`; with one connection it falls through. The dashboard key and JWTs keep "first connection" so existing scripts don't break. Every response sets `X-Instance-Id` to the serving connection. Pinned by `src/__tests__/restRoutes.multiInstance.test.ts`; UNVERIFIED on a live multi-account Sheets user.
+- **Exact slug match, not the `fallbackSubstring`** — `'slack'` matches `slack-bot` and `'peopleforce'` matches `peopleforce-v4`, which would let the wrong provider's connection answer.
+
 ### Body parsing
 
 - **Every factory calling `registerRestApiRoutes` must call `registerRestBodyParsers` + `registerRestBodyParseErrorHandler` first** — else `req.body` is undefined and POSTs 400 with misleading "Required" errors while GETs work.

@@ -15,6 +15,12 @@ const REDIS_KEY_PREFIX = 'oauth:rest_token:';
 
 export interface RestTokenRecord {
   userId: number;
+  /**
+   * The MCP instance whose session minted the bearer. With two connections to
+   * one service (two Google accounts on Sheets), the REST plane serves this
+   * one rather than whichever connection a slug lookup finds first.
+   */
+  instanceId?: string;
   createdAt: number;
   expiresAt: number;
 }
@@ -46,7 +52,7 @@ function memorySweep(): void {
   }
 }
 
-function memoryMint(userId: number): MintedRestToken {
+function memoryMint(userId: number, instanceId?: string): MintedRestToken {
   if (++mintsSinceLastSweep >= SWEEP_EVERY_MINTS) {
     mintsSinceLastSweep = 0;
     memorySweep();
@@ -55,20 +61,21 @@ function memoryMint(userId: number): MintedRestToken {
   const now = Date.now();
   memoryStore.set(token, {
     userId,
+    ...(instanceId ? { instanceId } : {}),
     createdAt: now,
     expiresAt: now + REST_TOKEN_TTL_MS,
   });
   return { token, expiresAt: now + REST_TOKEN_TTL_MS, ttlSeconds: REST_TOKEN_TTL_SECONDS };
 }
 
-function memoryLookup(token: string): number | null {
+function memoryLookup(token: string): RestTokenRecord | null {
   const rec = memoryStore.get(token);
   if (!rec) return null;
   if (rec.expiresAt < Date.now()) {
     memoryStore.delete(token);
     return null;
   }
-  return rec.userId;
+  return rec;
 }
 
 function memoryRevoke(token: string): void {
@@ -77,12 +84,13 @@ function memoryRevoke(token: string): void {
 
 // ---------- Redis-backed storage ----------
 
-async function redisMint(userId: number): Promise<MintedRestToken> {
+async function redisMint(userId: number, instanceId?: string): Promise<MintedRestToken> {
   const redis = getRedis();
   const token = generateToken();
   const now = Date.now();
   const rec: RestTokenRecord = {
     userId,
+    ...(instanceId ? { instanceId } : {}),
     createdAt: now,
     expiresAt: now + REST_TOKEN_TTL_MS,
   };
@@ -90,7 +98,7 @@ async function redisMint(userId: number): Promise<MintedRestToken> {
   return { token, expiresAt: rec.expiresAt, ttlSeconds: REST_TOKEN_TTL_SECONDS };
 }
 
-async function redisLookup(token: string): Promise<number | null> {
+async function redisLookup(token: string): Promise<RestTokenRecord | null> {
   const redis = getRedis();
   const data = await redis.get(`${REDIS_KEY_PREFIX}${token}`);
   if (!data) return null;
@@ -100,7 +108,7 @@ async function redisLookup(token: string): Promise<number | null> {
       await redis.del(`${REDIS_KEY_PREFIX}${token}`);
       return null;
     }
-    return rec.userId;
+    return rec;
   } catch {
     return null;
   }
@@ -113,15 +121,20 @@ async function redisRevoke(token: string): Promise<void> {
 
 // ---------- Public API ----------
 
-export async function mintRestToken(userId: number): Promise<MintedRestToken> {
-  if (isDatabaseAvailable()) return redisMint(userId);
-  return memoryMint(userId);
+export async function mintRestToken(userId: number, instanceId?: string): Promise<MintedRestToken> {
+  if (isDatabaseAvailable()) return redisMint(userId, instanceId);
+  return memoryMint(userId, instanceId);
 }
 
-export async function lookupRestToken(token: string): Promise<number | null> {
+/** The full record behind a bearer: who minted it and from which MCP instance. */
+export async function lookupRestTokenRecord(token: string): Promise<RestTokenRecord | null> {
   if (!token || typeof token !== 'string') return null;
   if (isDatabaseAvailable()) return redisLookup(token);
   return memoryLookup(token);
+}
+
+export async function lookupRestToken(token: string): Promise<number | null> {
+  return (await lookupRestTokenRecord(token))?.userId ?? null;
 }
 
 export async function revokeRestToken(token: string): Promise<void> {
