@@ -47,6 +47,7 @@ const SERVICES = [
   ['src/pinecone/server.ts',              'Pinecone',              'pinecone'],
   ['src/supabase/server.ts',              'Supabase',              'supabase'],
   ['src/admin-mcp/server.ts',             'Admin (usage analytics)', null],
+  ['src/storage/server.ts',               'Storage',               'storage'],
 ];
 
 // ---------------------------------------------------------------------------

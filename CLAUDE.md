@@ -1,6 +1,6 @@
 # Awesome MCP
 
-Multi-service FastMCP hosting platform: one MCP server per provider under `src/<provider>/server.ts` — Google Docs, Sheets, Calendar, Drive, Gmail and Slides, ClickUp, Slack (bot + user), Outline, PeopleForce (v2/v3 and v4), HubSpot, Redmine, Browserbase, GitHub, Pinecone and Supabase, plus an admins-only Admin MCP over the usage analytics — and a curl-able REST data plane under `/api/v1/*`.
+Multi-service FastMCP hosting platform: one MCP server per provider under `src/<provider>/server.ts` — Google Docs, Sheets, Calendar, Drive, Gmail and Slides, ClickUp, Slack (bot + user), Outline, PeopleForce (v2/v3 and v4), HubSpot, Redmine, Browserbase, GitHub, Pinecone and Supabase, a first-party Storage MCP (schema-enforced collections in our own Postgres), plus an admins-only Admin MCP over the usage analytics — and a curl-able REST data plane under `/api/v1/*`.
 
 ## Tool Inventory
 
@@ -29,6 +29,7 @@ Service-specific rules and limitations live next to the code, in nested `CLAUDE.
 - `src/redmine/CLAUDE.md` — Redmine
 - `src/slack/CLAUDE.md` — Slack shared code and the `slack-bot` server
 - `src/slack-user/CLAUDE.md` — Slack user server and its access rules
+- `src/storage/CLAUDE.md` — Storage MCP: per-user schema-enforced collections, migrations, quotas
 - `src/supabase/CLAUDE.md` — Supabase (hosted-MCP proxy, modern protocol)
 - `src/usage/CLAUDE.md` — usage analytics (`tool_call_events`): what is recorded, what never is
 - `src/website/CLAUDE.md` — dashboard sign-up/login, REST-plane handlers, body parsing

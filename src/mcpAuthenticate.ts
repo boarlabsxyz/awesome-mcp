@@ -1,7 +1,7 @@
 // src/mcpAuthenticate.ts
 // Shared authenticate handler for all MCP servers.
 import http from 'http';
-import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession, createSlackBotSession, createSlackUserSession, createOutlineSession, createPeopleForceSession, createPeopleForceV4Session, createHubSpotSession, createRedmineSession, createBrowserbaseSession, createGitHubSession, createPineconeSession, createSupabaseSession, createAdminSession } from './userSession.js';
+import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession, createSlackBotSession, createSlackUserSession, createOutlineSession, createPeopleForceSession, createPeopleForceV4Session, createHubSpotSession, createRedmineSession, createBrowserbaseSession, createGitHubSession, createPineconeSession, createSupabaseSession, createAdminSession, createStorageSession } from './userSession.js';
 import { loadUsers, getUserByApiKey, getUserById } from './userStore.js';
 import { loadClientCredentials } from './auth.js';
 import { getMcpConnection, getMcpConnectionByInstanceId } from './mcpConnectionStore.js';
@@ -32,6 +32,7 @@ export interface AuthDeps {
   createPineconeSession: (user: any, conn: any) => UserSession;
   createSupabaseSession: (user: any, conn: any) => UserSession;
   createAdminSession: (user: any) => UserSession;
+  createStorageSession: (user: any, instanceId?: string) => UserSession;
 }
 
 /** Default dependencies wired to real implementations. */
@@ -58,6 +59,7 @@ const defaultDeps: AuthDeps = {
   createPineconeSession,
   createSupabaseSession,
   createAdminSession,
+  createStorageSession,
 };
 
 /** Create a session from a verified connection. */
@@ -67,6 +69,11 @@ async function sessionFromConnection(user: any, connection: any, deps: AuthDeps)
   // this is that id being replayed against some other server.
   if (connection.provider === 'admin' || connection.mcpSlug === 'admin') {
     throw new Response(null, { status: 400, statusText: 'This connection is for the Admin MCP only.' } as any);
+  }
+  // Same for a Storage MCP instance id: the Storage MCP is answered first in
+  // resolveSession, so reaching here means the id was replayed elsewhere.
+  if (connection.provider === 'storage' || connection.mcpSlug === 'storage') {
+    throw new Response(null, { status: 400, statusText: 'This connection is for the Storage MCP only.' } as any);
   }
   if (connection.provider === 'clickup') {
     return deps.createClickUpSession(user, connection);
@@ -122,6 +129,14 @@ async function resolveSession(user: any, mcpSlug: string, instanceId: string | u
       throw new Response(null, { status: 403, statusText: 'The Admin MCP is for administrators only.' } as any);
     }
     return deps.createAdminSession(user);
+  }
+
+  // The Storage MCP has no credential: its data belongs to whoever is calling.
+  // Answered before the instanceId path, which skips ownership and would
+  // otherwise resolve a session from someone else's connection, and before the
+  // global-Google-token fallback, which would hand out a Google session.
+  if (mcpSlug === 'storage') {
+    return deps.createStorageSession(user, instanceId);
   }
 
   if (instanceId) {

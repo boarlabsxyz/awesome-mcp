@@ -471,6 +471,9 @@ export async function checkConnectionHealth(
       case 'admin':
         // No credential to expire: access is decided per call by ADMIN_EMAILS.
         return { state: 'healthy' };
+      case 'storage':
+        // No credential to expire: the data lives in this server's database.
+        return { state: 'healthy' };
       default:
         return { state: 'unknown', reason: `No health probe implemented for provider "${provider}".` };
     }

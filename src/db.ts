@@ -371,6 +371,48 @@ CREATE INDEX IF NOT EXISTS idx_tool_call_events_user_ts ON tool_call_events(user
 CREATE INDEX IF NOT EXISTS idx_tool_call_events_tool_ts ON tool_call_events(mcp_slug, tool, ts);
 `;
 
+// The Storage MCP's schema-enforced collections. All DML lives in
+// src/storage/store.ts. Data is the user's own content, so — unlike the
+// analytics table — it cascades away with the user. A record's `key` is copied
+// from data[key_field] by the app so a natural key (a profile URL) can upsert.
+const CREATE_STORAGE_TABLES = `
+CREATE TABLE IF NOT EXISTS storage_collections (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL,
+  fields      JSONB NOT NULL,
+  key_field   TEXT,
+  ttl_days    INT,
+  version     INT NOT NULL DEFAULT 1,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, name)
+);
+CREATE TABLE IF NOT EXISTS storage_records (
+  id            TEXT PRIMARY KEY,
+  collection_id BIGINT NOT NULL REFERENCES storage_collections(id) ON DELETE CASCADE,
+  key           TEXT,
+  data          JSONB NOT NULL,
+  bytes         INT NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (collection_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_storage_records_collection_updated ON storage_records(collection_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_storage_records_data ON storage_records USING GIN (data jsonb_path_ops);
+CREATE TABLE IF NOT EXISTS storage_migrations (
+  id               BIGSERIAL PRIMARY KEY,
+  collection_id    BIGINT NOT NULL REFERENCES storage_collections(id) ON DELETE CASCADE,
+  version          INT NOT NULL,
+  reason           TEXT NOT NULL,
+  operations       JSONB NOT NULL,
+  records_affected INT NOT NULL,
+  applied_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (collection_id, version)
+);
+`;
+
 // Add unique constraint on instance_id (each instance must be unique)
 const ADD_INSTANCE_ID_UNIQUE_CONSTRAINT = `
 DO $$
@@ -505,6 +547,8 @@ export async function initDatabase(): Promise<void> {
     console.error('Image blobs table ensured.');
     await pool.query(CREATE_TOOL_CALL_EVENTS_TABLE);
     console.error('Tool call events table ensured.');
+    await pool.query(CREATE_STORAGE_TABLES);
+    console.error('Storage MCP tables ensured.');
 
     dbAvailable = true;
 

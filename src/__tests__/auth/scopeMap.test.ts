@@ -120,6 +120,14 @@ describe('scopeMap', () => {
       assert.equal(getRequiredScope('/supabase-sse'), 'mcp:supabase');
     });
 
+    it('should return mcp:storage for /storage', () => {
+      assert.equal(getRequiredScope('/storage'), 'mcp:storage');
+    });
+
+    it('should return mcp:storage for /storage-sse', () => {
+      assert.equal(getRequiredScope('/storage-sse'), 'mcp:storage');
+    });
+
     it('should return null for unknown routes', () => {
       assert.equal(getRequiredScope('/health'), null);
       assert.equal(getRequiredScope('/api/config'), null);
@@ -133,8 +141,8 @@ describe('scopeMap', () => {
   });
 
   describe('ALL_SCOPES', () => {
-    it('should contain all 18 scopes', () => {
-      assert.equal(ALL_SCOPES.length, 18);
+    it('should contain all 19 scopes', () => {
+      assert.equal(ALL_SCOPES.length, 19);
       assert.ok(ALL_SCOPES.includes('mcp:docs'));
       assert.ok(ALL_SCOPES.includes('mcp:calendar'));
       assert.ok(ALL_SCOPES.includes('mcp:sheets'));
@@ -153,6 +161,7 @@ describe('scopeMap', () => {
       assert.ok(ALL_SCOPES.includes('mcp:github'));
       assert.ok(ALL_SCOPES.includes('mcp:pinecone'));
       assert.ok(ALL_SCOPES.includes('mcp:supabase'));
+      assert.ok(ALL_SCOPES.includes('mcp:storage'));
     });
   });
 
@@ -176,6 +185,7 @@ describe('scopeMap', () => {
       assert.deepEqual(getScopesForSlug('github'), ['mcp:github']);
       assert.deepEqual(getScopesForSlug('pinecone'), ['mcp:pinecone']);
       assert.deepEqual(getScopesForSlug('supabase'), ['mcp:supabase']);
+      assert.deepEqual(getScopesForSlug('storage'), ['mcp:storage']);
     });
 
     it('should return all scopes for unknown slugs', () => {

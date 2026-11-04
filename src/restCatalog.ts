@@ -28,7 +28,8 @@ export type RestService =
   | 'browserbase'
   | 'github'
   | 'pinecone'
-  | 'supabase';
+  | 'supabase'
+  | 'storage';
 
 /**
  * Which `src/<dir>/server.ts` implements each service's MCP tools.
@@ -58,6 +59,7 @@ export const SERVICE_SERVER_PATH: Record<RestService, string> = {
   github: 'src/github/server.ts',
   pinecone: 'src/pinecone/server.ts',
   supabase: 'src/supabase/server.ts',
+  storage: 'src/storage/server.ts',
 };
 
 export interface RestEndpoint {
@@ -522,6 +524,10 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}/functions', summary: 'List Edge Functions', mcpToolName: 'list_edge_functions', openapiOperationId: 'listSupabaseEdgeFunctions', status: 'planned' },
   { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}/functions/{functionSlug}', summary: 'Get the files of one Edge Function', mcpToolName: 'get_edge_function', openapiOperationId: 'getSupabaseEdgeFunction', status: 'planned' },
   { service: 'supabase', method: 'GET', path: '/api/v1/supabase/projects/{projectId}/branches', summary: 'List development branches', mcpToolName: 'list_branches', openapiOperationId: 'listSupabaseBranches', status: 'planned' },
+  { service: 'storage', method: 'GET', path: '/api/v1/storage/collections', summary: 'List your storage collections with record counts and quotas', mcpToolName: 'listCollections', openapiOperationId: 'listStorageCollections', status: 'planned' },
+  { service: 'storage', method: 'GET', path: '/api/v1/storage/collections/{collection}', summary: 'Get the schema and migration history of one collection', mcpToolName: 'describeCollection', openapiOperationId: 'describeStorageCollection', status: 'planned' },
+  { service: 'storage', method: 'GET', path: '/api/v1/storage/collections/{collection}/records/{recordId}', summary: 'Get one record by id', mcpToolName: 'getRecord', openapiOperationId: 'getStorageRecord', status: 'planned' },
+  { service: 'storage', method: 'POST', path: '/api/v1/storage/collections/{collection}/find', summary: 'Query the records of one collection', mcpToolName: 'findRecords', openapiOperationId: 'findStorageRecords', status: 'planned', notes: 'A read despite the POST: the where conditions do not fit a query string.' },
 ];
 
 /**
