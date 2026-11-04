@@ -161,7 +161,8 @@ export async function opDescribeCollection(userId: number | undefined, args: { c
     records: stats.records,
     bytes: stats.bytes,
     createdAt: c.createdAt,
-    updatedAt: c.updatedAt,
+    schemaChangedAt: c.updatedAt,
+    lastWriteAt: c.lastWriteAt,
     recentMigrations: migrations,
     ...(c.version > 1 + migrations.length ? { note: `Showing the last ${migrations.length} migrations of ${c.version - 1}.` } : {}),
   };
@@ -205,13 +206,19 @@ export async function opCreateCollection(
   }
 }
 
+const MIGRATION_SAMPLES = 3;
+
 function migrationReport(c: Collection, plan: MigrationPlan, recordsTotal: number) {
   return {
     recordsTotal,
     recordsChanged: plan.changed.length,
     failureCount: plan.failures.length,
     failures: plan.failures.slice(0, LIST_CAP),
-    samples: plan.changed.slice(0, 3).map(({ id, before, after }) => ({ id, before, after })),
+    ...(plan.failures.length > LIST_CAP ? { failuresNote: `Showing ${LIST_CAP} of ${plan.failures.length} failures.` } : {}),
+    samples: plan.changed.slice(0, MIGRATION_SAMPLES).map(({ id, before, after }) => ({ id, before, after })),
+    ...(plan.changed.length > MIGRATION_SAMPLES
+      ? { samplesNote: `Showing ${MIGRATION_SAMPLES} of ${plan.changed.length} changed records.` }
+      : {}),
     schemaBefore: describeShape(c),
     schemaAfter: describeShape(plan.shape),
   };
@@ -546,16 +553,32 @@ function toCondition(c: Collection, w: { field: string; op: WhereOp; value?: unk
   return { field: w.field, type: def.type, op: w.op, value: whereValue(w.field, def, w.value) };
 }
 
-function decodeCursor(cursor: string | undefined): number {
-  if (!cursor) return 0;
+/**
+ * A keyset cursor: the last record returned (its sort value and id), the sort
+ * it belongs to, the schema version it was read under (a migration can change
+ * the sort field's type), and how many records came before, for the note.
+ */
+interface Cursor {
+  v: number;
+  by: string;
+  dir: 'asc' | 'desc';
+  k: string | null;
+  id: string;
+  n: number;
+}
+
+function decodeCursor(cursor: string): Cursor {
   try {
-    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-    if (Number.isInteger(parsed?.o) && parsed.o >= 0) return parsed.o;
+    const p = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+    if (
+      Number.isInteger(p?.v) && typeof p.by === 'string' && (p.dir === 'asc' || p.dir === 'desc')
+      && (p.k === null || typeof p.k === 'string') && typeof p.id === 'string' && Number.isInteger(p.n) && p.n >= 0
+    ) return p;
   } catch { /* fall through */ }
   throw new UserError('cursor is not one this tool returned. Pass nextCursor from a previous findRecords call unchanged, or omit it.');
 }
 
-const encodeCursor = (offset: number): string => Buffer.from(JSON.stringify({ o: offset }), 'utf8').toString('base64url');
+const encodeCursor = (cursor: Cursor): string => Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
 
 export async function opFindRecords(
   userId: number | undefined,
@@ -576,6 +599,7 @@ export async function opFindRecords(
   const c = await requireCollection(pool, uid, args.collection);
   const conditions = (args.where ?? []).map((w) => toCondition(c, w));
 
+  const orderByName = args.orderBy ?? '_updatedAt';
   let orderBy: FindQuery['orderBy'] = '_updatedAt';
   if (args.orderBy && args.orderBy !== '_updatedAt') {
     if (args.orderBy === '_createdAt') orderBy = '_createdAt';
@@ -587,27 +611,39 @@ export async function opFindRecords(
     }
   }
 
-  const offset = decodeCursor(args.cursor);
+  const cursor = args.cursor ? decodeCursor(args.cursor) : null;
+  if (cursor && (cursor.by !== orderByName || cursor.dir !== args.order)) {
+    throw new UserError(`cursor belongs to a query sorted by ${cursor.by} ${cursor.dir}, not ${orderByName} ${args.order}. Keep orderBy and order unchanged while paging, or omit cursor to start over.`);
+  }
+  if (cursor && cursor.v !== c.version) {
+    throw new UserError(`"${c.name}" was migrated (version ${cursor.v} → ${c.version}) since this cursor was issued. Run the query again without cursor.`);
+  }
+  const seen = cursor?.n ?? 0;
   const query: FindQuery = {
     conditions,
     text: args.contains,
     updatedWithinDays: args.updatedWithinDays,
     orderBy,
     order: args.order,
-    limit: args.limit,
-    offset,
+    // One extra row says whether another page exists, whatever total did meanwhile.
+    limit: args.limit + 1,
+    after: cursor ? { sortKey: cursor.k, id: cursor.id } : undefined,
   };
   const page = await findRecords(pool, c.id, query);
-  const total = page.records.length === 0 && offset > 0 ? await countMatches(pool, c.id, query) : page.total;
-  const next = offset + page.records.length;
+  const more = page.records.length > args.limit;
+  const records = page.records.slice(0, args.limit);
+  const total = records.length === 0 && cursor ? await countMatches(pool, c.id, query) : page.total;
+  const last = records.at(-1);
+  const nextCursor = more && last
+    ? encodeCursor({ v: c.version, by: orderByName, dir: args.order, k: last.sortKey, id: last.id, n: seen + records.length })
+    : null;
   const now = deps.now();
   return {
     collection: c.name,
     total,
-    returned: page.records.length,
-    offset,
-    nextCursor: next < total ? encodeCursor(next) : null,
-    ...(next < total ? { note: `Showing ${offset + 1}-${next} of ${total} matches. Pass nextCursor to continue.` } : {}),
-    records: page.records.map((r) => present(r, c, now)),
+    returned: records.length,
+    nextCursor,
+    ...(nextCursor ? { note: `Showing ${seen + 1}-${seen + records.length} of ${total} matches. Pass nextCursor to continue.` } : {}),
+    records: records.map((r) => present(r, c, now)),
   };
 }

@@ -68,13 +68,14 @@ export const findRecordsSchema = z.object({
   orderBy: z.string().min(1).max(64).optional().describe('A single-value field, _updatedAt (default) or _createdAt.'),
   order: z.enum(['asc', 'desc']).default('desc'),
   limit: z.number().int().min(1).max(100).default(25),
-  cursor: z.string().max(200).optional().describe('nextCursor from a previous call, to get the next page.'),
+  // Long enough for a keyset cursor carrying a long string sort value.
+  cursor: z.string().max(100_000).optional().describe('nextCursor from a previous call, to get the next page. Keep the other arguments unchanged.'),
 });
 
 export const deleteRecordsSchema = z.object({
   collection,
-  ids: z.array(z.string().min(1).max(64)).min(1).max(500).optional(),
-  keys: z.array(z.string().min(1).max(2000)).min(1).max(500).optional(),
+  ids: z.array(z.string().min(1).max(64)).min(1).max(500).optional().describe('Record _ids. Give ids or keys, not both.'),
+  keys: z.array(z.string().min(1).max(2000)).min(1).max(500).optional().describe('keyField values. Give ids or keys, not both.'),
 });
 
 export const dropCollectionSchema = z.object({

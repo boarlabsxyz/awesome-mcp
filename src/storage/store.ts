@@ -67,6 +67,8 @@ export interface Collection extends CollectionShape {
   version: number;
   createdAt: string;
   updatedAt: string;
+  /** The last record write or migration; null until the first one. */
+  lastWriteAt: string | null;
 }
 
 export interface RecordRow {
@@ -91,6 +93,7 @@ function toCollection(row: any): Collection {
     version: Number(row.version),
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
+    lastWriteAt: row.last_write_at ? iso(row.last_write_at) : null,
   };
 }
 
@@ -123,12 +126,13 @@ export async function getCollection(q: Queryable, userId: number, name: string, 
 export interface CollectionSummary extends Collection {
   records: number;
   bytes: number;
-  lastWriteAt: string | null;
 }
 
 export async function listCollections(q: Queryable, userId: number): Promise<CollectionSummary[]> {
+  // The max(updated_at) fallback covers collections written before last_write_at existed.
   const { rows } = await q.query(
-    `SELECT c.*, count(r.id) AS records, coalesce(sum(r.bytes), 0) AS total_bytes, max(r.updated_at) AS last_write_at
+    `SELECT c.*, count(r.id) AS records, coalesce(sum(r.bytes), 0) AS total_bytes,
+            coalesce(c.last_write_at, max(r.updated_at)) AS last_write
        FROM storage_collections c
        LEFT JOIN storage_records r ON r.collection_id = c.id
       WHERE c.user_id = $1
@@ -140,8 +144,17 @@ export async function listCollections(q: Queryable, userId: number): Promise<Col
     ...toCollection(row),
     records: Number(row.records),
     bytes: Number(row.total_bytes),
-    lastWriteAt: row.last_write_at ? iso(row.last_write_at) : null,
+    lastWriteAt: row.last_write ? iso(row.last_write) : null,
   }));
+}
+
+/**
+ * Marks the collection written now. Every record write and migration calls
+ * it: lastWriteAt read off the records alone misses deletes and migrations
+ * (a migration keeps each record's updated_at).
+ */
+async function touchCollection(q: Queryable, collectionId: number): Promise<void> {
+  await q.query('UPDATE storage_collections SET last_write_at = now() WHERE id = $1', [collectionId]);
 }
 
 /** What one user already holds, for the quota checks. */
@@ -238,7 +251,7 @@ export async function applyMigration(
   const version = collection.version + 1;
   await q.query(
     `UPDATE storage_collections SET description = $2, fields = $3::jsonb, key_field = $4, ttl_days = $5,
-            version = $6, updated_at = now() WHERE id = $1`,
+            version = $6, updated_at = now(), last_write_at = now() WHERE id = $1`,
     [collection.id, shape.description, JSON.stringify(shape.fields), shape.keyField, shape.ttlDays, version],
   );
   await q.query(
@@ -300,6 +313,7 @@ export async function insertRecords(
      RETURNING id, key, (xmax = 0) AS inserted`,
     [collectionId, JSON.stringify(records)],
   );
+  await touchCollection(q, collectionId);
   return rows.map((row) => ({ id: row.id, key: row.key ?? null, inserted: row.inserted === true }));
 }
 
@@ -327,7 +341,9 @@ export async function updateRecord(
       WHERE collection_id = $1 AND id = $2 RETURNING *`,
     [collectionId, id, JSON.stringify(data), key, bytes],
   );
-  return rows[0] ? toRecord(rows[0]) : null;
+  if (!rows[0]) return null;
+  await touchCollection(q, collectionId);
+  return toRecord(rows[0]);
 }
 
 export async function deleteRecords(
@@ -340,6 +356,7 @@ export async function deleteRecords(
     `DELETE FROM storage_records WHERE collection_id = $1 AND ${column} = ANY($2::text[]) RETURNING id, key`,
     [collectionId, values],
   );
+  if (rows.length) await touchCollection(q, collectionId);
   return rows.map((row) => ({ id: row.id, key: row.key ?? null }));
 }
 
@@ -364,7 +381,8 @@ export interface FindQuery {
   orderBy: { field: string; type: FieldType } | '_updatedAt' | '_createdAt';
   order: 'asc' | 'desc';
   limit: number;
-  offset: number;
+  /** Keyset position: the sort value (as text) and id of the last record already returned. */
+  after?: { sortKey: string | null; id: string };
 }
 
 /** Escapes LIKE wildcards so a search for "50%" matches the text "50%". */
@@ -420,29 +438,56 @@ export function buildFindSql(collectionId: number, query: FindQuery): { text: st
     where.push(`r.updated_at >= now() - make_interval(days => $${params.length})`);
   }
   const dir = query.order === 'asc' ? 'ASC' : 'DESC';
-  let orderExpr: string;
-  if (query.orderBy === '_updatedAt') orderExpr = 'r.updated_at';
-  else if (query.orderBy === '_createdAt') orderExpr = 'r.created_at';
+  let sortExpr: string;
+  let sortCast: string | undefined = 'timestamptz';
+  if (query.orderBy === '_updatedAt') sortExpr = 'r.updated_at';
+  else if (query.orderBy === '_createdAt') sortExpr = 'r.created_at';
   else {
     params.push(query.orderBy.field);
-    const cast = PG_CAST[query.orderBy.type];
-    orderExpr = cast ? `(r.data ->> $${params.length})::${cast}` : `(r.data ->> $${params.length})`;
+    sortCast = PG_CAST[query.orderBy.type];
+    sortExpr = sortCast ? `(r.data ->> $${params.length})::${sortCast}` : `(r.data ->> $${params.length})`;
+  }
+  // Keyset paging: the rows after the last one returned in (sort value, id)
+  // order, NULLS LAST. Unlike an offset, a record written meanwhile cannot
+  // shift a page. total is counted in the inner query, before the keyset
+  // filter, so it stays the number of all matches.
+  let keyset = '';
+  if (query.after) {
+    const cmp = dir === 'ASC' ? '>' : '<';
+    params.push(query.after.id);
+    const idParam = `$${params.length}`;
+    if (query.after.sortKey === null) {
+      keyset = `WHERE m.sort_val IS NULL AND m.id ${cmp} ${idParam}`;
+    } else {
+      params.push(query.after.sortKey);
+      const k = sortCast ? `$${params.length}::${sortCast}` : `$${params.length}`;
+      keyset = `WHERE (m.sort_val ${cmp} ${k} OR (m.sort_val = ${k} AND m.id ${cmp} ${idParam}) OR m.sort_val IS NULL)`;
+    }
   }
   params.push(query.limit);
-  const limitParam = `$${params.length}`;
-  params.push(query.offset);
-  const offsetParam = `$${params.length}`;
-  const text = `SELECT r.*, count(*) OVER () AS total FROM storage_records r
-    WHERE ${where.join(' AND ')}
-    ORDER BY ${orderExpr} ${dir} NULLS LAST, r.id ${dir}
-    LIMIT ${limitParam} OFFSET ${offsetParam}`;
+  const text = `SELECT * FROM (
+      SELECT r.*, ${sortExpr} AS sort_val, (${sortExpr})::text AS sort_key, count(*) OVER () AS total
+        FROM storage_records r
+       WHERE ${where.join(' AND ')}
+    ) m
+    ${keyset}
+    ORDER BY m.sort_val ${dir} NULLS LAST, m.id ${dir}
+    LIMIT $${params.length}`;
   return { text, params };
 }
 
-export async function findRecords(q: Queryable, collectionId: number, query: FindQuery): Promise<{ records: RecordRow[]; total: number }> {
+export interface FoundRecord extends RecordRow {
+  /** The sort value as text, for the next page's keyset cursor. */
+  sortKey: string | null;
+}
+
+export async function findRecords(q: Queryable, collectionId: number, query: FindQuery): Promise<{ records: FoundRecord[]; total: number }> {
   const { text, params } = buildFindSql(collectionId, query);
   const { rows } = await q.query(text, params);
-  return { records: rows.map(toRecord), total: rows.length ? Number(rows[0].total) : 0 };
+  return {
+    records: rows.map((row) => ({ ...toRecord(row), sortKey: row.sort_key ?? null })),
+    total: rows.length ? Number(rows[0].total) : 0,
+  };
 }
 
 /**
@@ -450,7 +495,7 @@ export async function findRecords(q: Queryable, collectionId: number, query: Fin
  * past the last page, and "0 total" there would read as "no matches".
  */
 export async function countMatches(q: Queryable, collectionId: number, query: FindQuery): Promise<number> {
-  const { text, params } = buildFindSql(collectionId, { ...query, limit: 1, offset: 0 });
+  const { text, params } = buildFindSql(collectionId, { ...query, limit: 1, after: undefined });
   const { rows } = await q.query(text, params);
   return rows.length ? Number(rows[0].total) : 0;
 }

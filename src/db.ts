@@ -389,6 +389,8 @@ CREATE TABLE IF NOT EXISTS storage_collections (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (user_id, name)
 );
+-- Bumped by every record write and migration; NULL until the first one.
+ALTER TABLE storage_collections ADD COLUMN IF NOT EXISTS last_write_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS storage_records (
   id            TEXT PRIMARY KEY,
   collection_id BIGINT NOT NULL REFERENCES storage_collections(id) ON DELETE CASCADE,
