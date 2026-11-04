@@ -69,6 +69,24 @@ describe('planMigration', () => {
     assert.equal(filled.failures.length, 0);
   });
 
+  it('a changeField default fills missing values on an optional field too', () => {
+    const plan = planMigration(shape, records, [{ op: 'changeField', field: 'followers', description: 'Followers', default: '0' }]);
+    assert.equal(plan.changed.find((c) => c.id === 'r2')?.after.followers, '0');
+    assert.equal(plan.shape.fields.followers.required, false);
+  });
+
+  it('treats Object.prototype member names as reserved, not as existing fields', () => {
+    for (const field of ['constructor', 'toString', 'hasOwnProperty']) {
+      assert.throws(
+        () => planMigration(shape, records, [{ op: 'addField', field, type: 'string', required: false, description: 'x' }]),
+        (e: any) => /reserved/.test(e.message) && !/already exists/.test(e.message),
+        field,
+      );
+    }
+    assert.throws(() => planMigration(shape, records, [{ op: 'removeField', field: 'toString' }]), /no field "toString"/);
+    assert.throws(() => planMigration(shape, records, [{ op: 'renameField', from: 'name', to: 'valueOf' }]), /reserved/);
+  });
+
   it('refuses a keyField whose values repeat, naming both records', () => {
     const dupes: StoredRecord[] = [
       { id: 'r1', key: 'https://l.in/a', data: { profileUrl: 'https://l.in/a', name: 'Ada' } },

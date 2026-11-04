@@ -4,6 +4,7 @@ import { connectStorageMcp, type StorageConnectDeps } from '../../storage/connec
 
 function deps(existing: Array<{ mcpSlug: string; instanceId: string; instanceName: string }>): StorageConnectDeps {
   return {
+    isDatabaseAvailable: () => true,
     getUserConnectedMcps: async () => existing,
     createMcpInstance: mock.fn(async () => ({ instanceId: 'new1', instanceName: 'Storage' })) as any,
   };
@@ -24,6 +25,23 @@ describe('connectStorageMcp', () => {
     const d = deps([{ mcpSlug: 'storage', instanceId: 's1', instanceName: 'Storage' }]);
     const result = await connectStorageMcp({ id: 3 }, d);
     assert.deepEqual(result, { outcome: 'exists', instanceId: 's1', instanceName: 'Storage' });
+    assert.equal((d.createMcpInstance as any).mock.calls.length, 0);
+  });
+
+  it('answers a lost race on the unique index with the winning connector', async () => {
+    let lookups = 0;
+    const d: StorageConnectDeps = {
+      isDatabaseAvailable: () => true,
+      // First lookup (before the insert) sees nothing; the re-read sees the winner.
+      getUserConnectedMcps: async () => (lookups++ === 0 ? [] : [{ mcpSlug: 'storage', instanceId: 'won', instanceName: 'Storage' }]),
+      createMcpInstance: (async () => { throw Object.assign(new Error('dup'), { code: '23505' }); }) as any,
+    };
+    assert.deepEqual(await connectStorageMcp({ id: 3 }, d), { outcome: 'exists', instanceId: 'won', instanceName: 'Storage' });
+  });
+
+  it('refuses without a database instead of creating a connector no tool can serve', async () => {
+    const d = { ...deps([]), isDatabaseAvailable: () => false };
+    assert.deepEqual(await connectStorageMcp({ id: 3 }, d), { outcome: 'unavailable' });
     assert.equal((d.createMcpInstance as any).mock.calls.length, 0);
   });
 });

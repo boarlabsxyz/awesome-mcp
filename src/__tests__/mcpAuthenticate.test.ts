@@ -366,15 +366,26 @@ describe('Admin MCP (slug "admin")', () => {
 describe('Storage MCP (slug "storage")', () => {
   const storageConnection = { instanceId: 'sto1', userId: 99, mcpSlug: 'storage', provider: 'storage', providerTokens: {} };
 
-  it('builds a storage session for the caller without looking up any connection', async () => {
-    const deps = makeDeps({ getMcpConnectionByInstanceId: mock.fn(async () => storageConnection) });
+  it('builds a storage session for the caller, keeping the instance id when it is their own connector', async () => {
+    const own = { ...storageConnection, userId: fakeUser.id };
+    const deps = makeDeps({ getMcpConnectionByInstanceId: mock.fn(async () => own) });
     await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.sto1' }), 'storage', deps);
     const calls = (deps.createStorageSession as any).mock.calls;
     assert.equal(calls.length, 1);
     assert.equal(calls[0].arguments[0], fakeUser);
     assert.equal(calls[0].arguments[1], 'sto1');
-    assert.equal((deps.getMcpConnectionByInstanceId as any).mock.calls.length, 0);
+    assert.equal((deps.createUserSessionFromConnection as any).mock.calls.length, 0);
     assert.equal((deps.createUserSession as any).mock.calls.length, 0);
+  });
+
+  it('drops an instance id that belongs to someone else, or to another service, from the session', async () => {
+    for (const connection of [storageConnection, { ...storageConnection, userId: fakeUser.id, mcpSlug: 'google-docs' }, null]) {
+      const deps = makeDeps({ getMcpConnectionByInstanceId: mock.fn(async () => connection) });
+      await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.sto1' }), 'storage', deps);
+      const calls = (deps.createStorageSession as any).mock.calls;
+      assert.equal(calls[0].arguments[0], fakeUser, 'still the caller');
+      assert.equal(calls[0].arguments[1], undefined);
+    }
   });
 
   it('never falls back to a Google session when the caller has no storage connection', async () => {

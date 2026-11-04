@@ -71,6 +71,12 @@ describe('validateRecord', () => {
     assert.equal(validateRecord(fields, { ...valid, name: null }).ok, false);
   });
 
+  it('does not mistake Object.prototype members for schema fields', () => {
+    const plain: Fields = { a: { type: 'string', required: false, description: 'x' } };
+    // null on a name the schema lacks is not "absent optional": it is an unknown field.
+    assert.equal(validateRecord(plain, { toString: null }).ok, false);
+  });
+
   it('rejects a non-object record', () => {
     assert.equal(validateRecord(fields, [1]).ok, false);
     assert.equal(validateRecord(fields, 'x').ok, false);
@@ -83,6 +89,8 @@ describe('fieldsProblems', () => {
     assert.match(fieldsProblems({ 'a-b': { type: 'string', required: false, description: 'x' } }).join(), /not a valid field name/);
     assert.match(fieldsProblems({ n: { type: 'number', required: false, description: 'x', enum: ['1'] } }).join(), /enum is only allowed/);
     assert.match(fieldsProblems({}).join(), /at least one field/);
+    const reserved = JSON.parse('{"constructor":{"type":"string","required":false,"description":"x"}}') as Fields;
+    assert.match(fieldsProblems(reserved).join(), /reserved/);
     assert.deepEqual(fieldsProblems(fields), []);
   });
 
@@ -112,6 +120,7 @@ describe('convertValue', () => {
       [{ a: 1 }, 'string'],
       ['x', 'json'],
       [['a', 'b'], 'number[]'],
+      [9e15, 'datetime'], // past the Date range: toISOString() would throw
     ] as const) {
       assert.equal(convertValue(value, to).ok, false, `${JSON.stringify(value)} -> ${to}`);
     }

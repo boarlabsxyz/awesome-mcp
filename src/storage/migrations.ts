@@ -7,6 +7,7 @@ import {
   MAX_FIELDS,
   convertValue,
   fieldDefProblems,
+  fieldOf,
   validateRecord,
   valueProblem,
   type FieldDef,
@@ -110,7 +111,7 @@ const KEYABLE: ReadonlySet<string> = new Set(['string', 'url', 'integer', 'numbe
 
 /** Checks a keyField against fields. Returns a problem, or null. */
 export function keyFieldProblem(fields: Fields, keyField: string): string | null {
-  const def = fields[keyField];
+  const def = fieldOf(fields, keyField);
   if (!def) return `keyField "${keyField}" is not a field of this collection.`;
   if (!KEYABLE.has(def.type)) return `keyField "${keyField}" is ${def.type}; a key must be a string, url, integer or number field.`;
   if (!def.required) return `keyField "${keyField}" must be a required field, so every record has a key.`;
@@ -118,7 +119,7 @@ export function keyFieldProblem(fields: Fields, keyField: string): string | null
 }
 
 function requireField(fields: Fields, name: string, opName: string): FieldDef {
-  const def = fields[name];
+  const def = fieldOf(fields, name);
   if (!def) throw new MigrationError(`${opName}: there is no field "${name}". Fields: ${Object.keys(fields).join(', ') || '(none)'}.`);
   return def;
 }
@@ -130,7 +131,7 @@ function planShape(shape: CollectionShape, ops: MigrationOp[], recordCount: numb
   for (const op of ops) {
     switch (op.op) {
       case 'addField': {
-        if (fields[op.field]) throw new MigrationError(`addField: "${op.field}" already exists. Use changeField to modify it.`);
+        if (fieldOf(fields, op.field)) throw new MigrationError(`addField: "${op.field}" already exists. Use changeField to modify it.`);
         const def: FieldDef = { type: op.type, required: op.required, description: op.description, ...(op.enum ? { enum: op.enum } : {}) };
         const problems = fieldDefProblems(op.field, def);
         if (problems.length) throw new MigrationError(`addField: ${problems.join(' ')}`);
@@ -147,7 +148,7 @@ function planShape(shape: CollectionShape, ops: MigrationOp[], recordCount: numb
       }
       case 'renameField': {
         const def = requireField(fields, op.from, 'renameField');
-        if (fields[op.to]) throw new MigrationError(`renameField: "${op.to}" already exists.`);
+        if (fieldOf(fields, op.to)) throw new MigrationError(`renameField: "${op.to}" already exists.`);
         const problems = fieldDefProblems(op.to, def);
         if (problems.length) throw new MigrationError(`renameField: ${problems.join(' ')}`);
         delete fields[op.from];
@@ -220,13 +221,13 @@ function migrateData(data: Record<string, unknown>, ops: MigrationOp[], fieldsAf
         delete out[op.field];
         break;
       case 'changeField': {
-        const def = fieldsAfter(i)[op.field];
+        const def = fieldOf(fieldsAfter(i), op.field) as FieldDef;
         const current = out[op.field];
         if (current === undefined) {
-          if (def.required) {
-            if (op.default === undefined) return { reason: `"${op.field}" is missing and is now required (give a default)` };
-            out[op.field] = op.default;
-          }
+          // The default fills a missing value whether or not the field is
+          // required — that is what its description promises.
+          if (op.default !== undefined) out[op.field] = op.default;
+          else if (def.required) return { reason: `"${op.field}" is missing and is now required (give a default)` };
           break;
         }
         const converted = op.type ? convertValue(current, def.type) : { ok: true as const, value: current };

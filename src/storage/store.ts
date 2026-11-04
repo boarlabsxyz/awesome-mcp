@@ -43,6 +43,24 @@ export async function withTransaction<T>(pool: StoragePool, fn: (q: Queryable) =
   }
 }
 
+/** Advisory-lock namespace for Storage writes (the two-key form keeps it apart from any other user of advisory locks). */
+const STORAGE_LOCK_NAMESPACE = 0x5354; // 'ST'
+
+/**
+ * Runs fn in one transaction holding the user's Storage write lock. Every
+ * write takes it, so one user's writes run one at a time: quota checks
+ * cannot race (two inserts both passing the same totals), a write cannot
+ * validate against a schema a concurrent migration is replacing, and an
+ * update's read-modify-write cannot lose a concurrent change. Reads take no
+ * lock. Users never wait on each other.
+ */
+export async function withUserWriteLock<T>(pool: StoragePool, userId: number, fn: (q: Queryable) => Promise<T>): Promise<T> {
+  return withTransaction(pool, async (q) => {
+    await q.query('SELECT pg_advisory_xact_lock($1::int, $2::int)', [STORAGE_LOCK_NAMESPACE, userId]);
+    return fn(q);
+  });
+}
+
 export interface Collection extends CollectionShape {
   id: number;
   name: string;

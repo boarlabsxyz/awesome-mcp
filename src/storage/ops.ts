@@ -7,6 +7,7 @@ import { nanoid } from 'nanoid';
 import {
   SCALAR_TYPES,
   convertValue,
+  fieldOf,
   fieldsProblems,
   validateRecord,
   valueProblem,
@@ -34,7 +35,7 @@ import {
   storagePool,
   updateRecord,
   userUsage,
-  withTransaction,
+  withUserWriteLock,
   type Collection,
   type Condition,
   type FindQuery,
@@ -109,13 +110,14 @@ function capped(lines: string[]): string {
 
 /** A record as the model sees it: system fields (leading _) first, then its data. */
 function present(row: RecordRow, collection: Collection, now: number): Record<string, unknown> {
-  const ageDays = Math.round(((now - Date.parse(row.updatedAt)) / 86_400_000) * 10) / 10;
+  const exactAgeDays = (now - Date.parse(row.updatedAt)) / 86_400_000;
   const system: Record<string, unknown> = { _id: row.id };
   if (collection.keyField) system._key = row.key;
   system._createdAt = row.createdAt;
   system._updatedAt = row.updatedAt;
-  system._ageDays = ageDays;
-  if (collection.ttlDays) system._stale = ageDays > collection.ttlDays;
+  system._ageDays = Math.round(exactAgeDays * 10) / 10;
+  // Against the unrounded age: 30.04 days is stale under ttlDays 30, though it displays as 30.
+  if (collection.ttlDays) system._stale = exactAgeDays > collection.ttlDays;
   return { ...system, ...row.data };
 }
 
@@ -180,19 +182,21 @@ export async function opCreateCollection(
   if (problems.length) throw new UserError(`The collection was not created:\n${capped(problems)}`);
 
   const limits = storageLimits();
-  const usage = await userUsage(pool, uid);
-  if (usage.collections >= limits.maxCollections) {
-    throw new UserError(`You already have ${usage.collections} collections, the limit is ${limits.maxCollections}. Reuse one, or drop one you no longer need.`);
-  }
   try {
-    const c = await insertCollection(pool, uid, {
-      name: args.collection,
-      description: args.description,
-      fields: args.fields,
-      keyField: args.keyField ?? null,
-      ttlDays: args.ttlDays ?? null,
+    return await withUserWriteLock(pool, uid, async (q) => {
+      const usage = await userUsage(q, uid);
+      if (usage.collections >= limits.maxCollections) {
+        throw new UserError(`You already have ${usage.collections} collections, the limit is ${limits.maxCollections}. Reuse one, or drop one you no longer need.`);
+      }
+      const c = await insertCollection(q, uid, {
+        name: args.collection,
+        description: args.description,
+        fields: args.fields,
+        keyField: args.keyField ?? null,
+        ttlDays: args.ttlDays ?? null,
+      });
+      return { created: c.name, version: c.version, ...describeShape(c) };
     });
-    return { created: c.name, version: c.version, ...describeShape(c) };
   } catch (err: any) {
     if (err?.code === UNIQUE_VIOLATION) {
       throw new UserError(`A collection named "${args.collection}" already exists. Call describeCollection to see its schema, and migrateCollection to change it.`);
@@ -228,6 +232,22 @@ function plan(c: Collection, records: RecordRow[], ops: MigrationOp[], maxRecord
   return result;
 }
 
+/**
+ * Why the user's byte quota refuses this plan, or null. A migration can grow
+ * every record (a default on each one), so it is held to the same total that
+ * inserts and updates are.
+ */
+async function migrationQuotaProblem(q: Queryable, userId: number, records: RecordRow[], result: MigrationPlan): Promise<string | null> {
+  const before = new Map(records.map((r) => [r.id, r.bytes]));
+  const delta = result.changed.reduce((n, c) => n + bytesOf(c.after) - (before.get(c.id) ?? 0), 0);
+  if (delta <= 0) return null;
+  const { maxUserBytes } = storageLimits();
+  const usage = await userUsage(q, userId);
+  return usage.bytes + delta > maxUserBytes
+    ? `it would grow your storage by ${delta} bytes to ${usage.bytes + delta}, over the ${maxUserBytes}-byte limit`
+    : null;
+}
+
 export async function opMigrateCollection(
   userId: number | undefined,
   args: { collection: string; reason: string; operations: MigrationOp[]; dryRun: boolean },
@@ -241,17 +261,22 @@ export async function opMigrateCollection(
     const c = await requireCollection(pool, uid, args.collection);
     const records = await loadAllRecords(pool, c.id);
     const result = plan(c, records, args.operations, maxRecordBytes);
+    const quota = await migrationQuotaProblem(pool, uid, records, result);
+    let status = 'DRY RUN — nothing was changed. Call again with dryRun: false to apply it.';
+    if (result.failures.length) {
+      status = 'DRY RUN — nothing was changed. Applying this migration would be REFUSED: some records cannot be migrated (see failures). Give a default, or fix those records first.';
+    } else if (quota) {
+      status = `DRY RUN — nothing was changed. Applying this migration would be REFUSED: ${quota}.`;
+    }
     return {
-      status: result.failures.length
-        ? 'DRY RUN — nothing was changed. Applying this migration would be REFUSED: some records cannot be migrated (see failures). Give a default, or fix those records first.'
-        : 'DRY RUN — nothing was changed. Call again with dryRun: false to apply it.',
+      status,
       collection: c.name,
       currentVersion: c.version,
       ...migrationReport(c, result, records.length),
     };
   }
 
-  return withTransaction(pool, async (q) => {
+  return withUserWriteLock(pool, uid, async (q) => {
     const c = await requireCollection(q, uid, args.collection, true);
     const records = await loadAllRecords(q, c.id);
     const result = plan(c, records, args.operations, maxRecordBytes);
@@ -259,6 +284,8 @@ export async function opMigrateCollection(
       const lines = result.failures.map((f) => `record ${f.id}: ${f.reason}`);
       throw new UserError(`The migration was not applied — ${result.failures.length} of ${records.length} record(s) cannot be migrated. Nothing was changed.\n${capped(lines)}`);
     }
+    const quota = await migrationQuotaProblem(q, uid, records, result);
+    if (quota) throw new UserError(`The migration was not applied — ${quota}. Nothing was changed.`);
     const version = await applyMigration(q, c, result.shape, result.changed, args.operations, args.reason);
     return {
       status: `Applied. "${c.name}" is now version ${version}.`,
@@ -276,11 +303,13 @@ export async function opDropCollection(userId: number | undefined, args: { colle
     throw new UserError(`Not dropped: confirm must repeat the collection name exactly ("${args.collection}"), got "${args.confirm}".`);
   }
   const pool = requirePool(deps);
-  const c = await requireCollection(pool, uid, args.collection);
-  const stats = await collectionStats(pool, c.id);
-  const deleted = await deleteCollection(pool, c.id);
-  if (deleted === 0) throw new UserError(`"${args.collection}" was not dropped: it no longer exists (deleted concurrently?).`);
-  return { dropped: c.name, recordsDeleted: stats.records };
+  return withUserWriteLock(pool, uid, async (q) => {
+    const c = await requireCollection(q, uid, args.collection);
+    const stats = await collectionStats(q, c.id);
+    const deleted = await deleteCollection(q, c.id);
+    if (deleted === 0) throw new UserError(`"${args.collection}" was not dropped: it no longer exists (deleted concurrently?).`);
+    return { dropped: c.name, recordsDeleted: stats.records };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -294,65 +323,77 @@ export async function opInsertRecords(
 ) {
   const uid = requireUser(userId);
   const pool = requirePool(deps);
-  const c = await requireCollection(pool, uid, args.collection);
-  const upsert = args.onConflict === 'update';
-  if (upsert && !c.keyField) {
-    throw new UserError(`onConflict "update" needs a keyField, and "${c.name}" has none. Set one with migrateCollection (setOptions), or insert with onConflict "error".`);
-  }
-
   const limits = storageLimits();
-  const issues: string[] = [];
-  const rows: Array<{ id: string; key: string | null; data: Record<string, unknown>; bytes: number }> = [];
-  const batchKeys = new Map<string, number>();
-  args.records.forEach((record, i) => {
-    const validation = validateRecord(c.fields, record);
-    if (!validation.ok) {
-      issues.push(`records[${i}]: ${validation.issues.join('; ')}`);
-      return;
+  // Everything from the schema read to the insert holds the user's write
+  // lock: a concurrent migration cannot change the schema under the
+  // validation, and two inserts cannot both pass the same quota totals.
+  return withUserWriteLock(pool, uid, async (q) => {
+    const c = await requireCollection(q, uid, args.collection);
+    const upsert = args.onConflict === 'update';
+    if (upsert && !c.keyField) {
+      throw new UserError(`onConflict "update" needs a keyField, and "${c.name}" has none. Set one with migrateCollection (setOptions), or insert with onConflict "error".`);
     }
-    const bytes = bytesOf(validation.data);
-    if (bytes > limits.maxRecordBytes) {
-      issues.push(`records[${i}]: ${bytes} bytes, over the ${limits.maxRecordBytes}-byte record limit`);
-      return;
-    }
-    const key = keyOf(validation.data, c.keyField);
-    if (key !== null) {
-      const first = batchKeys.get(key);
-      if (first !== undefined) {
-        issues.push(`records[${i}]: ${c.keyField} ${JSON.stringify(key)} repeats records[${first}] in this batch`);
+
+    const issues: string[] = [];
+    const rows: Array<{ id: string; key: string | null; data: Record<string, unknown>; bytes: number }> = [];
+    const batchKeys = new Map<string, number>();
+    args.records.forEach((record, i) => {
+      const validation = validateRecord(c.fields, record);
+      if (!validation.ok) {
+        issues.push(`records[${i}]: ${validation.issues.join('; ')}`);
         return;
       }
-      batchKeys.set(key, i);
+      const bytes = bytesOf(validation.data);
+      if (bytes > limits.maxRecordBytes) {
+        issues.push(`records[${i}]: ${bytes} bytes, over the ${limits.maxRecordBytes}-byte record limit`);
+        return;
+      }
+      const key = keyOf(validation.data, c.keyField);
+      if (c.keyField && key === null) {
+        // An empty key would be stored as NULL, which UNIQUE never compares
+        // equal: duplicates would slip in and the record could not be found by key.
+        issues.push(`records[${i}]: keyField "${c.keyField}" must not be empty`);
+        return;
+      }
+      if (key !== null) {
+        const first = batchKeys.get(key);
+        if (first !== undefined) {
+          issues.push(`records[${i}]: ${c.keyField} ${JSON.stringify(key)} repeats records[${first}] in this batch`);
+          return;
+        }
+        batchKeys.set(key, i);
+      }
+      rows.push({ id: deps.newId(), key, data: validation.data, bytes });
+    });
+    if (issues.length) {
+      throw new UserError(`Nothing was written — ${issues.length} of ${args.records.length} record(s) do not match the schema of "${c.name}" (call describeCollection to see it):\n${capped(issues)}`);
     }
-    rows.push({ id: deps.newId(), key, data: validation.data, bytes });
+
+    const existing = await recordsByKeys(q, c.id, [...batchKeys.keys()]);
+    if (existing.length && !upsert) {
+      throw new UserError(`Nothing was written — ${existing.length} record(s) already exist with these ${c.keyField} values: ${existing.slice(0, 10).map((e) => JSON.stringify(e.key)).join(', ')}${existing.length > 10 ? ', …' : ''}. Use onConflict "update" to replace them.`);
+    }
+
+    const stats = await collectionStats(q, c.id);
+    const usage = await userUsage(q, uid);
+    const newCount = stats.records + rows.length - existing.length;
+    if (newCount > limits.maxRecords) {
+      throw new UserError(`Nothing was written — "${c.name}" would hold ${newCount} records, the limit is ${limits.maxRecords}.`);
+    }
+    const newBytes = usage.bytes + rows.reduce((n, r) => n + r.bytes, 0) - existing.reduce((n, e) => n + e.bytes, 0);
+    if (newBytes > limits.maxUserBytes) {
+      throw new UserError(`Nothing was written — your storage would use ${newBytes} bytes, the limit is ${limits.maxUserBytes}. Delete records or collections you no longer need.`);
+    }
+
+    const written = await insertRecords(q, c.id, rows, upsert);
+    const created = written.filter((w) => w.inserted).length;
+    return {
+      collection: c.name,
+      created,
+      updated: written.length - created,
+      records: written.map((w) => (c.keyField ? { _id: w.id, _key: w.key } : { _id: w.id })),
+    };
   });
-  if (issues.length) {
-    throw new UserError(`Nothing was written — ${issues.length} of ${args.records.length} record(s) do not match the schema of "${c.name}" (call describeCollection to see it):\n${capped(issues)}`);
-  }
-
-  const existing = await recordsByKeys(pool, c.id, [...batchKeys.keys()]);
-  if (existing.length && !upsert) {
-    throw new UserError(`Nothing was written — ${existing.length} record(s) already exist with these ${c.keyField} values: ${existing.slice(0, 10).map((e) => JSON.stringify(e.key)).join(', ')}${existing.length > 10 ? ', …' : ''}. Use onConflict "update" to replace them.`);
-  }
-
-  const [stats, usage] = await Promise.all([collectionStats(pool, c.id), userUsage(pool, uid)]);
-  const newCount = stats.records + rows.length - existing.length;
-  if (newCount > limits.maxRecords) {
-    throw new UserError(`Nothing was written — "${c.name}" would hold ${newCount} records, the limit is ${limits.maxRecords}.`);
-  }
-  const newBytes = usage.bytes + rows.reduce((n, r) => n + r.bytes, 0) - existing.reduce((n, e) => n + e.bytes, 0);
-  if (newBytes > limits.maxUserBytes) {
-    throw new UserError(`Nothing was written — your storage would use ${newBytes} bytes, the limit is ${limits.maxUserBytes}. Delete records or collections you no longer need.`);
-  }
-
-  const written = await insertRecords(pool, c.id, rows, upsert);
-  const created = written.filter((w) => w.inserted).length;
-  return {
-    collection: c.name,
-    created,
-    updated: written.length - created,
-    records: written.map((w) => (c.keyField ? { _id: w.id, _key: w.key } : { _id: w.id })),
-  };
 }
 
 /** Exactly one of id / key, and key only on a collection that has a keyField. */
@@ -388,39 +429,47 @@ export async function opUpdateRecord(
 ) {
   const uid = requireUser(userId);
   const pool = requirePool(deps);
-  const c = await requireCollection(pool, uid, args.collection);
-  const ref = recordRef(c, args);
   const set = args.set ?? {};
   const unset = args.unset ?? [];
   if (Object.keys(set).length === 0 && unset.length === 0) throw new UserError('Nothing to update: give set, unset, or both.');
-  const unknownUnset = unset.filter((f) => !c.fields[f]);
-  if (unknownUnset.length) throw new UserError(`unset names field(s) the schema does not have: ${unknownUnset.join(', ')}.`);
-  const both = unset.filter((f) => f in set);
+  const both = unset.filter((f) => Object.hasOwn(set, f));
   if (both.length) throw new UserError(`${both.join(', ')} appear in both set and unset.`);
 
-  const current = await getRecord(pool, c.id, ref);
-  if (!current) throw new UserError(`No record with ${describeRef(ref)} in "${c.name}".`);
-  const merged: Record<string, unknown> = { ...current.data, ...set };
-  for (const f of unset) delete merged[f];
-  const validation = validateRecord(c.fields, merged);
-  if (!validation.ok) throw new UserError(`Not updated — the result would not match the schema:\n${capped(validation.issues)}`);
+  // The read-modify-write holds the user's write lock, so a concurrent update
+  // of another field cannot be overwritten by this one's stale copy.
+  return withUserWriteLock(pool, uid, async (q) => {
+    const c = await requireCollection(q, uid, args.collection);
+    const ref = recordRef(c, args);
+    const unknownUnset = unset.filter((f) => !fieldOf(c.fields, f));
+    if (unknownUnset.length) throw new UserError(`unset names field(s) the schema does not have: ${unknownUnset.join(', ')}.`);
 
-  const limits = storageLimits();
-  const bytes = bytesOf(validation.data);
-  if (bytes > limits.maxRecordBytes) throw new UserError(`Not updated — the record would be ${bytes} bytes, over the ${limits.maxRecordBytes}-byte limit.`);
-  const usage = await userUsage(pool, uid);
-  if (usage.bytes - current.bytes + bytes > limits.maxUserBytes) {
-    throw new UserError(`Not updated — your storage would exceed its ${limits.maxUserBytes}-byte limit.`);
-  }
-  const key = keyOf(validation.data, c.keyField);
-  if (key !== null && key !== current.key) {
-    const clash = await recordsByKeys(pool, c.id, [key]);
-    if (clash.length) throw new UserError(`Not updated — record ${clash[0].id} already has ${c.keyField} ${JSON.stringify(key)}.`);
-  }
+    const current = await getRecord(q, c.id, ref);
+    if (!current) throw new UserError(`No record with ${describeRef(ref)} in "${c.name}".`);
+    const merged: Record<string, unknown> = { ...current.data, ...set };
+    for (const f of unset) delete merged[f];
+    const validation = validateRecord(c.fields, merged);
+    if (!validation.ok) throw new UserError(`Not updated — the result would not match the schema:\n${capped(validation.issues)}`);
 
-  const row = await updateRecord(pool, c.id, current.id, validation.data, key, bytes);
-  if (!row) throw new UserError(`Not updated — the record with ${describeRef(ref)} no longer exists (deleted concurrently?).`);
-  return present(row, c, deps.now());
+    const limits = storageLimits();
+    const bytes = bytesOf(validation.data);
+    if (bytes > limits.maxRecordBytes) throw new UserError(`Not updated — the record would be ${bytes} bytes, over the ${limits.maxRecordBytes}-byte limit.`);
+    const usage = await userUsage(q, uid);
+    if (usage.bytes - current.bytes + bytes > limits.maxUserBytes) {
+      throw new UserError(`Not updated — your storage would exceed its ${limits.maxUserBytes}-byte limit.`);
+    }
+    const key = keyOf(validation.data, c.keyField);
+    if (c.keyField && key === null) {
+      throw new UserError(`Not updated — keyField "${c.keyField}" must not be empty: the record could no longer be found by key.`);
+    }
+    if (key !== null && key !== current.key) {
+      const clash = await recordsByKeys(q, c.id, [key]);
+      if (clash.length) throw new UserError(`Not updated — record ${clash[0].id} already has ${c.keyField} ${JSON.stringify(key)}.`);
+    }
+
+    const row = await updateRecord(q, c.id, current.id, validation.data, key, bytes);
+    if (!row) throw new UserError(`Not updated — the record with ${describeRef(ref)} no longer exists (deleted concurrently?).`);
+    return present(row, c, deps.now());
+  });
 }
 
 export async function opDeleteRecords(
@@ -431,18 +480,20 @@ export async function opDeleteRecords(
   const uid = requireUser(userId);
   if ((args.ids === undefined) === (args.keys === undefined)) throw new UserError('Give exactly one of ids or keys.');
   const pool = requirePool(deps);
-  const c = await requireCollection(pool, uid, args.collection);
-  if (args.keys !== undefined && !c.keyField) throw new UserError(`"${c.name}" has no keyField, so records can only be deleted by id.`);
-  const requested = (args.ids ?? args.keys) as string[];
-  const deleted = await deleteRecords(pool, c.id, args.ids ? { ids: args.ids } : { keys: requested });
-  const found = new Set(deleted.map((d) => (args.ids ? d.id : d.key)));
-  const notFound = requested.filter((r) => !found.has(r));
-  return {
-    collection: c.name,
-    deleted: deleted.length,
-    deletedIds: deleted.map((d) => d.id),
-    notFound,
-  };
+  return withUserWriteLock(pool, uid, async (q) => {
+    const c = await requireCollection(q, uid, args.collection);
+    if (args.keys !== undefined && !c.keyField) throw new UserError(`"${c.name}" has no keyField, so records can only be deleted by id.`);
+    const requested = (args.ids ?? args.keys) as string[];
+    const deleted = await deleteRecords(q, c.id, args.ids ? { ids: args.ids } : { keys: requested });
+    const found = new Set(deleted.map((d) => (args.ids ? d.id : d.key)));
+    const notFound = requested.filter((r) => !found.has(r));
+    return {
+      collection: c.name,
+      deleted: deleted.length,
+      deletedIds: deleted.map((d) => d.id),
+      notFound,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -464,7 +515,7 @@ function whereValue(field: string, def: FieldDef, value: unknown): unknown {
 }
 
 function toCondition(c: Collection, w: { field: string; op: WhereOp; value?: unknown }): Condition {
-  const def = c.fields[w.field];
+  const def = fieldOf(c.fields, w.field);
   if (!def) throw new UserError(`where names "${w.field}", which is not a field of "${c.name}". Fields: ${Object.keys(c.fields).join(', ')}.`);
   const refuse = (allowed: string): never => {
     throw new UserError(`where on "${w.field}" (${def.type}): op "${w.op}" is not supported; use ${allowed}.`);
@@ -529,7 +580,7 @@ export async function opFindRecords(
   if (args.orderBy && args.orderBy !== '_updatedAt') {
     if (args.orderBy === '_createdAt') orderBy = '_createdAt';
     else {
-      const def = c.fields[args.orderBy];
+      const def = fieldOf(c.fields, args.orderBy);
       if (!def) throw new UserError(`orderBy "${args.orderBy}" is not a field of "${c.name}"; use a field name, _updatedAt or _createdAt.`);
       if (!SCALAR_TYPES.has(def.type)) throw new UserError(`orderBy "${args.orderBy}" is ${def.type}; only single-value fields can be sorted on.`);
       orderBy = { field: args.orderBy, type: def.type };

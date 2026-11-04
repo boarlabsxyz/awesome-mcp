@@ -29,6 +29,15 @@ export const fieldDefSchema = z.object({
 export const fieldsSchema = z.record(z.string(), fieldDefSchema)
   .describe('The collection\'s fields, by name. Names start with a letter and use letters, digits and _ (max 64 chars); at most 50 fields.');
 
+/**
+ * The field named `name`, if the schema has one. An own-property check, so
+ * names like `constructor` or `toString` are not mistaken for Object.prototype
+ * members — `fields[name]` alone would find those on every schema.
+ */
+export function fieldOf(fields: Fields, name: string): FieldDef | undefined {
+  return Object.hasOwn(fields, name) ? fields[name] : undefined;
+}
+
 const ENUM_TYPES: ReadonlySet<FieldType> = new Set(['string', 'string[]']);
 export const SCALAR_TYPES: ReadonlySet<FieldType> = new Set(['string', 'number', 'integer', 'boolean', 'datetime', 'url']);
 
@@ -37,6 +46,10 @@ export function fieldDefProblems(name: string, def: FieldDef): string[] {
   const problems: string[] = [];
   if (!FIELD_NAME_RE.test(name)) {
     problems.push(`"${name}" is not a valid field name: start with a letter, then letters, digits or _ (max 64 chars). A leading _ is reserved.`);
+  } else if (name in Object.prototype) {
+    // Zod reads a missing key's INHERITED value (Object.prototype.toString is
+    // a function), so such a field would fail validation on every record.
+    problems.push(`"${name}" is reserved (a built-in JavaScript object property); pick another field name.`);
   }
   if (def.enum && !ENUM_TYPES.has(def.type)) {
     problems.push(`"${name}": enum is only allowed on string and string[] fields, not ${def.type}.`);
@@ -102,7 +115,7 @@ export function validateRecord(fields: Fields, record: unknown): RecordValidatio
   }
   const cleaned: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record as Record<string, unknown>)) {
-    if (value === null && fields[key] && !fields[key].required) continue;
+    if (value === null && fieldOf(fields, key)?.required === false) continue;
     cleaned[key] = value;
   }
   const parsed = buildRecordSchema(fields).safeParse(cleaned);
@@ -145,7 +158,11 @@ function convertScalar(value: unknown, to: FieldType): Conversion {
       if (value === 0 || value === 1) return { ok: true, value: value === 1 };
       return fail();
     case 'datetime':
-      if (typeof value === 'number' && Number.isFinite(value)) return { ok: true, value: new Date(value).toISOString() };
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        // Past ±8.64e15 ms a Date is invalid and toISOString() throws.
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? fail() : { ok: true, value: date.toISOString() };
+      }
       if (typeof value === 'string') return { ok: true, value };
       return fail();
     default:

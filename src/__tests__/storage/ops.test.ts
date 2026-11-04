@@ -63,7 +63,8 @@ const recordRow = (id: string, data: Record<string, unknown>, updatedAt = '2026-
   total: 1,
 });
 
-const SELECT_COLLECTION = /FROM storage_collections WHERE user_id/;
+// Only the collection read; userUsage's subquery also says "FROM storage_collections WHERE user_id".
+const SELECT_COLLECTION = /SELECT \* FROM storage_collections WHERE user_id/;
 const ada = { profileUrl: 'https://l.in/ada', name: 'Ada' };
 
 const savedEnv = { ...process.env };
@@ -275,6 +276,52 @@ describe('buildFindSql', () => {
   });
 });
 
+describe('concurrency, freshness and keys', () => {
+  const LOCK = /pg_advisory_xact_lock/;
+  const recordPool = () => makePool([
+    [SELECT_COLLECTION, [collectionRow]],
+    [/SELECT \* FROM storage_records/, [recordRow('r1', ada)]],
+    [/UPDATE storage_records SET data/, [recordRow('r1', ada)]],
+    [/DELETE FROM storage_records/, [{ id: 'r1', key: ada.profileUrl }]],
+    [/INSERT INTO storage_records/, [{ id: 'id1', key: 'https://l.in/new', inserted: true }]],
+    [/DELETE FROM storage_collections/, [{}]],
+  ]);
+
+  it('every write takes the per-user lock before reading the schema', async () => {
+    const writes: Array<(p: Pool) => Promise<unknown>> = [
+      (p) => opInsertRecords(7, { collection: 'people', records: [{ profileUrl: 'https://l.in/new', name: 'N' }], onConflict: 'error' }, deps(p)),
+      (p) => opUpdateRecord(7, { collection: 'people', id: 'r1', set: { followers: 1 } }, deps(p)),
+      (p) => opDeleteRecords(7, { collection: 'people', ids: ['r1'] }, deps(p)),
+      (p) => opMigrateCollection(7, { collection: 'people', reason: 'r', operations: [{ op: 'setOptions', ttlDays: 60 }], dryRun: false }, deps(p)),
+      (p) => opDropCollection(7, { collection: 'people', confirm: 'people' }, deps(p)),
+    ];
+    for (const write of writes) {
+      const pool = recordPool();
+      await write(pool);
+      const lockAt = pool.calls.findIndex((c) => LOCK.test(c.text));
+      const schemaAt = pool.calls.findIndex((c) => SELECT_COLLECTION.test(c.text));
+      assert.ok(lockAt >= 0 && lockAt < schemaAt, `lock before schema read in ${write}`);
+      assert.deepEqual(pool.calls[lockAt].params[1], 7, 'locked per user');
+    }
+  });
+
+  it('_stale compares the unrounded age with ttlDays', async () => {
+    const thirtyDaysAndAnHour = new Date(Date.parse('2026-11-04T00:00:00Z') - (30 * 24 + 1) * 3_600_000).toISOString();
+    const pool = makePool([[SELECT_COLLECTION, [collectionRow]], [/SELECT \* FROM storage_records/, [recordRow('r1', ada, thirtyDaysAndAnHour)]]]);
+    const record = await opGetRecord(1, { collection: 'people', id: 'r1' }, deps(pool));
+    assert.equal(record._ageDays, 30);
+    assert.equal(record._stale, true);
+  });
+
+  it('refuses an empty keyField value on insert and on update', async () => {
+    const stringKey = { ...collectionRow, fields: { ...collectionRow.fields, profileUrl: { type: 'string', required: true, description: 'Key' } } };
+    const pool = makePool([[SELECT_COLLECTION, [stringKey]], [/SELECT \* FROM storage_records/, [recordRow('r1', ada)]]]);
+    await rejects(opInsertRecords(1, { collection: 'people', records: [{ profileUrl: '', name: 'X' }], onConflict: 'error' }, deps(pool)), /must not be empty/);
+    await rejects(opUpdateRecord(1, { collection: 'people', id: 'r1', set: { profileUrl: '' } }, deps(pool)), /must not be empty/);
+    assert.ok(!pool.calls.some((c) => /INSERT INTO storage_records|UPDATE storage_records SET data/.test(c.text)));
+  });
+});
+
 describe('migrateCollection', () => {
   const op = { op: 'addField' as const, field: 'company', type: 'string' as const, required: true, description: 'Employer', default: 'unknown' };
 
@@ -302,6 +349,21 @@ describe('migrateCollection', () => {
       /not applied[\s\S]*record r1/,
     );
     assert.ok(!pool.calls.some((c) => /UPDATE storage_collections/.test(c.text)));
+  });
+
+  it('holds a migration that grows records to the user byte quota, in the dry run and the apply', async () => {
+    process.env.STORAGE_MAX_USER_BYTES = '100';
+    const grow = { op: 'addField' as const, field: 'bio', type: 'string' as const, required: true, description: 'Bio', default: 'x'.repeat(80) };
+    const pool = () => makePool([
+      [SELECT_COLLECTION, [collectionRow]],
+      [/SELECT \* FROM storage_records/, [recordRow('r1', ada)]],
+      [/AS collections/, [{ collections: 1, bytes: 50 }]],
+    ]);
+    const dry = await opMigrateCollection(1, { collection: 'people', reason: 'r', operations: [grow], dryRun: true }, deps(pool()));
+    assert.match(dry.status, /would be REFUSED: it would grow your storage/);
+    const applied = pool();
+    await rejects(opMigrateCollection(1, { collection: 'people', reason: 'r', operations: [grow], dryRun: false }, deps(applied)), /not applied.*100-byte limit/);
+    assert.ok(!applied.calls.some((c) => /UPDATE storage_collections/.test(c.text)));
   });
 
   it('turns a planner refusal into a UserError', async () => {

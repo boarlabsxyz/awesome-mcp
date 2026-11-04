@@ -2048,7 +2048,9 @@ function registerSharedRoutes(app: express.Express): void {
       // (src/storage/connect.ts), so there is nothing to consent to.
       if (mcpSlug === 'storage') {
         const result = await connectStorageMcp({ id: connectingUser.id });
-        if (result.outcome === 'exists') {
+        if (result.outcome === 'unavailable') {
+          res.status(503).send('Storage is unavailable: this server has no database connection.');
+        } else if (result.outcome === 'exists') {
           res.redirect('/dashboard?already_exists=' + encodeURIComponent(result.instanceName));
         } else {
           console.error(`User ${connectingUser.id} connected Storage MCP: ${result.instanceId}`);

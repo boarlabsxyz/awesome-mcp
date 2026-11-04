@@ -136,7 +136,15 @@ async function resolveSession(user: any, mcpSlug: string, instanceId: string | u
   // otherwise resolve a session from someone else's connection, and before the
   // global-Google-token fallback, which would hand out a Google session.
   if (mcpSlug === 'storage') {
-    return deps.createStorageSession(user, instanceId);
+    // The id only labels the session for usage analytics; keep it only when
+    // it is the caller's own Storage connector, so a caller cannot file their
+    // calls under someone else's (or a nonexistent) instance.
+    let ownInstanceId: string | undefined;
+    if (instanceId) {
+      const connection = await deps.getMcpConnectionByInstanceId(instanceId);
+      if (connection?.mcpSlug === 'storage' && String(connection.userId) === String(user.id)) ownInstanceId = instanceId;
+    }
+    return deps.createStorageSession(user, ownInstanceId);
   }
 
   if (instanceId) {
