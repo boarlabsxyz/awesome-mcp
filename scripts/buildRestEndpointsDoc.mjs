@@ -87,6 +87,8 @@ lines.push('');
 lines.push('1. From any MCP session, call the `mintRestBearerForCurl` MCP tool — it returns a 5-minute bearer.');
 lines.push('2. Pass it as `Authorization: Bearer <token>` against the URLs below.');
 lines.push('');
+lines.push('**Several connections to one service** (two Google accounts on Sheets): the bearer is bound to the connector that minted it, so mint it from the connector whose account you mean. To choose explicitly — or with the dashboard API key, which otherwise gets the first connection — send `X-Instance-Id: <instanceId>`; an id that is not your connection to that service is a 404. A bearer minted on a different service, for an account with several connections to the target one, is a 409 listing them. Every response names the serving connection in its `X-Instance-Id` header.');
+lines.push('');
 lines.push('The same endpoints also accept the permanent dashboard API key (for ChatGPT Custom Actions backward compatibility).');
 lines.push('');
 lines.push('## Content negotiation');

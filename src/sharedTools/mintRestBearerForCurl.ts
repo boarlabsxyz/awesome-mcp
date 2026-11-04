@@ -37,7 +37,9 @@ export function registerMintRestBearerForCurl(server: FastMCP<UserSession>): voi
       'and you specifically want to fetch a large/bulk response straight to ' +
       'disk instead of through the LLM context window. The minted bearer is ' +
       `valid 5 minutes against GET ${BASE_URL}/api/v1/* (see listRestEndpoints). ` +
-      'If you cannot exec shell, this token is useless to you — skip it.',
+      'If you cannot exec shell, this token is useless to you — skip it. ' +
+      'The bearer acts as THIS connector\'s account: with several connections to one ' +
+      'service (two Google accounts), mint it from the connector whose account you need.',
     parameters: z.object({}),
     execute: async (_args, { session }) => {
       if (!session?.userId) {
@@ -45,7 +47,10 @@ export function registerMintRestBearerForCurl(server: FastMCP<UserSession>): voi
           'Not authenticated. Connect via the awesome-mcp dashboard before requesting a REST bearer.',
         );
       }
-      const minted = await mintRestToken(session.userId);
+      // Bound to this session's instance, so a user with two connections to one
+      // service (two Google accounts on Sheets) gets the account they are
+      // talking to, not whichever connection the REST plane finds first.
+      const minted = await mintRestToken(session.userId, session.instanceId);
       return JSON.stringify(
         {
           token: minted.token,
@@ -53,6 +58,7 @@ export function registerMintRestBearerForCurl(server: FastMCP<UserSession>): voi
           expiresIn: minted.ttlSeconds,
           expiresAt: new Date(minted.expiresAt).toISOString(),
           baseUrl: `${BASE_URL}/api/v1`,
+          ...(session.instanceId ? { instanceId: session.instanceId } : {}),
           usage: `curl -H "Authorization: Bearer <token>" ${BASE_URL}/api/v1/<resource>`,
         },
         null,

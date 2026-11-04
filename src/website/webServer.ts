@@ -331,7 +331,7 @@ import { consumeLoginAttempt, resetLoginAttempts, RateLimitVerdict, LOGIN_RATE_L
 import { sendMail, isMailConfigured, MailNotConfiguredError } from './mailer.js';
 import { verificationEmail, alreadyRegisteredEmail } from './authEmails.js';
 import { createPendingRegistration, consumePendingRegistration, deletePendingRegistration, restorePendingRegistration, PENDING_REGISTRATION } from './pendingRegistrationStore.js';
-import { lookupRestToken } from './restTokenStore.js';
+import { lookupRestToken, lookupRestTokenRecord } from './restTokenStore.js';
 import { mapSlackErrorToHttpStatus, slackWriteErrorStatus } from './slackErrorMapper.js';
 import { negotiateFormat, respondNegotiated } from './restContent.js';
 import { sendUpstreamError } from './restUpstreamError.js';
@@ -4324,34 +4324,40 @@ function registerRestApiRoutes(app: express.Express): void {
    * Resolve a Bearer token to a user record.
    * Tries JWT → API key (cheap local lookup) → opaque token (Auth0 /userinfo).
    */
-  async function resolveTokenToUser(token: string): Promise<UserRecord | null> {
+  /**
+   * `mintedInstanceId` is set only for a bearer from `mintRestBearerForCurl`:
+   * the MCP instance whose session minted it.
+   */
+  async function resolveTokenToUser(token: string): Promise<{ user: UserRecord; mintedInstanceId?: string } | null> {
     // Try JWT
     if (looksLikeJwt(token)) {
       try {
         const payload = await validateJwt(token);
-        return await mapJwtToUser(payload);
+        const jwtUser = await mapJwtToUser(payload);
+        return jwtUser ? { user: jwtUser } : null;
       } catch { /* not a valid JWT — try next */ }
     }
 
     // Try short-lived REST token (5-min, minted by mintRestBearerForCurl MCP tool)
     try {
-      const restUserId = await lookupRestToken(token);
-      if (restUserId !== null) {
+      const rec = await lookupRestTokenRecord(token);
+      if (rec !== null) {
         await loadUsers();
-        const restUser = await getUserById(restUserId);
-        if (restUser) return restUser;
+        const restUser = await getUserById(rec.userId);
+        if (restUser) return { user: restUser, mintedInstanceId: rec.instanceId };
       }
     } catch { /* fall through */ }
 
     // Try API key (cheap local lookup before hitting Auth0)
     await loadUsers();
     const apiKeyUser = await getUserByApiKey(token);
-    if (apiKeyUser) return apiKeyUser;
+    if (apiKeyUser) return { user: apiKeyUser };
 
     // Try opaque token (Auth0 /userinfo — last resort, network call)
     try {
       const payload = await validateOpaqueToken(token);
-      return await mapJwtToUser(payload);
+      const opaqueUser = await mapJwtToUser(payload);
+      return opaqueUser ? { user: opaqueUser } : null;
     } catch { /* not a valid opaque token either */ }
 
     return null;
@@ -4403,12 +4409,61 @@ function registerRestApiRoutes(app: express.Express): void {
       if (!token) { res.status(401).json({ error: 'Token is required' }); return; }
 
       try {
-        const user = await resolveTokenToUser(token);
-        if (!user) { res.status(401).json({ error: 'Invalid token' }); return; }
+        const resolved = await resolveTokenToUser(token);
+        if (!resolved) { res.status(401).json({ error: 'Invalid token' }); return; }
+        const { user, mintedInstanceId } = resolved;
         if (!user.id) { res.status(403).json({ error: 'User ID not found.' }); return; }
 
+        // Which connection serves the call, when the user has several for one
+        // service (two Google accounts on Sheets):
+        //   1. X-Instance-Id, named by the caller — must be the caller's own
+        //      connection to THIS service; anything else is a 404, never a
+        //      silent fall back to another account.
+        //   2. The instance whose MCP session minted the bearer. A bearer
+        //      minted on another service (Docs calling Sheets) names no Sheets
+        //      account: with one Sheets connection that is unambiguous and
+        //      falls through; with several it is a 409 listing them, never a
+        //      silent pick of the first.
+        //   3. The first connection for the slug — the permanent dashboard key
+        //      and JWTs, kept as before so existing scripts do not break.
+        // Exact slug match in 1 and 2: the substring fallback below would let
+        // a `slack` (user) instance answer `slack-bot` routes. The serving
+        // instance goes back in the X-Instance-Id response header either way.
+        let connection: Awaited<ReturnType<typeof getMcpConnectionByInstanceId>> = null;
+        const requestedInstance = req.headers['x-instance-id'];
+        if (typeof requestedInstance === 'string' && requestedInstance) {
+          const named = await getMcpConnectionByInstanceId(requestedInstance);
+          if (!named || named.userId !== user.id || named.mcpSlug !== primarySlug) {
+            res.status(404).json({ error: `No ${primarySlug} connection with instance id "${requestedInstance}" on this account.` });
+            return;
+          }
+          connection = named;
+        } else if (mintedInstanceId) {
+          // The minting session was already authorized for this instance, so
+          // no ownership check — the same rule as the MCP instanceId path.
+          const bound = await getMcpConnectionByInstanceId(mintedInstanceId);
+          if (bound && bound.mcpSlug === primarySlug) {
+            connection = bound;
+          } else {
+            const candidates = (await getUserConnectedMcps(user.id)).filter(c => c.mcpSlug === primarySlug);
+            if (candidates.length > 1) {
+              res.status(409).json({
+                error: `This bearer was minted on another service's MCP, and this account has ${candidates.length} ` +
+                  `${primarySlug} connections. Pick one with the X-Instance-Id header, or mint the bearer from ` +
+                  `the ${primarySlug} connector you mean.`,
+                instances: candidates.map(c => ({
+                  instanceId: c.instanceId,
+                  name: c.instanceName,
+                  account: c.googleEmail ?? c.providerEmail ?? null,
+                })),
+              });
+              return;
+            }
+          }
+        }
+
         // Find service-specific MCP connection for proper OAuth tokens
-        let connection = await getMcpConnection(user.id, primarySlug);
+        if (!connection) connection = await getMcpConnection(user.id, primarySlug);
         if (!connection) {
           const allConnections = await getUserConnectedMcps(user.id);
           connection = allConnections.find(c => c.mcpSlug.includes(fallbackSubstring)) || null;
@@ -4482,6 +4537,7 @@ function registerRestApiRoutes(app: express.Express): void {
           req.userSession = createUserSession(user, client_id, client_secret);
         }
 
+        if (connection?.instanceId) res.setHeader('X-Instance-Id', connection.instanceId);
         req.user = user;
         next();
       } catch (err: any) {
