@@ -920,6 +920,23 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
+  // The Storage MCP keeps its data in this server's own Postgres: no provider,
+  // no OAuth, connecting is one click (src/storage/connect.ts).
+  await createMcpCatalog({
+    slug: 'storage',
+    name: 'Storage MCP',
+    description: 'Structured storage Claude keeps between conversations: collections with enforced schemas, migrations, and freshness tracking.',
+    iconUrl: null,
+    mcpUrl: normalizeUrl(process.env.STORAGE_MCP_URL, '/storage'),
+    provider: 'storage',
+    scopes: [],
+    googleClientId: null,
+    googleClientSecret: null,
+    oauthScopes: [],
+    isLocal: !process.env.STORAGE_MCP_URL,
+    isActive: true,
+  });
+
   await seedRedmineCatalog(normalizeUrl);
   await seedGitHubCatalog(normalizeUrl);
   await seedSupabaseCatalog(normalizeUrl);

@@ -12,6 +12,7 @@ import { registerAdminUsageRoutes } from '../usage/adminUsageRoutes.js';
 import { isAdminEmail } from '../auth/admin.js';
 import { listUsersWithConnections } from '../usage/adminUsers.js';
 import { connectAdminMcp } from '../admin-mcp/connect.js';
+import { connectStorageMcp } from '../storage/connect.js';
 import { resourceServerMiddleware, createResourceServerMiddleware, stripTrustedIdentityHeaders } from '../auth/resourceServerMiddleware.js';
 import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
 import { validateJwt, validateOpaqueToken, hasScope } from '../auth/jwtValidator.js';
@@ -2038,6 +2039,21 @@ function registerSharedRoutes(app: express.Express): void {
         } else {
           console.error(`User ${connectingUser.id} connected Admin MCP: ${result.instanceId}`);
           // The dashboard banner prints this value, so it is the name, not the id.
+          res.redirect('/dashboard?connected=' + encodeURIComponent(result.instanceName));
+        }
+        return;
+      }
+
+      // Same for the Storage MCP: its data lives in our own database
+      // (src/storage/connect.ts), so there is nothing to consent to.
+      if (mcpSlug === 'storage') {
+        const result = await connectStorageMcp({ id: connectingUser.id });
+        if (result.outcome === 'unavailable') {
+          res.status(503).send('Storage is unavailable: this server has no database connection.');
+        } else if (result.outcome === 'exists') {
+          res.redirect('/dashboard?already_exists=' + encodeURIComponent(result.instanceName));
+        } else {
+          console.error(`User ${connectingUser.id} connected Storage MCP: ${result.instanceId}`);
           res.redirect('/dashboard?connected=' + encodeURIComponent(result.instanceName));
         }
         return;
@@ -4133,6 +4149,11 @@ function registerSharedRoutes(app: express.Express): void {
       'List my Supabase projects, then show the tables in the public schema of the production one',
       'Check the security advisors for my project and list any tables missing row level security',
       'Show the Postgres error logs from the last hour and tell me what is failing',
+    ],
+    'storage': [
+      'Save the people we just researched into a "linkedin_people" collection keyed by profile URL, and mark records stale after 30 days',
+      'Before you look anyone up on LinkedIn, check my stored people and only re-fetch the ones that are stale',
+      'Add a "company" field to my people collection, show me the dry run first, then apply it',
     ],
     'pinecone': [
       'List my Pinecone indexes and tell me which namespaces each one has and how many records',

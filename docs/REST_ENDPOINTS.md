@@ -445,9 +445,18 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `get_edge_function` | `GET /api/v1/supabase/projects/{projectId}/functions/{functionSlug}` | planned | Get the files of one Edge Function |
 | `list_branches` | `GET /api/v1/supabase/projects/{projectId}/branches` | planned | List development branches |
 
+### Storage (`storage`)
+
+| MCP tool | REST endpoint | Status | Summary |
+|---|---|---|---|
+| `listCollections` | `GET /api/v1/storage/collections` | planned | List your storage collections with record counts and quotas |
+| `describeCollection` | `GET /api/v1/storage/collections/{collection}` | planned | Get the schema and migration history of one collection |
+| `getRecord` | `GET /api/v1/storage/collections/{collection}/records/{recordId}` | planned | Get one record by id |
+| `findRecords` | `POST /api/v1/storage/collections/{collection}/find` | planned | Query the records of one collection — _A read despite the POST: the where conditions do not fit a query string._ |
+
 ## Status legend
 
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 331 endpoints.
+Catalog size: 335 endpoints.

@@ -880,6 +880,28 @@ export function createAdminSession(user: UserRecord): UserSession {
   };
 }
 
+/**
+ * Storage MCP session. Its data is keyed by the CALLER's userId, so the session
+ * is built from the authenticated user, never from a connection's owner.
+ */
+export function createStorageSession(user: UserRecord, instanceId?: string): UserSession {
+  return {
+    userId: user.id,
+    apiKey: user.apiKey,
+    email: user.email,
+    mcpSlug: 'storage',
+    instanceId,
+    // Null placeholders for Google clients (the Storage MCP won't use them)
+    googleDocs: null as any,
+    googleDrive: null as any,
+    googleSheets: null as any,
+    googleCalendar: null as any,
+    googleGmail: null as any,
+    googleSlides: null as any,
+    oauthClient: null as any,
+  };
+}
+
 export function clearSessionCache(apiKey: string): void {
   sessionCache.delete(apiKey);
   // Also clear any MCP-specific sessions for this user

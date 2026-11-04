@@ -32,6 +32,7 @@ function makeDeps(overrides: Partial<AuthDeps> = {}): AuthDeps {
     createPineconeSession: mock.fn(() => fakeSession),
     createSupabaseSession: mock.fn(() => fakeSession),
     createAdminSession: mock.fn(() => fakeSession),
+    createStorageSession: mock.fn(() => fakeSession),
     ...overrides,
   };
 }
@@ -356,6 +357,52 @@ describe('Admin MCP (slug "admin")', () => {
     } catch (e: any) {
       assert.equal(e.status, 400);
     } finally { restore(); }
+    assert.equal((deps.createUserSessionFromConnection as any).mock.calls.length, 0);
+  });
+});
+
+// The Storage MCP keys its data by the CALLER, so the session comes from the
+// authenticated user — never from a connection, whose owner may be someone else.
+describe('Storage MCP (slug "storage")', () => {
+  const storageConnection = { instanceId: 'sto1', userId: 99, mcpSlug: 'storage', provider: 'storage', providerTokens: {} };
+
+  it('builds a storage session for the caller, keeping the instance id when it is their own connector', async () => {
+    const own = { ...storageConnection, userId: fakeUser.id };
+    const deps = makeDeps({ getMcpConnectionByInstanceId: mock.fn(async () => own) });
+    await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.sto1' }), 'storage', deps);
+    const calls = (deps.createStorageSession as any).mock.calls;
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].arguments[0], fakeUser);
+    assert.equal(calls[0].arguments[1], 'sto1');
+    assert.equal((deps.createUserSessionFromConnection as any).mock.calls.length, 0);
+    assert.equal((deps.createUserSession as any).mock.calls.length, 0);
+  });
+
+  it('drops an instance id that belongs to someone else, or to another service, from the session', async () => {
+    for (const connection of [storageConnection, { ...storageConnection, userId: fakeUser.id, mcpSlug: 'google-docs' }, null]) {
+      const deps = makeDeps({ getMcpConnectionByInstanceId: mock.fn(async () => connection) });
+      await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.sto1' }), 'storage', deps);
+      const calls = (deps.createStorageSession as any).mock.calls;
+      assert.equal(calls[0].arguments[0], fakeUser, 'still the caller');
+      assert.equal(calls[0].arguments[1], undefined);
+    }
+  });
+
+  it('never falls back to a Google session when the caller has no storage connection', async () => {
+    const deps = makeDeps();
+    await authenticateRequest(makeRequest({ authorization: 'Bearer validkey' }), 'storage', deps);
+    assert.equal((deps.createStorageSession as any).mock.calls.length, 1);
+    assert.equal((deps.createUserSession as any).mock.calls.length, 0);
+  });
+
+  it('refuses a storage instance id replayed against another server', async () => {
+    const deps = makeDeps({ getMcpConnectionByInstanceId: mock.fn(async () => storageConnection) });
+    try {
+      await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.sto1' }), 'google-docs', deps);
+      assert.fail('should have thrown');
+    } catch (e: any) {
+      assert.equal(e.status, 400);
+    }
     assert.equal((deps.createUserSessionFromConnection as any).mock.calls.length, 0);
   });
 });

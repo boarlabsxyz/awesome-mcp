@@ -18,6 +18,7 @@ const BASE_URL = stripTrailingSlashes(process.env.BASE_URL || 'http://localhost:
 export const SERVICE_VALUES: [RestService, ...RestService[]] = [
   'docs', 'sheets', 'calendar', 'drive', 'gmail', 'slides', 'clickup', 'slack',
   'outline', 'peopleforce', 'hubspot', 'redmine', 'browserbase', 'github', 'pinecone', 'supabase',
+  'storage',
 ];
 
 export function registerListRestEndpoints(server: FastMCP<UserSession>): void {

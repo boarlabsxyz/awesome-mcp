@@ -119,6 +119,7 @@ import { browserbaseServer }   from '../browserbase/server.js';
 import { pineconeServer }      from '../pinecone/server.js';
 import { supabaseServer }      from '../supabase/server.js';
 import { adminServer }         from '../admin-mcp/server.js';
+import { storageServer }       from '../storage/server.js';
 import { redmineServer } from '../redmine/server.js';
 import { githubServer } from '../github/server.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
@@ -1542,6 +1543,7 @@ async function startServer() {
           "pinecone":        pineconeServer,
           "supabase":        supabaseServer,
           "admin":           adminServer,
+          "storage":         storageServer,
         };
         const mcpToStart = MCP_SERVERS_BY_SLUG[MCP_SLUG] ?? server; // default: google-docs
 
