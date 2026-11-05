@@ -30760,6 +30760,624 @@
         }
       }
     },
+    "/api/v1/storage/collections": {
+      "get": {
+        "operationId": "listStorageCollections",
+        "summary": "List your storage collections with record counts and quotas",
+        "description": "Name, description, schema version, field names, record count, size and last write of every collection, plus the quotas. Mirrors the MCP tool `listCollections`.",
+        "tags": [
+          "storage"
+        ],
+        "responses": {
+          "200": {
+            "description": "The collections and limits.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments, or the request does not match the collection schema; the error says what to fix.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/storage/collections/{collection}": {
+      "get": {
+        "operationId": "describeStorageCollection",
+        "summary": "Get the schema and migration history of one collection",
+        "description": "Every field with its type and description, the keyField and ttlDays, record count, and the last 10 migrations. Mirrors the MCP tool `describeCollection`.",
+        "tags": [
+          "storage"
+        ],
+        "parameters": [
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The collection name. GET /api/v1/storage/collections lists them."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments, or the request does not match the collection schema; the error says what to fix.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such collection or record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/storage/collections/{collection}/records/{recordId}": {
+      "get": {
+        "operationId": "getStorageRecord",
+        "summary": "Get one record by id or by keyField value",
+        "description": "The record with its system fields (_id, _createdAt, _updatedAt, _ageDays, and _stale when the collection has ttlDays). Mirrors the MCP tool `getRecord`.",
+        "tags": [
+          "storage"
+        ],
+        "parameters": [
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The collection name. GET /api/v1/storage/collections lists them."
+          },
+          {
+            "name": "recordId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The record _id, or its keyField value with by=key (URL-encode it)."
+          },
+          {
+            "name": "by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "id",
+                "key"
+              ]
+            },
+            "description": "key: recordId is the keyField value rather than the _id. Default id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments, or the request does not match the collection schema; the error says what to fix.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such collection or record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/storage/collections/{collection}/find": {
+      "post": {
+        "operationId": "findStorageRecords",
+        "summary": "Query the records of one collection",
+        "description": "A read despite the POST: the where conditions do not fit a query string. Returns total, one page of records and nextCursor; pass nextCursor back with the other arguments unchanged. Mirrors the MCP tool `findRecords`.",
+        "tags": [
+          "storage"
+        ],
+        "parameters": [
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The collection name. GET /api/v1/storage/collections lists them."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "where": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "field": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "op": {
+                          "type": "string",
+                          "enum": [
+                            "eq",
+                            "ne",
+                            "gt",
+                            "gte",
+                            "lt",
+                            "lte",
+                            "in",
+                            "contains",
+                            "exists"
+                          ]
+                        },
+                        "value": {
+                          "description": "Compared as the field's type. in: an array. contains: a substring (string/url fields, case-insensitive) or one element (array fields). exists: true/false."
+                        }
+                      },
+                      "required": [
+                        "field",
+                        "op"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 20,
+                    "description": "Conditions, all of which must hold."
+                  },
+                  "contains": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "description": "Case-insensitive text search across the whole record, field names included."
+                  },
+                  "updatedWithinDays": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3650,
+                    "description": "Only records updated within this many days."
+                  },
+                  "orderBy": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "description": "A single-value field, _updatedAt (default) or _createdAt."
+                  },
+                  "order": {
+                    "type": "string",
+                    "enum": [
+                      "asc",
+                      "desc"
+                    ],
+                    "default": "desc"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 25
+                  },
+                  "cursor": {
+                    "type": "string",
+                    "maxLength": 100000,
+                    "description": "nextCursor from a previous call, to get the next page. Keep the other arguments unchanged."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A page of matches.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments, or the request does not match the collection schema; the error says what to fix.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such collection or record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/storage/collections/{collection}/records": {
+      "post": {
+        "operationId": "insertStorageRecords",
+        "summary": "Insert up to 500 records, all or nothing",
+        "description": "Each record must match the collection schema; one invalid record rejects the batch with the problem in each listed. With onConflict update, a record whose keyField value exists replaces that record. Answers 201 when anything was created, 200 for an upsert that only replaced. Body limit 5 MB. The permanent dashboard API key can call it, not only the 5-minute bearer. Mirrors the MCP tool `insertRecords`.",
+        "tags": [
+          "storage"
+        ],
+        "parameters": [
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The collection name. GET /api/v1/storage/collections lists them."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "records": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": {}
+                    },
+                    "minItems": 1,
+                    "maxItems": 500,
+                    "description": "Records to insert, each matching the collection schema. All or nothing: one invalid record rejects the batch."
+                  },
+                  "onConflict": {
+                    "type": "string",
+                    "enum": [
+                      "error",
+                      "update"
+                    ],
+                    "default": "error",
+                    "description": "When a record's keyField value already exists: \"error\" (default) rejects the batch, \"update\" replaces that record's data."
+                  }
+                },
+                "required": [
+                  "records"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Records replaced.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Records created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments, or the request does not match the collection schema; the error says what to fix.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such collection or record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/storage/collections/{collection}/records/{recordId}/update": {
+      "post": {
+        "operationId": "updateStorageRecord",
+        "summary": "Update one record: set merges fields, unset removes optional ones",
+        "description": "The merged record must match the schema. The record is the one the path names; an id or key in the body is ignored. The permanent dashboard API key can call it, not only the 5-minute bearer. Mirrors the MCP tool `updateRecord`.",
+        "tags": [
+          "storage"
+        ],
+        "parameters": [
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The collection name. GET /api/v1/storage/collections lists them."
+          },
+          {
+            "name": "recordId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The record _id, or its keyField value with by=key (URL-encode it)."
+          },
+          {
+            "name": "by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "id",
+                "key"
+              ]
+            },
+            "description": "key: recordId is the keyField value rather than the _id. Default id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "set": {
+                    "type": "object",
+                    "additionalProperties": {},
+                    "description": "Fields to set, merged over the current record. The result must match the schema."
+                  },
+                  "unset": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64
+                    },
+                    "maxItems": 50,
+                    "description": "Optional fields to remove."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments, or the request does not match the collection schema; the error says what to fix.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such collection or record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/docs": {
       "get": {
         "operationId": "listGoogleDocs",

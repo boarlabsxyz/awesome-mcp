@@ -22,7 +22,15 @@ Collections with enforced schemas, kept in this platform's own Postgres, so Clau
 - **Writes are all or nothing and never silent.** One invalid record rejects the batch with per-index issues; `updateRecord`/`deleteRecords` report not-found instead of succeeding; `findRecords` always returns `total` and `nextCursor`.
 - **Argument names keep stored data out of analytics.** The collection is `collection` and free text is `contains`, neither in `PREVIEW_KEYS` (`src/usage/argSummary.ts`) — `name`/`query` would record their values.
 - **No database is an error, never an empty answer.**
-- **Deferred:** semantic/vector search, computed (JSONata) and script backfills (they wait for the sandbox), and the REST routes — catalog entries are `planned`; wire them with `/add-rest-endpoint storage`. Not wired in the combined web+MCP mode.
+- **Deferred:** semantic/vector search, and computed (JSONata) and script backfills (they wait for the sandbox). Not wired in the combined web+MCP mode.
+
+### REST plane
+
+- **`createServiceAuth('storage')` builds `createStorageSession` from the caller alone,** with or without a Storage connection, and never takes the Google fallback: the data is keyed by the user id, so a bearer minted on any of the user's connectors reaches their own records and nobody else's.
+- **Writes are insert and update only.** deleteRecords, migrateCollection and dropCollection stay MCP-only on purpose (the client can confirm them; a curl cannot), while the permanent dashboard API key can call the two that are exposed.
+- **Status comes from a tag, not the message.** `statusError` in `ops.ts` puts 404 (missing collection or record) or 503 (no database) on the UserError's `code`; `storageErrorResponse` (`restRoutes.ts`) answers that, any other UserError as 400 with its message, and anything else as a 500 that hides it.
+- **The path picks the record.** `/records/{recordId}` is the `_id`, or the keyField value with `?by=key`; an `id`/`key` in an update body is dropped. `/api/v1/storage` is in `REST_LARGE_BODY_PREFIXES` (5 MB) for bulk inserts.
+- **`public/openapi-storage.json`** carries the request bodies; it was scaffolded once from `schemas.ts` with zod-to-json-schema and is maintained by hand, so update it when a schema there changes.
 
 ## Deployment
 
@@ -33,7 +41,8 @@ A Railway service like the other connectors: `TRANSPORT=httpStream`, `MCP_MODE=m
 | File | Contains |
 |------|----------|
 | `src/storage/server.ts` | Tool registrations |
-| `src/storage/schemas.ts` | Tool parameter schemas, shared with the future REST routes |
+| `src/storage/schemas.ts` | Tool parameter schemas, shared with the REST routes |
+| `src/storage/restRoutes.ts` | The REST plane as a route table, plus `storageErrorResponse` |
 | `src/storage/fieldSchema.ts` | The field language → strict Zod, record validation, type conversions |
 | `src/storage/migrations.ts` | `planMigration` — the pure migration planner |
 | `src/storage/ops.ts` | Tool bodies: quotas, cross-argument checks, presentation of records |
