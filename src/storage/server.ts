@@ -81,8 +81,9 @@ storageServer.addTool({
   description:
     'The only way to change a collection\'s schema. Operations, applied in order: addField, renameField, removeField (deletes that data), changeField (type, required, description, enum), setOptions (description, keyField, ttlDays). ' +
     'Each change must say what happens to the records already stored: adding a required field to a non-empty collection needs a default, and a type change converts every value or aborts. ' +
-    'Defaults to dryRun: true, which changes nothing and shows the records that would change, before and after, and any that cannot migrate. Apply with dryRun: false. ' +
-    'The migration is all or nothing, and its reason is kept in the history describeCollection shows.',
+    'Defaults to dryRun: true, which changes nothing and shows the records that would change, before and after (a few samples), and any that cannot migrate. Apply with dryRun: false. ' +
+    'The migration is all or nothing, and its reason is kept in the history describeCollection shows. ' +
+    'Records keep their _updatedAt: reshaping data does not refresh it, so _stale is unchanged. A changeField that changes the type keeps the old description unless you pass a new one.',
   parameters: migrateCollectionSchema,
   execute: async (args, { session }) => json(await opMigrateCollection(session?.userId, args)),
 });
@@ -102,7 +103,7 @@ storageServer.addTool({
   name: 'getRecord',
   annotations: { readOnlyHint: true },
   description:
-    'Get one record by _id, or by its keyField value. The record comes with _createdAt, _updatedAt and _ageDays, and _stale when the collection has ttlDays.',
+    'Get one record by _id or by its keyField value (give one, not both). The record comes with _createdAt, _updatedAt and _ageDays, and _stale when the collection has ttlDays.',
   parameters: getRecordSchema,
   execute: async (args, { session }) => json(await opGetRecord(session?.userId, args)),
 });
@@ -113,7 +114,9 @@ storageServer.addTool({
   description:
     'Query a collection. where takes conditions on schema fields (eq, ne, gt, gte, lt, lte, in, contains, exists), all of which must hold; contains searches the text of whole records. ' +
     'Filter by freshness with updatedWithinDays; sort by a field, _updatedAt (default) or _createdAt. ' +
-    'Returns the total number of matches, one page of records (limit, default 25, max 100) and a nextCursor when there are more. Each record carries _ageDays, and _stale when the collection has ttlDays: re-fetch stale records from their source and update them.',
+    'string and url fields compare and sort as text ("10" before "4"); to compare numbers, migrate the field to number or integer. ' +
+    'Returns the total number of matches, one page of records (limit, default 25, max 100) and a nextCursor when there are more. ' +
+    'Paging is stable: records written meanwhile do not shift later pages, but total is counted on each call and can change between pages. Keep orderBy and order unchanged while paging. Each record carries _ageDays, and _stale when the collection has ttlDays: re-fetch stale records from their source and update them.',
   parameters: findRecordsSchema,
   execute: async (args, { session }) => json(await opFindRecords(session?.userId, args)),
 });
@@ -122,7 +125,7 @@ storageServer.addTool({
   name: 'updateRecord',
   annotations: { readOnlyHint: false },
   description:
-    'Update one record, by _id or keyField value: set merges fields over the record, unset removes optional fields. The result must match the schema. Refreshes the record\'s _updatedAt.',
+    'Update one record, by _id or by keyField value (give one, not both): set merges fields over the record, unset removes optional fields. The result must match the schema. Refreshes the record\'s _updatedAt.',
   parameters: updateRecordSchema,
   execute: async (args, { session }) => json(await opUpdateRecord(session?.userId, args)),
 });
@@ -131,7 +134,7 @@ storageServer.addTool({
   name: 'deleteRecords',
   annotations: { readOnlyHint: false, destructiveHint: true },
   description:
-    'Delete up to 500 records by _id or by keyField value. Cannot be undone. Reports how many were deleted and which of the given ids or keys did not exist.',
+    'Delete up to 500 records, by ids or by keys (keyField values): give one of the two, not both. Cannot be undone. Reports how many were deleted and which of the given ids or keys did not exist.',
   parameters: deleteRecordsSchema,
   execute: async (args, { session }) => json(await opDeleteRecords(session?.userId, args)),
 });

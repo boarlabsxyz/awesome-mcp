@@ -224,18 +224,34 @@ describe('findRecords', () => {
     await rejects(opFindRecords(1, { ...find, cursor: 'garbage' }, deps(pool)), /cursor/);
   });
 
-  it('pages with a total and a cursor', async () => {
-    const rows = [recordRow('r1', ada), recordRow('r2', { profileUrl: 'https://l.in/b', name: 'B' })].map((r) => ({ ...r, total: 5 }));
-    const pool = makePool([[SELECT_COLLECTION, [collectionRow]], [/count\(\*\) OVER/, rows]]);
+  const found = (id: string, sortKey: string | null) => ({ ...recordRow(id, { profileUrl: `https://l.in/${id}`, name: id }), total: 5, sort_key: sortKey });
+
+  it('pages with a total and a keyset cursor from the last record returned', async () => {
+    // limit 2 asks for 3 rows: the third only says another page exists.
+    const pool = makePool([[SELECT_COLLECTION, [collectionRow]], [/count\(\*\) OVER/, [found('r1', 'k1'), found('r2', 'k2'), found('r3', 'k3')]]]);
     const page = await opFindRecords(1, { ...find, limit: 2 }, deps(pool));
     assert.equal(page.total, 5);
     assert.equal(page.returned, 2);
-    assert.ok(page.nextCursor);
+    assert.deepEqual(page.records.map((r) => r._id), ['r1', 'r2']);
     assert.match(page.note!, /1-2 of 5/);
+    assert.equal(pool.calls.at(-1)!.params.at(-1), 3);
 
-    const last = makePool([[SELECT_COLLECTION, [collectionRow]], [/count\(\*\) OVER/, [{ ...rows[0], total: 5 }]]]);
-    const end = await opFindRecords(1, { ...find, limit: 2, cursor: Buffer.from('{"o":4}').toString('base64url') }, deps(last));
+    const next = makePool([[SELECT_COLLECTION, [collectionRow]], [/count\(\*\) OVER/, [found('r3', 'k3')]]]);
+    const end = await opFindRecords(1, { ...find, limit: 2, cursor: page.nextCursor! }, deps(next));
+    const sql = next.calls.at(-1)!;
+    assert.ok(sql.params.includes('r2') && sql.params.includes('k2'), 'continues after the last record returned');
     assert.equal(end.nextCursor, null);
+    assert.equal(end.note, undefined);
+  });
+
+  it('refuses a cursor from another sort, an older schema version, or the old offset form', async () => {
+    const pool = makePool([[SELECT_COLLECTION, [collectionRow]], [/count\(\*\) OVER/, [found('r1', 'k1'), found('r2', 'k2')]]]);
+    const { nextCursor } = await opFindRecords(1, { ...find, limit: 1 }, deps(pool));
+    await rejects(opFindRecords(1, { ...find, limit: 1, order: 'asc', cursor: nextCursor! }, deps(pool)), /Keep orderBy and order unchanged/);
+    await rejects(opFindRecords(1, { ...find, limit: 1, orderBy: '_createdAt', cursor: nextCursor! }, deps(pool)), /sorted by _updatedAt desc/);
+    const migrated = makePool([[SELECT_COLLECTION, [{ ...collectionRow, version: 2 }]]]);
+    await rejects(opFindRecords(1, { ...find, limit: 1, cursor: nextCursor! }, deps(migrated)), /was migrated \(version 1 → 2\)/);
+    await rejects(opFindRecords(1, { ...find, cursor: Buffer.from('{"o":4}').toString('base64url') }, deps(pool)), /cursor is not one/);
   });
 
   it('converts where values to the field type', async () => {
@@ -260,7 +276,7 @@ describe('buildFindSql', () => {
       orderBy: { field: evil, type: 'integer' },
       order: 'asc',
       limit: 10,
-      offset: 20,
+      after: { sortKey: '42', id: 'r7' },
     });
     assert.ok(!text.includes('DROP'));
     assert.ok(params.includes(evil));
@@ -268,7 +284,20 @@ describe('buildFindSql', () => {
     assert.match(text, /@> \$5::jsonb/);
     assert.ok(params.includes('["ts"]'));
     assert.ok(params.includes('%50\\%%'));
-    assert.match(text, /ORDER BY \(r\.data ->> \$\d+\)::numeric ASC NULLS LAST/);
+    assert.match(text, /\(r\.data ->> \$\d+\)::numeric AS sort_val/);
+    assert.match(text, /ORDER BY m\.sort_val ASC NULLS LAST, m\.id ASC/);
+  });
+
+  it('pages by keyset in sort order, NULLS LAST, with total counted before the keyset filter', () => {
+    const base = { conditions: [], orderBy: '_updatedAt' as const, limit: 26 };
+    const desc = buildFindSql(9, { ...base, order: 'desc', after: { sortKey: '2026-10-01 00:00:00+00', id: 'r2' } });
+    assert.match(desc.text, /WHERE \(m\.sort_val < \$3::timestamptz OR \(m\.sort_val = \$3::timestamptz AND m\.id < \$2\) OR m\.sort_val IS NULL\)/);
+    assert.deepEqual(desc.params, [9, 'r2', '2026-10-01 00:00:00+00', 26]);
+    assert.ok(desc.text.indexOf('count(*) OVER ()') < desc.text.indexOf(') m'), 'total is counted inside, before the keyset');
+
+    const nullKey = buildFindSql(9, { ...base, orderBy: { field: 'name', type: 'string' }, order: 'asc', after: { sortKey: null, id: 'r5' } });
+    assert.match(nullKey.text, /WHERE m\.sort_val IS NULL AND m\.id > \$3/);
+    assert.ok(!/OFFSET/.test(nullKey.text));
   });
 
   it('escapes LIKE wildcards', () => {
@@ -313,6 +342,29 @@ describe('concurrency, freshness and keys', () => {
     assert.equal(record._stale, true);
   });
 
+  it('every write that changed something marks the collection written, and lastWriteAt reports it', async () => {
+    const TOUCH = /SET last_write_at = now\(\)|last_write_at = now\(\) WHERE id/;
+    const writes: Array<(p: Pool) => Promise<unknown>> = [
+      (p) => opInsertRecords(7, { collection: 'people', records: [{ profileUrl: 'https://l.in/new', name: 'N' }], onConflict: 'error' }, deps(p)),
+      (p) => opUpdateRecord(7, { collection: 'people', id: 'r1', set: { followers: 1 } }, deps(p)),
+      (p) => opDeleteRecords(7, { collection: 'people', ids: ['r1'] }, deps(p)),
+      (p) => opMigrateCollection(7, { collection: 'people', reason: 'r', operations: [{ op: 'setOptions', ttlDays: 60 }], dryRun: false }, deps(p)),
+    ];
+    for (const write of writes) {
+      const pool = recordPool();
+      await write(pool);
+      assert.ok(pool.calls.some((c) => TOUCH.test(c.text)), `touches the collection in ${write}`);
+    }
+    const nothingDeleted = makePool([[SELECT_COLLECTION, [collectionRow]]]);
+    await opDeleteRecords(7, { collection: 'people', ids: ['gone'] }, deps(nothingDeleted));
+    assert.ok(!nothingDeleted.calls.some((c) => TOUCH.test(c.text)), 'a delete that found nothing is not a write');
+
+    const list = makePool([[/FROM storage_collections c/, [{ ...collectionRow, records: 0, total_bytes: 0, last_write: '2026-11-03T00:00:00Z' }]]]);
+    const listed = await opListCollections(7, deps(list));
+    assert.equal(listed.collections[0].lastWriteAt, '2026-11-03T00:00:00Z');
+    assert.match(list.calls[0].text, /coalesce\(c\.last_write_at, max\(r\.updated_at\)\)/);
+  });
+
   it('refuses an empty keyField value on insert and on update', async () => {
     const stringKey = { ...collectionRow, fields: { ...collectionRow.fields, profileUrl: { type: 'string', required: true, description: 'Key' } } };
     const pool = makePool([[SELECT_COLLECTION, [stringKey]], [/SELECT \* FROM storage_records/, [recordRow('r1', ada)]]]);
@@ -330,7 +382,16 @@ describe('migrateCollection', () => {
     const result = await opMigrateCollection(1, { collection: 'people', reason: 'track employer', operations: [op], dryRun: true }, deps(pool));
     assert.match(result.status, /DRY RUN — nothing was changed/);
     assert.equal(result.recordsChanged, 1);
+    assert.equal(result.samplesNote, undefined);
     assert.ok(!pool.calls.some((c) => /^\s*(UPDATE|INSERT)/.test(c.text)));
+  });
+
+  it('says when the samples are a subset of the changed records', async () => {
+    const four = ['a', 'b', 'c', 'd'].map((x) => recordRow(x, { profileUrl: `https://l.in/${x}`, name: x }));
+    const pool = makePool([[SELECT_COLLECTION, [collectionRow]], [/SELECT \* FROM storage_records/, four]]);
+    const result = await opMigrateCollection(1, { collection: 'people', reason: 'r', operations: [op], dryRun: true }, deps(pool));
+    assert.equal(result.samples.length, 3);
+    assert.equal(result.samplesNote, 'Showing 3 of 4 changed records.');
   });
 
   it('applies: locks the collection, bumps the version, records the reason', async () => {
