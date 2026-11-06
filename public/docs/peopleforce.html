@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <title>PeopleForce &middot; Docs &middot; Awesome MCP</title>
+  <meta name="description" content="Connect PeopleForce HR data — employees, departments, leave and recruitment — with an API key.">
+  <link rel="canonical" href="https://app.awesome-mcp.xyz/docs/peopleforce">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body class="docs-body">
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  <header class="header">
+    <div class="header-inner">
+      <button class="docs-menu-toggle" type="button" aria-expanded="false" aria-controls="docs-sidebar">
+        <span class="sr-only">Toggle documentation menu</span>
+        <span aria-hidden="true">&#9776;</span>
+      </button>
+      <h1><a href="/docs" translate="no">Awesome MCP <span class="docs-brand-tag">Docs</span></a></h1>
+      <div class="header-right">
+        <a href="/integrations" class="nav-link">Integrations</a>
+        <a href="/dashboard" class="btn-primary">Dashboard</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" id="docs-sidebar">
+      <nav aria-label="Documentation">
+        <p class="docs-nav-group">Getting started</p>
+        <ul>
+          <li><a href="/docs" class="docs-nav-link">Overview &amp; quickstart</a></li>
+          <li><a href="/docs/connect-a-connector" class="docs-nav-link">Connect a connector</a></li>
+          <li><a href="/docs/add-to-claude" class="docs-nav-link">Add to Claude</a></li>
+          <li><a href="/docs/images" class="docs-nav-link">Images</a></li>
+        </ul>
+        <p class="docs-nav-group">Connectors</p>
+        <ul>
+          <li><a href="/docs/google" class="docs-nav-link">Google Workspace</a></li>
+          <li><a href="/docs/clickup" class="docs-nav-link">ClickUp</a></li>
+          <li><a href="/docs/slack" class="docs-nav-link">Slack</a></li>
+          <li><a href="/docs/outline" class="docs-nav-link">Outline Wiki</a></li>
+          <li><a href="/docs/peopleforce" class="docs-nav-link active" aria-current="page">PeopleForce</a></li>
+          <li><a href="/docs/hubspot" class="docs-nav-link">HubSpot</a></li>
+        </ul>
+        <p class="docs-nav-group">Reference</p>
+        <ul>
+          <li><a href="/docs/rest-api" class="docs-nav-link">REST API</a></li>
+          <li><a href="/docs/troubleshooting" class="docs-nav-link">Troubleshooting</a></li>
+        </ul>
+      </nav>
+    </aside>
+
+    <main id="main" class="docs-content">
+  <p class="docs-eyebrow">Connectors</p>
+  <h1>PeopleForce</h1>
+  <p class="docs-lede">HR data via an API key you create yourself. A few things behave differently from what you would expect, and they are worth reading before you rely on an answer.</p>
+
+
+  <p>Employees, departments, leave, recruitment and the HR knowledge base.</p>
+
+  <h2 id="connecting">Connecting</h2>
+  <ol class="docs-steps">
+    <li>Click <strong>+ Add Tool</strong> and pick <strong>PeopleForce MCP</strong>.</li>
+    <li>In PeopleForce, go to <strong>Settings &rarr; Integrations &rarr; API</strong> and create a new
+    API key.</li>
+    <li>Paste it into the dashboard.</li>
+  </ol>
+  <div class="docs-note docs-note--warn">
+    <span class="docs-note-label">The key carries its creator&rsquo;s permissions</span>
+    <p>A PeopleForce API key inherits the permissions of whoever created it. If an HR administrator
+    creates the key, the connector can read everything that administrator can read &mdash; including
+    salary and personal data. Create the key as an account whose access matches what you actually
+    want the assistant to reach.</p>
+  </div>
+
+  <h2 id="writes">It can write, too</h2>
+  <p>Most of this connector reads, but four actions change things: creating a leave request, adding
+  a note to a candidate, moving an application to another stage, and disqualifying an application.</p>
+  <p>Disqualifying is not reversible by repeating it &mdash; asking twice disqualifies twice. Be
+  specific when you ask for it.</p>
+
+  <h2 id="quirks">Things that behave unexpectedly</h2>
+  <h3 id="status">Asking for &ldquo;all employees&rdquo;</h3>
+  <p>There is no &ldquo;everyone&rdquo; option in the underlying API. A plain employee listing returns
+  <em>active</em> employees only. A full headcount means asking for active and inactive separately.
+  People who have left show as inactive.</p>
+
+  <h3 id="probation">Probation</h3>
+  <p>Probation end dates are set by HR and reported as they stand &mdash; they are not calculated from a
+  hire date, and in practice they range from a few months to well over a year and can be extended.</p>
+  <p>&ldquo;Did this person pass probation?&rdquo; is not answerable. The record carries no termination date,
+  so someone who left during probation and someone who left five years later look identical: both
+  are simply inactive.</p>
+
+  <h3 id="learning">Courses and training</h3>
+  <p>There are no course, enrollment or completion records in the API. Training usually lives as free
+  text in objectives and key results, which makes counting it unreliable. Some organizations model
+  participation as a custom table on the employee profile &mdash; if yours does, that <em>is</em>
+  readable, and Claude can list which tables exist before reading one.</p>
+
+  <h3 id="history">Trends over time</h3>
+  <p>Nothing in the API is timestamped or filterable by date, so historical trends cannot be
+  reconstructed after the fact. If your organization needs them, a separate snapshot collector has
+  to be running &mdash; ask whoever operates this deployment.</p>
+
+  <h2 id="prompts">Try asking</h2>
+  <ul>
+    <li>&ldquo;Who's out on leave next week?&rdquo;</li>
+    <li>&ldquo;List everyone in the Engineering department&rdquo;</li>
+    <li>&ldquo;Show me the skills on Jane Doe's profile&rdquo;</li>
+  </ul>
+
+
+
+  <nav class="docs-prevnext" aria-label="Pagination">
+    <a href="/docs/outline" class="docs-prevnext-prev"><span class="docs-prevnext-dir">Previous</span><span class="docs-prevnext-title">Outline Wiki</span></a>
+    <a href="/docs/hubspot" class="docs-prevnext-next"><span class="docs-prevnext-dir">Next</span><span class="docs-prevnext-title">HubSpot</span></a>
+  </nav>
+    </main>
+
+    <aside class="docs-toc" id="docs-toc" aria-labelledby="toc-heading" hidden>
+      <p id="toc-heading" class="docs-toc-title">On this page</p>
+      <nav aria-label="On this page"></nav>
+    </aside>
+  </div>
+
+  <footer class="docs-footer">
+    <p><a href="/dashboard">Dashboard</a> &middot; <a href="/integrations">Integrations</a> &middot; <a href="/updates">Updates</a></p>
+  </footer>
+
+  <script src="/docs/docs.js" defer></script>
+</body>
+</html>

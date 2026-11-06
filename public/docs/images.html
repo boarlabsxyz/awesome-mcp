@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <title>Images &middot; Docs &middot; Awesome MCP</title>
+  <meta name="description" content="Let Claude post images into Google Docs, ClickUp Docs and pull files out of Slack.">
+  <link rel="canonical" href="https://app.awesome-mcp.xyz/docs/images">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body class="docs-body">
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  <header class="header">
+    <div class="header-inner">
+      <button class="docs-menu-toggle" type="button" aria-expanded="false" aria-controls="docs-sidebar">
+        <span class="sr-only">Toggle documentation menu</span>
+        <span aria-hidden="true">&#9776;</span>
+      </button>
+      <h1><a href="/docs" translate="no">Awesome MCP <span class="docs-brand-tag">Docs</span></a></h1>
+      <div class="header-right">
+        <a href="/integrations" class="nav-link">Integrations</a>
+        <a href="/dashboard" class="btn-primary">Dashboard</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" id="docs-sidebar">
+      <nav aria-label="Documentation">
+        <p class="docs-nav-group">Getting started</p>
+        <ul>
+          <li><a href="/docs" class="docs-nav-link">Overview &amp; quickstart</a></li>
+          <li><a href="/docs/connect-a-connector" class="docs-nav-link">Connect a connector</a></li>
+          <li><a href="/docs/add-to-claude" class="docs-nav-link">Add to Claude</a></li>
+          <li><a href="/docs/images" class="docs-nav-link active" aria-current="page">Images</a></li>
+        </ul>
+        <p class="docs-nav-group">Connectors</p>
+        <ul>
+          <li><a href="/docs/google" class="docs-nav-link">Google Workspace</a></li>
+          <li><a href="/docs/clickup" class="docs-nav-link">ClickUp</a></li>
+          <li><a href="/docs/slack" class="docs-nav-link">Slack</a></li>
+          <li><a href="/docs/outline" class="docs-nav-link">Outline Wiki</a></li>
+          <li><a href="/docs/peopleforce" class="docs-nav-link">PeopleForce</a></li>
+          <li><a href="/docs/hubspot" class="docs-nav-link">HubSpot</a></li>
+        </ul>
+        <p class="docs-nav-group">Reference</p>
+        <ul>
+          <li><a href="/docs/rest-api" class="docs-nav-link">REST API</a></li>
+          <li><a href="/docs/troubleshooting" class="docs-nav-link">Troubleshooting</a></li>
+        </ul>
+      </nav>
+    </aside>
+
+    <main id="main" class="docs-content">
+  <p class="docs-eyebrow">Getting started</p>
+  <h1>Letting Claude post images</h1>
+  <p class="docs-lede">Moving an image into a document works across three connectors, and needs one setting in Claude that is easy to miss.</p>
+
+
+  <p>Three connectors can put an image somewhere: Google (into a Doc or a Slides deck), ClickUp
+  (into a Doc page), and Slack (which is usually where the image comes <em>from</em>). They chain
+  together, and the chain is the interesting part.</p>
+
+  <h2 id="how-it-chains">How the pieces fit</h2>
+  <p>Most image workflows are the same shape: get a public URL for the image, then hand that URL to
+  whatever is going to display it.</p>
+  <div class="docs-pre-wrap"><pre><code>Slack downloadFile(format: "url")
+      ↓  returns a public https://…/images/&lt;hash&gt;.webp URL
+Google insertImageFromUrl    →  image lands in a Google Doc
+ClickUp insertImageIntoPage  →  image lands in a ClickUp Doc page</code></pre></div>
+
+  <p>You do not have to start in Slack &mdash; any publicly reachable image URL works as the input.
+  Slack is just the common case, because a screenshot someone posted in a channel is not publicly
+  reachable until it has been re-hosted.</p>
+
+  <h2 id="clickup-allowlist">ClickUp: the step everyone misses</h2>
+  <div class="docs-note docs-note--warn">
+    <span class="docs-note-label">Do this first, in Claude</span>
+    <p>Open <strong>Settings &rarr; Capabilities</strong> in Claude, scroll to
+    <strong>Domain allowlist</strong>, and add:</p>
+    <p><code>clickup.awesome-mcp.xyz</code></p>
+    <p>Without it, asking Claude to upload an image to a ClickUp Doc fails &mdash; Claude is not
+    allowed to fetch from the domain the image is served on. This is a setting in Claude, not on
+    this platform, so there is nothing on the dashboard that can fix it for you.</p>
+  </div>
+  <p>Once the domain is allowed, ask for it in plain language: &ldquo;Upload this image to the
+  &lsquo;Release notes&rsquo; page in ClickUp.&rdquo;</p>
+  <p>ClickUp has no image-upload API for Docs, so the image is stored and served by this platform
+  and embedded into the page as markdown. That is why the extra domain has to be allowed at all.</p>
+
+  <h2 id="google">Google Docs and Slides</h2>
+  <p>Google fetches the image itself, server-side, from whatever URL you give it. So a URL that is
+  public works, and one that requires a login does not &mdash; which is exactly why a Slack file has
+  to be re-hosted first.</p>
+  <p>Google Docs also accepts an image already in your Drive, or a file uploaded directly in the
+  conversation, so you can say &ldquo;insert this screenshot at the top of the doc&rdquo; without any URL
+  being involved.</p>
+
+  <h2 id="slack">Slack files</h2>
+  <p>When Claude reads a Slack channel, attachments show up as lines like:</p>
+  <div class="docs-pre-wrap"><pre><code>📎 screenshot.png — image/png, 284 KB — file ID: F09ABCDEF</code></pre></div>
+
+  <p>Claude can then fetch that file two ways:</p>
+  <ul>
+    <li><strong>As a URL</strong> (the default) &mdash; the image is re-hosted and Claude gets back a
+    public link, suitable for passing to Google or ClickUp.</li>
+    <li><strong>Inline</strong> &mdash; the image itself comes back into the conversation so Claude can
+    look at it. Use this when you want Claude to <em>read</em> the screenshot rather than move it.</li>
+  </ul>
+  <div class="docs-note docs-note--warn">
+    <span class="docs-note-label">Re-hosted Slack images are public</span>
+    <p>The generated link is unauthenticated. The address is long and unguessable, but anyone who
+    has it can open the image &mdash; including an image from a private channel or DM. To bound that,
+    Slack-sourced images are stored as short-lived and become eligible for deletion after a
+    retention period (30 days by default). Treat the link as temporary: use it now, do not file it
+    away.</p>
+  </div>
+  <p>If Slack files come back as &ldquo;file hidden&rdquo;, your Slack connection predates the
+  file-reading permission. Press <strong>Reconnect</strong> on the dashboard &mdash; see
+  <a href="/docs/troubleshooting">troubleshooting</a>.</p>
+
+  <h2 id="limits">Size limits</h2>
+  <div class="docs-table-wrap">
+  <table>
+    <thead><tr><th>Path</th><th>Limit</th></tr></thead>
+    <tbody>
+      <tr><td>Image fetched from a URL</td><td>20 MB</td></tr>
+      <tr><td>Image sent directly as data (ClickUp)</td><td>about 1.5 MB &mdash; a few hundred KB is comfortable</td></tr>
+      <tr><td>Slack file returned inline into the conversation</td><td>1.5 MB</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Re-hosted images are converted to WebP, so the stored copy is usually a good deal smaller than
+  what went in.</p>
+
+  <div class="docs-note docs-note--operator">
+    <span class="docs-note-label">For whoever runs the server</span>
+    <p>Image hosting needs <code>DATABASE_URL</code> and <code>IMAGE_PUBLIC_BASE_URL</code> set on the
+    deployment. Without them the image tools return a clear error rather than failing quietly.
+    <code>IMAGE_RETENTION_DAYS</code> controls how long short-lived images survive (default 30;
+    <code>0</code> disables expiry). These are deployment settings &mdash; there is nothing for an
+    end user to configure here.</p>
+  </div>
+
+
+  <nav class="docs-prevnext" aria-label="Pagination">
+    <a href="/docs/add-to-claude" class="docs-prevnext-prev"><span class="docs-prevnext-dir">Previous</span><span class="docs-prevnext-title">Add to Claude</span></a>
+    <a href="/docs/google" class="docs-prevnext-next"><span class="docs-prevnext-dir">Next</span><span class="docs-prevnext-title">Google Workspace</span></a>
+  </nav>
+    </main>
+
+    <aside class="docs-toc" id="docs-toc" aria-labelledby="toc-heading" hidden>
+      <p id="toc-heading" class="docs-toc-title">On this page</p>
+      <nav aria-label="On this page"></nav>
+    </aside>
+  </div>
+
+  <footer class="docs-footer">
+    <p><a href="/dashboard">Dashboard</a> &middot; <a href="/integrations">Integrations</a> &middot; <a href="/updates">Updates</a></p>
+  </footer>
+
+  <script src="/docs/docs.js" defer></script>
+</body>
+</html>

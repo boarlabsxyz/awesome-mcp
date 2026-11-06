@@ -187,6 +187,50 @@ describe('createWebOnlyApp routes', () => {
     assert.ok([200, 404].includes(res.status), `unexpected status ${res.status}`);
   });
 
+  // --- Docs site (public, no auth) ---
+
+  const DOCS_PAGES = [
+    'connect-a-connector', 'add-to-claude', 'images', 'google', 'clickup',
+    'slack', 'outline', 'peopleforce', 'hubspot', 'rest-api', 'troubleshooting',
+  ];
+
+  // Same caveat as /integrations above: publicDir resolves to src/public under
+  // tsx, so sendFile may 404. 200-or-404 proves the handler executed and — just
+  // as importantly — that the docs are NOT behind auth (no 302, no 401).
+  it('GET /docs is registered and public', async () => {
+    const res = await request(app).get('/docs');
+    assert.ok([200, 404].includes(res.status), `unexpected status ${res.status}`);
+  });
+
+  for (const page of DOCS_PAGES) {
+    it(`GET /docs/${page} is registered and public`, async () => {
+      const res = await request(app).get(`/docs/${page}`);
+      assert.ok([200, 404].includes(res.status), `unexpected status ${res.status}`);
+    });
+  }
+
+  // The three below do NOT depend on publicDir existing, so they assert exact
+  // statuses. With publicDir missing, 200-or-404 is true of any string — these
+  // are what actually pin the behaviour, in both test and production.
+
+  it('GET /docs/<unknown> returns 404, not the Express default handler', async () => {
+    const res = await request(app).get('/docs/no-such-page');
+    assert.equal(res.status, 404);
+  });
+
+  it('GET /docs/:page rejects path traversal', async () => {
+    // Express percent-decodes params, so this arrives as `../../package.json`
+    // and must be caught by the slug allowlist before path.join() sees it.
+    const res = await request(app).get('/docs/..%2F..%2Fpackage.json');
+    assert.equal(res.status, 404);
+    assert.doesNotMatch(res.text, /"dependencies"/, 'served a file outside public/docs');
+  });
+
+  it('GET /docs/:page rejects a dotted filename', async () => {
+    const res = await request(app).get('/docs/index.html.bak');
+    assert.equal(res.status, 404);
+  });
+
   // --- POST /api/disconnect without session ---
 
   it('POST /api/disconnect/:slug returns 401 without session', async () => {
@@ -212,6 +256,11 @@ describe('createWebApp routes', () => {
     const res = await request(app).get('/health');
     assert.equal(res.status, 200);
     assert.deepEqual(res.body, { status: 'ok' });
+  });
+
+  it('GET /docs is registered', async () => {
+    const res = await request(app).get('/docs');
+    assert.ok([200, 404].includes(res.status), `unexpected status ${res.status}`);
   });
 
   it('GET /api/config returns baseUrl and authMode', async () => {
