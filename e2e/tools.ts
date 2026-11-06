@@ -1,7 +1,7 @@
 // Inventory of the tools these checks can target, and what each one is allowed
 // to do.
 //
-// DOCS ONLY for now. The repo registers 352 tools across 16 servers (see
+// DOCS IN FULL, plus the most-used tools elsewhere (SERVICE_TOOLS). The repo registers 352 tools across 16 servers (see
 // docs/MCP_TOOLS.md, which is generated -- do not hand-maintain this count); this file
 // covers the 30 on the google-docs server as the proving ground. The `kind`
 // column is NOT hand-maintained guesswork -- it is read off each addTool's
@@ -76,6 +76,47 @@ export const DOCS_TOOLS: ToolEntry[] = [
   { name: 'importDocx', service: 'google-docs', kind: 'write', shapes: ['volume', 'zero'] },
   { name: 'batchUpdateDoc', service: 'google-docs', kind: 'write', shapes: ['volume', 'zero'] },
   { name: 'importToGoogleDoc', service: 'google-docs', kind: 'write', shapes: ['volume', 'zero'] },
+];
+
+/**
+ * Outside Docs, only the most-used tools per service so far -- picked from the
+ * Admin MCP's listToolUsage over 30 days (November 2026), not the whole surface.
+ * `kind` is still read off each tool's annotations. `shapes` is what was
+ * scaffolded: needle + zero for reads, zero for writes; volume waits on a rich
+ * tenant per service.
+ */
+export const SERVICE_TOOLS: ToolEntry[] = [
+  { name: 'listFolderContents', service: 'google-drive', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'getDocumentInfo', service: 'google-drive', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'getPresentation', service: 'google-slides', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'readSpreadsheet', service: 'google-sheets', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'getSpreadsheetInfo', service: 'google-sheets', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'writeSpreadsheet', service: 'google-sheets', kind: 'write', shapes: ['zero'] },
+  { name: 'searchEmails', service: 'google-gmail', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'readEmail', service: 'google-gmail', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'listEvents', service: 'google-calendar', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'getEvent', service: 'google-calendar', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'createEvent', service: 'google-calendar', kind: 'write', shapes: ['zero'] },
+  { name: 'searchMessages', service: 'slack', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'readChannelHistory', service: 'slack', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'readThreadReplies', service: 'slack', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'readChannelHistory', service: 'slack-bot', kind: 'read', shapes: ['needle', 'zero'] },
+  // users.list always includes the installer, so there is no empty state to seed.
+  { name: 'listUsers', service: 'slack-bot', kind: 'read', shapes: ['needle'] },
+  { name: 'getTask', service: 'clickup', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'filterTeamTasks', service: 'clickup', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'listTasks', service: 'clickup', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'listTimeEntries', service: 'redmine', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'getProject', service: 'redmine', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'getEmployee', service: 'peopleforce', kind: 'read', shapes: ['needle', 'zero'] },
+  // Only `page` and a `status` enum: no filter can match nothing.
+  { name: 'listEmployees', service: 'peopleforce', kind: 'read', shapes: ['needle'] },
+  { name: 'listLeaveRequests', service: 'peopleforce', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'searchDocuments', service: 'outline', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'getDocument', service: 'outline', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'searchCompanies', service: 'hubspot', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'getDeal', service: 'hubspot', kind: 'read', shapes: ['needle', 'zero'] },
+  { name: 'getCompanyDeals', service: 'hubspot', kind: 'read', shapes: ['needle', 'zero'] },
 ];
 
 export function toolsByKind(kind: ToolKind): ToolEntry[] {
