@@ -155,7 +155,7 @@ A fully configured run is **10 pass, 1 todo, 0 fail**. The todo is deliberate:
 `listGoogleDocs` does not report its scan extent yet, and that is a gap in the
 tool, not a regression — flip it to a real assertion in the commit that fixes it.
 
-Artifacts land in `.artifacts/local/direct-<account>/<tool>.<shape>/` as
+Artifacts land in `.artifacts/local/direct-<account>/<service>.<tool>.<shape>/` as
 `summary.json` + `response.txt`. Read `response.txt` before changing any
 assertion: a surprising answer is a finding, not a broken check.
 

@@ -72,6 +72,94 @@ Sandbox:
 |---|---|---|
 | `E2E_SANDBOX_FOLDER_ID` | Drive root | Optional. A folder keeps scratch docs out of the root and makes manual cleanup one click. |
 
+## Services beyond Docs
+
+Google Docs and Drive are the baseline every account connects (SETUP.md). The
+other services are seeded one tenant at a time, so their checks **skip** — with
+a reason naming what to set — until two things hold (`serviceEnv` in `env.ts`):
+
+1. the catalog slug is listed in `E2E_SERVICES` (comma-separated, or `all`),
+   e.g. `E2E_SERVICES=google-sheets,slack`. Matching is exact: `slack-bot` does
+   not enable `slack`.
+2. every fixture variable the check reads is set.
+
+The listing is a separate switch on purpose: a zero check with an impossible
+query reads no fixture variable, and without it would run, and fail, against an
+account that never connected the service. Once a service is listed, its zero
+checks need only the sandbox account to be connected to it.
+
+The tools covered are the most-used ones per service from the Admin MCP's
+`listToolUsage` (30 days, November 2026); `tools.ts` lists them. Each
+read has a `needle` (fixture) and a `zero` (sandbox) check; each write a `zero`.
+
+Fixture values. Every NEEDLE is a frozen marker string that appears nowhere else
+in that tenant — the same rule as `E2E_FIXTURE_DOC_NEEDLE`.
+
+| Variable | Must point at / contain |
+|---|---|
+| **google-drive** | |
+| `E2E_FIXTURE_DRIVE_FOLDER_ID` | the folder directly containing the fixture doc; fewer than 100 items |
+| **google-slides** | |
+| `E2E_FIXTURE_SLIDES_ID` | a deck with at least one slide |
+| `E2E_FIXTURE_SLIDES_NEEDLE` | in a text box on a slide, not in the deck title |
+| **google-sheets** | |
+| `E2E_FIXTURE_SHEET_ID` | the fixture spreadsheet |
+| `E2E_FIXTURE_SHEET_TITLE` | its exact title |
+| `E2E_FIXTURE_SHEET_TAB` | a tab whose name contains a space and no apostrophe, e.g. `Smoke Data` — the needle read quotes it |
+| `E2E_FIXTURE_SHEET_NEEDLE` | the plain-text value of A1 on that tab (not a number or date: it is read back formatted) |
+| **google-gmail** | |
+| `E2E_FIXTURE_GMAIL_MESSAGE_ID` | one frozen email (16 hex) |
+| `E2E_FIXTURE_GMAIL_NEEDLE` | in that email's subject **and** text body, matching exactly one message for `subject:"<needle>"` (a reply counts as a second); no `"`. The mailbox needs at least 2 messages in total |
+| **google-calendar** | |
+| `E2E_FIXTURE_CAL_EVENT_ID` | a timed (not all-day), non-recurring event |
+| `E2E_FIXTURE_CAL_NEEDLE` | in that event's summary |
+| `E2E_FIXTURE_CAL_EVENT_START` | the event's start, ISO 8601 with any offset |
+| `E2E_FIXTURE_CAL_ID` | optional, default `primary` — the calendar holding it |
+| `E2E_SANDBOX_CAL_ID` | optional, default `primary` — where createEvent writes |
+| **slack** (user token) | |
+| `E2E_FIXTURE_SLACK_CHANNEL_ID` | a frozen channel the fixture account's access rules allow — a denied channel fails reads and hides search matches |
+| `E2E_FIXTURE_SLACK_THREAD_TS` | a top-level message there with at least one reply |
+| `E2E_FIXTURE_SLACK_NEEDLE` | single line, in that message **and** a reply, findable by `search.messages` |
+| `E2E_SANDBOX_SLACK_CHANNEL_ID` | any channel the sandbox account's rules allow |
+| **slack-bot** | |
+| `E2E_FIXTURE_SLACKBOT_CHANNEL_ID` | a **public** channel the bot was invited to |
+| `E2E_FIXTURE_SLACKBOT_MESSAGE_TS` | a message there containing the bot needle |
+| `E2E_FIXTURE_SLACKBOT_NEEDLE` | single line, in that message |
+| `E2E_FIXTURE_SLACKBOT_USER_ID` | an active non-bot member on the first `users.list` page (200) |
+| `E2E_SANDBOX_SLACKBOT_CHANNEL_ID` | a public channel the sandbox bot is in |
+| **clickup** | |
+| `E2E_FIXTURE_CLICKUP_TASK_ID` | a frozen task |
+| `E2E_FIXTURE_CLICKUP_NEEDLE` | in that task's name |
+| `E2E_FIXTURE_CLICKUP_LIST_ID` | the task's **home** list (not via Tasks in Multiple Lists), under 100 tasks |
+| `E2E_FIXTURE_CLICKUP_WORKSPACE_ID` | the workspace holding that list |
+| `E2E_SANDBOX_CLICKUP_WORKSPACE_ID` | the sandbox workspace |
+| `E2E_SANDBOX_CLICKUP_EMPTY_LIST_ID` | a list that stays **permanently empty**, open and closed — no write check may use it |
+| **redmine** | must be a public https instance: `checkBaseUrl` refuses loopback, private IPs and http at connect |
+| `E2E_FIXTURE_REDMINE_PROJECT_ID` | numeric id or identifier; time tracking enabled, fixture account has `view_time_entries` |
+| `E2E_FIXTURE_REDMINE_NEEDLE` | in the project's name or description **and** in one time entry's comment |
+| `E2E_FIXTURE_REDMINE_TIME_ENTRY_ID` | that time entry |
+| `E2E_FIXTURE_REDMINE_TIME_ENTRY_DATE` | its `spent_on`, `YYYY-MM-DD` |
+| **peopleforce** | a designated test employee, never a real person |
+| `E2E_FIXTURE_PF_EMPLOYEE_ID` | active, on page 1 of listEmployees (a tenant of ≤50 active employees) |
+| `E2E_FIXTURE_PF_EMPLOYEE_NEEDLE` | that employee's work email, exactly as stored |
+| `E2E_FIXTURE_PF_LEAVE_REQUEST_ID` | an **approved** leave request of that employee, on page 1 of state=approved |
+| `E2E_FIXTURE_PF_LEAVE_NEEDLE` | that request's comment, exactly; not `-` (the formatter hides it) |
+| **outline** | |
+| `E2E_FIXTURE_OUTLINE_DOC_ID` | the published doc's UUID, not its URL slug |
+| `E2E_FIXTURE_OUTLINE_NEEDLE` | a **single token** in its body — Outline bolds each matched word, splitting a multi-word needle |
+| **hubspot** | |
+| `E2E_FIXTURE_HUBSPOT_COMPANY_ID` | the fixture company |
+| `E2E_FIXTURE_HUBSPOT_COMPANY_NEEDLE` | one alphanumeric token in its name |
+| `E2E_FIXTURE_HUBSPOT_COMPANY_DEAL_COUNT` | its exact deal count, 2–100 |
+| `E2E_FIXTURE_HUBSPOT_DEAL_ID` | one of those deals |
+| `E2E_FIXTURE_HUBSPOT_DEAL_NEEDLE` | a token in that deal's name |
+| `E2E_SANDBOX_HUBSPOT_EMPTY_COMPANY_ID` | a real company with no deals |
+
+**Not swept:** `sweepScratch` lists Google Docs only, so scratch spreadsheets
+(`setup/sheetsScratch.ts`), folders (`setup/driveScratch.ts`) and calendar events
+(`setup/calendarScratch.ts`) leaked by a run killed before teardown stay in the
+sandbox. They are self-dating, so extending the sweeper is mechanical.
+
 ## Why "empty account" is not the sandbox's contract
 
 It cannot be maintained. The first write makes it non-empty, and one failed
@@ -112,7 +200,7 @@ npm run sweep:sandbox
 SWEEP_DRY_RUN=1 npm run sweep:sandbox
 ```
 
-Artifacts land in `.artifacts/<sha|local>/direct-<account>/<tool>.<shape>/` —
+Artifacts land in `.artifacts/<sha|local>/direct-<account>/<service>.<tool>.<shape>/` —
 `summary.json` plus `response.txt`, the same two files `runbook.md`'s triage
 starts from. There is no screenshot or accessibility snapshot: there is no
 browser in this path.
@@ -251,6 +339,7 @@ Settings → Secrets and variables → Actions:
 | Secret | `E2E_FIXTURE_API_KEY`, `E2E_RICH_API_KEY`, `E2E_SANDBOX_API_KEY` |
 | Variable | `E2E_BASE_URL`, `E2E_FIXTURE_DOC_ID`, `E2E_FIXTURE_DOC_NEEDLE`, `E2E_FIXTURE_DOC_TITLE`, `E2E_RICH_DOC_ID` |
 | Variable (optional) | `E2E_RICH_DOC_MIN_CHARS`, `E2E_RICH_MIN_DOCS`, `E2E_SANDBOX_FOLDER_ID` |
+| Variable (per service) | `E2E_SERVICES`, plus that service's rows under "Services beyond Docs" — the workflow already forwards all of them |
 
 API keys are **secrets**, never variables: each one authenticates as that user to
 every MCP they have connected. The doc IDs and the needle are fine as variables —
