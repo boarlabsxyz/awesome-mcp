@@ -1,7 +1,7 @@
 // src/mcpAuthenticate.ts
 // Shared authenticate handler for all MCP servers.
 import http from 'http';
-import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession, createSlackBotSession, createSlackUserSession, createOutlineSession, createPeopleForceSession, createPeopleForceV4Session, createHubSpotSession, createRedmineSession, createBrowserbaseSession, createGitHubSession, createPineconeSession, createSupabaseSession, createAdminSession, createStorageSession } from './userSession.js';
+import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession, createSlackBotSession, createSlackUserSession, createOutlineSession, createPeopleForceSession, createPeopleForceV4Session, createHubSpotSession, createRedmineSession, createBrowserbaseSession, createGitHubSession, createPineconeSession, createSupabaseSession, createAdminSession, createStorageSession, createSandboxSession } from './userSession.js';
 import { loadUsers, getUserByApiKey, getUserById } from './userStore.js';
 import { loadClientCredentials } from './auth.js';
 import { getMcpConnection, getMcpConnectionByInstanceId } from './mcpConnectionStore.js';
@@ -33,6 +33,7 @@ export interface AuthDeps {
   createSupabaseSession: (user: any, conn: any) => UserSession;
   createAdminSession: (user: any) => UserSession;
   createStorageSession: (user: any, instanceId?: string) => UserSession;
+  createSandboxSession: (user: any, instanceId?: string) => UserSession;
 }
 
 /** Default dependencies wired to real implementations. */
@@ -60,7 +61,17 @@ const defaultDeps: AuthDeps = {
   createSupabaseSession,
   createAdminSession,
   createStorageSession,
+  createSandboxSession,
 };
+
+/**
+ * First-party connectors with no credential: what they reach belongs to
+ * whoever is calling, so resolveSession answers them from the caller alone.
+ */
+const PER_USER_MCPS = { storage: 'Storage', sandbox: 'Sandbox' } as const;
+type PerUserSlug = keyof typeof PER_USER_MCPS;
+const perUserSlug = (slug: unknown): PerUserSlug | null =>
+  typeof slug === 'string' && Object.hasOwn(PER_USER_MCPS, slug) ? (slug as PerUserSlug) : null;
 
 /** Create a session from a verified connection. */
 async function sessionFromConnection(user: any, connection: any, deps: AuthDeps): Promise<UserSession> {
@@ -70,10 +81,11 @@ async function sessionFromConnection(user: any, connection: any, deps: AuthDeps)
   if (connection.provider === 'admin' || connection.mcpSlug === 'admin') {
     throw new Response(null, { status: 400, statusText: 'This connection is for the Admin MCP only.' } as any);
   }
-  // Same for a Storage MCP instance id: the Storage MCP is answered first in
-  // resolveSession, so reaching here means the id was replayed elsewhere.
-  if (connection.provider === 'storage' || connection.mcpSlug === 'storage') {
-    throw new Response(null, { status: 400, statusText: 'This connection is for the Storage MCP only.' } as any);
+  // Same for a Storage or Sandbox MCP instance id: those MCPs are answered
+  // first in resolveSession, so reaching here means the id was replayed elsewhere.
+  const perUser = perUserSlug(connection.provider) ?? perUserSlug(connection.mcpSlug);
+  if (perUser) {
+    throw new Response(null, { status: 400, statusText: `This connection is for the ${PER_USER_MCPS[perUser]} MCP only.` } as any);
   }
   if (connection.provider === 'clickup') {
     return deps.createClickUpSession(user, connection);
@@ -131,20 +143,23 @@ async function resolveSession(user: any, mcpSlug: string, instanceId: string | u
     return deps.createAdminSession(user);
   }
 
-  // The Storage MCP has no credential: its data belongs to whoever is calling.
-  // Answered before the instanceId path, which skips ownership and would
-  // otherwise resolve a session from someone else's connection, and before the
-  // global-Google-token fallback, which would hand out a Google session.
-  if (mcpSlug === 'storage') {
-    // The id only labels the session for usage analytics; keep it only when
-    // it is the caller's own Storage connector, so a caller cannot file their
-    // calls under someone else's (or a nonexistent) instance.
+  // The Storage and Sandbox MCPs have no credential: their data and compute
+  // belong to whoever is calling. Answered before the instanceId path, which
+  // skips ownership and would otherwise resolve a session from someone else's
+  // connection, and before the global-Google-token fallback, which would hand
+  // out a Google session.
+  const perUser = perUserSlug(mcpSlug);
+  if (perUser) {
+    // The id only labels the session for usage analytics (and, on the Sandbox,
+    // the instance its REST bearers name); keep it only when it is the caller's
+    // own connector for this MCP, so a caller cannot file their calls under
+    // someone else's (or a nonexistent) instance.
     let ownInstanceId: string | undefined;
     if (instanceId) {
       const connection = await deps.getMcpConnectionByInstanceId(instanceId);
-      if (connection?.mcpSlug === 'storage' && String(connection.userId) === String(user.id)) ownInstanceId = instanceId;
+      if (connection?.mcpSlug === perUser && String(connection.userId) === String(user.id)) ownInstanceId = instanceId;
     }
-    return deps.createStorageSession(user, ownInstanceId);
+    return perUser === 'storage' ? deps.createStorageSession(user, ownInstanceId) : deps.createSandboxSession(user, ownInstanceId);
   }
 
   if (instanceId) {
