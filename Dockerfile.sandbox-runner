@@ -1,0 +1,22 @@
+# The sandbox runner service (src/sandbox/runner/): Python on Pyodide under
+# Deno, one worker process per user. Debian rather than Alpine like the main
+# image, because Deno ships only glibc builds. The service gets no
+# credentials (main.ts refuses to start with any), and runs as the
+# unprivileged `node` user, so the Deno permissions are not the only wall.
+FROM node:20-bookworm-slim
+WORKDIR /app
+RUN npm install -g deno@2.9.6
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+ENV SANDBOX_DENO_PATH=/usr/local/lib/node_modules/deno/deno
+# Bake the bundled Pyodide packages into node_modules/pyodide, read-only to
+# the workers (owned by root, and outside their write permission).
+RUN node dist/sandbox/runner/prefetch.js
+
+ENV NODE_ENV=production
+ENV PORT=8080
+USER node
+EXPOSE 8080
+CMD ["node", "dist/sandbox/runner/main.js"]

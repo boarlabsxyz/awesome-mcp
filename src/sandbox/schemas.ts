@@ -4,8 +4,8 @@
 import { z } from 'zod';
 
 export const runCodeSchema = z.object({
-  language: z.enum(['python', 'javascript', 'bash']).default('python')
-    .describe('python (default) and javascript keep their variables between calls; bash runs a shell command.'),
+  language: z.enum(['python', 'javascript']).default('python')
+    .describe('python (default) or javascript. Both keep their state between calls (JavaScript: on globalThis).'),
   code: z.string().min(1).max(200_000).describe('The code to run.'),
   timeoutSec: z.number().int().min(1).max(300).default(120)
     .describe('Stop the run after this many seconds (max 300; cut to what is left of your daily run time).'),
@@ -14,7 +14,7 @@ export const runCodeSchema = z.object({
 const path = z.string().min(1).max(1024);
 
 export const listFilesSchema = z.object({
-  path: path.default('/home/user').describe('Directory to list. Default /home/user, the working directory.'),
+  path: path.default('/home/user').describe('Directory to list, under /home/user (the default, and the working directory).'),
 });
 
 export const readFileSchema = z.object({

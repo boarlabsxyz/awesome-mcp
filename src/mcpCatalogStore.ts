@@ -937,12 +937,12 @@ export async function seedDefaultCatalogs(): Promise<void> {
     isActive: true,
   });
 
-  // The Sandbox MCP runs code on this platform's E2B key with per-user quotas:
+  // The Sandbox MCP runs code on this platform's own runner with per-user quotas:
   // no provider credential, connecting is one click (src/sandbox/connect.ts).
   await createMcpCatalog({
     slug: 'sandbox',
     name: 'Sandbox MCP',
-    description: 'A cloud sandbox where Claude runs Python, JavaScript or shell scripts against your connected services, and shows you only the result.',
+    description: 'A cloud sandbox where Claude runs Python or JavaScript against your connected services, and shows you only the result.',
     iconUrl: null,
     mcpUrl: normalizeUrl(process.env.SANDBOX_MCP_URL, '/sandbox'),
     provider: 'sandbox',

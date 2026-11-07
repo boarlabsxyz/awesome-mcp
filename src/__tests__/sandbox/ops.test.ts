@@ -10,8 +10,7 @@ import {
   opWriteFile,
   type SandboxOpsDeps,
 } from '../../sandbox/ops.js';
-import type { CreateOptions, RunOptions, RunOutcome, SandboxHandle, SandboxProvider } from '../../sandbox/provider.js';
-import { HELPER_PATH } from '../../sandbox/helper.js';
+import { SandboxRefusal, type CreateOptions, type RunOptions, type RunOutcome, type SandboxHandle, type SandboxProvider } from '../../sandbox/provider.js';
 import type { Kv } from '../../sandbox/state.js';
 
 /**
@@ -65,13 +64,25 @@ interface FakeSandbox {
   timeouts: number[];
   runs: Array<{ code: string; opts: RunOptions }>;
   reads: number[];
-  interrupted: string[];
 }
 
-/** A fake vendor. `run` decides what each runCode does. */
+/** A run's outcome: nothing printed, unless `over` says otherwise. */
+const outcome = (over: Partial<RunOutcome> = {}): RunOutcome => ({
+  stdout: '',
+  stderr: '',
+  results: [],
+  images: [],
+  imagesDropped: 0,
+  restarted: false,
+  ...over,
+  stdoutTotal: over.stdoutTotal ?? over.stdout?.length ?? 0,
+  stderrTotal: over.stderrTotal ?? over.stderr?.length ?? 0,
+});
+
+/** A fake engine. `run` decides what each runCode does. */
 function fakeProvider(
-  run: (code: string, opts: RunOptions) => Promise<RunOutcome> = async () => ({ results: [] }),
-  { interrupts = true, onCreate = () => {} }: { interrupts?: boolean; onCreate?: () => void } = {},
+  run: (code: string, opts: RunOptions) => Promise<RunOutcome> = async () => outcome(),
+  { onCreate = () => {} }: { onCreate?: () => void } = {},
 ) {
   const sandboxes = new Map<string, FakeSandbox>();
   const created: CreateOptions[] = [];
@@ -80,16 +91,15 @@ function fakeProvider(
   const handle = (s: FakeSandbox): SandboxHandle => ({
     id: s.id,
     async runCode(code, opts) { s.runs.push({ code, opts }); return run(code, opts); },
-    async interrupt(language) { s.interrupted.push(language); return interrupts; },
     async readFile(path, maxBytes) {
       const f = s.files.get(path);
-      if (!f) throw Object.assign(new Error('not found'), { name: 'FileNotFoundError' });
+      if (!f) throw Object.assign(new Error('not found'), { name: 'NotFoundError' });
       s.reads.push(maxBytes);
       return { bytes: f.subarray(0, maxBytes), size: f.length };
     },
     async writeFile(path, content) { s.files.set(path, new TextEncoder().encode(content)); },
     async listFiles(path) {
-      return [...s.files.keys()].filter((p) => p.startsWith(path)).map((p) => ({ name: p.split('/').pop()!, path: p, type: 'file', size: s.files.get(p)!.length }));
+      return [...s.files.keys()].filter((p) => p.startsWith(path)).map((p) => ({ name: p.split('/').pop()!, path: p, type: 'file' as const, size: s.files.get(p)!.length }));
     },
     async setTimeout(ms) { s.timeouts.push(ms); },
   });
@@ -97,7 +107,7 @@ function fakeProvider(
     async create(opts) {
       created.push(opts);
       onCreate();
-      const s: FakeSandbox = { id: `sbx${++n}`, alive: true, files: new Map(), timeouts: [], runs: [], reads: [], interrupted: [] };
+      const s: FakeSandbox = { id: `sbx${++n}`, alive: true, files: new Map(), timeouts: [], runs: [], reads: [] };
       sandboxes.set(s.id, s);
       return handle(s);
     },
@@ -111,8 +121,8 @@ function fakeProvider(
   return { provider, sandboxes, created, killed };
 }
 
-/** Deps over fakes. `provider` is a vendor (null: no E2B key), not the deps function. */
-function makeDeps(over: { kv?: ReturnType<typeof fakeKv>; provider?: SandboxProvider | null } = {}) {
+/** Deps over fakes. `provider` is an engine (null: no runner configured), not the deps function. */
+function makeDeps(over: { kv?: ReturnType<typeof fakeKv>; provider?: SandboxProvider | null; apiBase?: string } = {}) {
   const kv = over.kv ?? fakeKv();
   const vendor = fakeProvider();
   const provider = over.provider === undefined ? vendor.provider : over.provider;
@@ -123,7 +133,7 @@ function makeDeps(over: { kv?: ReturnType<typeof fakeKv>; provider?: SandboxProv
     kv: () => kv as unknown as Kv,
     mintToken: async (_uid, _inst, ttl) => { const token = `tok${tokens.minted.length + 1}`; tokens.minted.push(token); tokens.ttls.push(ttl); return { token }; },
     revokeToken: async (token) => { tokens.revoked.push(token); },
-    apiBase: () => 'https://awesome-mcp.xyz',
+    apiBase: () => over.apiBase ?? 'https://awesome-mcp.xyz',
     now: () => (t += 1500),
   };
   return { deps, kv, vendor, tokens };
@@ -144,20 +154,20 @@ afterEach(() => {
 describe('runCode', () => {
   it('says what is missing instead of failing obscurely', async () => {
     await rejects(opRunCode(undefined, undefined, run, makeDeps().deps), /signed-in user/);
-    await rejects(opRunCode(1, undefined, run, makeDeps({ provider: null }).deps), /E2B_API_KEY/);
+    await rejects(opRunCode(1, undefined, run, makeDeps({ provider: null }).deps), /SANDBOX_RUNNER_URL/);
     await rejects(opRunCode(1, undefined, run, { ...makeDeps().deps, kv: () => null }), /database\/Redis/);
   });
 
-  it('creates the user’s sandbox once, with the API helper and the egress allowlist, then reuses it', async () => {
-    const vendor = fakeProvider(async (_code, opts) => { opts.onStdout('hi\n'); return { results: [{ text: '2' }] }; });
+  it('creates the user’s sandbox once, with the network allowlist, then reuses it', async () => {
+    const vendor = fakeProvider(async () => outcome({ stdout: 'hi\n', results: ['2'] }));
     const { deps } = makeDeps({ provider: vendor.provider });
     const first = await opRunCode(7, 'inst1', run, deps);
     assert.equal(first.json.sandbox, 'new');
     assert.equal(first.json.stdout, 'hi\n');
     assert.deepEqual(first.json.results, ['2']);
-    assert.deepEqual(vendor.created[0].allowOut, ['awesome-mcp.xyz', 'pypi.org', 'files.pythonhosted.org', 'registry.npmjs.org']);
-    assert.equal(vendor.created[0].metadata.userId, '7');
-    assert.ok(vendor.sandboxes.get('sbx1')!.files.has(HELPER_PATH), 'helper written at creation');
+    assert.deepEqual(vendor.created[0].allowNet, ['awesome-mcp.xyz', 'pypi.org', 'files.pythonhosted.org']);
+    assert.equal(vendor.created[0].userId, 7);
+    assert.equal(vendor.sandboxes.get('sbx1')!.runs[0].opts.maxOutputChars, 20_000);
 
     const second = await opRunCode(7, 'inst1', run, deps);
     assert.equal(second.json.sandbox, 'reused');
@@ -171,13 +181,19 @@ describe('runCode', () => {
     vendor.sandboxes.get('sbx1')!.alive = false;
     const again = await opRunCode(7, undefined, run, deps);
     assert.equal(again.json.sandbox, 'replaced');
-    assert.match(String(again.json.note), /expired.*files and variables are gone/);
+    assert.match(String(again.json.note), /had stopped.*files and variables are gone/);
+  });
+
+  it('allows the API host with its port when BASE_URL names one', async () => {
+    const { deps, vendor } = makeDeps({ apiBase: 'http://localhost:8080' });
+    await opRunCode(7, undefined, run, deps);
+    assert.equal(vendor.created[0].allowNet[0], 'localhost:8080');
   });
 
   it('mints a bearer for the run, passes it in env, and revokes it after success and after failure', async () => {
     const vendor = fakeProvider(async (code) => {
       if (code === 'boom') throw new Error('kernel died');
-      return { results: [] };
+      return outcome();
     });
     const { deps, tokens } = makeDeps({ provider: vendor.provider });
     await opRunCode(7, 'inst1', run, deps);
@@ -204,27 +220,34 @@ describe('runCode', () => {
   });
 
   it('reports a timeout with the output printed so far, not as a failure', async () => {
-    const vendor = fakeProvider(async (_c, opts) => {
-      opts.onStdout('step 1\n');
-      throw Object.assign(new Error('timed out'), { name: 'TimeoutError' });
-    });
+    const vendor = fakeProvider(async () => outcome({ stdout: 'step 1\n', stopped: 'timeout' }));
     const { deps, tokens } = makeDeps({ provider: vendor.provider });
     const out = await opRunCode(7, undefined, run, deps);
-    assert.match(String(out.json.timedOut), /Stopped after 120 s/);
+    assert.match(String(out.json.timedOut), /Stopped after 120 s.*variables are gone, files are kept/);
     assert.equal(out.json.stdout, 'step 1\n');
     assert.deepEqual(tokens.revoked, ['tok1']);
-    // The timed-out request proves nothing, so the kernel is restarted to stop the code.
-    assert.deepEqual(vendor.sandboxes.get('sbx1')!.interrupted, ['python']);
-    assert.match(String((out.json.notes as string[]).at(-1)), /python kernel was restarted.*files are kept/);
+    assert.deepEqual(vendor.killed, [], 'the runner already stopped the interpreter; the sandbox and its files stay');
   });
 
-  it('stops the whole sandbox when the timed-out kernel cannot be restarted', async () => {
-    const vendor = fakeProvider(async () => { throw Object.assign(new Error('timed out'), { name: 'TimeoutError' }); }, { interrupts: false });
-    const { deps, kv } = makeDeps({ provider: vendor.provider });
-    const out = await opRunCode(7, undefined, run, deps);
-    assert.deepEqual(vendor.killed, ['sbx1']);
-    assert.equal(kv.data.get('sandbox:user:7'), undefined, 'the next call starts a new one');
-    assert.match(String((out.json.notes as string[]).at(-1)), /sandbox was stopped to end the run/);
+  it('says when the interpreter crashed, went over the disk limit, or was restarted', async () => {
+    const outcomes = [
+      outcome({ stopped: 'crashed', crashDetail: 'NotCapable: Deno.symlinkSync() requires unscoped --allow-read' }),
+      outcome({ stopped: 'disk' }),
+      outcome({ restarted: true }),
+    ];
+    const vendor = fakeProvider(async () => outcomes.shift()!);
+    const { deps } = makeDeps({ provider: vendor.provider });
+    const notes = async () => ((await opRunCode(7, undefined, run, deps)).json.notes as string[]).join(' ');
+    assert.match(await notes(), /crashed and was stopped \(NotCapable: Deno\.symlinkSync.*variables are gone; files are kept/);
+    assert.match(await notes(), /over its disk limit/);
+    assert.match(await notes(), /new Python\/JavaScript interpreter.*variables from earlier runs are gone/);
+  });
+
+  it('passes the engine’s refusals on as they are worded', async () => {
+    const busy = { ...fakeProvider().provider, create: async () => { throw new SandboxRefusal('The sandbox runner is at capacity'); } };
+    await rejects(opRunCode(7, undefined, run, makeDeps({ provider: busy }).deps), /^The sandbox runner is at capacity$/);
+    const full = fakeProvider(async () => { throw new SandboxRefusal('disk limit would be exceeded'); });
+    await rejects(opRunCode(7, undefined, run, makeDeps({ provider: full.provider }).deps), /^disk limit would be exceeded$/);
   });
 
   it('mints the bearer for the run timeout plus a margin, so a call near the end is not refused', async () => {
@@ -244,14 +267,14 @@ describe('runCode', () => {
   });
 
   it('caps the text results with one budget, not per result', async () => {
-    const vendor = fakeProvider(async () => ({ results: Array.from({ length: 5 }, () => ({ text: 'r'.repeat(10_000) })) }));
+    const vendor = fakeProvider(async () => outcome({ results: Array.from({ length: 5 }, () => 'r'.repeat(10_000)) }));
     const out = await opRunCode(7, undefined, run, makeDeps({ provider: vendor.provider }).deps);
     assert.equal((out.json.results as string[]).join('').length, 20_000);
     assert.equal((out.json.truncated as any).resultsTotalChars, 50_000);
   });
 
   it('caps output and says how much there was', async () => {
-    const vendor = fakeProvider(async (_c, opts) => { opts.onStdout('x'.repeat(50_000)); return { results: [] }; });
+    const vendor = fakeProvider(async () => outcome({ stdout: 'x'.repeat(20_000), stdoutTotal: 50_000 }));
     const out = await opRunCode(7, undefined, run, makeDeps({ provider: vendor.provider }).deps);
     assert.equal(String(out.json.stdout).length, 20_000);
     assert.equal((out.json.truncated as any).stdoutTotalChars, 50_000);
@@ -259,14 +282,15 @@ describe('runCode', () => {
 
   it('returns plot images (up to the cap) and the error with a capped traceback', async () => {
     const png = Buffer.from('fake-png').toString('base64');
-    const vendor = fakeProvider(async () => ({
-      results: [{ png }, { png }, { png }, { png }],
+    const vendor = fakeProvider(async () => outcome({
+      images: [png, png, png, png],
+      imagesDropped: 1, // one the runner already left out
       error: { name: 'ValueError', value: 'bad', traceback: 'T'.repeat(9000) },
     }));
     const out = await opRunCode(7, undefined, run, makeDeps({ provider: vendor.provider }).deps);
     assert.equal(out.images.length, 3);
     assert.equal(out.images[0].mimeType, 'image/png');
-    assert.match(String(out.json.imagesDropped), /^1 image/);
+    assert.match(String(out.json.imagesDropped), /^2 image/);
     assert.equal((out.json.error as any).name, 'ValueError');
     assert.ok((out.json.error as any).traceback.length < 6000);
   });
@@ -277,8 +301,8 @@ describe('runCode', () => {
     const running = new Promise<void>((r) => { started = r; });
     // Only the first run blocks until released; later ones finish at once.
     const vendor = fakeProvider(() => (release
-      ? Promise.resolve({ results: [] })
-      : new Promise((resolve) => { release = () => resolve({ results: [] }); started(); })));
+      ? Promise.resolve(outcome())
+      : new Promise((resolve) => { release = () => resolve(outcome()); started(); })));
     const { deps } = makeDeps({ provider: vendor.provider });
     const first = opRunCode(7, undefined, run, deps);
     await running;
@@ -295,7 +319,7 @@ describe('runCode', () => {
     let release!: () => void;
     let started!: () => void;
     const running = new Promise<void>((r) => { started = r; });
-    const vendor = fakeProvider(() => new Promise((resolve) => { release = () => resolve({ results: [] }); started(); }));
+    const vendor = fakeProvider(() => new Promise((resolve) => { release = () => resolve(outcome()); started(); }));
     const { deps, kv } = makeDeps({ provider: vendor.provider });
     const first = opRunCode(7, undefined, { ...run, timeoutSec: 300 }, deps);
     await running;
@@ -339,7 +363,7 @@ describe('runCode', () => {
 
   it('reserves the seconds before the run, so a Redis failure afterwards over-charges rather than losing them', async () => {
     const kv = fakeKv();
-    const vendor = fakeProvider(async () => { kv.down = true; return { results: [] }; });
+    const vendor = fakeProvider(async () => { kv.down = true; return outcome(); });
     const { deps } = makeDeps({ kv, provider: vendor.provider });
     const out = await opRunCode(7, undefined, run, deps);
     assert.equal(out.json.quota, 'unknown (usage store unreachable)');
@@ -355,9 +379,9 @@ describe('runCode', () => {
     assert.equal(tokens.minted.length, 0);
   });
 
-  it('passes a vendor failure through as itself, not as a Redis outage', async () => {
-    const provider = { ...fakeProvider().provider, create: async () => { throw new Error('E2B 500'); } };
-    await assert.rejects(opRunCode(7, undefined, run, makeDeps({ provider }).deps), /E2B 500/);
+  it('passes a runner failure through as itself, not as a Redis outage', async () => {
+    const provider = { ...fakeProvider().provider, create: async () => { throw new Error('The sandbox runner failed (500)'); } };
+    await assert.rejects(opRunCode(7, undefined, run, makeDeps({ provider }).deps), /runner failed \(500\)/);
   });
 });
 
@@ -381,7 +405,18 @@ describe('files, status and reset', () => {
     await rejects(opReadFile(7, { path: '/home/user/missing', maxChars: 5 }, deps), /No file at/);
   });
 
-  it('downloads only what maxChars can show of a large file', async () => {
+  it('lists at most 500 entries, with the total', async () => {
+    const { deps, vendor } = makeDeps();
+    await opWriteFile(7, { path: '/home/user/x', content: '' }, deps);
+    const files = vendor.sandboxes.get('sbx1')!.files;
+    for (let i = 0; i < 600; i++) files.set(`/home/user/f${i}`, new Uint8Array());
+    const listed = await opListFiles(7, { path: '/home/user' }, deps);
+    assert.equal((listed.json.entries as unknown[]).length, 500);
+    assert.equal(listed.json.count, 601);
+    assert.match(String(listed.json.truncated), /500 of 601/);
+  });
+
+  it('reads only what maxChars can show of a large file', async () => {
     const { deps, vendor } = makeDeps();
     await opWriteFile(7, { path: '/home/user/big.txt', content: 'é'.repeat(500_000) }, deps);
     const read = await opReadFile(7, { path: '/home/user/big.txt', maxChars: 3 }, deps);
