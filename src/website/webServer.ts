@@ -358,7 +358,7 @@ import { PINECONE_READ_ROUTES, PINECONE_WRITE_ROUTES, writeArgs as pineconeWrite
 import { HUBSPOT_WRITE_ROUTES, hubspotPassthroughStatus, writeArgs as hubspotWriteArgs } from '../hubspot/restRoutes.js';
 import { GMAIL_WRITE_ROUTES, gmailPassthroughStatus, writeArgs as gmailWriteArgs } from '../google-gmail/restRoutes.js';
 import { REDMINE_WRITE_ROUTES, writeArgs as redmineWriteArgs } from '../redmine/restRoutes.js';
-import { STORAGE_REST_ROUTES, storageErrorResponse } from '../storage/restRoutes.js';
+import { STORAGE_REST_ROUTES, storageErrorResponse, storageRequestProblem } from '../storage/restRoutes.js';
 import type { GitHubClient } from '../github/apiHelpers.js';
 import type { PineconeRulesState } from '../pinecone/accessRules.js';
 import type { PineconeRestContext } from '../pinecone/restOps.js';
@@ -10438,6 +10438,8 @@ function registerRestApiRoutes(app: express.Express): void {
   for (const route of STORAGE_REST_ROUTES) {
     app[route.method](route.path, requireStorageApiKey, async (req: ApiAuthenticatedRequest, res) => {
       try {
+        const problem = storageRequestProblem(route, req);
+        if (problem) { res.status(400).json({ error: problem }); return; }
         const parsed = route.schema.safeParse(route.args(req));
         if (!parsed.success) {
           if (route.method === 'get') { sendInvalidQuery(res, parsed.error.flatten()); return; }

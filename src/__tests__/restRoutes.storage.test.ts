@@ -153,6 +153,17 @@ describe('REST data plane: Storage handlers', () => {
     assert.equal(calls.length, 0);
   });
 
+  it('refuses an array body and an unknown ?by instead of dropping them', async () => {
+    const calls = fakePool([]);
+    const arr = await post('/api/v1/storage/collections/people/find', [{ field: 'followers', op: 'gte', value: 10 }]);
+    assert.equal(arr.status, 400, 'an unfiltered page would answer 200');
+    assert.match(arr.body.error, /JSON object, not an array/);
+    const by = await get('/api/v1/storage/collections/people/records/abc?by=keey');
+    assert.equal(by.status, 400, 'not a 404 for an id lookup');
+    assert.match(by.body.error, /by must be "id" or "key"/);
+    assert.equal(calls.length, 0);
+  });
+
   it('answers a schema mismatch as 400 with the per-record problem', async () => {
     fakePool([[SELECT_COLLECTION, [collectionRow]]]);
     const res = await post('/api/v1/storage/collections/people/records', { records: [{ ...ada, title: 'CTO' }] });
