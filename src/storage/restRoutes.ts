@@ -66,6 +66,20 @@ function recordRef(req: StorageRestRequest): { id: string } | { key: string } {
   return req.query.by === 'key' ? { key: value } : { id: value };
 }
 
+/**
+ * What the route's schema cannot see, or null. bodyOf turns an array body
+ * into {}, which /find would answer with an unfiltered page, and recordRef
+ * reads any `by` but `key` as an id, so `?by=keey` would look up an id.
+ */
+export function storageRequestProblem(route: StorageRestRoute, req: StorageRestRequest): string | null {
+  if (Array.isArray(req.body)) return 'The request body must be a JSON object, not an array.';
+  const by = req.query.by;
+  if (route.path.includes(':recordId') && by !== undefined && by !== 'id' && by !== 'key') {
+    return `by must be "id" or "key", not ${JSON.stringify(by)}.`;
+  }
+  return null;
+}
+
 const ok = (body: unknown) => ({ status: 200, body });
 
 export const STORAGE_REST_ROUTES: ReadonlyArray<StorageRestRoute> = [

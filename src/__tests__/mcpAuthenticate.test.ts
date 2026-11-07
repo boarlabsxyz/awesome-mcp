@@ -33,6 +33,7 @@ function makeDeps(overrides: Partial<AuthDeps> = {}): AuthDeps {
     createSupabaseSession: mock.fn(() => fakeSession),
     createAdminSession: mock.fn(() => fakeSession),
     createStorageSession: mock.fn(() => fakeSession),
+    createSandboxSession: mock.fn(() => fakeSession),
     ...overrides,
   };
 }
@@ -404,5 +405,33 @@ describe('Storage MCP (slug "storage")', () => {
       assert.equal(e.status, 400);
     }
     assert.equal((deps.createUserSessionFromConnection as any).mock.calls.length, 0);
+  });
+});
+
+// The Sandbox MCP runs on the platform's key with a per-user sandbox and
+// quota, so like Storage it is answered from the caller alone.
+describe('Sandbox MCP (slug "sandbox")', () => {
+  const sandboxConnection = { instanceId: 'sbx1', userId: 99, mcpSlug: 'sandbox', provider: 'sandbox', providerTokens: {} };
+
+  it('builds a sandbox session for the caller, keeping only their own instance id', async () => {
+    const own = makeDeps({ getMcpConnectionByInstanceId: mock.fn(async () => ({ ...sandboxConnection, userId: fakeUser.id })) });
+    await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.sbx1' }), 'sandbox', own);
+    const calls = (own.createSandboxSession as any).mock.calls;
+    assert.deepEqual([calls[0].arguments[0], calls[0].arguments[1]], [fakeUser, 'sbx1']);
+    assert.equal((own.createStorageSession as any).mock.calls.length, 0);
+
+    // A storage connector of the caller's own is not a sandbox connector.
+    const other = makeDeps({ getMcpConnectionByInstanceId: mock.fn(async () => ({ ...sandboxConnection, userId: fakeUser.id, mcpSlug: 'storage' })) });
+    await authenticateRequest(makeRequest({ authorization: 'Bearer validkey.sbx1' }), 'sandbox', other);
+    assert.equal((other.createSandboxSession as any).mock.calls[0].arguments[1], undefined);
+    assert.equal((other.createUserSession as any).mock.calls.length, 0);
+  });
+
+  it('refuses a sandbox instance id replayed against another server', async () => {
+    const deps = makeDeps({ getMcpConnectionByInstanceId: mock.fn(async () => sandboxConnection) });
+    await assert.rejects(
+      authenticateRequest(makeRequest({ authorization: 'Bearer validkey.sbx1' }), 'google-docs', deps),
+      (e: any) => e.status === 400 && /Sandbox MCP only/.test(e.statusText),
+    );
   });
 });

@@ -10,7 +10,6 @@ import * as crypto from 'node:crypto';
 import { isDatabaseAvailable, getRedis } from '../db.js';
 
 export const REST_TOKEN_TTL_SECONDS = 5 * 60;
-const REST_TOKEN_TTL_MS = REST_TOKEN_TTL_SECONDS * 1000;
 const REDIS_KEY_PREFIX = 'oauth:rest_token:';
 
 export interface RestTokenRecord {
@@ -52,7 +51,7 @@ function memorySweep(): void {
   }
 }
 
-function memoryMint(userId: number, instanceId?: string): MintedRestToken {
+function memoryMint(userId: number, instanceId: string | undefined, ttlSeconds: number): MintedRestToken {
   if (++mintsSinceLastSweep >= SWEEP_EVERY_MINTS) {
     mintsSinceLastSweep = 0;
     memorySweep();
@@ -63,9 +62,9 @@ function memoryMint(userId: number, instanceId?: string): MintedRestToken {
     userId,
     ...(instanceId ? { instanceId } : {}),
     createdAt: now,
-    expiresAt: now + REST_TOKEN_TTL_MS,
+    expiresAt: now + ttlSeconds * 1000,
   });
-  return { token, expiresAt: now + REST_TOKEN_TTL_MS, ttlSeconds: REST_TOKEN_TTL_SECONDS };
+  return { token, expiresAt: now + ttlSeconds * 1000, ttlSeconds };
 }
 
 function memoryLookup(token: string): RestTokenRecord | null {
@@ -84,7 +83,7 @@ function memoryRevoke(token: string): void {
 
 // ---------- Redis-backed storage ----------
 
-async function redisMint(userId: number, instanceId?: string): Promise<MintedRestToken> {
+async function redisMint(userId: number, instanceId: string | undefined, ttlSeconds: number): Promise<MintedRestToken> {
   const redis = getRedis();
   const token = generateToken();
   const now = Date.now();
@@ -92,10 +91,10 @@ async function redisMint(userId: number, instanceId?: string): Promise<MintedRes
     userId,
     ...(instanceId ? { instanceId } : {}),
     createdAt: now,
-    expiresAt: now + REST_TOKEN_TTL_MS,
+    expiresAt: now + ttlSeconds * 1000,
   };
-  await redis.setex(`${REDIS_KEY_PREFIX}${token}`, REST_TOKEN_TTL_SECONDS, JSON.stringify(rec));
-  return { token, expiresAt: rec.expiresAt, ttlSeconds: REST_TOKEN_TTL_SECONDS };
+  await redis.setex(`${REDIS_KEY_PREFIX}${token}`, ttlSeconds, JSON.stringify(rec));
+  return { token, expiresAt: rec.expiresAt, ttlSeconds };
 }
 
 async function redisLookup(token: string): Promise<RestTokenRecord | null> {
@@ -121,9 +120,13 @@ async function redisRevoke(token: string): Promise<void> {
 
 // ---------- Public API ----------
 
-export async function mintRestToken(userId: number, instanceId?: string): Promise<MintedRestToken> {
-  if (isDatabaseAvailable()) return redisMint(userId, instanceId);
-  return memoryMint(userId, instanceId);
+/**
+ * A new bearer. ttlSeconds defaults to the 5 minutes mintRestBearerForCurl
+ * promises; the sandbox passes its run timeout plus a margin instead.
+ */
+export async function mintRestToken(userId: number, instanceId?: string, ttlSeconds = REST_TOKEN_TTL_SECONDS): Promise<MintedRestToken> {
+  if (isDatabaseAvailable()) return redisMint(userId, instanceId, ttlSeconds);
+  return memoryMint(userId, instanceId, ttlSeconds);
 }
 
 /** The full record behind a bearer: who minted it and from which MCP instance. */

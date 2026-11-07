@@ -13,6 +13,7 @@ import { isAdminEmail } from '../auth/admin.js';
 import { listUsersWithConnections } from '../usage/adminUsers.js';
 import { connectAdminMcp } from '../admin-mcp/connect.js';
 import { connectStorageMcp } from '../storage/connect.js';
+import { connectSandboxMcp } from '../sandbox/connect.js';
 import { resourceServerMiddleware, createResourceServerMiddleware, stripTrustedIdentityHeaders } from '../auth/resourceServerMiddleware.js';
 import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
 import { validateJwt, validateOpaqueToken, hasScope } from '../auth/jwtValidator.js';
@@ -357,7 +358,7 @@ import { PINECONE_READ_ROUTES, PINECONE_WRITE_ROUTES, writeArgs as pineconeWrite
 import { HUBSPOT_WRITE_ROUTES, hubspotPassthroughStatus, writeArgs as hubspotWriteArgs } from '../hubspot/restRoutes.js';
 import { GMAIL_WRITE_ROUTES, gmailPassthroughStatus, writeArgs as gmailWriteArgs } from '../google-gmail/restRoutes.js';
 import { REDMINE_WRITE_ROUTES, writeArgs as redmineWriteArgs } from '../redmine/restRoutes.js';
-import { STORAGE_REST_ROUTES, storageErrorResponse } from '../storage/restRoutes.js';
+import { STORAGE_REST_ROUTES, storageErrorResponse, storageRequestProblem } from '../storage/restRoutes.js';
 import type { GitHubClient } from '../github/apiHelpers.js';
 import type { PineconeRulesState } from '../pinecone/accessRules.js';
 import type { PineconeRestContext } from '../pinecone/restOps.js';
@@ -407,6 +408,20 @@ const __dirname = path.dirname(__filename);
  * oversize body cannot be posted at anything else on the app.
  */
 const REST_LARGE_BODY_LIMIT = '5mb';
+
+/** One-click connects for the first-party connectors that collect no credential. */
+const PER_USER_CONNECTS = {
+  storage: {
+    connect: connectStorageMcp,
+    label: 'Storage MCP',
+    unavailable: 'Storage is unavailable: this server has no database connection.',
+  },
+  sandbox: {
+    connect: connectSandboxMcp,
+    label: 'Sandbox MCP',
+    unavailable: 'The sandbox is unavailable: this server has neither SANDBOX_MCP_URL nor E2B_API_KEY configured, or no database/Redis connection.',
+  },
+} as const;
 
 /**
  * Log sink for the provider helpers the REST plane reuses from the MCP servers
@@ -2048,16 +2063,17 @@ function registerSharedRoutes(app: express.Express): void {
         return;
       }
 
-      // Same for the Storage MCP: its data lives in our own database
-      // (src/storage/connect.ts), so there is nothing to consent to.
-      if (mcpSlug === 'storage') {
-        const result = await connectStorageMcp({ id: connectingUser.id });
+      // Same for the Storage MCP (its data lives in our own database) and the
+      // Sandbox MCP (it runs on our E2B key): there is nothing to consent to.
+      const perUserConnect = mcpSlug === 'storage' || mcpSlug === 'sandbox' ? PER_USER_CONNECTS[mcpSlug] : null;
+      if (perUserConnect) {
+        const result = await perUserConnect.connect({ id: connectingUser.id });
         if (result.outcome === 'unavailable') {
-          res.status(503).send('Storage is unavailable: this server has no database connection.');
+          res.status(503).send(perUserConnect.unavailable);
         } else if (result.outcome === 'exists') {
           res.redirect('/dashboard?already_exists=' + encodeURIComponent(result.instanceName));
         } else {
-          console.error(`User ${connectingUser.id} connected Storage MCP: ${result.instanceId}`);
+          console.error(`User ${connectingUser.id} connected ${perUserConnect.label}: ${result.instanceId}`);
           res.redirect('/dashboard?connected=' + encodeURIComponent(result.instanceName));
         }
         return;
@@ -4153,6 +4169,11 @@ function registerSharedRoutes(app: express.Express): void {
       'List my Supabase projects, then show the tables in the public schema of the production one',
       'Check the security advisors for my project and list any tables missing row level security',
       'Show the Postgres error logs from the last hour and tell me what is failing',
+    ],
+    'sandbox': [
+      'Pull every row of my "Leads" spreadsheet in a script, find the duplicates by email, and show me only the counts per domain',
+      'Load all records from my linkedin_people storage collection in Python and chart how many we have per company',
+      'Write a script that reads my last 200 ClickUp tasks over the API and tells me which assignee has the most overdue ones',
     ],
     'storage': [
       'Save the people we just researched into a "linkedin_people" collection keyed by profile URL, and mark records stale after 30 days',
@@ -10417,6 +10438,8 @@ function registerRestApiRoutes(app: express.Express): void {
   for (const route of STORAGE_REST_ROUTES) {
     app[route.method](route.path, requireStorageApiKey, async (req: ApiAuthenticatedRequest, res) => {
       try {
+        const problem = storageRequestProblem(route, req);
+        if (problem) { res.status(400).json({ error: problem }); return; }
         const parsed = route.schema.safeParse(route.args(req));
         if (!parsed.success) {
           if (route.method === 'get') { sendInvalidQuery(res, parsed.error.flatten()); return; }

@@ -27,10 +27,11 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Supabase](#supabase) (30)
 - [Admin (usage analytics)](#admin-usage-analytics-) (6)
 - [Storage](#storage) (10)
+- [Sandbox](#sandbox) (6)
 
 ## Shared (opt-in per server)
 
-Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 17 of 20 servers; not on PeopleForce v4, Supabase, Admin (usage analytics)).
+Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 17 of 21 servers; only listRestEndpoints on Sandbox; not on PeopleForce v4, Supabase, Admin (usage analytics)).
 
 | Tool | Description | REST |
 |---|---|---|
@@ -618,6 +619,19 @@ Source: `src/storage/server.ts` — 10 tools.
 | `deleteRecords` | Delete up to 500 records, by ids or by keys (keyField values): give one of the two, not both. Cannot be undone. Reports how many were deleted and which of the given ids or keys did not exist. | — |
 | `dropCollection` | Delete a collection with all its records and migration history. Cannot be undone. confirm must repeat the collection name exactly. | — |
 
+## Sandbox
+
+Source: `src/sandbox/server.ts` — 6 tools.
+
+| Tool | Description | REST |
+|---|---|---|
+| `runCode` | Run Python (default), JavaScript or a bash command in your own cloud sandbox and get stdout, stderr, errors and results (plots come back as images). Variables and files persist between calls while the sandbox is alive; it stops some idle minutes after the last runCode (file calls do not extend it; see sandboxStatus) and the next call starts a fresh one, which the response says. Keep anything worth keeping in the Storage MCP. Each run can call this platform's REST API as you: in Python, `from awesome import api` then `api('GET', '/api/v1/storage/collections')` or `api('POST', path, body)`; the token is in AWESOME_API_TOKEN and the base URL in AWESOME_API_BASE, valid only during the run. Use listRestEndpoints to see the routes for your connected services. Process data inside the script and print only a summary: output is capped at 20,000 characters each for stdout, stderr and results. The network reaches only this platform's API and the PyPI and npm registries (pip install works). Runs stop after timeoutSec (max 300, and no more than what is left of your daily run time); a run that times out has its kernel restarted, so its variables are lost but files are kept. | — |
+| `writeFile` | Write a text file (up to 1 MB) into your sandbox, e.g. a CSV you already have, for runCode to process. Starts the sandbox if none is running. For larger data, have a script fetch it over the REST API instead of passing it through this call. | — |
+| `listFiles` | List a directory in your running sandbox (default /home/user, the working directory): name, path, type and size of each entry. | — |
+| `readFile` | Read a file from your running sandbox. Text comes back capped at maxChars, and only that much is downloaded (the response gives the file size); PNG, JPEG, GIF and WebP images up to 1.5 MB come back as images. Other binary files are described, not returned: process them in runCode. | — |
+| `sandboxStatus` | Whether your sandbox is running and when it stops if left idle, plus today's usage against your daily limits (runs and seconds of run time, reset at midnight UTC). | — |
+| `resetSandbox` | Stop your sandbox now, discarding its files and variables. The next runCode starts a fresh one. Use it to clear a stuck state. | — |
+
 ---
 
-**Grand total: 443 tools across 21 sections.**
+**Grand total: 449 tools across 22 sections.**

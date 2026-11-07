@@ -474,6 +474,9 @@ export async function checkConnectionHealth(
       case 'storage':
         // No credential to expire: the data lives in this server's database.
         return { state: 'healthy' };
+      case 'sandbox':
+        // No user credential: runs use this platform's E2B key.
+        return { state: 'healthy' };
       default:
         return { state: 'unknown', reason: `No health probe implemented for provider "${provider}".` };
     }
