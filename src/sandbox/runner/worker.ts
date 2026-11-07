@@ -50,12 +50,19 @@ interface WorkerConfig {
 type Stream = 'stdout' | 'stderr';
 
 const config = JSON.parse(Deno.args[0]) as WorkerConfig;
+// Taken before any user code runs, so code that replaces the globals later
+// does not see or rewrite this worker's own messages. Hardening only: the
+// pool's watchdog, outside this process, is what bounds a misbehaving run.
 const encoder = new TextEncoder();
+const encode = encoder.encode.bind(encoder);
+const stringify = JSON.stringify;
+const parse = JSON.parse;
+const writeSync = Deno.stdout.writeSync.bind(Deno.stdout);
 
 function send(message: unknown): void {
-  const bytes = encoder.encode(JSON.stringify(message) + '\n');
+  const bytes = encode(stringify(message) + '\n');
   // A pipe may take less than all of it at once.
-  for (let off = 0; off < bytes.length;) off += Deno.stdout.writeSync(bytes.subarray(off));
+  for (let off = 0; off < bytes.length;) off += writeSync(bytes.subarray(off));
 }
 
 const { loadPyodide } = (await import(`file://${encodeURI(config.pyodideDir)}/pyodide.mjs`)) as {
@@ -79,16 +86,36 @@ if (config.mode === 'prefetch') {
 }
 
 // The run in progress: where output goes, and how much of it has been sent.
-let current: { id: number; maxChars: number; sent: Record<Stream, number>; total: Record<Stream, number> } | null = null;
+let current: { id: string; maxChars: number; sent: Record<Stream, number>; total: Record<Stream, number> } | null = null;
 
 function emit(stream: Stream, text: string): void {
   if (!current || !text) return;
+  const before = current.total[stream];
   current.total[stream] += text.length;
   const room = current.maxChars - current.sent[stream];
-  if (room <= 0) return;
-  const part = text.slice(0, room);
-  current.sent[stream] += part.length;
-  send({ id: current.id, type: 'out', stream, text: part });
+  if (room > 0) {
+    const part = text.slice(0, room);
+    current.sent[stream] += part.length;
+    send({ id: current.id, type: 'out', stream, text: part });
+  }
+  // Once, as the cap is passed: a run killed before `done` still shows its output was cut.
+  if (current.total[stream] > current.maxChars && before <= current.maxChars) {
+    send({ id: current.id, type: 'out', stream, text: '', more: true });
+  }
+}
+
+/** The results within one budget of max characters, and their full length. */
+function capResults(results: string[], max: number): { results: string[]; resultsTotal: number } {
+  const kept: string[] = [];
+  let used = 0;
+  let total = 0;
+  for (const r of results) {
+    total += r.length;
+    const part = r.slice(0, Math.max(0, max - used));
+    if (part) kept.push(part);
+    used += part.length;
+  }
+  return { results: kept, resultsTotal: total };
 }
 
 const decoders = { stdout: new TextDecoder(), stderr: new TextDecoder() };
@@ -113,7 +140,7 @@ _AWESOME = '''
 """Call this platform's REST API (/api/v1/...) as you, from code run by runCode.
 
 AWESOME_API_BASE and AWESOME_API_TOKEN are set for each run; the token is
-valid only while that run lasts.
+revoked when that run ends.
 """
 import json as _json
 import os as _os
@@ -234,7 +261,7 @@ async function runJs(code: string, envs: Record<string, string>) {
 }
 
 interface Request {
-  id: number;
+  id: string;
   language: 'python' | 'javascript';
   code: string;
   envs: Record<string, string>;
@@ -253,11 +280,11 @@ async function handle(req: Request): Promise<void> {
       emit('stderr', `A package this code imports could not be loaded (${(e as Error)?.message ?? e}). ` +
         `Bundled: ${config.packages.join(', ')}. Pure-Python packages install from PyPI: import micropip; await micropip.install('name')\n`);
     }
-    result = JSON.parse(await pythonRun(req.code, req.envs, config.maxImages, config.maxImageBytes));
+    result = parse(await pythonRun(req.code, req.envs, config.maxImages, config.maxImageBytes));
   }
   const { total } = current;
   current = null;
-  send({ id: req.id, type: 'done', ...result, stdoutTotal: total.stdout, stderrTotal: total.stderr });
+  send({ id: req.id, type: 'done', ...result, ...capResults(result.results, req.maxOutputChars), stdoutTotal: total.stdout, stderrTotal: total.stderr });
 }
 
 send({ type: 'ready' });
@@ -275,7 +302,7 @@ for (;;) {
     pending = pending.slice(nl + 1);
     let req: Request;
     try {
-      req = JSON.parse(line);
+      req = parse(line);
     } catch {
       continue;
     }

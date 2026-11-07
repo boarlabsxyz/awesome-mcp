@@ -24,7 +24,8 @@ export interface SandboxConnectDeps extends FirstPartyConnectDeps {
  * and need a runner configured here.
  */
 export function sandboxConfigured(env: NodeJS.ProcessEnv, databaseAvailable: boolean): boolean {
-  const runner = Boolean(env.SANDBOX_RUNNER_URL && env.SANDBOX_RUNNER_SECRET) || env.SANDBOX_RUNNER === 'local';
+  // As engine.ts decides: a runner URL wins, and needs its secret; only without one does local count.
+  const runner = env.SANDBOX_RUNNER_URL ? Boolean(env.SANDBOX_RUNNER_SECRET) : env.SANDBOX_RUNNER === 'local';
   return databaseAvailable && Boolean(env.SANDBOX_MCP_URL || runner);
 }
 

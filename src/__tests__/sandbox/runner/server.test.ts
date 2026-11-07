@@ -18,7 +18,7 @@ class EchoWorker implements WorkerLike {
   alive = true;
   async run(req: WorkerRunRequest) {
     if (req.code === 'full') throw Object.assign(new Error('The sandbox runner is at capacity'), { name: 'SandboxRefusal' });
-    return { stdout: `ran ${req.language}`, stderr: '', stdoutTotal: 6, stderrTotal: 0, results: [JSON.stringify(req.envs)], images: [], imagesDropped: 0 };
+    return { stdout: `ran ${req.language}`, stderr: '', stdoutTotal: 6, stderrTotal: 0, results: [JSON.stringify(req.envs)], resultsTotal: 0, images: [], imagesDropped: 0 };
   }
   kill() { this.alive = false; }
 }
@@ -31,7 +31,7 @@ before(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-http-'));
   const pool = new SandboxPool({
     denoPath: 'deno', workerScript: 'w.js', pyodideDir: '/p', packageDir: '/p', dataDir,
-    memoryMb: 256, maxWorkers: 2, maxDiskBytes: 1_000_000, maxFiles: 100, startTimeoutMs: 1000, diskCheckMs: 1000,
+    memoryMb: 256, maxWorkers: 2, maxDiskBytes: 1_000_000, maxFiles: 100, startTimeoutMs: 1000, maxRssBytes: 1e9, watchMs: 1000,
   }, async () => new EchoWorker());
   server = createRunnerApp(pool, SECRET).listen(0);
   await new Promise((r) => server.once('listening', r));
@@ -76,8 +76,10 @@ describe('runner HTTP API through its client', () => {
 
   it('refuses a wrong secret and a malformed body, but answers /health to anyone', async () => {
     await assert.rejects(runnerClient(base, 'wrong').create({ timeoutMs: 1000, allowNet: [], userId: 1 }), /failed \(401\).*does not match/);
-    const bad = await fetch(`${base}/sandboxes`, { method: 'POST', headers: { Authorization: `Bearer ${SECRET}`, 'Content-Type': 'application/json' }, body: '{"userId":"x"}' });
-    assert.equal(bad.status, 400);
+    const post = (body: string) => fetch(`${base}/sandboxes`, { method: 'POST', headers: { Authorization: `Bearer ${SECRET}`, 'Content-Type': 'application/json' }, body });
+    assert.equal((await post('{"userId":"x"}')).status, 400);
+    assert.equal((await post('{not json')).status, 400, 'unreadable JSON is the caller’s error, not a 500');
+    assert.equal((await post(JSON.stringify({ pad: 'x'.repeat(9 * 1024 * 1024) }))).status, 413);
     const health = await (await fetch(`${base}/health`)).json();
     assert.equal(health.ok, true);
     assert.equal(health.maxWorkers, 2);
@@ -94,7 +96,10 @@ describe('runner HTTP API through its client', () => {
 
 describe('runner startup and engine choice', () => {
   it('refuses to start while holding credentials, or without a long secret', () => {
-    assert.deepEqual(secretsInEnv({ DATABASE_URL: 'postgres://', REDIS_URL: 'redis://', GITHUB_TOKEN: 'x', SANDBOX_RUNNER_SECRET: SECRET, RAILWAY_TOKEN: 'r', PORT: '8080', EMPTY_SECRET: '' }), ['DATABASE_URL', 'REDIS_URL', 'GITHUB_TOKEN']);
+    assert.deepEqual(
+      secretsInEnv({ DATABASE_URL: 'postgres://', REDIS_URL: 'redis://', GITHUB_TOKEN: 'x', SANDBOX_RUNNER_SECRET: SECRET, RAILWAY_TOKEN: 'r', RAILWAY_PRIVATE_DOMAIN: 'runner.railway.internal', PORT: '8080', EMPTY_SECRET: '' }),
+      ['DATABASE_URL', 'REDIS_URL', 'GITHUB_TOKEN', 'RAILWAY_TOKEN'],
+    );
     assert.match(String(startupProblem({ SANDBOX_RUNNER_SECRET: SECRET, COOKIE_SECRET: 'c' })), /COOKIE_SECRET/);
     assert.match(String(startupProblem({ SANDBOX_RUNNER_SECRET: 'short' })), /at least 32/);
     assert.equal(startupProblem({ SANDBOX_RUNNER_SECRET: SECRET, PORT: '8080' }), null);

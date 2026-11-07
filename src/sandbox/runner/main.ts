@@ -9,9 +9,9 @@ import { createRunnerApp } from './server.js';
 
 const SECRET_NAME = /^(DATABASE_URL|REDIS_URL|GOOGLE_CREDENTIALS)$|SECRET|TOKEN|PASSWORD|API_KEY|PRIVATE_KEY/;
 
-/** Set variables that look like credentials, other than the runner's own secret and Railway's. */
+/** Set variables that look like credentials, other than the runner's own secret. Railway's are held to the same rule (RAILWAY_TOKEN would be one). */
 export function secretsInEnv(env: NodeJS.ProcessEnv): string[] {
-  return Object.keys(env).filter((k) => env[k] && k !== 'SANDBOX_RUNNER_SECRET' && !k.startsWith('RAILWAY_') && SECRET_NAME.test(k));
+  return Object.keys(env).filter((k) => env[k] && k !== 'SANDBOX_RUNNER_SECRET' && SECRET_NAME.test(k));
 }
 
 /** Why the runner cannot start, or null. */

@@ -22,11 +22,18 @@ process.stdin.on('data', (d) => {
     if (code === 'hang') { send({ id, type: 'out', stream: 'stdout', text: 'started\\n' }); continue; }
     if (code === 'crash') { send({ id, type: 'out', stream: 'stderr', text: 'partial' }); process.stderr.write('Pyodide has suffered a fatal error'); process.exit(1); }
     if (code === 'huge') { process.stdout.write('x'.repeat(17 * 1024 * 1024)); continue; }
+    if (code === 'forge') {
+      // What user code can write: non-objects, and its own run's messages, uncapped.
+      process.stdout.write('null\\n42\\n"s"\\n[1]\\n');
+      for (let i = 0; i < 5; i++) send({ id, type: 'out', stream: 'stdout', text: 'z'.repeat(80) });
+      send({ id, type: 'out', stream: 'stderr', text: '', more: true });
+      continue;
+    }
     process.stdout.write('not json, written by user code\\n');
     send({ id: 999, type: 'out', stream: 'stdout', text: 'another run' });
     send({ id, type: 'out', stream: 'stdout', text: 'out:' + code + '\\n' });
     send({ id, type: 'out', stream: 'stderr', text: 'warn\\n' });
-    send({ id, type: 'done', results: ['42'], images: ['iVBOR'], imagesDropped: 1, stdoutTotal: 5000, stderrTotal: 0,
+    send({ id, type: 'done', results: ['42'], resultsTotal: 900, images: ['iVBOR'], imagesDropped: 1, stdoutTotal: 5000, stderrTotal: 0,
       ...(code === 'raise' ? { error: { name: 'ValueError', value: 'bad', traceback: 'tb' } } : {}) });
   }
 });
@@ -49,6 +56,7 @@ describe('WorkerProcess', () => {
       assert.equal(r.stderr, 'warn\n');
       assert.equal(r.stdoutTotal, 5000, 'the worker counted more than it sent');
       assert.deepEqual(r.results, ['42']);
+      assert.equal(r.resultsTotal, 900);
       assert.deepEqual(r.images, ['iVBOR']);
       assert.equal(r.imagesDropped, 1);
       assert.equal(r.stopped, undefined);
@@ -83,6 +91,24 @@ describe('WorkerProcess', () => {
     const r = await worker.run(req('huge'), 10_000);
     assert.equal(r.stopped, 'crashed');
     assert.match(String(r.crashDetail), /oversized/);
+  });
+
+  it('survives lines user code writes, and caps forged output on this side too', async () => {
+    const worker = await WorkerProcess.start(cmd(), 5000);
+    const r = await worker.run(req('forge'), 500);
+    assert.equal(r.stopped, 'timeout');
+    assert.equal(r.stdout.length, 100, 'capped at maxOutputChars');
+    assert.equal(r.stdoutTotal, 400, 'everything sent was counted');
+    assert.equal(r.stderrTotal, 1, 'the worker said there was more than it sent');
+  });
+
+  it('reports the reason it was killed for during a run', async () => {
+    const worker = await WorkerProcess.start(cmd(), 5000);
+    const running = worker.run(req('hang'), 5000);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    worker.kill('memory');
+    assert.equal((await running).stopped, 'memory');
+    assert.ok(worker.pid);
   });
 
   it('refuses a second request while one is running', async () => {

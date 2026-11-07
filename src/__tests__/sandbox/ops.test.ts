@@ -77,6 +77,7 @@ const outcome = (over: Partial<RunOutcome> = {}): RunOutcome => ({
   ...over,
   stdoutTotal: over.stdoutTotal ?? over.stdout?.length ?? 0,
   stderrTotal: over.stderrTotal ?? over.stderr?.length ?? 0,
+  resultsTotal: over.resultsTotal ?? (over.results ?? []).join('').length,
 });
 
 /** A fake engine. `run` decides what each runCode does. */
@@ -233,14 +234,18 @@ describe('runCode', () => {
     const outcomes = [
       outcome({ stopped: 'crashed', crashDetail: 'NotCapable: Deno.symlinkSync() requires unscoped --allow-read' }),
       outcome({ stopped: 'disk' }),
+      outcome({ stopped: 'memory' }),
       outcome({ restarted: true }),
+      outcome({ restarted: true, previousStop: 'background' }),
     ];
     const vendor = fakeProvider(async () => outcomes.shift()!);
     const { deps } = makeDeps({ provider: vendor.provider });
     const notes = async () => ((await opRunCode(7, undefined, run, deps)).json.notes as string[]).join(' ');
     assert.match(await notes(), /crashed and was stopped \(NotCapable: Deno\.symlinkSync.*variables are gone; files are kept/);
     assert.match(await notes(), /over its disk limit/);
-    assert.match(await notes(), /new Python\/JavaScript interpreter.*variables from earlier runs are gone/);
+    assert.match(await notes(), /more memory than a sandbox may/);
+    assert.match(await notes(), /new Python\/JavaScript interpreter \(the previous one had been stopped\).*variables from earlier runs are gone/);
+    assert.match(await notes(), /code left running after a run kept using CPU/);
   });
 
   it('passes the engine’s refusals on as they are worded', async () => {
@@ -250,10 +255,10 @@ describe('runCode', () => {
     await rejects(opRunCode(7, undefined, run, makeDeps({ provider: full.provider }).deps), /^disk limit would be exceeded$/);
   });
 
-  it('mints the bearer for the run timeout plus a margin, so a call near the end is not refused', async () => {
+  it('mints the bearer for the run timeout, a cold start and a margin, so a call near the end is not refused', async () => {
     const { deps, tokens } = makeDeps();
     await opRunCode(7, undefined, { ...run, timeoutSec: 300 }, deps);
-    assert.deepEqual(tokens.ttls, [330]);
+    assert.deepEqual(tokens.ttls, [390]);
   });
 
   it('stops the sandbox when the bearer cannot be revoked, after retrying', async () => {
@@ -271,6 +276,10 @@ describe('runCode', () => {
     const out = await opRunCode(7, undefined, run, makeDeps({ provider: vendor.provider }).deps);
     assert.equal((out.json.results as string[]).join('').length, 20_000);
     assert.equal((out.json.truncated as any).resultsTotalChars, 50_000);
+    // The runner already cut them, and says how long they were.
+    const cut = fakeProvider(async () => outcome({ results: ['r'.repeat(20_000)], resultsTotal: 900_000 }));
+    const again = await opRunCode(7, undefined, run, makeDeps({ provider: cut.provider }).deps);
+    assert.equal((again.json.truncated as any).resultsTotalChars, 900_000);
   });
 
   it('caps output and says how much there was', async () => {

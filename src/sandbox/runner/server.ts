@@ -48,7 +48,8 @@ export function createRunnerApp(provider: SandboxProvider & { stats?: () => obje
     }
     next();
   });
-  app.use(express.json({ limit: '2mb' }));
+  // A schema-valid write is up to 1,000,000 characters, each up to 6 bytes once JSON-escaped (\u0000).
+  app.use(express.json({ limit: '8mb' }));
 
   /** The sandbox the path names; a stopped one is a 404 the client turns into "gone". */
   const sandbox = async (req: Request): Promise<SandboxHandle> => {
@@ -105,7 +106,10 @@ export function createRunnerApp(provider: SandboxProvider & { stats?: () => obje
   // Express 5 routes rejected promises here.
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     const e = err as { name?: string; message?: string; issues?: unknown };
+    const status = (err as { status?: number })?.status;
     if (err instanceof z.ZodError) res.status(400).json({ error: `Bad request to the sandbox runner: ${err.message}` });
+    // The body parser's own errors carry their status: 400 unreadable JSON, 413 too large.
+    else if (typeof status === 'number' && status >= 400 && status < 500) res.status(status).json({ error: `Bad request to the sandbox runner: ${e.message}` });
     else if (e?.name === 'NotFoundError') res.status(404).json({ error: e.message });
     else if (e?.name === 'SandboxRefusal') res.status(409).json({ error: e.message });
     else res.status(500).json({ error: e?.message ?? String(err) });

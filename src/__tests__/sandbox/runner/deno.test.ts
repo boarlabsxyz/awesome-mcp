@@ -15,7 +15,17 @@ import type { RunOptions, SandboxHandle } from '../../../sandbox/provider.js';
 
 const config = poolConfigFromEnv(process.env);
 const hasDeno = spawnSync(config.denoPath, ['--version']).status === 0;
-const hasWheels = hasDeno && fs.readdirSync(config.packageDir).some((f) => f.startsWith('numpy-'));
+function wheelsPresent(): boolean {
+  try {
+    return fs.readdirSync(config.packageDir).some((f) => f.startsWith('numpy-'));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw err;
+  }
+}
+const hasWheels = hasDeno && wheelsPresent();
+// The watchdog reads CPU and memory from /proc.
+const linuxOnly = process.platform === 'linux' ? false : 'the watchdog measures CPU and memory through /proc (Linux)';
 const skip = !hasDeno ? 'Deno is not installed (set SANDBOX_DENO_PATH)' : !hasWheels ? 'no prefetched wheels (npm run sandbox:prefetch)' : false;
 // CI's sandbox job sets this, so a broken install fails instead of passing as skipped.
 if (skip && process.env.SANDBOX_REQUIRE_DENO) throw new Error(`The Deno sandbox suite cannot run: ${skip}.`);
@@ -27,6 +37,7 @@ let otherUrl = '';
 let pool: SandboxPool;
 let dataDir = '';
 const seen: string[] = [];
+const created: string[] = [];
 
 async function listen(handler: http.RequestListener): Promise<[http.Server, number]> {
   const server = http.createServer(handler).listen(0, '127.0.0.1');
@@ -48,16 +59,23 @@ before(async () => {
   otherUrl = `http://127.0.0.1:${otherPort}/`;
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deno-sandbox-'));
   process.env.SANDBOX_SENTINEL = 'leak-me';
-  pool = new SandboxPool({ ...config, dataDir, memoryMb: 256, maxWorkers: 3 });
+  // The production default: every bundled package must load within it.
+  pool = new SandboxPool({ ...config, dataDir, memoryMb: 1024, maxRssBytes: 2560 * 1024 * 1024, maxWorkers: 3 });
 });
-after(() => {
+after(async () => {
+  // Stop every worker, or their processes keep the test run alive until the idle timers fire.
+  for (const id of created) await pool.kill(id).catch(() => {});
   delete process.env.SANDBOX_SENTINEL;
   api?.close();
   other?.close();
   if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
-const sandbox = () => pool.create({ timeoutMs: 120_000, allowNet: [apiHost], userId: 1 });
+async function sandbox(): Promise<SandboxHandle> {
+  const h = await pool.create({ timeoutMs: 120_000, allowNet: [apiHost], userId: 1 });
+  created.push(h.id);
+  return h;
+}
 const opts = (over: Partial<RunOptions> = {}): RunOptions => ({
   language: 'python',
   envs: { AWESOME_API_BASE: `http://${apiHost}`, AWESOME_API_TOKEN: 'run-token' },
@@ -161,7 +179,7 @@ describe('Deno sandbox: running code', { skip, timeout: 180_000 }, () => {
 
   it('caps Python memory with a MemoryError, and the interpreter survives it', async () => {
     const h = await sandbox();
-    const r = await py(h, 'b = bytearray(400 * 1024**2)');
+    const r = await py(h, 'b = bytearray(1200 * 1024**2)');
     assert.equal(r.error?.name, 'MemoryError');
     assert.deepEqual((await py(h, '1 + 1')).results, ['2']);
   });
@@ -176,11 +194,41 @@ describe('Deno sandbox: running code', { skip, timeout: 180_000 }, () => {
     assert.deepEqual(next.results, ["(False, 'ok')"]);
   });
 
+  it('loads every bundled package from the baked-in wheels, with no CDN to fall back on', async () => {
+    const h = await sandbox();
+    const r = await py(h, 'import micropip, numpy, pandas, matplotlib, scipy, sklearn, pyarrow, duckdb, requests, bs4, lxml, yaml, xlrd, regex, PIL\n"loaded"', { timeoutMs: 120_000 });
+    assert.equal(r.error, undefined, r.error?.traceback);
+    assert.deepEqual(r.results, ["'loaded'"]);
+  });
+
+  it('resolves JavaScript’s relative paths in /home/user, where Python sees the same files', async () => {
+    const h = await sandbox();
+    const w = await js(h, 'await Deno.writeTextFile("from-js.txt", "hi"); return "ok"');
+    assert.equal(w.error, undefined, w.error?.value);
+    assert.deepEqual((await py(h, 'open("/home/user/from-js.txt").read()')).results, ["'hi'"]);
+  });
+
   it('returns open matplotlib figures as PNGs', async () => {
     const h = await sandbox();
     const r = await py(h, 'import matplotlib.pyplot as plt\nplt.plot([1, 3, 2])\nplt.title("t")\nNone');
     assert.equal(r.images.length, 1);
     assert.equal(Buffer.from(r.images[0], 'base64').subarray(1, 4).toString(), 'PNG');
     assert.equal(r.stderr, '', 'no warnings leak from rendering');
+  });
+});
+
+describe('Deno sandbox: the watchdog', { skip: skip || linuxOnly, timeout: 120_000 }, () => {
+  it('stops code left running after its run returned', async () => {
+    const h = await sandbox();
+    await js(h, 'setInterval(() => { const end = Date.now() + 200; while (Date.now() < end); }, 0); return "returned"');
+    await new Promise((r) => setTimeout(r, 4000));
+    const next = await js(h, 'return 1');
+    assert.equal(next.previousStop, 'background');
+  });
+
+  it('stops a worker whose WebAssembly memories add up past the limit', async () => {
+    const h = await sandbox();
+    const r = await js(h, 'const all = []; for (;;) { const m = new WebAssembly.Memory({ initial: 4096 }); new Uint8Array(m.buffer).fill(1); all.push(m); await new Promise((r) => setTimeout(r, 10)); }');
+    assert.equal(r.stopped, 'memory');
   });
 });

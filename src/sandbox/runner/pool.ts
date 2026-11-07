@@ -40,6 +40,8 @@ const JS_HEAP_MB = 512;
 const PAGES_PER_MB = 16;
 /** An idle timer that fires mid-run waits this long and checks again. */
 const BUSY_RETRY_MS = 30_000;
+/** Between runs a worker should be idle; past this share of one core it is running code left behind, and is stopped. */
+const IDLE_CPU_SHARE = 0.5;
 
 export interface PoolConfig {
   denoPath: string;
@@ -58,8 +60,14 @@ export interface PoolConfig {
   maxDiskBytes: number;
   maxFiles: number;
   startTimeoutMs: number;
-  /** How often a running session's directory is measured against the disk limits. */
-  diskCheckMs: number;
+  /**
+   * The resident memory a worker may use: WebAssembly (memoryMb, per memory),
+   * the JavaScript heap and Pyodide itself. A process-wide bound, since code
+   * can allocate several WebAssembly memories or large ArrayBuffers.
+   */
+  maxRssBytes: number;
+  /** How often the watchdog measures each live worker (disk, memory, idle CPU). */
+  watchMs: number;
 }
 
 function envInt(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
@@ -90,11 +98,13 @@ export function poolConfigFromEnv(env: NodeJS.ProcessEnv): PoolConfig {
     maxDiskBytes: envInt(env, 'SANDBOX_MAX_DISK_MB', 500) * 1024 * 1024,
     maxFiles: envInt(env, 'SANDBOX_MAX_FILES', 10_000),
     startTimeoutMs: 60_000,
-    diskCheckMs: 2000,
+    maxRssBytes: envInt(env, 'SANDBOX_MAX_RSS_MB', envInt(env, 'SANDBOX_MEMORY_MB', 1024) + 1024) * 1024 * 1024,
+    watchMs: 1000,
   };
 }
 
-const NET_ENTRY = /^[a-z0-9.-]+(:\d{1,5})?$/i;
+/** hostname or IPv4, or a bracketed IPv6 address, each with an optional port. */
+const NET_ENTRY = /^([a-z0-9.-]+|\[[0-9a-f:.]+\])(:\d{1,5})?$/i;
 
 /**
  * The Deno command for one session's worker. The permissions are the
@@ -131,6 +141,7 @@ export function workerCommand(config: PoolConfig, homeDir: string, allowNet: str
     ],
     // Deno's own cache only; the code inside cannot read it (no permission).
     env: { DENO_DIR: path.join(config.dataDir, '.deno'), DENO_NO_UPDATE_CHECK: '1', NO_COLOR: '1' },
+    cwd: homeDir,
   };
 }
 
@@ -169,27 +180,79 @@ export interface DirUsage {
   entries: number;
 }
 
-/** Bytes and entries under dir, without following links; stops counting past maxEntries. */
+/** A directory the user's code made unreadable (chmod 000) is made readable again: it is ours to measure and remove. */
+async function openDir(dir: string): Promise<fs.Dir | null> {
+  try {
+    return await fsp.opendir(dir);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'EACCES' && code !== 'EPERM') return null; // removed while counting
+    await fsp.chmod(dir, 0o700).catch(() => {});
+    return fsp.opendir(dir).catch(() => null);
+  }
+}
+
+/**
+ * Bytes and entries under dir, without following links. Stops as soon as the
+ * count passes maxEntries, reading entries one at a time, so a directory of a
+ * million files costs no more than the limit.
+ */
 export async function dirUsage(dir: string, maxEntries: number): Promise<DirUsage> {
   const usage = { bytes: 0, entries: 0 };
   const stack = [dir];
-  while (stack.length && usage.entries <= maxEntries) {
-    const current = stack.pop()!;
-    let entries: fs.Dirent[];
+  while (stack.length) {
+    const handle = await openDir(stack.pop()!);
+    if (!handle) continue;
     try {
-      entries = await fsp.readdir(current, { withFileTypes: true });
+      for await (const entry of handle) {
+        if (++usage.entries > maxEntries) return usage;
+        const full = path.join(handle.path, entry.name);
+        if (entry.isDirectory()) stack.push(full);
+        else usage.bytes += await fsp.lstat(full).then((st) => st.size, () => 0);
+      }
     } catch {
-      continue; // removed while counting
-    }
-    for (const entry of entries) {
-      usage.entries++;
-      const full = path.join(current, entry.name);
-      if (entry.isDirectory()) stack.push(full);
-      else usage.bytes += await fsp.lstat(full).then((s) => s.size, () => 0);
+      // removed while counting
     }
   }
   return usage;
 }
+
+/** Removes a session directory, restoring permissions the user's code took away if the first try fails. */
+async function removeTree(dir: string): Promise<void> {
+  try {
+    await fsp.rm(dir, { recursive: true, force: true });
+    return;
+  } catch {
+    // fall through: something inside is not writable
+  }
+  const stack = [dir];
+  while (stack.length) {
+    const current = stack.pop()!;
+    await fsp.chmod(current, 0o700).catch(() => {});
+    const entries = await fsp.readdir(current, { withFileTypes: true }).catch(() => []);
+    for (const e of entries) if (e.isDirectory()) stack.push(path.join(current, e.name));
+  }
+  await fsp.rm(dir, { recursive: true, force: true });
+}
+
+/** CPU seconds and resident bytes of a process, or null where /proc is missing (macOS: the watchdog then measures disk only). */
+export async function procStats(pid: number): Promise<{ cpuSec: number; rssBytes: number } | null> {
+  try {
+    const [stat, status] = await Promise.all([
+      fsp.readFile(`/proc/${pid}/stat`, 'utf8'),
+      fsp.readFile(`/proc/${pid}/status`, 'utf8'),
+    ]);
+    // Fields after the parenthesised command name; utime and stime are the 12th and 13th, in clock ticks (100 Hz on Linux).
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    const ticks = Number(fields[11]) + Number(fields[12]);
+    const rssKb = Number(/VmRSS:\s+(\d+)/.exec(status)?.[1] ?? 0);
+    return { cpuSec: ticks / 100, rssBytes: rssKb * 1024 };
+  } catch {
+    return null;
+  }
+}
+
+export type ProcStats = typeof procStats;
 
 function notFoundOr(err: unknown, sandboxPath: string, what: string): never {
   if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') throw new SandboxNotFound(`No ${what} at ${sandboxPath}.`);
@@ -205,10 +268,19 @@ interface Session {
   worker: WorkerLike | null;
   /** A worker has run for this session before, so a new one means lost variables. */
   hadWorker: boolean;
+  /** Why the watchdog stopped the last worker between runs, for the next run to say. */
+  previousStop?: PreviousStop;
   busy: boolean;
+  destroyed: boolean;
   lastUsed: number;
   endsAt: number;
   timer?: NodeJS.Timeout;
+}
+
+type PreviousStop = NonNullable<RunOutcome['previousStop']>;
+interface Baseline {
+  cpuSec: number;
+  at: number;
 }
 
 export type StartWorker = (cmd: WorkerCommand, startTimeoutMs: number) => Promise<WorkerLike>;
@@ -223,6 +295,7 @@ export class SandboxPool implements SandboxProvider {
   constructor(
     private readonly config: PoolConfig,
     private readonly startWorker: StartWorker = (cmd, ms) => WorkerProcess.start(cmd, ms),
+    private readonly measure: ProcStats = procStats,
   ) {}
 
   /**
@@ -235,7 +308,7 @@ export class SandboxPool implements SandboxProvider {
       await fsp.mkdir(this.config.dataDir, { recursive: true });
       const real = await fsp.realpath(this.config.dataDir);
       for (const name of await fsp.readdir(real)) {
-        if (SESSION_ID.test(name) && !this.sessions.has(name)) await fsp.rm(path.join(real, name), { recursive: true, force: true });
+        if (SESSION_ID.test(name) && !this.sessions.has(name)) await removeTree(path.join(real, name));
       }
       return real;
     })();
@@ -246,7 +319,9 @@ export class SandboxPool implements SandboxProvider {
     const root = await this.dataDir();
     const id = crypto.randomBytes(16).toString('hex');
     const dir = path.join(root, id);
-    const session: Session = { id, userId: opts.userId, dir, allowNet: [...opts.allowNet], worker: null, hadWorker: false, busy: false, lastUsed: Date.now(), endsAt: 0 };
+    const session: Session = {
+      id, userId: opts.userId, dir, allowNet: [...opts.allowNet], worker: null, hadWorker: false, busy: false, destroyed: false, lastUsed: Date.now(), endsAt: 0,
+    };
     workerCommand(this.config, dir, session.allowNet); // validates now, not at the first run
     await fsp.mkdir(dir);
     this.sessions.set(id, session);
@@ -281,17 +356,78 @@ export class SandboxPool implements SandboxProvider {
     session.endsAt = Date.now() + ms;
     session.timer = setTimeout(() => {
       if (session.busy) this.arm(session, BUSY_RETRY_MS);
-      else void this.destroy(session);
+      // A timer callback has no caller: a rejection here would end the process, and every session with it.
+      else this.destroy(session).catch((err) => console.error(`Sandbox ${session.id}: could not remove its directory: ${(err as Error)?.message ?? err}`));
     }, ms);
     session.timer.unref();
   }
 
   private async destroy(session: Session): Promise<void> {
+    if (session.destroyed) return;
+    session.destroyed = true;
     clearTimeout(session.timer);
     this.sessions.delete(session.id);
     session.worker?.kill();
     session.worker = null;
-    await fsp.rm(session.dir, { recursive: true, force: true });
+    await removeTree(session.dir);
+  }
+
+  private async overDisk(session: Session): Promise<boolean> {
+    const usage = await dirUsage(session.dir, this.config.maxFiles);
+    return usage.bytes > this.config.maxDiskBytes || usage.entries > this.config.maxFiles;
+  }
+
+  /** Stops this worker if it is still the session's; a run in progress reports the reason itself. */
+  private stopWorker(session: Session, worker: WorkerLike, reason: PreviousStop): void {
+    if (session.worker !== worker || !worker.alive) return; // already gone: a late measurement
+    worker.kill(reason === 'disk' || reason === 'memory' ? reason : undefined);
+    session.worker = null;
+    if (!session.busy) session.previousStop = reason;
+  }
+
+  /**
+   * Measures a live worker for as long as it lives, not only during runs: a
+   * run can end (or forge its end) with code still going — a timer, an
+   * asyncio task — and only measurements from outside the process bound it.
+   * Disk and memory are checked always; CPU only between runs, since a run's
+   * own time is metered.
+   */
+  private watch(session: Session, worker: WorkerLike): void {
+    let baseline: Baseline | undefined;
+    let checking = false;
+    const timer = setInterval(() => {
+      if (session.worker !== worker || !worker.alive) {
+        clearInterval(timer);
+        return;
+      }
+      if (checking) return;
+      checking = true;
+      this.check(session, worker, baseline)
+        .then((next) => { baseline = next; }, () => { baseline = undefined; })
+        .finally(() => { checking = false; });
+    }, this.config.watchMs);
+  }
+
+  /** One watchdog pass; the idle-CPU baseline for the next. */
+  private async check(session: Session, worker: WorkerLike, baseline: Baseline | undefined): Promise<Baseline | undefined> {
+    if (await this.overDisk(session)) {
+      this.stopWorker(session, worker, 'disk');
+      return undefined;
+    }
+    const stats = worker.pid ? await this.measure(worker.pid) : null;
+    if (!stats) return undefined;
+    if (stats.rssBytes > this.config.maxRssBytes) {
+      this.stopWorker(session, worker, 'memory');
+      return undefined;
+    }
+    if (session.busy) return undefined;
+    const now = Date.now();
+    if (baseline && now - baseline.at >= this.config.watchMs * 0.9
+      && stats.cpuSec - baseline.cpuSec > IDLE_CPU_SHARE * ((now - baseline.at) / 1000)) {
+      this.stopWorker(session, worker, 'background');
+      return undefined;
+    }
+    return { cpuSec: stats.cpuSec, at: now };
   }
 
   /** A worker for this session, stopping the least recently used idle one when the pool is full. */
@@ -302,8 +438,7 @@ export class SandboxPool implements SandboxProvider {
       if (!idle) {
         throw new SandboxRefusal(`The sandbox runner is at capacity (${this.config.maxWorkers} interpreters, all running code). Try again shortly.`);
       }
-      idle.worker!.kill();
-      idle.worker = null;
+      this.stopWorker(idle, idle.worker!, 'evicted');
     }
     this.starting++;
     try {
@@ -319,32 +454,30 @@ export class SandboxPool implements SandboxProvider {
     session.lastUsed = Date.now();
     try {
       let restarted = false;
+      let previousStop: PreviousStop | undefined;
       if (!session.worker?.alive) {
         restarted = session.hadWorker;
-        session.worker = await this.startFor(session);
+        previousStop = session.previousStop;
+        session.previousStop = undefined;
+        const started = await this.startFor(session);
+        // The session may have ended while the worker started; nothing else would ever stop it.
+        if (session.destroyed) {
+          started.kill();
+          throw new SandboxNotFound('This sandbox has stopped.');
+        }
+        session.worker = started;
         session.hadWorker = true;
+        this.watch(session, started);
       }
-      const worker = session.worker;
-      let overDisk = false;
-      let checking = false;
-      const watch = setInterval(() => {
-        if (checking) return;
-        checking = true;
-        void dirUsage(session.dir, this.config.maxFiles).then((u) => {
-          if (u.bytes > this.config.maxDiskBytes || u.entries > this.config.maxFiles) {
-            overDisk = true;
-            worker.kill();
-          }
-        }).finally(() => { checking = false; });
-      }, this.config.diskCheckMs);
-      let result;
-      try {
-        result = await worker.run({ language: opts.language, code, envs: opts.envs, maxOutputChars: opts.maxOutputChars }, opts.timeoutMs);
-      } finally {
-        clearInterval(watch);
+      const worker = session.worker!;
+      const result = await worker.run({ language: opts.language, code, envs: opts.envs, maxOutputChars: opts.maxOutputChars }, opts.timeoutMs);
+      // A run shorter than one watchdog interval was never measured: measure it before reporting success.
+      if (!result.stopped && worker.alive && await this.overDisk(session)) {
+        this.stopWorker(session, worker, 'disk');
+        result.stopped = 'disk';
       }
       if (result.stopped || !worker.alive) session.worker = null;
-      return { ...result, ...(overDisk ? { stopped: 'disk' as const } : {}), restarted };
+      return { ...result, restarted, ...(previousStop ? { previousStop } : {}) };
     } finally {
       session.busy = false;
       session.lastUsed = Date.now();
@@ -395,17 +528,33 @@ export class SandboxPool implements SandboxProvider {
     }
   }
 
+  /** A write the idle timer raced (it may have removed the session, or mkdir recreated its directory) is refused, leaving nothing behind. */
   private async writeFile(session: Session, sandboxPath: string, content: string): Promise<void> {
+    try {
+      await this.write(session, sandboxPath, content);
+    } catch (err) {
+      if (!session.destroyed) throw err;
+    }
+    if (session.destroyed) {
+      await removeTree(session.dir).catch(() => {});
+      throw new SandboxNotFound('This sandbox stopped during the write.');
+    }
+  }
+
+  private async write(session: Session, sandboxPath: string, content: string): Promise<void> {
     const host = toHostPath(session.dir, sandboxPath);
     if (host === session.dir) throw new SandboxRefusal(`${sandboxPath} is the home directory, not a file.`);
     await assertResolvesInside(session.dir, host);
-    const usage = await dirUsage(session.dir, this.config.maxFiles);
-    const size = Buffer.byteLength(content, 'utf8');
-    if (usage.bytes + size > this.config.maxDiskBytes || usage.entries >= this.config.maxFiles) {
-      throw new SandboxRefusal(`The sandbox's disk limit (${Math.round(this.config.maxDiskBytes / 1048576)} MB, ${this.config.maxFiles} files) would be exceeded. Delete files with runCode first.`);
-    }
     const existing = await fsp.lstat(host).catch(() => null);
     if (existing && !existing.isFile()) throw new SandboxRefusal(`${sandboxPath} exists and is not a regular file.`);
+    // Projected usage: an overwrite replaces the old bytes and adds no entry; missing parents are entries too.
+    let added = existing ? 0 : 1;
+    for (let dir = path.dirname(host); dir !== session.dir && !(await fsp.lstat(dir).catch(() => null)); dir = path.dirname(dir)) added++;
+    const usage = await dirUsage(session.dir, this.config.maxFiles);
+    const bytes = usage.bytes - (existing?.size ?? 0) + Buffer.byteLength(content, 'utf8');
+    if (bytes > this.config.maxDiskBytes || usage.entries + added > this.config.maxFiles) {
+      throw new SandboxRefusal(`The sandbox's disk limit (${Math.round(this.config.maxDiskBytes / 1048576)} MB, ${this.config.maxFiles} files) would be exceeded. Delete files with runCode first.`);
+    }
     await fsp.mkdir(path.dirname(host), { recursive: true });
     await fsp.writeFile(host, content, 'utf8');
   }

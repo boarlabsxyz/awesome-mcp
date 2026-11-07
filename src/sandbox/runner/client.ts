@@ -24,8 +24,14 @@ export function runnerClient(baseUrl: string, secret: string): SandboxProvider {
       throw new Error(`The sandbox runner could not be reached (${(err as Error)?.message ?? err}).`);
     }
     if (res.status === 204) return undefined as T;
+    if (res.ok) {
+      try {
+        return (await res.json()) as T;
+      } catch (err) {
+        throw new Error(`The sandbox runner sent an unreadable answer (${(err as Error)?.message ?? err}).`);
+      }
+    }
     const data = (await res.json().catch(() => ({}))) as { error?: string };
-    if (res.ok) return data as T;
     const message = data.error ?? `The sandbox runner answered ${res.status}.`;
     if (res.status === 404) throw new SandboxNotFound(message);
     if (res.status === 409) throw new SandboxRefusal(message);

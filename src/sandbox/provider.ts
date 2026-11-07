@@ -19,18 +19,22 @@ export interface RunOutcome {
   /** Characters printed, of which stdout/stderr hold the first maxOutputChars. */
   stdoutTotal: number;
   stderrTotal: number;
-  /** repr() of the last expression (Python) or the returned value (JavaScript). */
+  /** repr() of the last expression (Python) or the returned value (JavaScript), cut to maxOutputChars together. */
   results: string[];
+  /** Their full length. */
+  resultsTotal: number;
   /** Base64 PNGs: matplotlib figures left open at the end of a Python run. */
   images: string[];
   imagesDropped: number;
   error?: { name: string; value: string; traceback: string };
   /** The interpreter was stopped during the run (files are kept, variables are gone). */
-  stopped?: 'timeout' | 'crashed' | 'disk';
+  stopped?: 'timeout' | 'crashed' | 'disk' | 'memory';
   /** Why it crashed, when it did. */
   crashDetail?: string;
   /** This run needed a new interpreter after earlier runs: their variables are gone. */
   restarted: boolean;
+  /** Why the runner stopped the previous interpreter between runs, when it did. */
+  previousStop?: 'disk' | 'memory' | 'background' | 'evicted';
 }
 
 export interface SandboxEntry {

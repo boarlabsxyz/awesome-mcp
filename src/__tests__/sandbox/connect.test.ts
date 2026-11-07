@@ -34,6 +34,7 @@ describe('connectSandboxMcp', () => {
     assert.equal(sandboxConfigured({ SANDBOX_RUNNER_URL: 'http://runner:8080', SANDBOX_RUNNER_SECRET: 's' }, true), true);
     assert.equal(sandboxConfigured({ SANDBOX_RUNNER_URL: 'http://runner:8080' }, true), false, 'a runner URL without its secret cannot be called');
     assert.equal(sandboxConfigured({ SANDBOX_RUNNER: 'local' }, true), true);
+    assert.equal(sandboxConfigured({ SANDBOX_RUNNER_URL: 'http://runner:8080', SANDBOX_RUNNER: 'local' }, true), false, 'the URL wins, as in engine.ts');
     assert.equal(sandboxConfigured({}, true), false);
     assert.equal(sandboxConfigured({ SANDBOX_MCP_URL: 'https://sandbox.example' }, false), false, 'still needs a database');
   });

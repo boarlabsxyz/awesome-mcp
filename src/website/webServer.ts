@@ -419,7 +419,7 @@ const PER_USER_CONNECTS = {
   sandbox: {
     connect: connectSandboxMcp,
     label: 'Sandbox MCP',
-    unavailable: 'The sandbox is unavailable: this server has neither SANDBOX_MCP_URL nor a sandbox runner (SANDBOX_RUNNER_URL, or SANDBOX_RUNNER=local) configured, or no database/Redis connection.',
+    unavailable: 'The sandbox is unavailable: this server has neither SANDBOX_MCP_URL nor a sandbox runner (SANDBOX_RUNNER_URL with SANDBOX_RUNNER_SECRET, or SANDBOX_RUNNER=local) configured, or no database/Redis connection.',
   },
 } as const;
 

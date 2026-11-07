@@ -8,7 +8,10 @@ WORKDIR /app
 RUN npm install -g deno@2.9.6
 COPY package*.json ./
 RUN npm ci
-COPY . .
+# Only what the build needs: nothing else from the context (stray credential
+# files included) can reach this image.
+COPY tsconfig.json ./
+COPY src ./src
 RUN npm run build
 ENV SANDBOX_DENO_PATH=/usr/local/lib/node_modules/deno/deno
 # Bake the bundled Pyodide packages into node_modules/pyodide, read-only to

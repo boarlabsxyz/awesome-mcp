@@ -33,13 +33,14 @@ function config(over: Partial<PoolConfig> = {}): PoolConfig {
     maxDiskBytes: 1_000_000,
     maxFiles: 100,
     startTimeoutMs: 1000,
-    diskCheckMs: 20,
+    maxRssBytes: 2_000_000_000,
+    watchMs: 20,
     ...over,
   };
 }
 
 const done = (over: Partial<WorkerRunResult> = {}): WorkerRunResult => ({
-  stdout: '', stderr: '', stdoutTotal: 0, stderrTotal: 0, results: [], images: [], imagesDropped: 0, ...over,
+  stdout: '', stderr: '', stdoutTotal: 0, stderrTotal: 0, results: [], resultsTotal: 0, images: [], imagesDropped: 0, ...over,
 });
 
 /** Fake workers: `behave` decides each run; every started worker and command is recorded. */
@@ -53,8 +54,11 @@ function fakeWorkers(behave: (req: WorkerRunRequest, w: FakeWorker, cmd: WorkerC
   return { start, started };
 }
 
+let nextPid = 1000;
+
 class FakeWorker implements WorkerLike {
   alive = true;
+  readonly pid = nextPid++;
   private settle?: (r: WorkerRunResult) => void;
   constructor(private readonly behave: (req: WorkerRunRequest, w: FakeWorker) => Promise<WorkerRunResult>) {}
   run(req: WorkerRunRequest): Promise<WorkerRunResult> {
@@ -63,10 +67,10 @@ class FakeWorker implements WorkerLike {
       void this.behave(req, this).then(resolve);
     });
   }
-  kill(): void {
+  kill(reason?: 'disk' | 'memory'): void {
     if (!this.alive) return;
     this.alive = false;
-    this.settle?.(done({ stopped: 'crashed' }));
+    this.settle?.(done({ stopped: reason ?? 'crashed' }));
   }
 }
 
@@ -82,6 +86,7 @@ describe('workerCommand', () => {
     assert.ok(cmd.args.includes('--allow-read=/app/node_modules/pyodide,/data/abc'), 'duplicates collapse');
     assert.ok(cmd.args.includes('--allow-write=/data/abc'));
     assert.ok(cmd.args.includes('--allow-net=api.example.com,localhost:8080'));
+    assert.equal(cmd.cwd, '/data/abc', 'JavaScript relative paths land in /home/user');
     assert.ok(cmd.args.includes('--v8-flags=--max-old-space-size=512,--wasm-max-mem-pages=16384'), '1024 MB is 16384 pages of 64 KiB');
     assert.ok(!cmd.args.some((a) => /^--allow-(env|run|ffi|sys|all)|^-A$/.test(a)));
     assert.deepEqual(Object.keys(cmd.env).sort(), ['DENO_DIR', 'DENO_NO_UPDATE_CHECK', 'NO_COLOR'], 'no inherited environment');
@@ -99,6 +104,11 @@ describe('workerCommand', () => {
     assert.throws(() => workerCommand(config(), '/data/abc', ['evil.com,0.0.0.0']), { name: 'SandboxRefusal' });
     assert.throws(() => workerCommand(config(), '/data/abc', ['http://x']), { name: 'SandboxRefusal' });
     assert.throws(() => workerCommand(config(), '/data/a,b', []), /commas/);
+  });
+
+  it('accepts bracketed IPv6 hosts, as URL.host gives them', () => {
+    assert.ok(workerCommand(config(), '/data/abc', ['[::1]:8080', '[2001:db8::1]']).args.includes('--allow-net=[::1]:8080,[2001:db8::1]'));
+    assert.throws(() => workerCommand(config(), '/data/abc', ['[::1]x']), { name: 'SandboxRefusal' });
   });
 });
 
@@ -124,12 +134,22 @@ describe('dirUsage and poolConfigFromEnv', () => {
     fs.writeFileSync(path.join(dir, 'a'), 'abc');
     fs.writeFileSync(path.join(dir, 'sub', 'b'), 'de');
     assert.deepEqual(await dirUsage(dir, 100), { bytes: 5, entries: 3 });
-    assert.ok((await dirUsage(dir, 0)).entries >= 1);
+    assert.equal((await dirUsage(dir, 1)).entries, 2, 'stops as soon as the count passes the cap');
+  });
+
+  it('counts what user code hid behind chmod 000', async () => {
+    const dir = config().dataDir;
+    fs.mkdirSync(path.join(dir, 'hidden'));
+    fs.writeFileSync(path.join(dir, 'hidden', 'big'), 'x'.repeat(100));
+    fs.chmodSync(path.join(dir, 'hidden'), 0o000);
+    assert.deepEqual(await dirUsage(dir, 100), { bytes: 100, entries: 2 });
   });
 
   it('reads limits from the environment, with defaults', () => {
     const d = poolConfigFromEnv({ SANDBOX_PYODIDE_DIR: '/p' });
     assert.equal(d.denoPath, 'deno');
+    assert.equal(d.maxRssBytes, 2048 * 1024 * 1024, 'WebAssembly memory plus 1 GB for the rest');
+    assert.equal(poolConfigFromEnv({ SANDBOX_PYODIDE_DIR: '/p', SANDBOX_MAX_RSS_MB: '3000' }).maxRssBytes, 3000 * 1024 * 1024);
     assert.equal(d.packageDir, '/p', 'the wheels sit beside Pyodide unless told otherwise');
     assert.equal(d.memoryMb, 1024);
     assert.equal(d.maxWorkers, 4);
@@ -177,6 +197,35 @@ describe('SandboxPool sessions', () => {
     await create(new SandboxPool(c, fakeWorkers().start));
     assert.equal(fs.existsSync(stale), false);
     assert.ok(fs.existsSync(path.join(c.dataDir, 'keep.txt')));
+  });
+
+  it('removes a directory whose permissions user code took away, and survives an idle cleanup that fails', async () => {
+    const c = config();
+    const pool = new SandboxPool(c, fakeWorkers().start);
+    const h = await create(pool);
+    const dir = path.join(fs.realpathSync(c.dataDir), h.id);
+    fs.mkdirSync(path.join(dir, 'locked'));
+    fs.writeFileSync(path.join(dir, 'locked', 'f'), 'x');
+    fs.chmodSync(path.join(dir, 'locked'), 0o000);
+    await pool.kill(h.id);
+    assert.equal(fs.existsSync(dir), false);
+
+    // A failure the timer cannot surface is logged, never an unhandled rejection that ends the runner.
+    const h2 = await create(pool, 30);
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (m: string) => errors.push(m);
+    try {
+      fs.rmSync(path.join(fs.realpathSync(c.dataDir), h2.id), { recursive: true });
+      fs.writeFileSync(path.join(fs.realpathSync(c.dataDir), h2.id), 'a file where the directory was');
+      fs.chmodSync(fs.realpathSync(c.dataDir), 0o500);
+      await sleep(100);
+    } finally {
+      fs.chmodSync(fs.realpathSync(c.dataDir), 0o700);
+      console.error = original;
+    }
+    assert.equal(await pool.connect(h2.id), null);
+    assert.match(errors.join(' '), /could not remove its directory/);
   });
 
   it('refuses a bad allowlist at creation, not at the first run', async () => {
@@ -253,6 +302,85 @@ describe('SandboxPool runs', () => {
     assert.equal(r.stopped, 'disk');
   });
 
+  it('measures a run that ends before the watchdog does, and stops it past the disk limit', async () => {
+    const workers = fakeWorkers(async (_req, _w, cmd) => {
+      fs.writeFileSync(path.join(cmd.cwd!, 'big'), 'x'.repeat(5000));
+      return done({ results: ['ok'] });
+    });
+    const h = await create(new SandboxPool(config({ maxDiskBytes: 1000, watchMs: 60_000 }), workers.start));
+    assert.equal((await h.runCode('fill', opts())).stopped, 'disk');
+  });
+
+  it('stops a worker that keeps using CPU between runs — code left running, or a forged end of run', async () => {
+    let cpu = 0;
+    const workers = fakeWorkers();
+    const pool = new SandboxPool(config(), workers.start, async () => ({ cpuSec: cpu, rssBytes: 1 }));
+    const h = await create(pool);
+    await h.runCode('setInterval(spin)', opts());
+    const spin = setInterval(() => { cpu += 0.02; }, 20); // one core's worth
+    try {
+      await sleep(150);
+    } finally {
+      clearInterval(spin);
+    }
+    assert.equal(workers.started[0].worker.alive, false);
+    const next = await h.runCode('x', opts());
+    assert.equal(next.restarted, true);
+    assert.equal(next.previousStop, 'background');
+  });
+
+  it('leaves an idle worker alone, and charges nothing for a run’s own CPU', async () => {
+    let cpu = 0;
+    let release!: () => void;
+    const workers = fakeWorkers((req) => (req.code === 'busy' ? new Promise((r) => { release = () => r(done()); }) : Promise.resolve(done())));
+    const pool = new SandboxPool(config(), workers.start, async () => ({ cpuSec: cpu, rssBytes: 1 }));
+    const h = await create(pool);
+    const running = h.runCode('busy', opts());
+    const spin = setInterval(() => { cpu += 0.02; }, 20);
+    await sleep(100);
+    clearInterval(spin);
+    release();
+    assert.equal((await running).stopped, undefined);
+    await sleep(100);
+    assert.ok(workers.started[0].worker.alive);
+  });
+
+  it('stops a worker over the memory limit, during a run or between runs', async () => {
+    let rss = 1;
+    const workers = fakeWorkers((req) => (req.code === 'grow' ? new Promise(() => { rss = 10_000; }) : Promise.resolve(done())));
+    const pool = new SandboxPool(config({ maxRssBytes: 5000 }), workers.start, async () => ({ cpuSec: 0, rssBytes: rss }));
+    const h = await create(pool);
+    assert.equal((await h.runCode('grow', opts())).stopped, 'memory');
+    rss = 1;
+    await h.runCode('x', opts());
+    rss = 10_000;
+    await sleep(80);
+    const next = await h.runCode('x', opts());
+    assert.equal(next.previousStop, 'memory');
+  });
+
+  it('stops a worker whose session ended while it was starting', async () => {
+    let resolveStart!: (w: WorkerLike) => void;
+    const worker = new FakeWorker(async () => done());
+    const pool = new SandboxPool(config(), () => new Promise((r) => { resolveStart = r; }));
+    const h = await create(pool);
+    const running = h.runCode('x', opts());
+    await sleep(10);
+    await pool.kill(h.id);
+    resolveStart(worker);
+    await assert.rejects(running, { name: 'NotFoundError' });
+    assert.equal(worker.alive, false);
+  });
+
+  it('says why an evicted worker’s user lost their variables', async () => {
+    const pool = new SandboxPool(config({ maxWorkers: 1 }), fakeWorkers().start);
+    const a = await create(pool);
+    const b = await create(pool);
+    await a.runCode('x', opts());
+    await b.runCode('x', opts());
+    assert.equal((await a.runCode('x', opts())).previousStop, 'evicted');
+  });
+
   it('kills the worker when the session ends mid-idle', async () => {
     const workers = fakeWorkers();
     const pool = new SandboxPool(config(), workers.start);
@@ -297,9 +425,29 @@ describe('SandboxPool files', () => {
     await assert.rejects(h.writeFile('link', 'x'), /leads outside/);
   });
 
-  it('refuses a write past the disk limit', async () => {
+  it('refuses a write past the disk limit, counting an overwrite as replacing the old bytes', async () => {
     const h = await create(new SandboxPool(config({ maxDiskBytes: 10 }), fakeWorkers().start));
     await h.writeFile('a', '12345');
     await assert.rejects(h.writeFile('b', '123456'), /disk limit/);
+    await h.writeFile('a', '1234567890'); // replaces 5 bytes: 10 in all
+    await assert.rejects(h.writeFile('a', '12345678901'), /disk limit/);
+  });
+
+  it('counts the parent directories a write would create against the file limit', async () => {
+    const h = await create(new SandboxPool(config({ maxFiles: 3 }), fakeWorkers().start));
+    await h.writeFile('one', 'x');
+    await assert.rejects(h.writeFile('a/b/c', 'x'), /3 files/, 'a, a/b and a/b/c would make four');
+    await h.writeFile('a/c', 'x');
+    await h.writeFile('a/c', 'y'); // an overwrite adds nothing
+  });
+
+  it('refuses a write that raced the session ending, leaving no directory behind', async () => {
+    const c = config();
+    const pool = new SandboxPool(c, fakeWorkers().start);
+    const h = await create(pool);
+    const write = h.writeFile('deep/x.txt', 'x');
+    await pool.kill(h.id);
+    await assert.rejects(write, { name: 'NotFoundError' });
+    assert.equal(fs.existsSync(path.join(fs.realpathSync(c.dataDir), h.id)), false);
   });
 });

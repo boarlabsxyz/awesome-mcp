@@ -61,6 +61,8 @@ const MAX_LIST_ENTRIES = 500;
 const CRASH_DETAIL_CAP = 500;
 /** The run's bearer outlives its timeout by this much, so a call dispatched near the end is not refused. */
 const TOKEN_MARGIN_SEC = 30;
+/** And by the interpreter's start (the runner's limit for it), since the token is minted before a cold start. */
+const WORKER_START_SEC = 60;
 const REVOKE_ATTEMPTS = 3;
 
 interface Ready {
@@ -251,16 +253,26 @@ export async function opRunCode(
   });
 }
 
+const PREVIOUS_STOP: Record<NonNullable<RunOutcome['previousStop']>, string> = {
+  disk: 'it was stopped because /home/user went over its disk limit',
+  memory: 'it was stopped for using more memory than a sandbox may',
+  background: 'it was stopped because code left running after a run kept using CPU (finish all work before a run returns)',
+  evicted: 'it was stopped to make room for another user',
+};
+
 /** What the runner reports about stopping or restarting the interpreter, as notes for the caller. */
 function interpreterNotes(outcome: RunOutcome): string[] {
   const notes: string[] = [];
   if (outcome.restarted) {
-    notes.push('This run started a new Python/JavaScript interpreter (the previous one was stopped, or made room for another user): variables from earlier runs are gone; files are kept.');
+    const why = outcome.previousStop ? PREVIOUS_STOP[outcome.previousStop] : 'the previous one had been stopped';
+    notes.push(`This run started a new Python/JavaScript interpreter (${why}): variables from earlier runs are gone; files are kept.`);
   }
   if (outcome.stopped === 'crashed') {
     notes.push(`The interpreter crashed and was stopped${outcome.crashDetail ? ` (${cap(outcome.crashDetail, CRASH_DETAIL_CAP)})` : ''}: variables are gone; files are kept.`);
   } else if (outcome.stopped === 'disk') {
     notes.push('The run was stopped: /home/user went over its disk limit. Variables are gone; delete files to get back under the limit.');
+  } else if (outcome.stopped === 'memory') {
+    notes.push('The run was stopped for using more memory than a sandbox may. Variables are gone; files are kept. Process the data in chunks.');
   }
   return notes;
 }
@@ -285,7 +297,7 @@ async function runReserved(
   await handle.setTimeout(idleMs() + timeoutMs);
 
   const notes: string[] = [];
-  const { token, expiresAt } = await deps.mintToken(r.uid, instanceId, grantedSec + TOKEN_MARGIN_SEC);
+  const { token, expiresAt } = await deps.mintToken(r.uid, instanceId, grantedSec + WORKER_START_SEC + TOKEN_MARGIN_SEC);
   const started = deps.now();
   let outcome: RunOutcome;
   let gone = false;
@@ -334,6 +346,8 @@ async function runReserved(
   const truncated: Record<string, number> = {};
   if (outcome.stdoutTotal > outcome.stdout.length) truncated.stdoutTotalChars = outcome.stdoutTotal;
   if (outcome.stderrTotal > outcome.stderr.length) truncated.stderrTotalChars = outcome.stderrTotal;
+  // The runner already cut the results to the same budget; resultsTotal is what there was.
+  resultTotal = Math.max(resultTotal, outcome.resultsTotal ?? 0);
   if (resultTotal > resultChars) truncated.resultsTotalChars = resultTotal;
   const timedOut = outcome.stopped === 'timeout';
 
