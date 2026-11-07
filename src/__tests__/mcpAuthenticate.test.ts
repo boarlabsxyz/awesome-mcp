@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it, mock, beforeEach } from 'node:test';
+import { describe, it, mock, beforeEach, afterEach } from 'node:test';
 import http from 'http';
 import { authenticateRequest, AuthDeps } from '../mcpAuthenticate.js';
 
@@ -364,8 +364,31 @@ describe('Admin MCP (slug "admin")', () => {
 
 // The Storage MCP keys its data by the CALLER, so the session comes from the
 // authenticated user — never from a connection, whose owner may be someone else.
+/** Makes the shared fake user an admin for one describe block: Storage and Sandbox are admin-only. */
+function asAdmin() {
+  const saved = process.env.ADMIN_EMAILS;
+  beforeEach(() => { process.env.ADMIN_EMAILS = fakeUser.email; });
+  afterEach(() => {
+    if (saved === undefined) delete process.env.ADMIN_EMAILS;
+    else process.env.ADMIN_EMAILS = saved;
+  });
+}
+
+/** authenticateRequest for a caller who is not an admin must answer 403 and build no session. */
+async function assertNonAdminRefused(slug: string, deps: AuthDeps) {
+  process.env.ADMIN_EMAILS = 'boss@example.com';
+  await assert.rejects(authenticateRequest(makeRequest({ authorization: 'Bearer validkey' }), slug, deps), (e: any) => e.status === 403);
+}
+
 describe('Storage MCP (slug "storage")', () => {
+  asAdmin();
   const storageConnection = { instanceId: 'sto1', userId: 99, mcpSlug: 'storage', provider: 'storage', providerTokens: {} };
+
+  it('refuses a non-admin with 403: Storage is admin-only', async () => {
+    const deps = makeDeps();
+    await assertNonAdminRefused('storage', deps);
+    assert.equal((deps.createStorageSession as any).mock.calls.length, 0);
+  });
 
   it('builds a storage session for the caller, keeping the instance id when it is their own connector', async () => {
     const own = { ...storageConnection, userId: fakeUser.id };
@@ -411,7 +434,14 @@ describe('Storage MCP (slug "storage")', () => {
 // The Sandbox MCP runs on the platform's key with a per-user sandbox and
 // quota, so like Storage it is answered from the caller alone.
 describe('Sandbox MCP (slug "sandbox")', () => {
+  asAdmin();
   const sandboxConnection = { instanceId: 'sbx1', userId: 99, mcpSlug: 'sandbox', provider: 'sandbox', providerTokens: {} };
+
+  it('refuses a non-admin with 403: Sandbox is admin-only', async () => {
+    const deps = makeDeps();
+    await assertNonAdminRefused('sandbox', deps);
+    assert.equal((deps.createSandboxSession as any).mock.calls.length, 0);
+  });
 
   it('builds a sandbox session for the caller, keeping only their own instance id', async () => {
     const own = makeDeps({ getMcpConnectionByInstanceId: mock.fn(async () => ({ ...sandboxConnection, userId: fakeUser.id })) });
