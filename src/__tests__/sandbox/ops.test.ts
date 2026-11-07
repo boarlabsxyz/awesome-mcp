@@ -14,25 +14,46 @@ import type { CreateOptions, RunOptions, RunOutcome, SandboxHandle, SandboxProvi
 import { HELPER_PATH } from '../../sandbox/helper.js';
 import type { Kv } from '../../sandbox/state.js';
 
-/** An in-memory Redis slice. `down` makes every call fail, like an unreachable server. */
+/**
+ * An in-memory Redis slice whose PX keys expire on its own clock (`advance`).
+ * `down` makes every call fail, like an unreachable server.
+ */
 function fakeKv() {
   const data = new Map<string, string>();
+  const expiresAt = new Map<string, number>();
   const kv = {
     data,
+    clock: 0,
     down: false,
+    advance(ms: number) { kv.clock += ms; },
+    /** ms until the key expires, or undefined when it has no TTL. */
+    ttl(key: string) { const at = expiresAt.get(key); return at === undefined ? undefined : at - kv.clock; },
     check() {
       if (kv.down) throw new Error('connect ECONNREFUSED');
     },
-    async get(key: string) { kv.check(); return data.get(key) ?? null; },
-    async set(key: string, value: string, _px: 'PX', _ms: number, nx?: 'NX') {
+    live(key: string) {
+      const at = expiresAt.get(key);
+      if (at !== undefined && at <= kv.clock) { data.delete(key); expiresAt.delete(key); }
+      return data.get(key) ?? null;
+    },
+    async get(key: string) { kv.check(); return kv.live(key); },
+    async set(key: string, value: string, _px: 'PX', ms: number, nx?: 'NX') {
       kv.check();
-      if (nx && data.has(key)) return null;
+      if (nx && kv.live(key) !== null) return null;
       data.set(key, value);
+      expiresAt.set(key, kv.clock + ms);
       return 'OK' as const;
     },
-    async del(key: string) { kv.check(); return data.delete(key) ? 1 : 0; },
+    async del(key: string) { kv.check(); expiresAt.delete(key); return data.delete(key) ? 1 : 0; },
     async incrby(key: string, by: number) { kv.check(); const n = Number(data.get(key) ?? 0) + by; data.set(key, String(n)); return n; },
     async expire() { kv.check(); return 1; },
+    /** Only the lock-renewal script: PEXPIRE KEYS[1] if it still holds ARGV[1]. */
+    async eval(_script: string, _n: number, key: string, token: string, ms: number) {
+      kv.check();
+      if (kv.live(key) !== token) return 0;
+      expiresAt.set(key, kv.clock + Number(ms));
+      return 1;
+    },
   };
   return kv;
 }
@@ -43,10 +64,15 @@ interface FakeSandbox {
   files: Map<string, Uint8Array>;
   timeouts: number[];
   runs: Array<{ code: string; opts: RunOptions }>;
+  reads: number[];
+  interrupted: string[];
 }
 
 /** A fake vendor. `run` decides what each runCode does. */
-function fakeProvider(run: (code: string, opts: RunOptions) => Promise<RunOutcome> = async () => ({ results: [] })) {
+function fakeProvider(
+  run: (code: string, opts: RunOptions) => Promise<RunOutcome> = async () => ({ results: [] }),
+  { interrupts = true, onCreate = () => {} }: { interrupts?: boolean; onCreate?: () => void } = {},
+) {
   const sandboxes = new Map<string, FakeSandbox>();
   const created: CreateOptions[] = [];
   const killed: string[] = [];
@@ -54,10 +80,12 @@ function fakeProvider(run: (code: string, opts: RunOptions) => Promise<RunOutcom
   const handle = (s: FakeSandbox): SandboxHandle => ({
     id: s.id,
     async runCode(code, opts) { s.runs.push({ code, opts }); return run(code, opts); },
-    async readFile(path) {
+    async interrupt(language) { s.interrupted.push(language); return interrupts; },
+    async readFile(path, maxBytes) {
       const f = s.files.get(path);
       if (!f) throw Object.assign(new Error('not found'), { name: 'FileNotFoundError' });
-      return f;
+      s.reads.push(maxBytes);
+      return { bytes: f.subarray(0, maxBytes), size: f.length };
     },
     async writeFile(path, content) { s.files.set(path, new TextEncoder().encode(content)); },
     async listFiles(path) {
@@ -68,7 +96,8 @@ function fakeProvider(run: (code: string, opts: RunOptions) => Promise<RunOutcom
   const provider: SandboxProvider = {
     async create(opts) {
       created.push(opts);
-      const s: FakeSandbox = { id: `sbx${++n}`, alive: true, files: new Map(), timeouts: [], runs: [] };
+      onCreate();
+      const s: FakeSandbox = { id: `sbx${++n}`, alive: true, files: new Map(), timeouts: [], runs: [], reads: [], interrupted: [] };
       sandboxes.set(s.id, s);
       return handle(s);
     },
@@ -87,12 +116,12 @@ function makeDeps(over: { kv?: ReturnType<typeof fakeKv>; provider?: SandboxProv
   const kv = over.kv ?? fakeKv();
   const vendor = fakeProvider();
   const provider = over.provider === undefined ? vendor.provider : over.provider;
-  const tokens = { minted: [] as string[], revoked: [] as string[] };
+  const tokens = { minted: [] as string[], revoked: [] as string[], ttls: [] as number[] };
   let t = Date.parse('2026-11-05T12:00:00Z');
   const deps: SandboxOpsDeps = {
     provider: () => provider,
     kv: () => kv as unknown as Kv,
-    mintToken: async () => { const token = `tok${tokens.minted.length + 1}`; tokens.minted.push(token); return { token }; },
+    mintToken: async (_uid, _inst, ttl) => { const token = `tok${tokens.minted.length + 1}`; tokens.minted.push(token); tokens.ttls.push(ttl); return { token }; },
     revokeToken: async (token) => { tokens.revoked.push(token); },
     apiBase: () => 'https://awesome-mcp.xyz',
     now: () => (t += 1500),
@@ -184,6 +213,41 @@ describe('runCode', () => {
     assert.match(String(out.json.timedOut), /Stopped after 120 s/);
     assert.equal(out.json.stdout, 'step 1\n');
     assert.deepEqual(tokens.revoked, ['tok1']);
+    // The timed-out request proves nothing, so the kernel is restarted to stop the code.
+    assert.deepEqual(vendor.sandboxes.get('sbx1')!.interrupted, ['python']);
+    assert.match(String((out.json.notes as string[]).at(-1)), /python kernel was restarted.*files are kept/);
+  });
+
+  it('stops the whole sandbox when the timed-out kernel cannot be restarted', async () => {
+    const vendor = fakeProvider(async () => { throw Object.assign(new Error('timed out'), { name: 'TimeoutError' }); }, { interrupts: false });
+    const { deps, kv } = makeDeps({ provider: vendor.provider });
+    const out = await opRunCode(7, undefined, run, deps);
+    assert.deepEqual(vendor.killed, ['sbx1']);
+    assert.equal(kv.data.get('sandbox:user:7'), undefined, 'the next call starts a new one');
+    assert.match(String((out.json.notes as string[]).at(-1)), /sandbox was stopped to end the run/);
+  });
+
+  it('mints the bearer for the run timeout plus a margin, so a call near the end is not refused', async () => {
+    const { deps, tokens } = makeDeps();
+    await opRunCode(7, undefined, { ...run, timeoutSec: 300 }, deps);
+    assert.deepEqual(tokens.ttls, [330]);
+  });
+
+  it('stops the sandbox when the bearer cannot be revoked, after retrying', async () => {
+    const { deps, vendor } = makeDeps();
+    let attempts = 0;
+    const failing = { ...deps, revokeToken: async () => { attempts++; throw new Error('READONLY'); } };
+    const out = await opRunCode(7, undefined, run, failing);
+    assert.equal(attempts, 3);
+    assert.deepEqual(vendor.killed, ['sbx1']);
+    assert.match(String((out.json.notes as string[]).at(-1)), /could not be revoked, so the sandbox was stopped/);
+  });
+
+  it('caps the text results with one budget, not per result', async () => {
+    const vendor = fakeProvider(async () => ({ results: Array.from({ length: 5 }, () => ({ text: 'r'.repeat(10_000) })) }));
+    const out = await opRunCode(7, undefined, run, makeDeps({ provider: vendor.provider }).deps);
+    assert.equal((out.json.results as string[]).join('').length, 20_000);
+    assert.equal((out.json.truncated as any).resultsTotalChars, 50_000);
   });
 
   it('caps output and says how much there was', async () => {
@@ -227,6 +291,28 @@ describe('runCode', () => {
     await opRunCode(7, undefined, run, deps); // lock released
   });
 
+  it('holds the lock for the whole run timeout, and refuses to run once the lease was lost while starting', async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const running = new Promise<void>((r) => { started = r; });
+    const vendor = fakeProvider(() => new Promise((resolve) => { release = () => resolve({ results: [] }); started(); }));
+    const { deps, kv } = makeDeps({ provider: vendor.provider });
+    const first = opRunCode(7, undefined, { ...run, timeoutSec: 300 }, deps);
+    await running;
+    kv.advance(299_000); // most of a 300 s run later, the lease still holds
+    await rejects(opRunCode(7, undefined, run, deps), /busy/);
+    release();
+    await first;
+
+    // Creating the sandbox outlasts the lease and another call takes the lock: this one must not run.
+    const slow = makeDeps();
+    const stalled = fakeProvider(undefined, { onCreate: () => { slow.kv.advance(10 * 60_000); void slow.kv.set('sandbox:lock:9', 'someone-else', 'PX', 60_000); } });
+    await rejects(opRunCode(9, undefined, run, { ...slow.deps, provider: () => stalled.provider }), /lost the sandbox lock/);
+    assert.equal(stalled.sandboxes.get('sbx1')!.runs.length, 0);
+    assert.equal(slow.tokens.minted.length, 0);
+    assert.equal(slow.kv.data.get('sandbox:lock:9'), 'someone-else', 'the other holder keeps its lock');
+  });
+
   it('enforces the daily run and run-second quotas, charging the seconds actually used', async () => {
     process.env.SANDBOX_MAX_RUNS_PER_DAY = '2';
     const { deps, kv } = makeDeps();
@@ -240,6 +326,25 @@ describe('runCode', () => {
     process.env.SANDBOX_MAX_RUNS_PER_DAY = '100';
     process.env.SANDBOX_MAX_SECONDS_PER_DAY = '1';
     await rejects(opRunCode(7, undefined, run, deps), /seconds of run time today/);
+  });
+
+  it('cuts the run timeout to the seconds left today, and says so', async () => {
+    process.env.SANDBOX_MAX_SECONDS_PER_DAY = '50';
+    const { deps, vendor } = makeDeps();
+    await opRunCode(7, undefined, run, deps); // uses 2 s
+    const out = await opRunCode(7, undefined, { ...run, timeoutSec: 300 }, deps);
+    assert.equal(vendor.sandboxes.get('sbx1')!.runs[1].opts.timeoutMs, 48_000);
+    assert.match(String((out.json.notes as string[])[0]), /cut to 48 s/);
+  });
+
+  it('reserves the seconds before the run, so a Redis failure afterwards over-charges rather than losing them', async () => {
+    const kv = fakeKv();
+    const vendor = fakeProvider(async () => { kv.down = true; return { results: [] }; });
+    const { deps } = makeDeps({ kv, provider: vendor.provider });
+    const out = await opRunCode(7, undefined, run, deps);
+    assert.equal(out.json.quota, 'unknown (usage store unreachable)');
+    kv.down = false;
+    assert.equal(kv.data.get('sandbox:quota:7:2026-11-05:secs'), '120', 'the whole reservation stays charged');
   });
 
   it('fails closed when Redis is unreachable: no run, no sandbox, no token', async () => {
@@ -274,6 +379,26 @@ describe('files, status and reset', () => {
     assert.equal(read.json.content, 'hello');
     assert.match(String(read.json.truncated), /first 5 of 11/);
     await rejects(opReadFile(7, { path: '/home/user/missing', maxChars: 5 }, deps), /No file at/);
+  });
+
+  it('downloads only what maxChars can show of a large file', async () => {
+    const { deps, vendor } = makeDeps();
+    await opWriteFile(7, { path: '/home/user/big.txt', content: 'é'.repeat(500_000) }, deps);
+    const read = await opReadFile(7, { path: '/home/user/big.txt', maxChars: 3 }, deps);
+    assert.deepEqual(vendor.sandboxes.get('sbx1')!.reads, [12]);
+    assert.equal(read.json.content, 'ééé');
+    assert.equal(read.json.bytes, 1_000_000);
+    assert.match(String(read.json.truncated), /first 3 characters of a 1000000-byte file/);
+  });
+
+  it('file calls never extend the sandbox: only metered runs keep it alive', async () => {
+    const { deps, vendor } = makeDeps();
+    await opRunCode(7, undefined, run, deps);
+    const before = [...vendor.sandboxes.get('sbx1')!.timeouts];
+    await opWriteFile(7, { path: '/home/user/a.txt', content: 'x' }, deps);
+    await opListFiles(7, { path: '/home/user' }, deps);
+    await opReadFile(7, { path: '/home/user/a.txt', maxChars: 10 }, deps);
+    assert.deepEqual(vendor.sandboxes.get('sbx1')!.timeouts, before);
   });
 
   it('returns an image file as an image, and describes other binary files', async () => {

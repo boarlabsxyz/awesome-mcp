@@ -419,7 +419,7 @@ const PER_USER_CONNECTS = {
   sandbox: {
     connect: connectSandboxMcp,
     label: 'Sandbox MCP',
-    unavailable: 'The sandbox is unavailable: this server has no E2B_API_KEY configured, or no database/Redis connection.',
+    unavailable: 'The sandbox is unavailable: this server has neither SANDBOX_MCP_URL nor E2B_API_KEY configured, or no database/Redis connection.',
   },
 } as const;
 

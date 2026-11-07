@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it, mock } from 'node:test';
-import { connectSandboxMcp, type SandboxConnectDeps } from '../../sandbox/connect.js';
+import { connectSandboxMcp, sandboxConfigured, type SandboxConnectDeps } from '../../sandbox/connect.js';
 
 function deps(over: Partial<SandboxConnectDeps> = {}): SandboxConnectDeps {
   return {
@@ -27,5 +27,12 @@ describe('connectSandboxMcp', () => {
 
     const again = deps({ getUserConnectedMcps: mock.fn(async () => [{ mcpSlug: 'sandbox', instanceId: 'old', instanceName: 'Sandbox' }]) });
     assert.deepEqual(await connectSandboxMcp({ id: 1 }, again), { outcome: 'exists', instanceId: 'old', instanceName: 'Sandbox' });
+  });
+
+  it('counts a remote Sandbox service as ready: its E2B key is on that service, not this one', () => {
+    assert.equal(sandboxConfigured({ SANDBOX_MCP_URL: 'https://sandbox.example' }, true), true);
+    assert.equal(sandboxConfigured({ E2B_API_KEY: 'k' }, true), true);
+    assert.equal(sandboxConfigured({}, true), false);
+    assert.equal(sandboxConfigured({ SANDBOX_MCP_URL: 'https://sandbox.example', E2B_API_KEY: 'k' }, false), false, 'still needs a database');
   });
 });

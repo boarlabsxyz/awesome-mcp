@@ -56,10 +56,10 @@ sandboxServer.addTool({
   annotations: { readOnlyHint: false, openWorldHint: true },
   description:
     'Run Python (default), JavaScript or a bash command in your own cloud sandbox and get stdout, stderr, errors and results (plots come back as images). ' +
-    'Variables and files persist between calls while the sandbox is in use; it stops after some idle minutes (see sandboxStatus) and the next call starts a fresh one, which the response says. Keep anything worth keeping in the Storage MCP. ' +
+    'Variables and files persist between calls while the sandbox is alive; it stops some idle minutes after the last runCode (file calls do not extend it; see sandboxStatus) and the next call starts a fresh one, which the response says. Keep anything worth keeping in the Storage MCP. ' +
     'Each run can call this platform\'s REST API as you: in Python, `from awesome import api` then `api(\'GET\', \'/api/v1/storage/collections\')` or `api(\'POST\', path, body)`; the token is in AWESOME_API_TOKEN and the base URL in AWESOME_API_BASE, valid only during the run. Use listRestEndpoints to see the routes for your connected services. ' +
-    'Process data inside the script and print only a summary: output is capped at 20,000 characters per stream. ' +
-    'The network reaches only this platform\'s API and the PyPI and npm registries (pip install works). Runs stop after timeoutSec (max 300).',
+    'Process data inside the script and print only a summary: output is capped at 20,000 characters each for stdout, stderr and results. ' +
+    'The network reaches only this platform\'s API and the PyPI and npm registries (pip install works). Runs stop after timeoutSec (max 300, and no more than what is left of your daily run time); a run that times out has its kernel restarted, so its variables are lost but files are kept.',
   parameters: runCodeSchema,
   execute: async (args, { session }) => respond(await opRunCode(session?.userId, session?.instanceId, args)),
 });
@@ -86,7 +86,7 @@ sandboxServer.addTool({
   name: 'readFile',
   annotations: { readOnlyHint: true },
   description:
-    'Read a file from your running sandbox. Text comes back capped at maxChars (the response gives the total); PNG, JPEG, GIF and WebP images up to 1.5 MB come back as images. ' +
+    'Read a file from your running sandbox. Text comes back capped at maxChars, and only that much is downloaded (the response gives the file size); PNG, JPEG, GIF and WebP images up to 1.5 MB come back as images. ' +
     'Other binary files are described, not returned: process them in runCode.',
   parameters: readFileSchema,
   execute: async (args, { session }) => respond(await opReadFile(session?.userId, args)),

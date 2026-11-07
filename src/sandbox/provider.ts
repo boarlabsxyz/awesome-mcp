@@ -32,10 +32,24 @@ export interface SandboxEntry {
   size: number;
 }
 
+export interface FileRead {
+  /** The file's first bytes: all of it when `size` <= maxBytes. */
+  bytes: Uint8Array;
+  /** The whole file's size. */
+  size: number;
+}
+
 export interface SandboxHandle {
   readonly id: string;
   runCode(code: string, opts: RunOptions): Promise<RunOutcome>;
-  readFile(path: string): Promise<Uint8Array>;
+  /**
+   * Stops whatever the language's kernel is still running by restarting it
+   * (variables go, files stay). False when no kernel for the language was
+   * found to restart, so the caller cannot claim the run stopped.
+   */
+  interrupt(language: SandboxLanguage): Promise<boolean>;
+  /** At most maxBytes of the file, so a huge file is not downloaded to show a little of it. */
+  readFile(path: string, maxBytes: number): Promise<FileRead>;
   writeFile(path: string, content: string): Promise<void>;
   listFiles(path: string): Promise<SandboxEntry[]>;
   /** Sets the time left before the vendor kills the sandbox, counted from now. */
@@ -64,6 +78,25 @@ const REQUEST_MARGIN_MS = 15_000;
 /** The SDK's "no such sandbox", which a deprecated parent class still covers. */
 const isNotFound = (err: unknown): boolean => /NotFound/.test((err as { name?: string })?.name ?? '');
 
+/** The first maxBytes of a stream; the rest is never downloaded. */
+export async function readPrefix(stream: ReadableStream<Uint8Array>, maxBytes: number): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const out = new Uint8Array(maxBytes);
+  let filled = 0;
+  try {
+    while (filled < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const take = Math.min(value.length, maxBytes - filled);
+      out.set(value.subarray(0, take), filled);
+      filled += take;
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return out.subarray(0, filled);
+}
+
 function wrap(sandbox: Sandbox): SandboxHandle {
   return {
     id: sandbox.sandboxId,
@@ -85,7 +118,19 @@ function wrap(sandbox: Sandbox): SandboxHandle {
           : undefined,
       };
     },
-    readFile: (path) => sandbox.files.read(path, { format: 'bytes' }),
+    async interrupt(language) {
+      // UNVERIFIED live: the context language names are assumed to be the
+      // runCode ones (plus 'js'). No match is reported, never guessed.
+      const names = language === 'javascript' ? ['javascript', 'js'] : [language];
+      const contexts = (await sandbox.listCodeContexts()).filter((c) => names.includes(c.language));
+      for (const context of contexts) await sandbox.restartCodeContext(context);
+      return contexts.length > 0;
+    },
+    async readFile(path, maxBytes) {
+      const { size } = await sandbox.files.getInfo(path);
+      if (size <= maxBytes) return { bytes: await sandbox.files.read(path, { format: 'bytes' }), size };
+      return { bytes: await readPrefix(await sandbox.files.read(path, { format: 'stream' }), maxBytes), size };
+    },
     async writeFile(path, content) {
       await sandbox.files.write(path, content);
     },

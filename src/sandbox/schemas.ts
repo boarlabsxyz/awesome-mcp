@@ -8,7 +8,7 @@ export const runCodeSchema = z.object({
     .describe('python (default) and javascript keep their variables between calls; bash runs a shell command.'),
   code: z.string().min(1).max(200_000).describe('The code to run.'),
   timeoutSec: z.number().int().min(1).max(300).default(120)
-    .describe('Stop the run after this many seconds (max 300, the lifetime of the run\'s REST token).'),
+    .describe('Stop the run after this many seconds (max 300; cut to what is left of your daily run time).'),
 });
 
 const path = z.string().min(1).max(1024);
