@@ -21,6 +21,10 @@ if (!process.env.GOOGLE_CREDENTIALS) {
 // They do not require any upstream Google/Slack/ClickUp mocking, so they
 // cover the routes' presence + auth gate cheaply.
 const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
+  // Storage reads.
+  '/api/v1/storage/collections',
+  '/api/v1/storage/collections/people',
+  '/api/v1/storage/collections/people/records/rec-1',
   // Pinecone reads. /indexes is in both arrays: GET lists, POST creates.
   '/api/v1/pinecone/indexes',
   '/api/v1/pinecone/indexes/company-docs',
@@ -184,6 +188,10 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
 // here proves the gate runs ahead of validation and an unauthenticated caller
 // can't probe the schema by watching 400s.
 const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
+  // Storage. /find is a READ served over POST (the where conditions).
+  '/api/v1/storage/collections/people/find',
+  '/api/v1/storage/collections/people/records',
+  '/api/v1/storage/collections/people/records/rec-1/update',
   // Pinecone. The two searches and the rerank are READS served over POST (the
   // body carries a filter and rerank options), so they are gated here by verb
   // rather than in the GET array above.

@@ -7,6 +7,8 @@ import { FastMCP } from 'fastmcp';
 import { instrumentServer } from '../usage/instrumentServer.js';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import {
   createCollectionSchema,
   deleteRecordsSchema,
@@ -38,6 +40,13 @@ export const storageServer = instrumentServer(new FastMCP<UserSession>({
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'storage'),
 }), 'storage');
+
+// Required once any Storage REST catalog entry is `live`: a script moving
+// records in bulk needs a short-lived bearer (or it falls back to the
+// permanent dashboard API key) and a way to discover the endpoints.
+// src/__tests__/sharedToolsRegistration.test.ts enforces this.
+registerMintRestBearerForCurl(storageServer);
+registerListRestEndpoints(storageServer);
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2);
 

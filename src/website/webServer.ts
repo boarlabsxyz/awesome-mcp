@@ -357,6 +357,7 @@ import { PINECONE_READ_ROUTES, PINECONE_WRITE_ROUTES, writeArgs as pineconeWrite
 import { HUBSPOT_WRITE_ROUTES, hubspotPassthroughStatus, writeArgs as hubspotWriteArgs } from '../hubspot/restRoutes.js';
 import { GMAIL_WRITE_ROUTES, gmailPassthroughStatus, writeArgs as gmailWriteArgs } from '../google-gmail/restRoutes.js';
 import { REDMINE_WRITE_ROUTES, writeArgs as redmineWriteArgs } from '../redmine/restRoutes.js';
+import { STORAGE_REST_ROUTES, storageErrorResponse } from '../storage/restRoutes.js';
 import type { GitHubClient } from '../github/apiHelpers.js';
 import type { PineconeRulesState } from '../pinecone/accessRules.js';
 import type { PineconeRestContext } from '../pinecone/restOps.js';
@@ -1393,6 +1394,9 @@ const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
   // full message passes 100kb well before Slack refuses it. GET siblings on the
   // same prefix are unaffected — a parser only reads a body that is present.
   '/api/v1/slack/channels',
+  // Storage insertRecords: up to 500 records of up to 64 KB each — a bulk load
+  // from a script is why the endpoint exists. Covers find's where body too.
+  '/api/v1/storage',
 ];
 
 /**
@@ -4490,7 +4494,14 @@ function registerRestApiRoutes(app: express.Express): void {
           connection = allConnections.find(c => c.mcpSlug.includes(fallbackSubstring)) || null;
         }
 
-        if (connection) {
+        if (primarySlug === 'storage') {
+          // Storage data is keyed by the caller's user id, not by a connection
+          // or a provider token, so the session is built from the user alone.
+          // Never the Google fallback below: a Storage call must not depend on
+          // (or fail for lack of) a Google connection.
+          const { createStorageSession } = await import('../userSession.js');
+          req.userSession = createStorageSession(user, connection?.mcpSlug === 'storage' ? connection.instanceId : undefined);
+        } else if (connection) {
           if (connection.provider === 'clickup') {
             // ClickUp uses its own session with clickUpAccessToken
             const { createClickUpSession } = await import('../userSession.js');
@@ -4583,6 +4594,7 @@ function registerRestApiRoutes(app: express.Express): void {
   const requireGitHubApiKey = createServiceAuth('github', 'github');
   const requirePineconeApiKey = createServiceAuth('pinecone', 'pinecone');
   const requireOutlineApiKey = createServiceAuth('outline', 'outline');
+  const requireStorageApiKey = createServiceAuth('storage', 'storage');
 
   // JSON body parser already added above for auth routes
 
@@ -10400,6 +10412,25 @@ function registerRestApiRoutes(app: express.Express): void {
       return;
     }
     sendUpstreamError(res, err, { notFound: 'Pinecone index not found', fallback });
+  }
+
+  for (const route of STORAGE_REST_ROUTES) {
+    app[route.method](route.path, requireStorageApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const parsed = route.schema.safeParse(route.args(req));
+        if (!parsed.success) {
+          if (route.method === 'get') { sendInvalidQuery(res, parsed.error.flatten()); return; }
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const result = await route.run(req.userSession!.userId as number, parsed.data);
+        res.status(result.status).json(result.body);
+      } catch (err) {
+        const { status, body } = storageErrorResponse(err, route.fallback);
+        if (status === 500) console.error(`Error in Storage ${route.tool}:`, err);
+        res.status(status).json(body);
+      }
+    });
   }
 
   for (const route of PINECONE_READ_ROUTES) {

@@ -39,6 +39,7 @@ const SERVICE_PREFIX = {
   'openapi-outline.json': 'Outline',
   'openapi-github.json': 'GitHub',
   'openapi-pinecone.json': 'Pinecone',
+  'openapi-storage.json': 'Storage',
 };
 
 const SHARED_SCHEMAS = new Set(['Error']);

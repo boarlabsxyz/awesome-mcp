@@ -449,14 +449,16 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 
 | MCP tool | REST endpoint | Status | Summary |
 |---|---|---|---|
-| `listCollections` | `GET /api/v1/storage/collections` | planned | List your storage collections with record counts and quotas |
-| `describeCollection` | `GET /api/v1/storage/collections/{collection}` | planned | Get the schema and migration history of one collection |
-| `getRecord` | `GET /api/v1/storage/collections/{collection}/records/{recordId}` | planned | Get one record by id |
-| `findRecords` | `POST /api/v1/storage/collections/{collection}/find` | planned | Query the records of one collection — _A read despite the POST: the where conditions do not fit a query string._ |
+| `listCollections` | `GET /api/v1/storage/collections` | live | List your storage collections with record counts and quotas |
+| `describeCollection` | `GET /api/v1/storage/collections/{collection}` | live | Get the schema and migration history of one collection |
+| `getRecord` | `GET /api/v1/storage/collections/{collection}/records/{recordId}` | live | Get one record by id or by keyField value — _recordId is the record _id; add ?by=key to look the record up by its keyField value instead (URL-encode it)._ |
+| `findRecords` | `POST /api/v1/storage/collections/{collection}/find` | live | Query the records of one collection — _A read despite the POST: the where conditions do not fit a query string. Body is the findRecords tool arguments; page with nextCursor._ |
+| `insertRecords` | `POST /api/v1/storage/collections/{collection}/records` | live | Insert up to 500 records, all or nothing — _Write: the permanent dashboard API key can call it, not only the 5-minute bearer. Body {records, onConflict}; onConflict update replaces records whose keyField value exists. 201 when anything was created, else 200. Body limit 5 MB._ |
+| `updateRecord` | `POST /api/v1/storage/collections/{collection}/records/{recordId}/update` | live | Update one record: set merges fields, unset removes optional ones — _Write: the permanent dashboard API key can call it, not only the 5-minute bearer. Body {set, unset}; add ?by=key to address the record by its keyField value. deleteRecords, migrateCollection and dropCollection stay MCP-only._ |
 
 ## Status legend
 
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 335 endpoints.
+Catalog size: 337 endpoints.
