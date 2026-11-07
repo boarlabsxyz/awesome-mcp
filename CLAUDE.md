@@ -1,6 +1,6 @@
 # Awesome MCP
 
-Multi-service FastMCP hosting platform: one MCP server per provider under `src/<provider>/server.ts` — Google Docs, Sheets, Calendar, Drive, Gmail and Slides, ClickUp, Slack (bot + user), Outline, PeopleForce (v2/v3 and v4), HubSpot, Redmine, Browserbase, GitHub, Pinecone and Supabase, first-party Storage (schema-enforced collections in our own Postgres) and Sandbox (code execution on E2B) MCPs, plus an admins-only Admin MCP over the usage analytics — and a curl-able REST data plane under `/api/v1/*`.
+Multi-service FastMCP hosting platform: one MCP server per provider under `src/<provider>/server.ts` — Google Docs, Sheets, Calendar, Drive, Gmail and Slides, ClickUp, Slack (bot + user), Outline, PeopleForce (v2/v3 and v4), HubSpot, Redmine, Browserbase, GitHub, Pinecone and Supabase, first-party Storage (schema-enforced collections in our own Postgres) and Sandbox (code execution on E2B) MCPs, plus an Admin MCP over the usage analytics — those three admins only (`ADMIN_ONLY_MCPS`, `src/auth/admin.ts`) — and a curl-able REST data plane under `/api/v1/*`.
 
 ## Tool Inventory
 

@@ -6,7 +6,7 @@ import { loadUsers, getUserByApiKey, getUserById } from './userStore.js';
 import { loadClientCredentials } from './auth.js';
 import { getMcpConnection, getMcpConnectionByInstanceId } from './mcpConnectionStore.js';
 import { getMcpCatalog } from './mcpCatalogStore.js';
-import { isAdminEmail } from './auth/admin.js';
+import { ADMIN_ONLY_MCPS, isAdminEmail } from './auth/admin.js';
 
 /** Dependencies injected for testability. */
 export interface AuthDeps {
@@ -132,16 +132,15 @@ async function sessionFromConnection(user: any, connection: any, deps: AuthDeps)
 
 /** Resolve a user + optional instanceId/slug to a session. */
 async function resolveSession(user: any, mcpSlug: string, instanceId: string | undefined, deps: AuthDeps): Promise<UserSession> {
-  // The Admin MCP is decided by WHO is calling, before any other path: the
-  // instanceId path skips ownership, and the global-Google-token fallback
-  // below would hand any Google-connected user a session for any slug. OAuth
-  // scopes cannot stand in for this check — any user can obtain mcp:admin.
-  if (mcpSlug === 'admin') {
-    if (!isAdminEmail(user?.email)) {
-      throw new Response(null, { status: 403, statusText: 'The Admin MCP is for administrators only.' } as any);
-    }
-    return deps.createAdminSession(user);
+  // The admin-only MCPs (Admin, Storage, Sandbox) are decided by WHO is
+  // calling, before any other path: the instanceId path skips ownership, and
+  // the global-Google-token fallback below would hand any Google-connected
+  // user a session for any slug. OAuth scopes cannot stand in for this check —
+  // any user can obtain any mcp:* scope.
+  if (ADMIN_ONLY_MCPS.has(mcpSlug) && !isAdminEmail(user?.email)) {
+    throw new Response(null, { status: 403, statusText: 'This MCP is for administrators only.' } as any);
   }
+  if (mcpSlug === 'admin') return deps.createAdminSession(user);
 
   // The Storage and Sandbox MCPs have no credential: their data and compute
   // belong to whoever is calling. Answered before the instanceId path, which

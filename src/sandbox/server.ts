@@ -6,6 +6,7 @@
 // what the script prints.
 import { FastMCP } from 'fastmcp';
 import { instrumentServer } from '../usage/instrumentServer.js';
+import { requireAdminForEveryTool } from '../admin-mcp/adminGuard.js';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
@@ -27,11 +28,13 @@ import {
   type ToolOutput,
 } from './ops.js';
 
-export const sandboxServer = instrumentServer(new FastMCP<UserSession>({
+// Admins only (ADMIN_ONLY_MCPS, src/auth/admin.ts): the guard re-checks the
+// caller on every call, since FastMCP authenticates once per session.
+export const sandboxServer = requireAdminForEveryTool(instrumentServer(new FastMCP<UserSession>({
   name: 'Sandbox MCP',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'sandbox'),
-}), 'sandbox');
+}), 'sandbox'), 'The Sandbox MCP is for administrators only. Your account is not in ADMIN_EMAILS.');
 
 // Scripts call the REST plane, so the route list is what Claude writes them
 // against. No mintRestBearerForCurl: every run already carries its own bearer.

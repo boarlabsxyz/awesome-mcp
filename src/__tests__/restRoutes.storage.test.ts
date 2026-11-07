@@ -72,8 +72,12 @@ describe('REST data plane: Storage handlers', () => {
   let userId: number;
   let otherKey: string;
   let otherId: number;
+  let outsiderKey: string;
+  const savedAdmins = process.env.ADMIN_EMAILS;
 
   before(async () => {
+    // Storage is admin-only: both test accounts are admins, the outsider is not.
+    process.env.ADMIN_EMAILS = 'st-rest@example.com, st-other@example.com';
     await createMcpCatalog({
       slug: 'storage', name: 'Storage MCP', description: 'test',
       iconUrl: '', mcpUrl: '/storage', provider: 'storage', scopes: [],
@@ -92,10 +96,26 @@ describe('REST data plane: Storage handlers', () => {
     const other = await getUserByGoogleId('google-st-other');
     otherKey = (other as any).apiKey;
     otherId = (other as any).id;
+
+    await createOrUpdateUser({ email: 'st-outsider@example.com', googleId: 'google-st-outsider', name: 'ST Outsider' }, dummyTokens);
+    outsiderKey = ((await getUserByGoogleId('google-st-outsider')) as any).apiKey;
   });
 
   afterEach(() => __setStoragePoolForTests(null));
-  after(() => __setStoragePoolForTests(null));
+  after(() => {
+    __setStoragePoolForTests(null);
+    if (savedAdmins === undefined) delete process.env.ADMIN_EMAILS;
+    else process.env.ADMIN_EMAILS = savedAdmins;
+  });
+
+  it('refuses a caller who is not an admin with 403, before touching the database', async () => {
+    const calls = fakePool([]);
+    const res = await get('/api/v1/storage/collections', outsiderKey);
+    assert.equal(res.status, 403);
+    assert.match(res.body.error, /administrators only/);
+    assert.equal((await post('/api/v1/storage/collections/people/records', { records: [ada] }, outsiderKey)).status, 403);
+    assert.equal(calls.length, 0);
+  });
 
   const get = (path: string, key = apiKey) => request(app).get(path).set('Authorization', `Bearer ${key}`);
   const post = (path: string, body: unknown = {}, key = apiKey) =>

@@ -48,6 +48,14 @@ describe('Admin MCP web routes', () => {
       googleClientId: null, googleClientSecret: null, oauthScopes: [],
       isLocal: true, isActive: true,
     });
+    for (const slug of ['storage', 'sandbox']) {
+      await createMcpCatalog({
+        slug, name: slug, description: 'test',
+        iconUrl: null, mcpUrl: `/${slug}`, provider: slug, scopes: [],
+        googleClientId: null, googleClientSecret: null, oauthScopes: [],
+        isLocal: true, isActive: true,
+      });
+    }
     await createMcpCatalog({
       slug: 'clickup', name: 'ClickUp', description: 'test',
       iconUrl: null, mcpUrl: '/clickup', provider: 'clickup', scopes: [],
@@ -104,10 +112,32 @@ describe('Admin MCP web routes', () => {
       assert.equal(one.status, 200);
     });
 
+    it('Storage and Sandbox are admin-only too: hidden from a non-admin, shown to an admin', async () => {
+      const member = await request(app).get('/api/v1/catalogs').set('Cookie', `session=${memberCookie}`);
+      const admin = await request(app).get('/api/v1/catalogs').set('Cookie', `session=${adminCookie}`);
+      for (const slug of ['storage', 'sandbox']) {
+        assert.ok(!slugs(member).includes(slug), slug);
+        assert.ok(slugs(admin).includes(slug), slug);
+        assert.equal((await request(app).get(`/api/v1/catalogs/${slug}`)).status, 404, slug);
+      }
+    });
+
     it('a forged session cookie counts as anonymous', async () => {
       const res = await request(app).get('/api/v1/catalogs').set('Cookie', 'session=s:not-a-session.bad');
       assert.equal(res.status, 200);
       assert.ok(!slugs(res).includes('admin'));
+    });
+  });
+
+  describe('/connect/storage and /connect/sandbox', () => {
+    it('refuse a non-admin and create nothing', async () => {
+      for (const slug of ['storage', 'sandbox']) {
+        const res = await request(app).get(`/connect/${slug}`).set('Cookie', `session=${memberCookie}`);
+        assert.equal(res.status, 403, slug);
+        assert.match(res.text, /administrators only/);
+      }
+      const conns = await getUserConnectedMcps(MEMBER_ID);
+      assert.equal(conns.filter((c) => c.mcpSlug === 'storage' || c.mcpSlug === 'sandbox').length, 0);
     });
   });
 

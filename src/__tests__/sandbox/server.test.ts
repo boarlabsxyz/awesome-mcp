@@ -29,11 +29,26 @@ describe('Sandbox MCP server', () => {
     assert.deepEqual(toolMap.get('listFiles')!.parameters.parse({}), { path: '/home/user' });
   });
 
+  it('refuses every tool, listRestEndpoints included, to a caller who is not an admin', async () => {
+    const saved = process.env.ADMIN_EMAILS;
+    process.env.ADMIN_EMAILS = 'boss@example.com';
+    try {
+      for (const [name, tool] of toolMap) {
+        await assert.rejects(tool.execute({}, { session: { userId: 7, email: 'someone@example.com' } }), /administrators only/, name);
+      }
+    } finally {
+      if (saved === undefined) delete process.env.ADMIN_EMAILS;
+      else process.env.ADMIN_EMAILS = saved;
+    }
+  });
+
   it('every tool says what is missing when this service has no E2B key', async () => {
     const saved = process.env.E2B_API_KEY;
+    const savedAdmins = process.env.ADMIN_EMAILS;
     delete process.env.E2B_API_KEY;
+    process.env.ADMIN_EMAILS = 'admin@example.com';
     try {
-      const session = { userId: 7, instanceId: 'sbx1' };
+      const session = { userId: 7, instanceId: 'sbx1', email: 'admin@example.com' };
       const calls: Array<[string, unknown]> = [
         ['runCode', { language: 'python', code: 'print(1)', timeoutSec: 120 }],
         ['writeFile', { path: '/home/user/a', content: 'x' }],
@@ -47,6 +62,8 @@ describe('Sandbox MCP server', () => {
       }
     } finally {
       if (saved !== undefined) process.env.E2B_API_KEY = saved;
+      if (savedAdmins === undefined) delete process.env.ADMIN_EMAILS;
+      else process.env.ADMIN_EMAILS = savedAdmins;
     }
   });
 });

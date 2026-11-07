@@ -9,7 +9,7 @@ import { OAuth2Client } from 'google-auth-library';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { restUsageMiddleware } from '../usage/restUsageMiddleware.js';
 import { registerAdminUsageRoutes } from '../usage/adminUsageRoutes.js';
-import { isAdminEmail } from '../auth/admin.js';
+import { ADMIN_ONLY_MCPS, isAdminEmail } from '../auth/admin.js';
 import { listUsersWithConnections } from '../usage/adminUsers.js';
 import { connectAdminMcp } from '../admin-mcp/connect.js';
 import { connectStorageMcp } from '../storage/connect.js';
@@ -2067,6 +2067,10 @@ function registerSharedRoutes(app: express.Express): void {
       // Sandbox MCP (it runs on our E2B key): there is nothing to consent to.
       const perUserConnect = mcpSlug === 'storage' || mcpSlug === 'sandbox' ? PER_USER_CONNECTS[mcpSlug] : null;
       if (perUserConnect) {
+        if (!isAdminEmail(connectingUser.email)) {
+          res.status(403).send(`The ${perUserConnect.label} is for administrators only.`);
+          return;
+        }
         const result = await perUserConnect.connect({ id: connectingUser.id });
         if (result.outcome === 'unavailable') {
           res.status(503).send(perUserConnect.unavailable);
@@ -4197,11 +4201,10 @@ function registerSharedRoutes(app: express.Express): void {
     ],
   };
 
-  // Catalogs only administrators may see. is_active is global, so the filter
-  // is per request: the dashboard's same-origin fetch carries the session
-  // cookie, while the public integrations page and anonymous callers do not.
-  const ADMIN_ONLY_SLUGS = new Set(['admin']);
-
+  // Catalogs only administrators may see (ADMIN_ONLY_MCPS). is_active is
+  // global, so the filter is per request: the dashboard's same-origin fetch
+  // carries the session cookie, while the public integrations page and
+  // anonymous callers do not.
   /** True only for a request with a live dashboard session belonging to an admin. Never throws. */
   async function requestIsAdmin(req: Request): Promise<boolean> {
     try {
@@ -4221,7 +4224,7 @@ function registerSharedRoutes(app: express.Express): void {
     try {
       console.error('[/api/v1/catalogs] Fetching catalogs...');
       const isAdmin = await requestIsAdmin(req);
-      const catalogs = (await listMcpCatalogs()).filter((c) => isAdmin || !ADMIN_ONLY_SLUGS.has(c.slug));
+      const catalogs = (await listMcpCatalogs()).filter((c) => isAdmin || !ADMIN_ONLY_MCPS.has(c.slug));
       console.error(`[/api/v1/catalogs] Found ${catalogs.length} catalogs`);
       res.json({
         catalogs: catalogs.map(c => {
@@ -4253,7 +4256,7 @@ function registerSharedRoutes(app: express.Express): void {
   app.get('/api/v1/catalogs/:slug', async (req, res) => {
     try {
       const catalog = await getMcpCatalog(req.params.slug);
-      if (!catalog || (ADMIN_ONLY_SLUGS.has(catalog.slug) && !(await requestIsAdmin(req)))) {
+      if (!catalog || (ADMIN_ONLY_MCPS.has(catalog.slug) && !(await requestIsAdmin(req)))) {
         res.status(404).json({ error: 'Catalog not found' });
         return;
       }
@@ -4515,6 +4518,11 @@ function registerRestApiRoutes(app: express.Express): void {
           connection = allConnections.find(c => c.mcpSlug.includes(fallbackSubstring)) || null;
         }
 
+        if (primarySlug === 'storage' && !isAdminEmail(user.email)) {
+          // Admins only, like the Storage MCP itself (ADMIN_ONLY_MCPS).
+          res.status(403).json({ error: 'The Storage REST API is for administrators only.' });
+          return;
+        }
         if (primarySlug === 'storage') {
           // Storage data is keyed by the caller's user id, not by a connection
           // or a provider token, so the session is built from the user alone.

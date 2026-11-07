@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { UserError } from 'fastmcp';
-import { isAdminEmail, adminEmails } from '../../auth/admin.js';
+import { ADMIN_ONLY_MCPS, isAdminEmail, adminEmails } from '../../auth/admin.js';
 import { requireAdminForEveryTool, NOT_ADMIN_MESSAGE } from '../../admin-mcp/adminGuard.js';
 import { instrumentServer } from '../../usage/instrumentServer.js';
 import {
@@ -107,18 +107,30 @@ describe('requireAdminForEveryTool', () => {
   });
 });
 
-// The Admin MCP must be constructed inside the guard: a bare server would
-// work, pass every other test, and answer anyone whose session got created.
-describe('src/admin-mcp/server.ts is built inside the admin guard', () => {
-  const file = resolve(dirname(fileURLToPath(import.meta.url)), '../../admin-mcp/server.ts');
-  const source = readFileSync(file, 'utf8').replace(/^[ \t]*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+// Every admin-only MCP must be constructed inside the guard: a bare server
+// would work, pass every other test, and answer anyone whose session got created.
+const ADMIN_ONLY_SERVER_FILES: Record<string, string> = { admin: 'admin-mcp', storage: 'storage', sandbox: 'sandbox' };
+const stripComments = (path: string) =>
+  readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../..', path), 'utf8').replace(/^[ \t]*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
 
-  it('wraps every FastMCP construction in requireAdminForEveryTool(instrumentServer(...))', () => {
-    const constructions = source.match(/new FastMCP\b/g) ?? [];
-    const guarded = source.match(/requireAdminForEveryTool\(\s*instrumentServer\(\s*new FastMCP\b/g) ?? [];
-    assert.ok(constructions.length >= 1);
-    assert.equal(guarded.length, constructions.length);
+describe('every admin-only MCP server is built inside the admin guard', () => {
+  it('ADMIN_ONLY_MCPS and this list agree, so a newly restricted MCP is checked too', () => {
+    assert.deepEqual([...ADMIN_ONLY_MCPS].sort(), Object.keys(ADMIN_ONLY_SERVER_FILES).sort());
   });
+
+  for (const [slug, dir] of Object.entries(ADMIN_ONLY_SERVER_FILES)) {
+    it(`${dir}/server.ts wraps every FastMCP construction in requireAdminForEveryTool(instrumentServer(...))`, () => {
+      const source = stripComments(`${dir}/server.ts`);
+      const constructions = source.match(/new FastMCP\b/g) ?? [];
+      const guarded = source.match(/requireAdminForEveryTool\(\s*instrumentServer\(\s*new FastMCP\b/g) ?? [];
+      assert.ok(constructions.length >= 1, slug);
+      assert.equal(guarded.length, constructions.length, slug);
+    });
+  }
+});
+
+describe('src/admin-mcp/server.ts registers through the guarded server', () => {
+  const source = stripComments('admin-mcp/server.ts');
 
   it('registers tools only through the guarded server', () => {
     const registrations = source.match(/^\s*(\w+)\.addTool\(/gm) ?? [];
