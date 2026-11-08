@@ -67,6 +67,25 @@ jobs:
       - run: npm run build
       - run: npm test
 
+  # The sandbox's security checks under real Deno on Linux, as the runner
+  # image runs it (src/__tests__/sandbox/runner/deno.test.ts). `npm test`
+  # skips that file without Deno; here it must run.
+  sandbox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm install -g deno@2.9.6
+      - run: echo "SANDBOX_DENO_PATH=$(npm root -g)/deno/deno" >> "$GITHUB_ENV"
+      - run: npm run sandbox:prefetch
+      - run: node --import tsx --test src/__tests__/sandbox/runner/deno.test.ts
+        env:
+          SANDBOX_REQUIRE_DENO: '1'
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -80,7 +99,7 @@ jobs:
 
   trigger-deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [lint, typecheck, test, build]
+    needs: [lint, typecheck, test, sandbox, build]
     runs-on: ubuntu-latest
     permissions:
       actions: write

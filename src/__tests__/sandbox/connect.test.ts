@@ -12,7 +12,7 @@ function deps(over: Partial<SandboxConnectDeps> = {}): SandboxConnectDeps {
 }
 
 describe('connectSandboxMcp', () => {
-  it('refuses without an E2B key or Redis, creating nothing', async () => {
+  it('refuses without a runner or Redis, creating nothing', async () => {
     const d = deps({ isConfigured: () => false });
     assert.deepEqual(await connectSandboxMcp({ id: 1 }, d), { outcome: 'unavailable' });
     assert.equal((d.createMcpInstance as any).mock.calls.length, 0);
@@ -29,10 +29,13 @@ describe('connectSandboxMcp', () => {
     assert.deepEqual(await connectSandboxMcp({ id: 1 }, again), { outcome: 'exists', instanceId: 'old', instanceName: 'Sandbox' });
   });
 
-  it('counts a remote Sandbox service as ready: its E2B key is on that service, not this one', () => {
+  it('counts a remote Sandbox service as ready: its runner settings are on that service, not this one', () => {
     assert.equal(sandboxConfigured({ SANDBOX_MCP_URL: 'https://sandbox.example' }, true), true);
-    assert.equal(sandboxConfigured({ E2B_API_KEY: 'k' }, true), true);
+    assert.equal(sandboxConfigured({ SANDBOX_RUNNER_URL: 'http://runner:8080', SANDBOX_RUNNER_SECRET: 's' }, true), true);
+    assert.equal(sandboxConfigured({ SANDBOX_RUNNER_URL: 'http://runner:8080' }, true), false, 'a runner URL without its secret cannot be called');
+    assert.equal(sandboxConfigured({ SANDBOX_RUNNER: 'local' }, true), true);
+    assert.equal(sandboxConfigured({ SANDBOX_RUNNER_URL: 'http://runner:8080', SANDBOX_RUNNER: 'local' }, true), false, 'the URL wins, as in engine.ts');
     assert.equal(sandboxConfigured({}, true), false);
-    assert.equal(sandboxConfigured({ SANDBOX_MCP_URL: 'https://sandbox.example', E2B_API_KEY: 'k' }, false), false, 'still needs a database');
+    assert.equal(sandboxConfigured({ SANDBOX_MCP_URL: 'https://sandbox.example' }, false), false, 'still needs a database');
   });
 });

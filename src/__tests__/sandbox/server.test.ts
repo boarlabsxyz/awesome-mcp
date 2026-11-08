@@ -42,10 +42,11 @@ describe('Sandbox MCP server', () => {
     }
   });
 
-  it('every tool says what is missing when this service has no E2B key', async () => {
-    const saved = process.env.E2B_API_KEY;
+  it('every tool says what is missing when this service has no sandbox runner', async () => {
+    const saved = { url: process.env.SANDBOX_RUNNER_URL, mode: process.env.SANDBOX_RUNNER };
     const savedAdmins = process.env.ADMIN_EMAILS;
-    delete process.env.E2B_API_KEY;
+    delete process.env.SANDBOX_RUNNER_URL;
+    delete process.env.SANDBOX_RUNNER;
     process.env.ADMIN_EMAILS = 'admin@example.com';
     try {
       const session = { userId: 7, instanceId: 'sbx1', email: 'admin@example.com' };
@@ -58,10 +59,11 @@ describe('Sandbox MCP server', () => {
         ['resetSandbox', {}],
       ];
       for (const [name, args] of calls) {
-        await assert.rejects(toolMap.get(name)!.execute(args, { session }), /E2B_API_KEY/, name);
+        await assert.rejects(toolMap.get(name)!.execute(args, { session }), /SANDBOX_RUNNER_URL/, name);
       }
     } finally {
-      if (saved !== undefined) process.env.E2B_API_KEY = saved;
+      if (saved.url !== undefined) process.env.SANDBOX_RUNNER_URL = saved.url;
+      if (saved.mode !== undefined) process.env.SANDBOX_RUNNER = saved.mode;
       if (savedAdmins === undefined) delete process.env.ADMIN_EMAILS;
       else process.env.ADMIN_EMAILS = savedAdmins;
     }

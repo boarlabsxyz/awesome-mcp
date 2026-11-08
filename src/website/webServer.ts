@@ -419,7 +419,7 @@ const PER_USER_CONNECTS = {
   sandbox: {
     connect: connectSandboxMcp,
     label: 'Sandbox MCP',
-    unavailable: 'The sandbox is unavailable: this server has neither SANDBOX_MCP_URL nor E2B_API_KEY configured, or no database/Redis connection.',
+    unavailable: 'The sandbox is unavailable: this server has neither SANDBOX_MCP_URL nor a sandbox runner (SANDBOX_RUNNER_URL with SANDBOX_RUNNER_SECRET, or SANDBOX_RUNNER=local) configured, or no database/Redis connection.',
   },
 } as const;
 
@@ -2064,7 +2064,7 @@ function registerSharedRoutes(app: express.Express): void {
       }
 
       // Same for the Storage MCP (its data lives in our own database) and the
-      // Sandbox MCP (it runs on our E2B key): there is nothing to consent to.
+      // Sandbox MCP (it runs on our own runner): there is nothing to consent to.
       const perUserConnect = mcpSlug === 'storage' || mcpSlug === 'sandbox' ? PER_USER_CONNECTS[mcpSlug] : null;
       if (perUserConnect) {
         if (!isAdminEmail(connectingUser.email)) {
