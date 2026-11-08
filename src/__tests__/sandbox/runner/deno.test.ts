@@ -169,6 +169,15 @@ describe('Deno sandbox: running code', { skip, timeout: 180_000 }, () => {
     assert.equal(big.stdoutTotal, 5001);
   });
 
+  it('reports a thrown value whose fields cannot become text, and keeps the interpreter', async () => {
+    const h = await sandbox();
+    await js(h, 'globalThis.kept = 1');
+    const r = await js(h, 'throw { name: { toString: 0 }, message: "bad", stack: "tb" }');
+    assert.equal(r.stopped, undefined);
+    assert.match(String(r.error?.name), /cannot be shown as text/);
+    assert.deepEqual((await js(h, 'return kept')).results, ['1']);
+  });
+
   it('runs JavaScript as an async function body, with state on globalThis', async () => {
     const h = await sandbox();
     await js(h, 'globalThis.n = 20');

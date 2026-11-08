@@ -27,13 +27,12 @@ import {
   type SandboxProvider,
 } from '../provider.js';
 import { BUNDLED_PACKAGES } from './packages.js';
-import { WorkerProcess, type WorkerCommand, type WorkerLike } from './workerProcess.js';
+import { MAX_IMAGE_BYTES, MAX_IMAGES, WorkerProcess, type WorkerCommand, type WorkerLike } from './workerProcess.js';
+
+export { MAX_IMAGE_BYTES, MAX_IMAGES };
 
 /** Where the user's directory appears inside the sandbox. */
 export const SANDBOX_HOME = '/home/user';
-/** Images a run returns at most, and the size of each. */
-export const MAX_IMAGES = 3;
-export const MAX_IMAGE_BYTES = 1_500_000;
 /** V8's own heap (JavaScript, not Python), per worker. */
 const JS_HEAP_MB = 512;
 /** One WebAssembly page is 64 KiB. */
@@ -319,6 +318,8 @@ export class SandboxPool implements SandboxProvider {
   private readonly sessions = new Map<string, Session>();
   private starting = 0;
   private prepared: Promise<string> | null = null;
+  /** Set by close(): nothing new is admitted, so shutdown leaves no session behind. */
+  private closing = false;
 
   constructor(
     private readonly config: PoolConfig,
@@ -344,6 +345,7 @@ export class SandboxPool implements SandboxProvider {
   }
 
   async create(opts: CreateOptions): Promise<SandboxHandle> {
+    this.refuseIfClosing();
     const root = await this.dataDir();
     const id = crypto.randomBytes(16).toString('hex');
     const dir = path.join(root, id);
@@ -353,6 +355,11 @@ export class SandboxPool implements SandboxProvider {
     workerCommand(this.config, dir, session.allowNet); // validates now, not at the first run
     await fsp.mkdir(dir);
     this.sessions.set(id, session);
+    // A create already past the check when close() took its snapshot undoes itself.
+    if (this.closing) {
+      await this.destroy(session);
+      this.refuseIfClosing();
+    }
     this.arm(session, opts.timeoutMs);
     return this.handle(session);
   }
@@ -374,7 +381,12 @@ export class SandboxPool implements SandboxProvider {
 
   /** Ends every session: workers stopped, directories removed. */
   async close(): Promise<void> {
+    this.closing = true;
     await Promise.all([...this.sessions.values()].map((s) => this.destroy(s)));
+  }
+
+  private refuseIfClosing(): void {
+    if (this.closing) throw new SandboxRefusal('The sandbox runner is shutting down (a redeploy). Try again in a minute.');
   }
 
   /** Live workers, for the runner's health answer. */

@@ -247,6 +247,18 @@ describe('SandboxPool sessions', () => {
     assert.match(errors.join(' '), /could not remove its directory/);
   });
 
+  it('admits nothing once closing, and a create caught mid-way leaves no directory', async () => {
+    const c = config();
+    const pool = new TestPool(c, fakeWorkers().start);
+    const kept = await create(pool);
+    const inFlight = create(pool); // past the check, still preparing
+    await pool.close();
+    await assert.rejects(inFlight, /shutting down/);
+    await assert.rejects(create(pool), /shutting down/);
+    assert.equal(await pool.connect(kept.id), null);
+    assert.deepEqual(fs.readdirSync(fs.realpathSync(c.dataDir)).filter((n) => /^[0-9a-f]{32}$/.test(n)), []);
+  });
+
   it('refuses a bad allowlist at creation, not at the first run', async () => {
     const pool = new TestPool(config(), fakeWorkers().start);
     await assert.rejects(pool.create({ timeoutMs: 1000, allowNet: ['a b'], userId: 1 }), { name: 'SandboxRefusal' });

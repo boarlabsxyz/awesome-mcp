@@ -289,7 +289,14 @@ async function handle(req: Request): Promise<void> {
   current = null;
   // A huge exception message must not overflow the host's line limit and cost the user their variables.
   const err = result.error as { name?: unknown; value?: unknown; traceback?: unknown } | undefined;
-  const clip = (v: unknown, n: number) => String(v ?? '').slice(0, n);
+  // Thrown values are user data: String() of one can itself throw ({ toString: 0 }).
+  const clip = (v: unknown, n: number) => {
+    try {
+      return String(v ?? '').slice(0, n);
+    } catch {
+      return '[a value that cannot be shown as text]';
+    }
+  };
   const error = err ? { name: clip(err.name, 200), value: clip(err.value, ERROR_FIELD_CHARS), traceback: clip(err.traceback, ERROR_FIELD_CHARS) } : undefined;
   send({ id: req.id, type: 'done', ...result, error, ...capResults(result.results, req.maxOutputChars), stdoutTotal: total.stdout, stderrTotal: total.stderr });
 }

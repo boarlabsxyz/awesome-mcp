@@ -54,6 +54,12 @@ export interface WorkerCommand {
   cwd?: string;
 }
 
+/** Images a run returns at most, and the size of each (bytes of PNG). */
+export const MAX_IMAGES = 3;
+export const MAX_IMAGE_BYTES = 1_500_000;
+/** An exception's message and traceback are cut to this, here and in the worker. */
+export const ERROR_FIELD_CHARS = 20_000;
+
 /** The longest protocol line accepted; a longer one means the worker is misbehaving, and it is killed. */
 const MAX_LINE_CHARS = 16 * 1024 * 1024;
 /** How much of the worker's own stderr is kept, for a crash report. */
@@ -223,16 +229,20 @@ export class WorkerProcess implements WorkerLike {
     if (msg.type === 'out') {
       this.append(p, msg.stream === 'stderr' ? 'stderr' : 'stdout', typeof msg.text === 'string' ? msg.text : '', msg.more === true);
     } else if (msg.type === 'done') {
+      // The worker's own caps, applied again: a forged `done` never passed them.
       const results = strings(msg.results);
       const error = msg.error !== null && typeof msg.error === 'object' ? (msg.error as Message) : undefined;
+      const allImages = strings(msg.images);
+      const images = allImages.filter((png) => png.length * 0.75 <= MAX_IMAGE_BYTES).slice(0, MAX_IMAGES);
+      const field = (v: unknown, n: number) => text(v).slice(0, n);
       this.finish({
         stdoutTotal: Math.max(p.total.stdout, count(msg.stdoutTotal)),
         stderrTotal: Math.max(p.total.stderr, count(msg.stderrTotal)),
         results: capResults(results, p.maxChars),
         resultsTotal: Math.max(results.reduce((n, r) => n + r.length, 0), count(msg.resultsTotal)),
-        images: strings(msg.images),
-        imagesDropped: count(msg.imagesDropped),
-        ...(error ? { error: { name: text(error.name) || 'Error', value: text(error.value), traceback: text(error.traceback) } } : {}),
+        images,
+        imagesDropped: count(msg.imagesDropped) + (allImages.length - images.length),
+        ...(error ? { error: { name: field(error.name, 200) || 'Error', value: field(error.value, ERROR_FIELD_CHARS), traceback: field(error.traceback, ERROR_FIELD_CHARS) } } : {}),
       }, false);
     }
   }

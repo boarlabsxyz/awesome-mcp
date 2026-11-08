@@ -25,8 +25,8 @@ process.stdin.on('data', (d) => {
     if (code === 'forge-done') {
       // A completion with the wrong types where strings and numbers belong, and results past the budget.
       send({ id, type: 'done', results: ['a'.repeat(150), { toString: 1, valueOf: 1 }, 5], resultsTotal: { valueOf: 1 },
-        images: [{ toString: 1 }], imagesDropped: 'many', stdoutTotal: -3,
-        error: { name: { toString: 1, valueOf: 1 }, value: 7, traceback: ['tb'] } });
+        images: [{ toString: 1 }, 'A'.repeat(10), 'B'.repeat(2100000), 'C', 'D', 'E'], imagesDropped: 'many', stdoutTotal: -3,
+        error: { name: { toString: 1, valueOf: 1 }, value: 'v'.repeat(30000), traceback: ['tb'] } });
       continue;
     }
     if (code === 'forge') {
@@ -116,10 +116,10 @@ describe('WorkerProcess', () => {
       assert.equal(r.stopped, undefined);
       assert.deepEqual(r.results, ['a'.repeat(100)]);
       assert.equal(r.resultsTotal, 150);
-      assert.deepEqual(r.images, []);
-      assert.equal(r.imagesDropped, 0);
+      assert.deepEqual(r.images, ['A'.repeat(10), 'C', 'D'], 'at most 3, none over 1.5 MB of PNG');
+      assert.equal(r.imagesDropped, 2);
       assert.equal(r.stdoutTotal, 0);
-      assert.deepEqual(r.error, { name: 'Error', value: '', traceback: '' });
+      assert.deepEqual(r.error, { name: 'Error', value: 'v'.repeat(20_000), traceback: '' });
       assert.ok(worker.alive, 'the runner and the worker both carry on');
     } finally {
       worker.kill();
