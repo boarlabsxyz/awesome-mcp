@@ -59,8 +59,8 @@ before(async () => {
   otherUrl = `http://127.0.0.1:${otherPort}/`;
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deno-sandbox-'));
   process.env.SANDBOX_SENTINEL = 'leak-me';
-  // The production default: every bundled package must load within it.
-  pool = new SandboxPool({ ...config, dataDir, memoryMb: 1024, maxRssBytes: 2560 * 1024 * 1024, maxWorkers: 3 });
+  // The production defaults: every bundled package must load within them, RSS limit included.
+  pool = new SandboxPool({ ...poolConfigFromEnv({ ...process.env, SANDBOX_MEMORY_MB: '', SANDBOX_MAX_RSS_MB: '' }), dataDir, maxWorkers: 3 });
 });
 after(async () => {
   // Stop every worker, or their processes keep the test run alive until the idle timers fire.
@@ -199,6 +199,10 @@ describe('Deno sandbox: running code', { skip, timeout: 180_000 }, () => {
     const r = await py(h, 'import micropip, numpy, pandas, matplotlib, scipy, sklearn, pyarrow, duckdb, requests, bs4, lxml, yaml, xlrd, regex, PIL\n"loaded"', { timeoutMs: 120_000 });
     assert.equal(r.error, undefined, r.error?.traceback);
     assert.deepEqual(r.results, ["'loaded'"]);
+    // Let the watchdog sample the loaded interpreter (Linux): it must stay under the default RSS limit.
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    const after = await py(h, 'len(sys.modules) > 0 if (sys := __import__("sys")) else False');
+    assert.equal(after.restarted, false, `the watchdog stopped it: ${after.previousStop}`);
   });
 
   it('resolves JavaScript’s relative paths in /home/user, where Python sees the same files', async () => {

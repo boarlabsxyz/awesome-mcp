@@ -104,6 +104,9 @@ function emit(stream: Stream, text: string): void {
   }
 }
 
+/** An exception's message and traceback are cut to this; the host shows less still. */
+const ERROR_FIELD_CHARS = 20_000;
+
 /** The results within one budget of max characters, and their full length. */
 function capResults(results: string[], max: number): { results: string[]; resultsTotal: number } {
   const kept: string[] = [];
@@ -284,7 +287,11 @@ async function handle(req: Request): Promise<void> {
   }
   const { total } = current;
   current = null;
-  send({ id: req.id, type: 'done', ...result, ...capResults(result.results, req.maxOutputChars), stdoutTotal: total.stdout, stderrTotal: total.stderr });
+  // A huge exception message must not overflow the host's line limit and cost the user their variables.
+  const err = result.error as { name?: unknown; value?: unknown; traceback?: unknown } | undefined;
+  const clip = (v: unknown, n: number) => String(v ?? '').slice(0, n);
+  const error = err ? { name: clip(err.name, 200), value: clip(err.value, ERROR_FIELD_CHARS), traceback: clip(err.traceback, ERROR_FIELD_CHARS) } : undefined;
+  send({ id: req.id, type: 'done', ...result, error, ...capResults(result.results, req.maxOutputChars), stdoutTotal: total.stdout, stderrTotal: total.stderr });
 }
 
 send({ type: 'ready' });

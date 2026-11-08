@@ -15,7 +15,18 @@ import type { RunOptions } from '../../../sandbox/provider.js';
 import type { WorkerCommand, WorkerLike, WorkerRunRequest, WorkerRunResult } from '../../../sandbox/runner/workerProcess.js';
 
 const roots: string[] = [];
-afterEach(() => {
+const pools: SandboxPool[] = [];
+
+/** A pool the test ends afterwards: a live fake worker keeps its watchdog interval, and the test process, running. */
+class TestPool extends SandboxPool {
+  constructor(...args: ConstructorParameters<typeof SandboxPool>) {
+    super(...args);
+    pools.push(this);
+  }
+}
+
+afterEach(async () => {
+  for (const p of pools.splice(0)) await p.close().catch(() => {});
   for (const r of roots.splice(0)) fs.rmSync(r, { recursive: true, force: true });
 });
 
@@ -137,6 +148,14 @@ describe('dirUsage and poolConfigFromEnv', () => {
     assert.equal((await dirUsage(dir, 1)).entries, 2, 'stops as soon as the count passes the cap');
   });
 
+  it('counts what user code hid behind a listable but unsearchable directory (chmod 0400)', async () => {
+    const dir = config().dataDir;
+    fs.mkdirSync(path.join(dir, 'ro'));
+    fs.writeFileSync(path.join(dir, 'ro', 'big'), 'x'.repeat(300));
+    fs.chmodSync(path.join(dir, 'ro'), 0o400);
+    assert.deepEqual(await dirUsage(dir, 100), { bytes: 300, entries: 2 });
+  });
+
   it('counts what user code hid behind chmod 000', async () => {
     const dir = config().dataDir;
     fs.mkdirSync(path.join(dir, 'hidden'));
@@ -166,7 +185,7 @@ describe('dirUsage and poolConfigFromEnv', () => {
 
 describe('SandboxPool sessions', () => {
   it('creates a directory per session, removes it on kill, and forgets the session', async () => {
-    const pool = new SandboxPool(config(), fakeWorkers().start);
+    const pool = new TestPool(config(), fakeWorkers().start);
     const h = await create(pool);
     const dir = path.join(fs.realpathSync(roots[0]), h.id);
     assert.ok(fs.statSync(dir).isDirectory());
@@ -180,7 +199,7 @@ describe('SandboxPool sessions', () => {
   });
 
   it('stops a session after its idle timeout, and setTimeout pushes that back', async () => {
-    const pool = new SandboxPool(config(), fakeWorkers().start);
+    const pool = new TestPool(config(), fakeWorkers().start);
     const h = await create(pool, 60);
     await h.setTimeout(200);
     await sleep(100);
@@ -194,14 +213,14 @@ describe('SandboxPool sessions', () => {
     const stale = path.join(c.dataDir, 'a'.repeat(32));
     fs.mkdirSync(stale);
     fs.writeFileSync(path.join(c.dataDir, 'keep.txt'), 'x');
-    await create(new SandboxPool(c, fakeWorkers().start));
+    await create(new TestPool(c, fakeWorkers().start));
     assert.equal(fs.existsSync(stale), false);
     assert.ok(fs.existsSync(path.join(c.dataDir, 'keep.txt')));
   });
 
   it('removes a directory whose permissions user code took away, and survives an idle cleanup that fails', async () => {
     const c = config();
-    const pool = new SandboxPool(c, fakeWorkers().start);
+    const pool = new TestPool(c, fakeWorkers().start);
     const h = await create(pool);
     const dir = path.join(fs.realpathSync(c.dataDir), h.id);
     fs.mkdirSync(path.join(dir, 'locked'));
@@ -229,7 +248,7 @@ describe('SandboxPool sessions', () => {
   });
 
   it('refuses a bad allowlist at creation, not at the first run', async () => {
-    const pool = new SandboxPool(config(), fakeWorkers().start);
+    const pool = new TestPool(config(), fakeWorkers().start);
     await assert.rejects(pool.create({ timeoutMs: 1000, allowNet: ['a b'], userId: 1 }), { name: 'SandboxRefusal' });
   });
 });
@@ -237,7 +256,7 @@ describe('SandboxPool sessions', () => {
 describe('SandboxPool runs', () => {
   it('starts a worker on the first run and keeps it for the next', async () => {
     const workers = fakeWorkers(async (req) => done({ results: [req.code] }));
-    const pool = new SandboxPool(config(), workers.start);
+    const pool = new TestPool(config(), workers.start);
     const h = await create(pool);
     const first = await h.runCode('x = 1', opts());
     assert.deepEqual(first.results, ['x = 1']);
@@ -253,7 +272,7 @@ describe('SandboxPool runs', () => {
       if (req.code === 'loop') { w.alive = false; return done({ stopped: 'timeout' }); }
       return done();
     });
-    const pool = new SandboxPool(config(), workers.start);
+    const pool = new TestPool(config(), workers.start);
     const h = await create(pool);
     assert.equal((await h.runCode('loop', opts())).stopped, 'timeout');
     const next = await h.runCode('x', opts());
@@ -264,7 +283,7 @@ describe('SandboxPool runs', () => {
   it('refuses a second run in the same session while one is running', async () => {
     let release!: () => void;
     const workers = fakeWorkers(() => new Promise((r) => { release = () => r(done()); }));
-    const h = await create(new SandboxPool(config(), workers.start));
+    const h = await create(new TestPool(config(), workers.start));
     const first = h.runCode('slow', opts());
     await sleep(10);
     await assert.rejects(h.runCode('x', opts()), /already running code/);
@@ -275,7 +294,7 @@ describe('SandboxPool runs', () => {
   it('makes room by stopping the least recently used idle worker, and refuses when every worker is busy', async () => {
     let release: (() => void) | undefined;
     const workers = fakeWorkers((req) => (req.code === 'slow' ? new Promise((r) => { release = () => r(done()); }) : Promise.resolve(done())));
-    const pool = new SandboxPool(config({ maxWorkers: 1 }), workers.start);
+    const pool = new TestPool(config({ maxWorkers: 1 }), workers.start);
     const a = await create(pool);
     const b = await create(pool);
     await a.runCode('x', opts());
@@ -297,7 +316,7 @@ describe('SandboxPool runs', () => {
       fs.writeFileSync(path.join(home, 'big'), 'x'.repeat(5000));
       return new Promise<WorkerRunResult>(() => {}); // runs until killed
     });
-    const h = await create(new SandboxPool(c, workers.start));
+    const h = await create(new TestPool(c, workers.start));
     const r = await h.runCode('fill', opts());
     assert.equal(r.stopped, 'disk');
   });
@@ -307,14 +326,14 @@ describe('SandboxPool runs', () => {
       fs.writeFileSync(path.join(cmd.cwd!, 'big'), 'x'.repeat(5000));
       return done({ results: ['ok'] });
     });
-    const h = await create(new SandboxPool(config({ maxDiskBytes: 1000, watchMs: 60_000 }), workers.start));
+    const h = await create(new TestPool(config({ maxDiskBytes: 1000, watchMs: 60_000 }), workers.start));
     assert.equal((await h.runCode('fill', opts())).stopped, 'disk');
   });
 
   it('stops a worker that keeps using CPU between runs — code left running, or a forged end of run', async () => {
     let cpu = 0;
     const workers = fakeWorkers();
-    const pool = new SandboxPool(config(), workers.start, async () => ({ cpuSec: cpu, rssBytes: 1 }));
+    const pool = new TestPool(config(), workers.start, async () => ({ cpuSec: cpu, rssBytes: 1 }));
     const h = await create(pool);
     await h.runCode('setInterval(spin)', opts());
     const spin = setInterval(() => { cpu += 0.02; }, 20); // one core's worth
@@ -329,11 +348,26 @@ describe('SandboxPool runs', () => {
     assert.equal(next.previousStop, 'background');
   });
 
+  it('does not count a run that started and ended between two watchdog passes as idle CPU', async () => {
+    let cpu = 0;
+    const workers = fakeWorkers(async () => { cpu += 5; return done(); }); // a heavy run, over before the next pass
+    const pool = new TestPool(config({ watchMs: 40 }), workers.start, async () => ({ cpuSec: cpu, rssBytes: 1 }));
+    const h = await create(pool);
+    await h.runCode('warm', opts());
+    for (let i = 0; i < 5; i++) {
+      await sleep(30);
+      await h.runCode('heavy', opts());
+    }
+    await sleep(100);
+    assert.ok(workers.started[0].worker.alive, 'the variables survive');
+    assert.equal(workers.started.length, 1);
+  });
+
   it('leaves an idle worker alone, and charges nothing for a run’s own CPU', async () => {
     let cpu = 0;
     let release!: () => void;
     const workers = fakeWorkers((req) => (req.code === 'busy' ? new Promise((r) => { release = () => r(done()); }) : Promise.resolve(done())));
-    const pool = new SandboxPool(config(), workers.start, async () => ({ cpuSec: cpu, rssBytes: 1 }));
+    const pool = new TestPool(config(), workers.start, async () => ({ cpuSec: cpu, rssBytes: 1 }));
     const h = await create(pool);
     const running = h.runCode('busy', opts());
     const spin = setInterval(() => { cpu += 0.02; }, 20);
@@ -348,7 +382,7 @@ describe('SandboxPool runs', () => {
   it('stops a worker over the memory limit, during a run or between runs', async () => {
     let rss = 1;
     const workers = fakeWorkers((req) => (req.code === 'grow' ? new Promise(() => { rss = 10_000; }) : Promise.resolve(done())));
-    const pool = new SandboxPool(config({ maxRssBytes: 5000 }), workers.start, async () => ({ cpuSec: 0, rssBytes: rss }));
+    const pool = new TestPool(config({ maxRssBytes: 5000 }), workers.start, async () => ({ cpuSec: 0, rssBytes: rss }));
     const h = await create(pool);
     assert.equal((await h.runCode('grow', opts())).stopped, 'memory');
     rss = 1;
@@ -362,7 +396,7 @@ describe('SandboxPool runs', () => {
   it('stops a worker whose session ended while it was starting', async () => {
     let resolveStart!: (w: WorkerLike) => void;
     const worker = new FakeWorker(async () => done());
-    const pool = new SandboxPool(config(), () => new Promise((r) => { resolveStart = r; }));
+    const pool = new TestPool(config(), () => new Promise((r) => { resolveStart = r; }));
     const h = await create(pool);
     const running = h.runCode('x', opts());
     await sleep(10);
@@ -372,8 +406,23 @@ describe('SandboxPool runs', () => {
     assert.equal(worker.alive, false);
   });
 
+  it('keeps the eviction reason through a capacity refusal, for the retry that succeeds', async () => {
+    let release: (() => void) | undefined;
+    const workers = fakeWorkers((req) => (req.code === 'slow' ? new Promise((r) => { release = () => r(done()); }) : Promise.resolve(done())));
+    const pool = new TestPool(config({ maxWorkers: 1 }), workers.start);
+    const a = await create(pool);
+    const b = await create(pool);
+    await a.runCode('x', opts());
+    const busy = b.runCode('slow', opts()); // evicts a's worker, then holds the only slot
+    await sleep(10);
+    await assert.rejects(a.runCode('x', opts()), /at capacity/);
+    release!();
+    await busy;
+    assert.equal((await a.runCode('x', opts())).previousStop, 'evicted');
+  });
+
   it('says why an evicted worker’s user lost their variables', async () => {
-    const pool = new SandboxPool(config({ maxWorkers: 1 }), fakeWorkers().start);
+    const pool = new TestPool(config({ maxWorkers: 1 }), fakeWorkers().start);
     const a = await create(pool);
     const b = await create(pool);
     await a.runCode('x', opts());
@@ -383,7 +432,7 @@ describe('SandboxPool runs', () => {
 
   it('kills the worker when the session ends mid-idle', async () => {
     const workers = fakeWorkers();
-    const pool = new SandboxPool(config(), workers.start);
+    const pool = new TestPool(config(), workers.start);
     const h = await create(pool);
     await h.runCode('x', opts());
     await pool.kill(h.id);
@@ -393,7 +442,7 @@ describe('SandboxPool runs', () => {
 
 describe('SandboxPool files', () => {
   it('writes, lists and reads files under /home/user, reading only the prefix asked for', async () => {
-    const h = await create(new SandboxPool(config(), fakeWorkers().start));
+    const h = await create(new TestPool(config(), fakeWorkers().start));
     await h.writeFile('/home/user/data/in.csv', 'a,b\n1,2\n');
     await h.writeFile('note.txt', 'hello');
     const top = await h.listFiles('/home/user');
@@ -405,7 +454,7 @@ describe('SandboxPool files', () => {
   });
 
   it('answers not found, not a directory, and is a directory plainly', async () => {
-    const h = await create(new SandboxPool(config(), fakeWorkers().start));
+    const h = await create(new TestPool(config(), fakeWorkers().start));
     await h.writeFile('f.txt', 'x');
     await assert.rejects(h.readFile('missing.txt', 10), { name: 'NotFoundError', message: 'No file at missing.txt.' });
     await assert.rejects(h.listFiles('nodir'), { name: 'NotFoundError' });
@@ -416,7 +465,7 @@ describe('SandboxPool files', () => {
 
   it('refuses paths outside /home/user and links that lead out of it', async () => {
     const c = config();
-    const h = await create(new SandboxPool(c, fakeWorkers().start));
+    const h = await create(new TestPool(c, fakeWorkers().start));
     await assert.rejects(h.readFile('/etc/passwd', 10), { name: 'SandboxRefusal' });
     const secret = path.join(c.dataDir, 'outside.txt');
     fs.writeFileSync(secret, 'secret');
@@ -426,7 +475,7 @@ describe('SandboxPool files', () => {
   });
 
   it('refuses a write past the disk limit, counting an overwrite as replacing the old bytes', async () => {
-    const h = await create(new SandboxPool(config({ maxDiskBytes: 10 }), fakeWorkers().start));
+    const h = await create(new TestPool(config({ maxDiskBytes: 10 }), fakeWorkers().start));
     await h.writeFile('a', '12345');
     await assert.rejects(h.writeFile('b', '123456'), /disk limit/);
     await h.writeFile('a', '1234567890'); // replaces 5 bytes: 10 in all
@@ -434,7 +483,7 @@ describe('SandboxPool files', () => {
   });
 
   it('counts the parent directories a write would create against the file limit', async () => {
-    const h = await create(new SandboxPool(config({ maxFiles: 3 }), fakeWorkers().start));
+    const h = await create(new TestPool(config({ maxFiles: 3 }), fakeWorkers().start));
     await h.writeFile('one', 'x');
     await assert.rejects(h.writeFile('a/b/c', 'x'), /3 files/, 'a, a/b and a/b/c would make four');
     await h.writeFile('a/c', 'x');
@@ -443,7 +492,7 @@ describe('SandboxPool files', () => {
 
   it('refuses a write that raced the session ending, leaving no directory behind', async () => {
     const c = config();
-    const pool = new SandboxPool(c, fakeWorkers().start);
+    const pool = new TestPool(c, fakeWorkers().start);
     const h = await create(pool);
     const write = h.writeFile('deep/x.txt', 'x');
     await pool.kill(h.id);

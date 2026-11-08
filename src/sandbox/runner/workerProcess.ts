@@ -72,6 +72,23 @@ interface Pending {
 
 type Message = Record<string, unknown>;
 
+/** Only the strings in v: parsed JSON can hold an object whose String() throws ({"toString": 1}). */
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+const text = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+/** The results within one budget of max characters, as the worker also cuts them: a forged `done` never passed its cut. */
+function capResults(results: string[], max: number): string[] {
+  const kept: string[] = [];
+  let used = 0;
+  for (const r of results) {
+    const part = r.slice(0, Math.max(0, max - used));
+    if (part) kept.push(part);
+    used += part.length;
+  }
+  return kept;
+}
+
 export class WorkerProcess implements WorkerLike {
   private readonly child: ChildProcess;
   private buffer = '';
@@ -179,6 +196,15 @@ export class WorkerProcess implements WorkerLike {
   }
 
   private onLine(line: string): void {
+    try {
+      this.handleLine(line);
+    } catch (err) {
+      // A line this side failed on must not reach the stream handler and end the runner, and every session in it.
+      this.finish({ stopped: 'crashed', crashDetail: `The worker sent a message the runner could not read (${(err as Error)?.message ?? err}).` }, true);
+    }
+  }
+
+  private handleLine(line: string): void {
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
@@ -197,19 +223,16 @@ export class WorkerProcess implements WorkerLike {
     if (msg.type === 'out') {
       this.append(p, msg.stream === 'stderr' ? 'stderr' : 'stdout', typeof msg.text === 'string' ? msg.text : '', msg.more === true);
     } else if (msg.type === 'done') {
-      const strings = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
-      const error = msg.error as WorkerRunResult['error'] | undefined;
       const results = strings(msg.results);
+      const error = msg.error !== null && typeof msg.error === 'object' ? (msg.error as Message) : undefined;
       this.finish({
-        stdoutTotal: Math.max(p.total.stdout, Number(msg.stdoutTotal) || 0),
-        stderrTotal: Math.max(p.total.stderr, Number(msg.stderrTotal) || 0),
-        results,
-        resultsTotal: Math.max(results.join('').length, Number(msg.resultsTotal) || 0),
+        stdoutTotal: Math.max(p.total.stdout, count(msg.stdoutTotal)),
+        stderrTotal: Math.max(p.total.stderr, count(msg.stderrTotal)),
+        results: capResults(results, p.maxChars),
+        resultsTotal: Math.max(results.reduce((n, r) => n + r.length, 0), count(msg.resultsTotal)),
         images: strings(msg.images),
-        imagesDropped: Number(msg.imagesDropped) || 0,
-        ...(error && typeof error === 'object'
-          ? { error: { name: String(error.name), value: String(error.value), traceback: String(error.traceback) } }
-          : {}),
+        imagesDropped: count(msg.imagesDropped),
+        ...(error ? { error: { name: text(error.name) || 'Error', value: text(error.value), traceback: text(error.traceback) } } : {}),
       }, false);
     }
   }

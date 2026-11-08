@@ -22,6 +22,13 @@ process.stdin.on('data', (d) => {
     if (code === 'hang') { send({ id, type: 'out', stream: 'stdout', text: 'started\\n' }); continue; }
     if (code === 'crash') { send({ id, type: 'out', stream: 'stderr', text: 'partial' }); process.stderr.write('Pyodide has suffered a fatal error'); process.exit(1); }
     if (code === 'huge') { process.stdout.write('x'.repeat(17 * 1024 * 1024)); continue; }
+    if (code === 'forge-done') {
+      // A completion with the wrong types where strings and numbers belong, and results past the budget.
+      send({ id, type: 'done', results: ['a'.repeat(150), { toString: 1, valueOf: 1 }, 5], resultsTotal: { valueOf: 1 },
+        images: [{ toString: 1 }], imagesDropped: 'many', stdoutTotal: -3,
+        error: { name: { toString: 1, valueOf: 1 }, value: 7, traceback: ['tb'] } });
+      continue;
+    }
     if (code === 'forge') {
       // What user code can write: non-objects, and its own run's messages, uncapped.
       process.stdout.write('null\\n42\\n"s"\\n[1]\\n');
@@ -100,6 +107,23 @@ describe('WorkerProcess', () => {
     assert.equal(r.stdout.length, 100, 'capped at maxOutputChars');
     assert.equal(r.stdoutTotal, 400, 'everything sent was counted');
     assert.equal(r.stderrTotal, 1, 'the worker said there was more than it sent');
+  });
+
+  it('reads a forged completion safely: only real strings and numbers, results cut to the budget', async () => {
+    const worker = await WorkerProcess.start(cmd(), 5000);
+    try {
+      const r = await worker.run(req('forge-done'), 5000);
+      assert.equal(r.stopped, undefined);
+      assert.deepEqual(r.results, ['a'.repeat(100)]);
+      assert.equal(r.resultsTotal, 150);
+      assert.deepEqual(r.images, []);
+      assert.equal(r.imagesDropped, 0);
+      assert.equal(r.stdoutTotal, 0);
+      assert.deepEqual(r.error, { name: 'Error', value: '', traceback: '' });
+      assert.ok(worker.alive, 'the runner and the worker both carry on');
+    } finally {
+      worker.kill();
+    }
   });
 
   it('reports the reason it was killed for during a run', async () => {

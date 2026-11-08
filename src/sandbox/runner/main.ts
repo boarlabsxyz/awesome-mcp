@@ -34,7 +34,12 @@ async function main(): Promise<void> {
     console.error(`Deno is not runnable at ${config.denoPath} (SANDBOX_DENO_PATH): ${deno.error?.message ?? deno.stderr}`);
     process.exit(1);
   }
-  const app = createRunnerApp(new SandboxPool(config), process.env.SANDBOX_RUNNER_SECRET!);
+  const pool = new SandboxPool(config);
+  const app = createRunnerApp(pool, process.env.SANDBOX_RUNNER_SECRET!);
+  // A redeploy sends SIGTERM: stop the workers and remove the session directories on the way out.
+  process.once('SIGTERM', () => {
+    void pool.close().finally(() => process.exit(0));
+  });
   const port = Number(process.env.PORT) || 8080;
   // '::' so Railway's private network (IPv6) reaches it.
   app.listen(port, '::', () => {
