@@ -88,8 +88,19 @@ if (config.mode === 'prefetch') {
 // The run in progress: where output goes, and how much of it has been sent.
 let current: { id: string; maxChars: number; sent: Record<Stream, number>; total: Record<Stream, number> } | null = null;
 
-function emit(stream: Stream, text: string): void {
-  if (!current || !text) return;
+// Deno's permission errors end "run again with the --allow-net flag", a flag
+// no one using the sandbox can set; say what the limit is instead.
+const DENO_DENIAL = /Requires (\w+) access to (.+?), run again with the --allow-[\w-]+ flag/g;
+function plainDenials(text: string): string {
+  if (!text.includes('--allow-')) return text;
+  return text.replace(DENO_DENIAL, (_m, kind: string, target: string) => kind === 'net'
+    ? `Network access to ${target} is blocked: code in the sandbox reaches only this platform's API and PyPI`
+    : `${kind} access to ${target} is blocked: code in the sandbox reaches only its own files under /home/user`);
+}
+
+function emit(stream: Stream, raw: string): void {
+  if (!current || !raw) return;
+  const text = plainDenials(raw);
   const before = current.total[stream];
   current.total[stream] += text.length;
   const room = current.maxChars - current.sent[stream];
@@ -292,7 +303,7 @@ async function handle(req: Request): Promise<void> {
   // Thrown values are user data: String() of one can itself throw ({ toString: 0 }).
   const clip = (v: unknown, n: number) => {
     try {
-      return String(v ?? '').slice(0, n);
+      return plainDenials(String(v ?? '')).slice(0, n);
     } catch {
       return '[a value that cannot be shown as text]';
     }

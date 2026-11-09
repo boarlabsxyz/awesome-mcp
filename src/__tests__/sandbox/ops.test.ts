@@ -230,7 +230,7 @@ describe('runCode', () => {
     assert.deepEqual(vendor.killed, [], 'the runner already stopped the interpreter; the sandbox and its files stay');
   });
 
-  it('says when the interpreter crashed, went over the disk limit, or was restarted', async () => {
+  it('says when the interpreter crashed, went over the disk limit, or was replaced', async () => {
     const outcomes = [
       outcome({ stopped: 'crashed', crashDetail: 'NotCapable: Deno.symlinkSync() requires unscoped --allow-read' }),
       outcome({ stopped: 'disk' }),
@@ -244,7 +244,7 @@ describe('runCode', () => {
     assert.match(await notes(), /crashed and was stopped \(NotCapable: Deno\.symlinkSync.*variables are gone; files are kept/);
     assert.match(await notes(), /over its disk limit/);
     assert.match(await notes(), /more memory than a sandbox may/);
-    assert.match(await notes(), /new Python\/JavaScript interpreter \(the previous one had been stopped\).*variables from earlier runs are gone/);
+    assert.match(await notes(), /new Python\/JavaScript interpreter \(the previous one was stopped\).*variables from earlier runs are gone/);
     assert.match(await notes(), /code left running after a run kept using CPU/);
   });
 

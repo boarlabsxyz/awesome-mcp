@@ -99,7 +99,8 @@ describe('Deno sandbox: what user code cannot reach', { skip, timeout: 120_000 }
 
   it('cannot read host files, list other directories, or mount them', async () => {
     const r = await py(h, 'from pyodide.code import run_js\nrun_js("Deno.readTextFileSync(\'/etc/hosts\')")');
-    assert.match(String(r.error?.value), /NotCapable: Requires read access/);
+    assert.match(String(r.error?.value), /read access to "\/etc\/hosts" is blocked: code in the sandbox reaches only its own files/);
+    assert.doesNotMatch(String(r.error?.value) + String(r.error?.traceback), /--allow-/, 'no advice to pass a flag the user cannot set');
     const node = await js(h, 'const fs = await import("node:fs"); return fs.readFileSync("/etc/hosts", "utf8")');
     assert.match(String(node.error?.value), /NotCapable|read access/);
     const mount = await py(h, 'import pyodide_js\npyodide_js.mountNodeFS("/x", "/")');
@@ -108,7 +109,7 @@ describe('Deno sandbox: what user code cannot reach', { skip, timeout: 120_000 }
 
   it('cannot run programs or load native code', async () => {
     // An absolute path: a bare name already fails to resolve, there being no PATH.
-    assert.match(String((await js(h, 'new Deno.Command("/bin/sh").outputSync()')).error?.value), /Requires run access/);
+    assert.match(String((await js(h, 'new Deno.Command("/bin/sh").outputSync()')).error?.value), /run access to "\/bin\/sh" is blocked/);
     assert.equal((await js(h, '(await import("node:child_process")).execFileSync("/bin/sh")')).error?.name, 'NotCapable');
     assert.equal((await js(h, 'Deno.dlopen("/usr/lib/libc.so.6", {})')).error?.name, 'NotCapable');
   });
@@ -121,9 +122,15 @@ describe('Deno sandbox: what user code cannot reach', { skip, timeout: 120_000 }
     const ok = await js(h, `return (await fetch("http://${apiHost}/ping")).status`);
     assert.deepEqual(ok.results, ['200']);
     const denied = await js(h, `return (await fetch("${otherUrl}")).status`);
-    assert.match(String(denied.error?.value), /NotCapable|net access/);
+    assert.match(String(denied.error?.value), /Network access to "[^"]+" is blocked: code in the sandbox reaches only this platform's API and PyPI/);
+    assert.doesNotMatch(String(denied.error?.value) + String(denied.error?.traceback), /--allow-net/);
+    const printed = await js(h, `try { await fetch("${otherUrl}") } catch (e) { console.error(String(e)) }`);
+    assert.match(printed.stderr, /Network access to .* is blocked/, 'printed by user code too');
+    const fromPython = await py(h, `from pyodide.http import pyfetch\nawait pyfetch("${otherUrl}")`);
+    assert.match(String(fromPython.error?.value), /Network access to .* is blocked/);
+    assert.doesNotMatch(String(fromPython.error?.traceback), /--allow-net/);
     const raw = await js(h, `await Deno.connect({ hostname: "127.0.0.1", port: ${new URL(otherUrl).port} })`);
-    assert.match(String(raw.error?.value), /NotCapable|net access/);
+    assert.match(String(raw.error?.value), /Network access to .* is blocked/);
   });
 
   it('cannot plant a symlink out of its directory: the attempt kills the interpreter, files stay', async () => {

@@ -264,7 +264,7 @@ const PREVIOUS_STOP: Record<NonNullable<RunOutcome['previousStop']>, string> = {
 function interpreterNotes(outcome: RunOutcome): string[] {
   const notes: string[] = [];
   if (outcome.restarted) {
-    const why = outcome.previousStop ? PREVIOUS_STOP[outcome.previousStop] : 'the previous one had been stopped';
+    const why = outcome.previousStop ? PREVIOUS_STOP[outcome.previousStop] : 'the previous one was stopped';
     notes.push(`This run started a new Python/JavaScript interpreter (${why}): variables from earlier runs are gone; files are kept.`);
   }
   if (outcome.stopped === 'crashed') {
@@ -356,7 +356,7 @@ async function runReserved(
       sandbox: state,
       ...(STATE_NOTE[state] ? { note: STATE_NOTE[state] } : {}),
       durationMs: deps.now() - started,
-      ...(timedOut ? { timedOut: `Stopped after ${grantedSec} s, and the interpreter was restarted: variables are gone, files are kept. Output up to that point is below; raise timeoutSec (max ${sandboxLimits().maxTimeoutSec}) or split the work.` } : {}),
+      ...(timedOut ? { timedOut: `Stopped after ${grantedSec} s, and the interpreter was stopped with it: variables are gone, files are kept, and the next run starts a new interpreter. Output up to that point is below; raise timeoutSec (max ${sandboxLimits().maxTimeoutSec}) or split the work.` } : {}),
       stdout: outcome.stdout,
       stderr: outcome.stderr,
       ...(Object.keys(truncated).length ? { truncated: { ...truncated, note: `Output is capped at ${OUTPUT_CAP} characters each for stdout, stderr and results: print a summary, or write the full output to a file and read the part you need.` } } : {}),

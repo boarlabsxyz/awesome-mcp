@@ -64,7 +64,7 @@ sandboxServer.addTool({
     'Each run can call this platform\'s REST API as you: in Python, `from awesome import api` then `api(\'GET\', \'/api/v1/storage/collections\')` or `api(\'POST\', path, body)`; in JavaScript, `await api(\'GET\', path)`. The token is revoked when the run ends (if revoking fails, the sandbox is stopped instead, and the token lasts until it expires minutes later). Use listRestEndpoints to see the routes for your connected services. ' +
     'Process data inside the script and print only a summary: output is capped at 20,000 characters each for stdout, stderr and results. ' +
     'Bundled packages, loaded on import: numpy, pandas, matplotlib, scipy, scikit-learn, pyarrow, duckdb, requests, beautifulsoup4, lxml, pyyaml, xlrd, regex, pillow. Pure-Python packages install from PyPI with `import micropip; await micropip.install(\'name\')`; other packages with native code cannot be installed, and there is no shell. ' +
-    'The network reaches only this platform\'s API and PyPI. Python\'s memory is capped (MemoryError past it). Runs stop after timeoutSec (max 300, and no more than what is left of your daily run time); a run that times out has its interpreter restarted, so variables are lost but files are kept.',
+    'The network reaches only this platform\'s API and PyPI. Python\'s memory is capped (MemoryError past it). Runs stop after timeoutSec (max 300, and no more than what is left of your daily run time); a run that times out stops its interpreter, so variables are lost but files are kept, and the next run starts a new one.',
   parameters: runCodeSchema,
   execute: async (args, { session }) => respond(await opRunCode(session?.userId, session?.instanceId, args)),
 });
