@@ -8240,8 +8240,7 @@ function registerRestApiRoutes(app: express.Express): void {
   // brevity: the cross-cutting rules (the safeParse 400, the UserError-versus-
   // upstream-status branch, the status code) live in ONE place where a later fix
   // cannot fail to reach a copy; one handler the tests reach beats thirteen they
-  // do not; and thirteen near-identical handler bodies trip the duplicated-lines
-  // quality gate.
+  // do not.
   //
   // These are ACTION paths (/tasks/{id}/update, not a POST verb on /tasks/{id})
   // because the older ChatGPT-compat routes above already own the bare resource
