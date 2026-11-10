@@ -6029,16 +6029,11 @@ function registerRestApiRoutes(app: express.Express): void {
       // revisionId is what the next pinned update should send.
       res.json({ replies: result.data.replies, revisionId: result.data.writeControl?.requiredRevisionId ?? null });
     } catch (err: any) {
-      const { isStaleRevision, staleRevisionMessage } = await import('../google-slides/toolHandlers.js');
-      if (isStaleRevision(err, req.body?.requiredRevisionId)) {
-        res.status(409).json({ error: staleRevisionMessage(req.body.requiredRevisionId) });
-        return;
-      }
-      // Google's 400 names the bad request; answering it as 500 blamed the server.
-      if (err?.code === 400) {
-        res.status(400).json({ error: err.message || 'Invalid request' });
-        return;
-      }
+      // Imported lazily, like the other provider modules here, so the web
+      // process does not load the Slides handlers (and FastMCP) at startup.
+      const { slidesBatchUpdateErrorResponse } = await import('../google-slides/toolHandlers.js');
+      const mapped = slidesBatchUpdateErrorResponse(err, req.body?.requiredRevisionId);
+      if (mapped) { res.status(mapped.status).json(mapped.body); return; }
       sendUpstreamError(res, err, { notFound: 'Presentation not found', fallback: 'Failed to batch update presentation' });
     }
   });

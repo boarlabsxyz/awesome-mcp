@@ -28,9 +28,7 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": [
-                  "title"
-                ],
+                "required": ["title"],
                 "properties": {
                   "title": {
                     "type": "string",
@@ -236,9 +234,7 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": [
-                  "requests"
-                ],
+                "required": ["requests"],
                 "properties": {
                   "requests": {
                     "type": "array",

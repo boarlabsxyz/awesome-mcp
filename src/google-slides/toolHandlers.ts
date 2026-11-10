@@ -49,9 +49,30 @@ export function extractElementTexts(element: slides_v1.Schema$PageElement): stri
  * A pinned revision that is no longer the latest: Google answers 400 and writes
  * nothing. Reported as that, never retried against a fresh revision, which would
  * overwrite the change the pin exists to protect.
+ *
+ * UNVERIFIED against live Google: the only link between that 400 and "stale" is
+ * the word "revision" in the message (Google documents just "400 bad request").
+ * If a live stale pin's message lacks it, this falls through to the ordinary
+ * bad-request path, so check that first on a live run.
  */
 export function isStaleRevision(error: any, requiredRevisionId: string | undefined): boolean {
   return Boolean(requiredRevisionId) && error?.code === 400 && /revision/i.test(String(error?.message));
+}
+
+/**
+ * The REST answer for a failed POST /api/v1/slides/{id}/batchUpdate, or null to
+ * let sendUpstreamError map it (404/403/500). Pure, so the mapping is testable
+ * without a Slides client.
+ */
+export function slidesBatchUpdateErrorResponse(
+  err: any,
+  requiredRevisionId: unknown,
+): { status: number; body: { error: string } } | null {
+  const pin = typeof requiredRevisionId === 'string' ? requiredRevisionId : undefined;
+  if (isStaleRevision(err, pin)) return { status: 409, body: { error: staleRevisionMessage(pin!) } };
+  // Google's 400 names the bad request; answering it as 500 blamed the server.
+  if (err?.code === 400) return { status: 400, body: { error: err.message || 'Invalid request' } };
+  return null;
 }
 
 export function staleRevisionMessage(requiredRevisionId: string): string {
@@ -250,6 +271,7 @@ export async function handleBatchUpdatePresentation(
     const revisionId = response.data.writeControl?.requiredRevisionId;
     let result = `Batch update successful! ${args.requests.length} request(s) applied.\n`;
     if (revisionId) result += `Presentation revision is now ${revisionId}.\n`;
+    else if (args.requiredRevisionId) result += 'Google did not return the new revision; re-read before pinning another update.\n';
     result += '\n';
 
     if (replies.length > 0) {
