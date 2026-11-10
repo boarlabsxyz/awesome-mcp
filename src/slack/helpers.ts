@@ -170,6 +170,14 @@ function refusal(status: number, message: string): UserError {
   return err;
 }
 
+/** The users a DM is opened with: one 1-on-1, or 2-8 for a group DM. */
+export function resolveDmUsers(args: { userId?: string; userIds?: string[] }): string[] {
+  if ((args.userId === undefined) === (args.userIds === undefined)) {
+    throw new UserError('Give userId for a 1-on-1 DM or userIds for a group DM, not both or neither.');
+  }
+  return args.userIds ?? [args.userId!];
+}
+
 export function assertWritesEnabled(): void {
   if (process.env.SLACK_WRITES_ENABLED !== 'true') {
     // 503, not 403: the caller is allowed, the deployment has not turned it on.

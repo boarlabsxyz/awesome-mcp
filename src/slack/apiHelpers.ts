@@ -353,6 +353,11 @@ export interface SlackMessagePage {
   response_metadata?: { next_cursor?: string };
 }
 
+/** One plain-text paragraph as the Block Kit rich_text Slack Lists and canvases expect. */
+export function plainRichText(text: string): unknown[] {
+  return [{ type: 'rich_text', elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text }] }] }];
+}
+
 export class SlackClient {
   constructor(private botToken: string) {}
 
@@ -639,10 +644,137 @@ export class SlackClient {
 
   // === Conversations (open DM) ===
 
-  async conversationsOpen(userId: string): Promise<{
+  /** One user ID opens a 1-on-1 DM; a comma-separated list (2-8) a group DM. */
+  async conversationsOpen(userIds: string): Promise<{
     channel: { id: string };
   }> {
-    return this.request('conversations.open', { users: userId });
+    return this.request('conversations.open', { users: userIds });
+  }
+
+  async conversationsCreate(name: string, isPrivate: boolean): Promise<{
+    channel: { id: string; name: string; is_private: boolean };
+  }> {
+    return this.request('conversations.create', { name, is_private: isPrivate });
+  }
+
+  async conversationsMembersPage(channel: string, cursor?: string, limit = 200): Promise<{
+    members: string[];
+    response_metadata?: { next_cursor?: string };
+  }> {
+    return this.request('conversations.members', { channel, limit, ...(cursor ? { cursor } : {}) });
+  }
+
+  // === Reactions, profiles, scheduling ===
+
+  async reactionsAdd(channel: string, timestamp: string, name: string): Promise<{ ok: boolean }> {
+    return this.request('reactions.add', { channel, timestamp, name });
+  }
+
+  async usersInfoFull(userId: string): Promise<{ user: Record<string, any> }> {
+    return this.request('users.info', { user: userId });
+  }
+
+  async usersProfileGet(userId: string): Promise<{ profile: Record<string, any> }> {
+    return this.request('users.profile.get', { user: userId, include_labels: true });
+  }
+
+  async chatScheduleMessage(
+    channel: string, postAt: number, text: string | undefined, threadTs?: string,
+    options?: { blocks?: unknown[]; markdownText?: string },
+  ): Promise<{ scheduled_message_id: string; post_at: number; channel: string }> {
+    return this.request('chat.scheduleMessage', {
+      channel,
+      post_at: postAt,
+      ...(text !== undefined ? { text } : {}),
+      ...(threadTs ? { thread_ts: threadTs } : {}),
+      ...(options?.blocks ? { blocks: JSON.stringify(options.blocks) } : {}),
+      ...(options?.markdownText !== undefined ? { markdown_text: options.markdownText } : {}),
+    });
+  }
+
+  // === File upload (external flow) ===
+
+  async filesGetUploadUrlExternal(filename: string, length: number): Promise<{ upload_url: string; file_id: string }> {
+    return this.request('files.getUploadURLExternal', { filename, length });
+  }
+
+  async filesCompleteUploadExternal(
+    files: Array<{ id: string; title?: string }>,
+    options: { channelId?: string; threadTs?: string; initialComment?: string },
+  ): Promise<{ files: Array<SlackFileInfo & { title?: string; permalink?: string }> }> {
+    return this.request('files.completeUploadExternal', {
+      files: JSON.stringify(files),
+      ...(options.channelId ? { channel_id: options.channelId } : {}),
+      ...(options.threadTs ? { thread_ts: options.threadTs } : {}),
+      ...(options.initialComment ? { initial_comment: options.initialComment } : {}),
+    });
+  }
+
+  // === Canvases ===
+
+  async canvasesCreate(title: string | undefined, markdown: string | undefined): Promise<{ canvas_id: string }> {
+    return this.request('canvases.create', {
+      ...(title ? { title } : {}),
+      ...(markdown !== undefined ? { document_content: JSON.stringify({ type: 'markdown', markdown }) } : {}),
+    });
+  }
+
+  async conversationsCanvasesCreate(channelId: string, markdown: string | undefined): Promise<{ canvas_id: string }> {
+    return this.request('conversations.canvases.create', {
+      channel_id: channelId,
+      ...(markdown !== undefined ? { document_content: JSON.stringify({ type: 'markdown', markdown }) } : {}),
+    });
+  }
+
+  async canvasesGetContent(canvasId: string, contentType: 'markdown' | 'html'): Promise<{ content: string }> {
+    return this.request('canvases.getContent', { canvas_id: canvasId, content_type: contentType });
+  }
+
+  /** Slack takes exactly one change per call. */
+  async canvasesEdit(canvasId: string, change: Record<string, unknown>): Promise<{ ok: boolean }> {
+    return this.request('canvases.edit', { canvas_id: canvasId, changes: JSON.stringify([change]) });
+  }
+
+  async canvasesSectionsLookup(canvasId: string, criteria: Record<string, unknown>): Promise<{ sections: Array<{ id: string }> }> {
+    return this.request('canvases.sections.lookup', { canvas_id: canvasId, criteria: JSON.stringify(criteria) });
+  }
+
+  // === Lists (paid workspaces only) ===
+
+  async slackListsCreate(args: { name: string; todoMode?: boolean; description?: string }): Promise<{ list_id: string; list_metadata?: unknown }> {
+    return this.request('slackLists.create', {
+      name: args.name,
+      ...(args.todoMode !== undefined ? { todo_mode: args.todoMode } : {}),
+      ...(args.description ? { description_blocks: JSON.stringify(plainRichText(args.description)) } : {}),
+    });
+  }
+
+  async slackListsItemsList(listId: string, options: { cursor?: string; limit?: number; includeList?: boolean; archived?: boolean }): Promise<{
+    items: Array<Record<string, any>>; list?: Record<string, any>; response_metadata?: { next_cursor?: string };
+  }> {
+    return this.request('slackLists.items.list', {
+      list_id: listId,
+      ...(options.limit ? { limit: options.limit } : {}),
+      ...(options.cursor ? { cursor: options.cursor } : {}),
+      ...(options.includeList !== undefined ? { include_list: options.includeList } : {}),
+      ...(options.archived ? { archived: true } : {}),
+    });
+  }
+
+  async slackListsItemsInfo(listId: string, itemId: string): Promise<{ record: Record<string, any>; list?: Record<string, any> }> {
+    return this.request('slackLists.items.info', { list_id: listId, id: itemId, include_is_subscribed: false });
+  }
+
+  async slackListsItemsCreate(listId: string, initialFields: unknown[], parentItemId?: string): Promise<{ item: Record<string, any> }> {
+    return this.request('slackLists.items.create', {
+      list_id: listId,
+      initial_fields: JSON.stringify(initialFields),
+      ...(parentItemId ? { parent_item_id: parentItemId } : {}),
+    });
+  }
+
+  async slackListsItemsUpdate(listId: string, cells: unknown[]): Promise<{ ok: boolean }> {
+    return this.request('slackLists.items.update', { list_id: listId, cells: JSON.stringify(cells) });
   }
 
   // === Files ===

@@ -40,10 +40,13 @@ describe('slack-bot tool registry', () => {
     assert.equal(registrations.length, toolMap.size, 'duplicate tool name registered');
   });
 
-  it('registers the 8 original tools, editMessage and 2 shared tools', () => {
+  it('registers the 8 original tools, editMessage, the workspace tools and 2 shared tools', () => {
     const expected = [
       'listChannels', 'readChannelHistory', 'readThreadReplies', 'downloadFile',
       'postMessage', 'replyInThread', 'editMessage', 'listUsers', 'openDm',
+      'createChannel', 'addReaction', 'getUserProfile', 'listChannelMembers', 'uploadFile', 'scheduleMessage',
+      'createCanvas', 'getCanvasContent', 'findCanvasSections', 'editCanvas',
+      'createList', 'getListItems', 'getListItem', 'createListItem', 'updateListItem',
       'mintRestBearerForCurl', 'listRestEndpoints',
     ];
     assert.deepEqual([...toolMap.keys()].sort(), expected.sort());

@@ -1409,6 +1409,9 @@ const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
   // full message passes 100kb well before Slack refuses it. GET siblings on the
   // same prefix are unaffected — a parser only reads a body that is present.
   '/api/v1/slack/channels',
+  // uploadFile (base64) and canvas markdown (up to 1 MiB).
+  '/api/v1/slack/files',
+  '/api/v1/slack/canvases',
   // Storage insertRecords: up to 500 records of up to 64 KB each — a bulk load
   // from a script is why the endpoint exists. Covers find's where body too.
   '/api/v1/storage',
@@ -7257,7 +7260,7 @@ function registerRestApiRoutes(app: express.Express): void {
   // repeated POST posts the message again. Short-lived bearer only
   // (requireMintedRestBearer): the permanent dashboard key cannot post or edit
   // as the bot — signed off on 2026-10-29 instead of exposing it to that key.
-  type SlackOps = typeof import('../slack/helpers.js');
+  type SlackOps = typeof import('../slack/helpers.js') & typeof import('../slack/workspaceTools.js');
   type SlackClientT = import('../slack/apiHelpers.js').SlackClient;
   interface SlackWriteRoute {
     path: string;
@@ -7290,6 +7293,73 @@ function registerRestApiRoutes(app: express.Express): void {
       schema: (m) => m.editMessageRestSchema,
       run: async (m, c, a, p) => m.projectWriteOutcome(await m.performEditMessage(c, p.channelId, p.ts, a.text, a)),
     },
+    // Channels, reactions, scheduling, uploads, canvases and lists — the
+    // non-destructive writes of src/slack/workspaceTools.ts, same gate and
+    // bearer as posting. Canvas section delete and whole-canvas replace are
+    // not offered on either surface.
+    {
+      path: '/api/v1/slack/channels',
+      status: 201,
+      fallback: 'Failed to create channel',
+      schema: (m) => m.createChannelRestSchema,
+      run: async (m, c, a) => m.performCreateChannel(c, a),
+    },
+    {
+      path: '/api/v1/slack/channels/:channelId/messages/:ts/reactions',
+      status: 200,
+      fallback: 'Failed to add reaction',
+      schema: (m) => m.addReactionRestSchema,
+      run: async (m, c, a, p) => m.performAddReaction(c, p.channelId, { emoji: a.emoji, timestamp: p.ts }),
+    },
+    {
+      path: '/api/v1/slack/channels/:channelId/scheduled-messages',
+      status: 201,
+      fallback: 'Failed to schedule message',
+      schema: (m) => m.scheduleMessageRestSchema,
+      run: async (m, c, a, p) => m.performScheduleMessage(c, p.channelId, a),
+    },
+    {
+      path: '/api/v1/slack/files',
+      status: 201,
+      fallback: 'Failed to upload file',
+      schema: (m) => m.uploadFileRestSchema,
+      run: async (m, c, a) => m.performUploadFile(c, a),
+    },
+    {
+      path: '/api/v1/slack/canvases',
+      status: 201,
+      fallback: 'Failed to create canvas',
+      schema: (m) => m.createCanvasRestSchema,
+      run: async (m, c, a) => m.performCreateCanvas(c, a),
+    },
+    {
+      path: '/api/v1/slack/canvases/:canvasId/edit',
+      status: 200,
+      fallback: 'Failed to edit canvas',
+      schema: (m) => m.editCanvasRestSchema,
+      run: async (m, c, a, p) => m.performEditCanvas(c, p.canvasId, a),
+    },
+    {
+      path: '/api/v1/slack/lists',
+      status: 201,
+      fallback: 'Failed to create list',
+      schema: (m) => m.createListRestSchema,
+      run: async (m, c, a) => m.performCreateList(c, a),
+    },
+    {
+      path: '/api/v1/slack/lists/:listId/items',
+      status: 201,
+      fallback: 'Failed to create list item',
+      schema: (m) => m.createListItemRestSchema,
+      run: async (m, c, a, p) => m.performCreateListItem(c, p.listId, a),
+    },
+    {
+      path: '/api/v1/slack/lists/:listId/items/:itemId/update',
+      status: 200,
+      fallback: 'Failed to update list item',
+      schema: (m) => m.updateListItemRestSchema,
+      run: async (m, c, a, p) => m.performUpdateListItem(c, p.listId, p.itemId, a),
+    },
   ];
   for (const route of SLACK_WRITE_ROUTES) {
     app.post(route.path, requireSlackApiKey, requireMintedRestBearer, async (req: ApiAuthenticatedRequest, res) => {
@@ -7298,7 +7368,7 @@ function registerRestApiRoutes(app: express.Express): void {
           res.status(403).json({ error: 'Slack-bot connection required for REST. Connect via the dashboard.' });
           return;
         }
-        const ops = await import('../slack/helpers.js');
+        const ops: SlackOps = { ...(await import('../slack/helpers.js')), ...(await import('../slack/workspaceTools.js')) };
         const params = req.params as Record<string, string>;
         const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
           ? Object.fromEntries(Object.entries(req.body).filter(([k]) => !(k in params)))
@@ -7315,6 +7385,69 @@ function registerRestApiRoutes(app: express.Express): void {
         const status = slackWriteErrorStatus(err);
         if (status >= 500) console.error(`Slack REST write failed (${route.path}):`, err?.message || err);
         res.status(status).json({ error: err?.message || route.fallback });
+      }
+    });
+  }
+
+  // Slack reads added with workspaceTools: a profile, channel members, a
+  // canvas, list records. Bot connection only, like the other GETs.
+  const slackBotClient = async (req: ApiAuthenticatedRequest, res: Response) => {
+    if (!req.userSession?.slackBotToken) {
+      res.status(403).json({ error: 'Slack-bot connection required for REST.' });
+      return null;
+    }
+    const { SlackClient } = await import('../slack/apiHelpers.js');
+    return new SlackClient(req.userSession.slackBotToken);
+  };
+  const SLACK_READ_ROUTES: Array<{ path: string; fallback: string; run: (c: import('../slack/apiHelpers.js').SlackClient, req: ApiAuthenticatedRequest) => Promise<unknown> }> = [
+    {
+      path: '/api/v1/slack/users/:userId',
+      fallback: 'Failed to get user profile',
+      run: async (c, req) => (await import('../slack/workspaceTools.js')).performGetUserProfile(c, req.params.userId as string),
+    },
+    {
+      path: '/api/v1/slack/channels/:channelId/members',
+      fallback: 'Failed to list channel members',
+      run: async (c, req) => {
+        const page = await c.conversationsMembersPage(req.params.channelId as string, qstr(req.query.cursor) || undefined, qint(req.query.limit, 200, { max: 1000 }));
+        return { members: page.members, nextCursor: page.response_metadata?.next_cursor || null };
+      },
+    },
+    {
+      path: '/api/v1/slack/canvases/:canvasId',
+      fallback: 'Failed to read canvas',
+      run: async (c, req) => {
+        const contentType = qstr(req.query.contentType) === 'html' ? 'html' : 'markdown';
+        return { canvasId: req.params.canvasId, contentType, content: (await c.canvasesGetContent(req.params.canvasId as string, contentType)).content };
+      },
+    },
+    {
+      path: '/api/v1/slack/lists/:listId/items',
+      fallback: 'Failed to read list items',
+      run: async (c, req) => {
+        const r = await c.slackListsItemsList(req.params.listId as string, {
+          cursor: qstr(req.query.cursor) || undefined,
+          limit: qint(req.query.limit, 100, { max: 1000 }),
+          includeList: qstr(req.query.includeList) !== 'false',
+          archived: qstr(req.query.archived) === 'true',
+        });
+        return { list: r.list ?? null, items: r.items, nextCursor: r.response_metadata?.next_cursor || null };
+      },
+    },
+    {
+      path: '/api/v1/slack/lists/:listId/items/:itemId',
+      fallback: 'Failed to read list item',
+      run: async (c, req) => (await c.slackListsItemsInfo(req.params.listId as string, req.params.itemId as string)).record,
+    },
+  ];
+  for (const route of SLACK_READ_ROUTES) {
+    app.get(route.path, requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const client = await slackBotClient(req, res);
+        if (!client) return;
+        res.json(await route.run(client, req));
+      } catch (err: any) {
+        res.status(mapSlackErrorToHttpStatus(err)).json({ error: err.message || route.fallback });
       }
     });
   }

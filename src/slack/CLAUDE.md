@@ -27,6 +27,16 @@ Access rules, search and org discovery (user-token server): see `src/slack-user/
 - **`chat.update` with `text` but no `blocks` strips existing blocks** (descriptions warn). Old text is unrecoverable, so a plain-text edit's confirmation echoes the new text.
 - **`editMessage` is registered on both servers**; on slack-user wrapped in `enforceAccess` like `postMessage`. slack-bot has no `enforceAccess` on any tool. `readOnlyHint: false`, no `destructiveHint` (deletes only). Registry guard: `src/__tests__/slack/tools.test.ts`.
 
+### Workspace tools (`workspaceTools.ts`, both servers; NOT exercised live)
+- **Registered once for both servers** (`registerSlackWorkspaceTools`): createChannel, addReaction, getUserProfile, listChannelMembers, uploadFile, scheduleMessage, canvases (create/get/findSections/edit), lists (create, items get/create/update). `openDm` takes `userIds` (2-8) for a group DM.
+- **slack-user injects `guardChannel: enforceAccess` and `guardFile`** — canvases and lists are files: readable if ANY channel they are shared into passes (search's posture), a file shared nowhere passes. The registry guard reads these bodies from `workspaceTools.ts`.
+- **Every write runs `assertWritesEnabled`** (`SLACK_WRITES_ENABLED`), like posting.
+- **No destructive Slack ops** — no canvas section delete and no whole-canvas replace (`replace_section` requires `sectionId`; Slack's `replace` without one replaces everything).
+- **Upload is the external flow**; bytes go only to an `https://*.slack.com` upload URL. Sharing completes asynchronously, so `sharedConfirmed` is `null`, not `false`, when the share list is still empty.
+- **`updateListItem` re-reads the record** (`slackLists.items.update` answers bare `ok`). Lists need a paid workspace.
+- **New scopes:** slack-user catalog adds `channels:write`, `groups:write`, `reactions:write`, `files:write`, `users.profile:read`, `users:read.email`, `canvases:read/write`, `lists:read/write` (reconnect); the bot's are listed in the dashboard hint (app reinstall). A missing scope surfaces as Slack's `missing_scope` with needed/provided.
+- **REST (slack-bot):** the writes join `SLACK_WRITE_ROUTES` (minted bearer, `.strict()` bodies from `*RestSchema`); reads are `SLACK_READ_ROUTES`. `/api/v1/slack/files` and `/canvases` take large bodies.
+
 ### Reading messages back
 - **`format: 'json'` on `readChannelHistory`/`readThreadReplies` (both servers, `messageFormatParam`) is the only proof a post or edit landed** — once a message has blocks its `text` is only the notification fallback. `projectMessage` returns a documented subset (blocks, user / bot_id / app_id, subtype, edited, reactions, metadata, files without private URLs, permalink); text stays the default and byte-identical.
 - **Both reads always send `include_all_metadata=true`** — without it Slack omits `metadata` from every message.

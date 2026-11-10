@@ -708,7 +708,12 @@ export async function seedDefaultCatalogs(): Promise<void> {
     // reaction_added (message events ride on channels:history/groups:history,
     // already above). Every addition here costs every already-connected user a
     // reconnect to re-consent, so batch them rather than shipping one at a time.
-    oauthScopes: ['channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'im:write', 'mpim:history', 'mpim:read', 'mpim:write', 'chat:write', 'users:read', 'team:read', 'files:read', 'search:read', 'reactions:read'],
+    // The second line is one such batch (src/slack/workspaceTools.ts):
+    // createChannel, addReaction, uploadFile, getUserProfile (custom fields and
+    // email), canvases and lists. Tools reached without them answer Slack's
+    // missing_scope with needed/provided, which names the reconnect.
+    oauthScopes: ['channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'im:write', 'mpim:history', 'mpim:read', 'mpim:write', 'chat:write', 'users:read', 'team:read', 'files:read', 'search:read', 'reactions:read',
+      'channels:write', 'groups:write', 'reactions:write', 'files:write', 'users.profile:read', 'users:read.email', 'canvases:read', 'canvases:write', 'lists:read', 'lists:write'],
     isLocal: !process.env.SLACK_USER_MCP_URL,
     isActive: true,
   });

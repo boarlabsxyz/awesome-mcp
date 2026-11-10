@@ -1092,7 +1092,7 @@
           <label id="tokenLabel" for="tokenInput">Bot Token</label>
           <input type="password" id="tokenInput" placeholder="xoxb-…" autocomplete="off" spellcheck="false" />
           <p class="name-suggestion" id="tokenHint">
-            Create a <span translate="no">Slack</span> App, add bot scopes (<code translate="no">channels:history</code>, <code translate="no">channels:read</code>, <code translate="no">groups:history</code>, <code translate="no">groups:read</code>, <code translate="no">chat:write</code>, <code translate="no">users:read</code>, <code translate="no">files:read</code>), install to workspace, then paste the Bot User OAuth Token here. The bot only sees channels where it's been /invited.
+            Create a <span translate="no">Slack</span> App, add bot scopes (<code translate="no">channels:history</code>, <code translate="no">channels:read</code>, <code translate="no">groups:history</code>, <code translate="no">groups:read</code>, <code translate="no">chat:write</code>, <code translate="no">users:read</code>, <code translate="no">files:read</code>; for creating channels, reactions, uploads, canvases and lists also <code translate="no">channels:manage</code>, <code translate="no">groups:write</code>, <code translate="no">im:write</code>, <code translate="no">mpim:write</code>, <code translate="no">reactions:write</code>, <code translate="no">files:write</code>, <code translate="no">users.profile:read</code>, <code translate="no">users:read.email</code>, <code translate="no">canvases:read</code>, <code translate="no">canvases:write</code>, <code translate="no">lists:read</code>, <code translate="no">lists:write</code>), install to workspace, then paste the Bot User OAuth Token here. The bot only sees channels where it's been /invited.
           </p>
         </div>
 
@@ -1993,7 +1993,12 @@
           'Create a <span translate="no">Slack</span> App, add bot scopes (<code translate="no">channels:history</code>, ' +
           '<code translate="no">channels:read</code>, <code translate="no">groups:history</code>, ' +
           '<code translate="no">groups:read</code>, <code translate="no">chat:write</code>, ' +
-          '<code translate="no">users:read</code>, <code translate="no">files:read</code>), ' +
+          '<code translate="no">users:read</code>, <code translate="no">files:read</code>; for creating channels, reactions, ' +
+          'uploads, canvases and lists also <code translate="no">channels:manage</code>, <code translate="no">groups:write</code>, ' +
+          '<code translate="no">im:write</code>, <code translate="no">mpim:write</code>, <code translate="no">reactions:write</code>, ' +
+          '<code translate="no">files:write</code>, <code translate="no">users.profile:read</code>, <code translate="no">users:read.email</code>, ' +
+          '<code translate="no">canvases:read</code>, <code translate="no">canvases:write</code>, <code translate="no">lists:read</code>, ' +
+          '<code translate="no">lists:write</code>), ' +
           'install to workspace, then paste the Bot User OAuth Token here. ' +
           "The bot only sees channels where it's been /invited.";
         urlSection.style.display = 'none';
