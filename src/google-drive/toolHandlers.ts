@@ -304,7 +304,7 @@ export async function handleCreateFolder(
 
 export async function handleListFolderContents(
   drive: drive_v3.Drive,
-  args: { folderId: string; includeSubfolders: boolean; includeFiles: boolean; maxResults: number } & SharedDriveArgs,
+  args: { folderId: string; includeSubfolders: boolean; includeFiles: boolean; maxResults: number; pageToken?: string } & SharedDriveArgs,
   log: Log
 ): Promise<string> {
   log.info(`Listing contents of folder: ${args.folderId}`);
@@ -319,12 +319,18 @@ export async function handleListFolderContents(
       q: queryString,
       pageSize: args.maxResults,
       orderBy: 'folder,name',
-      fields: 'files(id,name,mimeType,size,modifiedTime,webViewLink,owners(displayName),driveId)',
+      ...(args.pageToken ? { pageToken: args.pageToken } : {}),
+      fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,owners(displayName),driveId)',
       ...buildSharedDriveParams(args),
     });
     const items = response.data.files || [];
     if (items.length === 0) return "The folder is empty or you don't have permission to view its contents.";
     let result = `Contents of folder (${items.length} item${items.length !== 1 ? 's' : ''}):\n\n`;
+    // A full page used to end here with no hint that more existed, which read
+    // as the whole folder.
+    if (response.data.nextPageToken) {
+      result = `Contents of folder (first ${items.length} items; MORE remain — call again with pageToken "${response.data.nextPageToken}"):\n\n`;
+    }
     const folders = items.filter(i => i.mimeType === 'application/vnd.google-apps.folder');
     const files = items.filter(i => i.mimeType !== 'application/vnd.google-apps.folder');
     if (folders.length > 0 && args.includeSubfolders) {

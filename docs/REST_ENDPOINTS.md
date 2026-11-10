@@ -101,12 +101,15 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 
 | MCP tool | REST endpoint | Status | Summary |
 |---|---|---|---|
+| `searchDriveFiles` | `GET /api/v1/drive/files?q={query}` | live | Search all of Drive by name or content, or list recent files — _Any file type and folder. Omit q for recently modified files. Paginated with nextPageToken; incompleteSearch true means Drive skipped some locations. A fullText search is ordered by relevance, never by date._ |
+| `listDriveChanges` | `GET /api/v1/drive/changes` | live | Follow the Drive change feed — _Without pageToken returns startPageToken and no changes: the feed only records what happens after a token is issued. nextPageToken means more now; newStartPageToken means poll later with it._ |
+| `uploadDriveFile` | `POST /api/v1/drive/files` | live | Upload a file, optionally converting it to a Google Doc, Sheet or Slides — _Body limit 5mb, so about 3.7 MB of file as base64 (the MCP tool takes up to 20 MB). Not idempotent: each call creates another file. convertTo is checked against what Drive can import, since Drive silently keeps an unconvertible upload as the original type._ |
 | `getDocumentInfo` | `GET /api/v1/drive/files/{fileId}` | live | Get file metadata |
 | `getFilePermissions` | `GET /api/v1/drive/files/{fileId}/permissions` | live | List permissions on a file |
 | `checkPublicAccess` | `GET /api/v1/drive/files/{fileId}/public` | live | Check if a file is publicly accessible |
 | `downloadDriveFile` | `GET /api/v1/drive/files/{fileId}/download` | live | Download or export a file — _Streams binary. Google native types are exported (default: PDF for docs/slides, CSV for sheets, PNG for drawings); override with ?exportMime=._ |
 | `getFolderInfo` | `GET /api/v1/drive/folders/{folderId}` | live | Get folder metadata |
-| `listFolderContents` | `GET /api/v1/drive/folders/{folderId}/contents` | live | List the contents of a folder |
+| `listFolderContents` | `GET /api/v1/drive/folders/{folderId}/contents` | live | List the contents of a folder — _Paginated: pass nextPageToken back as pageToken._ |
 | `listSharedDrives` | `GET /api/v1/drive/shared-drives` | live | List shared drives |
 
 ### Gmail (`gmail`)
@@ -461,4 +464,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 337 endpoints.
+Catalog size: 340 endpoints.

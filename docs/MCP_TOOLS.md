@@ -10,7 +10,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Docs](#google-docs) (38)
 - [Google Sheets](#google-sheets) (12)
 - [Google Calendar](#google-calendar) (6)
-- [Google Drive](#google-drive) (15)
+- [Google Drive](#google-drive) (18)
 - [Gmail](#gmail) (14)
 - [Google Slides](#google-slides) (6)
 - [ClickUp](#clickup) (48)
@@ -117,7 +117,7 @@ Source: `src/google-calendar/server.ts` — 6 tools.
 
 ## Google Drive
 
-Source: `src/google-drive/server.ts` — 15 tools.
+Source: `src/google-drive/server.ts` — 18 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -136,6 +136,9 @@ Source: `src/google-drive/server.ts` — 15 tools.
 | `getFilePermissions` | Retrieve all permissions on a Google Drive file or folder. Shows who has access, their roles, and sharing status. | `GET /api/v1/drive/files/{fileId}/permissions` |
 | `shareDriveFile` | Share a Google Drive file or folder by creating a permission. Required fields by type: type=user\|group → emailAddress; type=domain → domain; type=anyone → no extra field. | — |
 | `checkPublicAccess` | List the file's direct permissions and report whether an "anyone with link" grant exists on the file itself. Does NOT follow folder-inherited, domain-wide, or shared-drive policies, so a file inside a public folder may report private here. | `GET /api/v1/drive/files/{fileId}/public` |
+| `searchDriveFiles` | Searches all of Drive (any file type, any folder) by name or content, or lists recently modified files when no query is given. Paginated. | `GET /api/v1/drive/files?q={query}` |
+| `listDriveChanges` | Follows the Drive change feed: what was created, edited, trashed or removed since a token. First call (no pageToken) returns the token to poll with. | `GET /api/v1/drive/changes` |
+| `uploadDriveFile` | Uploads a file (base64 bytes or text) to Drive, optionally converting it into a Google Doc, Sheet or Slides. Up to 20 MB. | `POST /api/v1/drive/files` |
 
 ## Gmail
 
@@ -634,4 +637,4 @@ Source: `src/sandbox/server.ts` — 6 tools.
 
 ---
 
-**Grand total: 449 tools across 22 sections.**
+**Grand total: 452 tools across 22 sections.**

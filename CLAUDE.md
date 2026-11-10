@@ -19,6 +19,7 @@ Service-specific rules and limitations live next to the code, in nested `CLAUDE.
 - `src/github/CLAUDE.md` — GitHub
 - `src/google-calendar/CLAUDE.md` — Google Calendar
 - `src/google-docs/CLAUDE.md` — Google Docs, including its parameter patterns and the tools that throw (`NOT_IMPLEMENTED`)
+- `src/google-drive/CLAUDE.md` — Google Drive: search, change feed, upload
 - `src/google-gmail/CLAUDE.md` — Gmail
 - `src/google-sheets/CLAUDE.md` — Google Sheets
 - `src/hubspot/CLAUDE.md` — HubSpot
