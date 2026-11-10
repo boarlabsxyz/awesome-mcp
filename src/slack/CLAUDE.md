@@ -29,11 +29,13 @@ Access rules, search and org discovery (user-token server): see `src/slack-user/
 
 ### Workspace tools (`workspaceTools.ts`, both servers; NOT exercised live)
 - **Registered once for both servers** (`registerSlackWorkspaceTools`): createChannel, addReaction, getUserProfile, listChannelMembers, uploadFile, scheduleMessage, canvases (create/get/findSections/edit), lists (create, items get/create/update). `openDm` takes `userIds` (2-8) for a group DM.
-- **slack-user injects `guardChannel: enforceAccess` and `guardFile`** — canvases and lists are files: readable if ANY channel they are shared into passes (search's posture), a file shared nowhere passes. The registry guard reads these bodies from `workspaceTools.ts`.
+- **slack-user injects `guardChannel: enforceAccess` and `guardFile` (`guardFileByShares`)** — canvases and lists are files: allowed if ANY channel they are shared into passes (search's posture, for writes too); a file with no reported share passes only if the caller created it, else it is withheld (403), because `files.info` may omit shares. The registry guard reads these bodies from `workspaceTools.ts` and checks `guardFile(` runs before any Slack call.
 - **Every write runs `assertWritesEnabled`** (`SLACK_WRITES_ENABLED`), like posting.
 - **No destructive Slack ops** — no canvas section delete and no whole-canvas replace (`replace_section` requires `sectionId`; Slack's `replace` without one replaces everything).
 - **Upload is the external flow**; bytes go only to an `https://*.slack.com` upload URL. Sharing completes asynchronously, so `sharedConfirmed` is `null`, not `false`, when the share list is still empty.
-- **`updateListItem` re-reads the record** (`slackLists.items.update` answers bare `ok`). Lists need a paid workspace.
+- **`updateListItem` compares re-read VALUES** (`storedValueMatches`): present-but-unchanged is `false`, links or a text column without plain `text` are `null`. Lists need a paid workspace.
+- **Refusals carry `status`** (`refusal()` exported from `helpers.ts`), and `slackWriteErrorStatus` maps `name_taken` 409, `invalid_name*`/`invalid_column_id`/`time_*` 400, `*_not_found` 404, `paid_teams_only`/`free_teams_cannot*` 403 — they were all 500.
+- **Upload fetch: `redirect: 'error'` and a 60 s timeout**; invalid base64 is refused; a failed completion names the orphaned file id.
 - **New scopes:** slack-user catalog adds `channels:write`, `groups:write`, `reactions:write`, `files:write`, `users.profile:read`, `users:read.email`, `canvases:read/write`, `lists:read/write` (reconnect); the bot's are listed in the dashboard hint (app reinstall). A missing scope surfaces as Slack's `missing_scope` with needed/provided.
 - **REST (slack-bot):** the writes join `SLACK_WRITE_ROUTES` (minted bearer, `.strict()` bodies from `*RestSchema`); reads are `SLACK_READ_ROUTES`. `/api/v1/slack/files` and `/canvases` take large bodies.
 

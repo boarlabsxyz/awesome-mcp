@@ -164,7 +164,7 @@ export function formatMessage(msg: any, userNames: Map<string, string>, channelI
  * the rewritten messages below no longer contain Slack's error code — so
  * matching the text, as the read routes do, would turn every one into a 500.
  */
-function refusal(status: number, message: string): UserError {
+export function refusal(status: number, message: string): UserError {
   const err = new UserError(message);
   (err as UserError & { status: number }).status = status;
   return err;

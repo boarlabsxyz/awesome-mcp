@@ -252,6 +252,16 @@ describe('slack-user access gating', () => {
     }
   });
 
+  it('runs the file guard in every canvas and list tool before calling Slack', () => {
+    for (const name of ['getCanvasContent', 'findCanvasSections', 'editCanvas', 'getListItems', 'getListItem', 'createListItem', 'updateListItem']) {
+      const block = toolSource(name);
+      const guard = block.indexOf('guardFile(');
+      assert.ok(guard > 0, `${name} must call guardFile`);
+      const firstCall = block.search(/client\.|perform[A-Z]/);
+      assert.ok(firstCall === -1 || guard < firstCall, `${name} must guard before calling Slack`);
+    }
+  });
+
   it('wires the shared workspace tools to enforceAccess and the file guard', () => {
     assert.match(serverSource, /registerSlackWorkspaceTools\(slackUserServer, \{[^}]*guardChannel: enforceAccess,[^}]*guardFile: guardSharedFile,/s);
   });

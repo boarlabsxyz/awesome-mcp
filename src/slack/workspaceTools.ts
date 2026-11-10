@@ -13,10 +13,9 @@
 
 import { z } from 'zod';
 import type { FastMCP } from 'fastmcp';
-import { UserError } from 'fastmcp';
 import type { UserSession } from '../userSession.js';
-import { plainRichText, type SlackClient } from './apiHelpers.js';
-import { assertWritesEnabled, resolveMessageBody, richTextParams } from './helpers.js';
+import { fileShareTargets, plainRichText, type SlackClient } from './apiHelpers.js';
+import { assertWritesEnabled, refusal, resolveMessageBody, richTextParams } from './helpers.js';
 
 export interface SlackWorkspaceToolOptions {
   getClient: (session?: UserSession) => SlackClient;
@@ -37,12 +36,12 @@ export const MAX_SLACK_UPLOAD_BYTES = 20 * 1024 * 1024;
 export function resolvePostAt(postAt: string, now: number = Date.now()): number {
   const seconds = /^\d+(\.\d+)?$/.test(postAt) ? Math.floor(Number(postAt)) : Math.floor(Date.parse(postAt) / 1000);
   if (!Number.isFinite(seconds)) {
-    throw new UserError(`postAt "${postAt}" is neither an ISO 8601 time nor a Unix timestamp.`);
+    throw refusal(400, `postAt "${postAt}" is neither an ISO 8601 time nor a Unix timestamp.`);
   }
   const nowSeconds = Math.floor(now / 1000);
-  if (seconds <= nowSeconds) throw new UserError(`postAt ${new Date(seconds * 1000).toISOString()} is in the past.`);
+  if (seconds <= nowSeconds) throw refusal(400, `postAt ${new Date(seconds * 1000).toISOString()} is in the past.`);
   if (seconds > nowSeconds + MAX_SCHEDULE_DAYS * 86400) {
-    throw new UserError(`postAt ${new Date(seconds * 1000).toISOString()} is more than ${MAX_SCHEDULE_DAYS} days ahead, which Slack does not allow.`);
+    throw refusal(400, `postAt ${new Date(seconds * 1000).toISOString()} is more than ${MAX_SCHEDULE_DAYS} days ahead, which Slack does not allow.`);
   }
   return seconds;
 }
@@ -51,7 +50,7 @@ export function resolvePostAt(postAt: string, now: number = Date.now()): number 
 export function normalizeChannelName(name: string): string {
   const normalized = name.trim().replace(/^#/, '').toLowerCase();
   if (!/^[a-z0-9][a-z0-9_-]{0,79}$/.test(normalized)) {
-    throw new UserError(`"${name}" is not a valid Slack channel name: use up to 80 lowercase letters, digits, hyphens and underscores, with no spaces or periods.`);
+    throw refusal(400, `"${name}" is not a valid Slack channel name: use up to 80 lowercase letters, digits, hyphens and underscores, with no spaces or periods.`);
   }
   return normalized;
 }
@@ -79,7 +78,7 @@ export function toListCell(field: ListField): Record<string, unknown> {
   if (field.checkbox !== undefined) values.push(['checkbox', field.checkbox]);
   if (field.link !== undefined) values.push(['link', field.link.map((original_url) => ({ original_url }))]);
   if (values.length !== 1) {
-    throw new UserError(`Column ${field.columnId}: give exactly one value (text, select, date, user, number, checkbox or link); got ${values.length}.`);
+    throw refusal(400, `Column ${field.columnId}: give exactly one value (text, select, date, user, number, checkbox or link); got ${values.length}.`);
   }
   return { column_id: field.columnId, [values[0][0]]: values[0][1] };
 }
@@ -87,12 +86,17 @@ export function toListCell(field: ListField): Record<string, unknown> {
 /** The bytes to upload, from exactly one of base64 or text. */
 export function uploadBytes(args: { contentBase64?: string; textContent?: string }): Buffer {
   if ((args.contentBase64 === undefined) === (args.textContent === undefined)) {
-    throw new UserError('Give exactly one of contentBase64 or textContent.');
+    throw refusal(400, 'Give exactly one of contentBase64 or textContent.');
+  }
+  // Buffer.from skips characters that are not base64, so corrupt input would
+  // upload a different file and report success.
+  if (args.contentBase64 !== undefined && !/^[A-Za-z0-9+/\s]*={0,2}\s*$/.test(args.contentBase64)) {
+    throw refusal(400, 'contentBase64 is not valid base64.');
   }
   const bytes = args.contentBase64 !== undefined ? Buffer.from(args.contentBase64, 'base64') : Buffer.from(args.textContent!, 'utf8');
-  if (bytes.length === 0) throw new UserError('The file is empty.');
+  if (bytes.length === 0) throw refusal(400, 'The file is empty.');
   if (bytes.length > MAX_SLACK_UPLOAD_BYTES) {
-    throw new UserError(`The file is ${bytes.length} bytes; the limit here is ${MAX_SLACK_UPLOAD_BYTES} (20 MB).`);
+    throw refusal(400, `The file is ${bytes.length} bytes; the limit here is ${MAX_SLACK_UPLOAD_BYTES} (20 MB).`);
   }
   return bytes;
 }
@@ -106,6 +110,56 @@ export function assertSlackUploadUrl(uploadUrl: string): URL {
   return url;
 }
 
+/**
+ * Whether a re-read record holds the value that was sent: true, false, or null
+ * when the stored shape cannot be compared (links, or a text column read back
+ * without its plain `text`).
+ */
+export function storedValueMatches(fields: Array<Record<string, any>>, sent: ListField): boolean | null {
+  const stored = fields.find((f) => f.column_id === sent.columnId);
+  if (!stored) return false;
+  const sameSet = (a: unknown[] | undefined, b: unknown[]) =>
+    Array.isArray(a) && a.length === b.length && [...a].map(String).sort().join('\u0000') === [...b].map(String).sort().join('\u0000');
+  if (sent.checkbox !== undefined) return stored.checkbox === undefined ? null : stored.checkbox === sent.checkbox;
+  if (sent.select !== undefined) return sameSet(stored.select, sent.select);
+  if (sent.user !== undefined) return sameSet(stored.user, sent.user);
+  if (sent.date !== undefined) return sameSet(stored.date, sent.date);
+  if (sent.number !== undefined) return sameSet(stored.number, sent.number);
+  if (sent.text !== undefined) return typeof stored.text === 'string' ? stored.text.trim() === sent.text.trim() : null;
+  return null;
+}
+
+/**
+ * Canvases and lists are files, so on slack-user they are checked by where
+ * they are shared: allowed if ANY share target passes `enforce` (search's
+ * posture). A file with no share Slack reports is allowed only when the caller
+ * created it, and withheld otherwise: files.info may omit shares, and failing
+ * open would let a denied channel's canvas be read by ID.
+ */
+export async function guardFileByShares(
+  client: SlackClient,
+  fileId: string,
+  enforce: (channelId: string) => Promise<void>,
+): Promise<void> {
+  const { file } = await client.filesInfo(fileId);
+  const targets = [...fileShareTargets(file)];
+  if (targets.length === 0) {
+    const { user_id } = await client.authTest();
+    if (file.user && file.user === user_id) return;
+    throw refusal(403, `File ${fileId} is not reported as shared in any channel, so the access rules cannot be checked; it is withheld.`);
+  }
+  let lastDenial: unknown;
+  for (const channelId of targets) {
+    try {
+      await enforce(channelId);
+      return;
+    } catch (err) {
+      lastDenial = err;
+    }
+  }
+  throw lastDenial;
+}
+
 // === Ops shared by both servers ===
 
 export async function performUploadFile(
@@ -114,15 +168,25 @@ export async function performUploadFile(
   fetchImpl: typeof fetch = fetch,
 ) {
   assertWritesEnabled();
-  if (args.threadTs && !args.channelId) throw new UserError('threadTs needs channelId.');
+  if (args.threadTs && !args.channelId) throw refusal(400, 'threadTs needs channelId.');
   const bytes = uploadBytes(args);
   const { upload_url, file_id } = await client.filesGetUploadUrlExternal(args.filename, bytes.length);
   const target = assertSlackUploadUrl(upload_url);
-  const put = await fetchImpl(target, { method: 'POST', body: bytes });
-  if (!put.ok) throw new Error(`Uploading the bytes to Slack failed (HTTP ${put.status}); the file was not created.`);
-  const done = await client.filesCompleteUploadExternal([{ id: file_id, ...(args.title ? { title: args.title } : {}) }], {
-    channelId: args.channelId, threadTs: args.threadTs, initialComment: args.initialComment,
-  });
+  // No redirects: the host check covers only this URL. And a timeout, which
+  // request() has and a raw fetch does not.
+  const put = await fetchImpl(target, { method: 'POST', body: bytes, redirect: 'error', signal: AbortSignal.timeout(60_000) });
+  if (!put.ok) throw refusal(502, `Uploading the bytes to Slack failed (HTTP ${put.status}); the file was not created.`);
+  let done: Awaited<ReturnType<SlackClient['filesCompleteUploadExternal']>>;
+  try {
+    done = await client.filesCompleteUploadExternal([{ id: file_id, ...(args.title ? { title: args.title } : {}) }], {
+      channelId: args.channelId, threadTs: args.threadTs, initialComment: args.initialComment,
+    });
+  } catch (error: any) {
+    // The bytes are already on Slack under file_id; say so rather than leave
+    // an orphan nobody knows about.
+    error.message = `${error.message} (the bytes were uploaded as file ${file_id}, which was not completed or shared)`;
+    throw error;
+  }
   const file = done.files?.[0];
   // Sharing completes asynchronously, so an empty share list right after the
   // call is "not yet confirmed", not "not shared".
@@ -179,7 +243,7 @@ export const createListFields = {
   todoMode: z.boolean().optional().describe('Add task-tracking columns.'),
 };
 export const createListItemFields = {
-  fields: z.array(listFieldSchema).min(1).describe('One entry per column to fill.'),
+  fields: z.array(listFieldSchema).min(1).max(100).describe('One entry per column to fill.'),
   parentItemId: z.string().optional().describe('Create it as a subtask of this record.'),
 };
 export const updateListItemFields = {
@@ -242,11 +306,11 @@ export async function performCreateCanvas(client: SlackClient, args: Args<typeof
 
 export async function performEditCanvas(client: SlackClient, canvasId: string, args: Args<typeof editCanvasFields>) {
   assertWritesEnabled();
-  if (args.markdown === undefined) throw new UserError(`${args.operation} needs markdown.`);
+  if (args.markdown === undefined) throw refusal(400, `${args.operation} needs markdown.`);
   const needsSection = args.operation === 'insert_before' || args.operation === 'insert_after' || args.operation === 'replace_section';
   // A replace without a section replaces the WHOLE canvas in Slack, which is a
   // destructive edit this tool does not offer.
-  if (needsSection && !args.sectionId) throw new UserError(`${args.operation} needs sectionId (from findCanvasSections).`);
+  if (needsSection && !args.sectionId) throw refusal(400, `${args.operation} needs sectionId (from findCanvasSections).`);
   const content = { type: 'markdown', markdown: args.markdown };
   const change = args.operation === 'rename'
     ? { operation: 'rename', title_content: content }
@@ -276,11 +340,14 @@ export async function performUpdateListItem(client: SlackClient, listId: string,
   assertWritesEnabled();
   const cells = args.fields.map((f) => ({ row_id: itemId, ...toListCell(f) }));
   await client.slackListsItemsUpdate(listId, cells);
-  // slackLists.items.update answers only {ok: true}; re-read to confirm.
+  // slackLists.items.update answers only {ok: true}; re-read and compare the
+  // stored VALUES, since a column that already had a value is present either way.
   const { record } = await client.slackListsItemsInfo(listId, itemId);
-  const stored = new Set((record.fields ?? []).map((f: any) => f.column_id));
-  const notReadBack = args.fields.filter((f) => !stored.has(f.columnId)).map((f) => f.columnId);
-  return { listId, itemId, updated: args.fields.length, confirmed: notReadBack.length === 0, notReadBack, record };
+  const verdicts = args.fields.map((f) => ({ columnId: f.columnId, matches: storedValueMatches(record.fields ?? [], f) }));
+  const notReadBack = verdicts.filter((v) => v.matches === false).map((v) => v.columnId);
+  const unverifiable = verdicts.filter((v) => v.matches === null).map((v) => v.columnId);
+  const confirmed = notReadBack.length ? false : unverifiable.length ? null : true;
+  return { listId, itemId, updated: args.fields.length, confirmed, notReadBack, unverifiable, record };
 }
 
 export function registerSlackWorkspaceTools(server: FastMCP<UserSession>, opts: SlackWorkspaceToolOptions): void {
@@ -426,7 +493,7 @@ export function registerSlackWorkspaceTools(server: FastMCP<UserSession>, opts: 
       sectionTypes: z.array(z.enum(['h1', 'h2', 'h3', 'any_header'])).optional().describe('Only these header types.'),
     }),
     execute: async (args, { session }) => {
-      if (!args.containsText && !args.sectionTypes?.length) throw new UserError('Give containsText and/or sectionTypes.');
+      if (!args.containsText && !args.sectionTypes?.length) throw refusal(400, 'Give containsText and/or sectionTypes.');
       const client = opts.getClient(session);
       await guardFile(client, session!, args.canvasId);
       const { sections } = await client.canvasesSectionsLookup(args.canvasId, {
@@ -523,9 +590,11 @@ export function registerSlackWorkspaceTools(server: FastMCP<UserSession>, opts: 
       const client = opts.getClient(session);
       await guardFile(client, session!, args.listId);
       const r = await performUpdateListItem(client, args.listId, args.itemId, args);
-      return r.confirmed
-        ? `Updated ${r.updated} field(s) on record ${args.itemId}.`
-        : `Slack accepted the update to ${args.itemId}, but these columns do not read back on the record: ${r.notReadBack.join(', ')}.`;
+      if (r.confirmed === true) return `Updated ${r.updated} field(s) on record ${args.itemId}; the record reads back as sent.`;
+      if (r.confirmed === false) {
+        return `Slack accepted the update to ${args.itemId}, but these columns do not read back as sent: ${r.notReadBack.join(', ')}.`;
+      }
+      return `Slack accepted the update to ${args.itemId}; these columns could not be compared on re-read: ${r.unverifiable.join(', ')}.`;
     },
   });
 }

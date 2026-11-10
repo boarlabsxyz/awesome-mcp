@@ -139,3 +139,61 @@ describe('ops', () => {
     assert.equal(client.filesCompleteUploadExternal.mock.callCount(), 0);
   });
 });
+
+describe('review follow-ups', () => {
+  it('guardFileByShares: passes if any share is allowed, refuses all-denied, and withholds an unshared file unless you created it', async () => {
+    const { guardFileByShares } = await import('../../slack/workspaceTools.js');
+    const client = (file: any) => ({ filesInfo: mock.fn(async () => ({ file })), authTest: mock.fn(async () => ({ user_id: 'Ume' })) }) as any;
+    const enforce = async (channelId: string) => { if (channelId !== 'Callowed') throw new Error(`denied ${channelId}`); };
+
+    await guardFileByShares(client({ channels: ['Cdenied', 'Callowed'] }), 'F1', enforce);
+    await assert.rejects(() => guardFileByShares(client({ channels: ['Cdenied'] }), 'F1', enforce), /denied Cdenied/);
+    await assert.rejects(() => guardFileByShares(client({ ims: ['Dx'] }), 'F1', enforce), /denied Dx/, 'an im-only share is checked too');
+    await guardFileByShares(client({ user: 'Ume' }), 'F1', enforce);
+    await assert.rejects(
+      () => guardFileByShares(client({ user: 'Uother' }), 'F1', enforce),
+      (err: any) => err.status === 403 && /withheld/.test(err.message),
+    );
+  });
+
+  it('storedValueMatches compares values, not mere presence', async () => {
+    const { storedValueMatches } = await import('../../slack/workspaceTools.js');
+    const fields = [{ column_id: 'C1', checkbox: false }, { column_id: 'C2', select: ['b', 'a'] }, { column_id: 'C3', text: 'Hi ' }, { column_id: 'C4', link: [] }];
+    assert.equal(storedValueMatches(fields, { columnId: 'C1', checkbox: true }), false, 'present but unchanged is not confirmed');
+    assert.equal(storedValueMatches(fields, { columnId: 'C2', select: ['a', 'b'] }), true);
+    assert.equal(storedValueMatches(fields, { columnId: 'C3', text: 'Hi' }), true);
+    assert.equal(storedValueMatches(fields, { columnId: 'C4', link: ['https://x.io'] }), null);
+    assert.equal(storedValueMatches(fields, { columnId: 'C9', checkbox: true }), false);
+  });
+
+  it('caller-fixable refusals carry status 400 for the REST plane', () => {
+    try { resolvePostAt('2000-01-01T00:00:00Z', NOW); assert.fail('should throw'); } catch (err: any) { assert.equal(err.status, 400); }
+    try { normalizeChannelName('a b'); assert.fail('should throw'); } catch (err: any) { assert.equal(err.status, 400); }
+  });
+
+  it('refuses invalid base64 and names an orphaned upload when completion fails', async () => {
+    assert.throws(() => uploadBytes({ contentBase64: 'not*b64!' }), /not valid base64/);
+    const client = {
+      filesGetUploadUrlExternal: mock.fn(async () => ({ upload_url: 'https://files.slack.com/upload/v1/x', file_id: 'F9' })),
+      filesCompleteUploadExternal: mock.fn(async () => { throw new Error('Slack API error (files.completeUploadExternal): channel_not_found'); }),
+    };
+    const fetchImpl = mock.fn(async (_url: unknown, init: any) => {
+      assert.equal(init.redirect, 'error');
+      assert.ok(init.signal, 'the transfer has a timeout');
+      return new Response('OK', { status: 200 });
+    });
+    await assert.rejects(
+      () => performUploadFile(client as any, { filename: 'a', textContent: 'x', channelId: 'C1' }, fetchImpl as any),
+      /channel_not_found.*uploaded as file F9/,
+    );
+  });
+
+  it('maps the new Slack codes to REST statuses', async () => {
+    const { slackWriteErrorStatus } = await import('../../website/slackErrorMapper.js');
+    const status = (code: string) => slackWriteErrorStatus(new Error(`Slack API error (x): ${code}`));
+    assert.equal(status('name_taken'), 409);
+    assert.equal(status('invalid_name_specials'), 400);
+    assert.equal(status('list_not_found'), 404);
+    assert.equal(status('paid_teams_only'), 403);
+  });
+});

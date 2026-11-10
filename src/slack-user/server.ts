@@ -26,8 +26,7 @@ import { resolveTeamNames, formatTeamLabel } from './teamNames.js';
 import type { SlackAccessRules } from '../mcpConnectionStore.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
-import { registerSlackWorkspaceTools } from '../slack/workspaceTools.js';
-import { fileShareTargets } from '../slack/apiHelpers.js';
+import { guardFileByShares, registerSlackWorkspaceTools } from '../slack/workspaceTools.js';
 import { resolveDmUsers } from '../slack/helpers.js';
 
 export const slackUserServer = instrumentServer(new FastMCP<UserSession>({
@@ -701,23 +700,11 @@ slackUserServer.addTool({
  * Canvases and lists are files, so they are checked by where they are shared:
  * readable if ANY channel they are shared into passes the rules (the same
  * posture as searchFiles). One shared only into denied channels is refused,
- * or it could be read by ID around the rules. A file shared nowhere is the
- * caller's own and passes.
+ * or it could be read by ID around the rules. One with no reported share
+ * passes only if the caller created it (see guardFileByShares).
  */
 async function guardSharedFile(client: SlackClient, session: UserSession, fileId: string): Promise<void> {
-  const { file } = await client.filesInfo(fileId);
-  const targets = [...fileShareTargets(file)];
-  if (targets.length === 0) return;
-  let lastDenial: unknown;
-  for (const channelId of targets) {
-    try {
-      await enforceAccess(client, session, channelId);
-      return;
-    } catch (err) {
-      lastDenial = err;
-    }
-  }
-  throw lastDenial;
+  await guardFileByShares(client, fileId, (channelId) => enforceAccess(client, session, channelId));
 }
 
 registerSlackWorkspaceTools(slackUserServer, {
