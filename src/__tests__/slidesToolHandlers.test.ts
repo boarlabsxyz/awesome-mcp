@@ -735,3 +735,32 @@ describe('handleListPresentationComments', () => {
     assert.ok(result.includes('Anonymous comment'));
   });
 });
+
+describe('revision pinning', () => {
+  it('shows the revision on reads', async () => {
+    const slides = mockSlides({ presentations: { get: mock.fn(async () => ({ data: { presentationId: 'p', title: 'T', revisionId: 'rev-7', slides: [] } })) } });
+    const out = await handleGetPresentation(slides as any, { presentationId: 'p' }, noopLog as any);
+    assert.match(out, /\*\*Revision ID:\*\* rev-7/);
+  });
+
+  it('sends writeControl only when pinned, and reports the new revision', async () => {
+    const batchUpdate = mock.fn(async (_req: any) => ({ data: { replies: [{}], writeControl: { requiredRevisionId: 'rev-8' } } }));
+    const slides = mockSlides({ presentations: { batchUpdate } });
+    const out = await handleBatchUpdatePresentation(slides as any, { presentationId: 'p', requests: [{ deleteObject: { objectId: 'x' } }], requiredRevisionId: 'rev-7' }, noopLog as any);
+    assert.deepEqual(batchUpdate.mock.calls[0].arguments[0].requestBody.writeControl, { requiredRevisionId: 'rev-7' });
+    assert.match(out, /revision is now rev-8/);
+
+    await handleBatchUpdatePresentation(slides as any, { presentationId: 'p', requests: [{}] }, noopLog as any);
+    assert.equal('writeControl' in batchUpdate.mock.calls[1].arguments[0].requestBody, false);
+  });
+
+  it('names a stale revision as "nothing was written" instead of a bad request', async () => {
+    const slides = mockSlides({ presentations: { batchUpdate: mock.fn(async () => {
+      throw Object.assign(new Error('The required revision ID does not match the latest revision.'), { code: 400 });
+    }) } });
+    await assert.rejects(
+      () => handleBatchUpdatePresentation(slides as any, { presentationId: 'p', requests: [{}], requiredRevisionId: 'rev-7' }, noopLog as any),
+      /changed after revision rev-7.*nothing was written/s,
+    );
+  });
+});

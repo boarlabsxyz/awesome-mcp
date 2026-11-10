@@ -89,6 +89,8 @@ slidesServer.addTool({
   parameters: z.object({
     presentationId: z.string().describe('The ID of the presentation to update.'),
     requests: z.array(z.record(z.any())).describe('Array of Google Slides API request objects (e.g., [{createSlide: {...}}, {insertText: {...}}]).'),
+    requiredRevisionId: z.string().min(1).optional()
+      .describe('Optional Revision ID from getPresentation. If anyone changed the presentation since, Google rejects the whole batch and nothing is written.'),
   }),
   execute: async (args, { log, session }) => {
     return handleBatchUpdatePresentation(getSlidesClient(session), args, log);
