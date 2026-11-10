@@ -7053,7 +7053,9 @@ function registerRestApiRoutes(app: express.Express): void {
       }
       const result = await performInspectSpreadsheetCells(req.userSession!.googleSheets, parsed.data);
       res.json({ spreadsheetId: parsed.data.spreadsheetId, ...result });
-    } catch (err) {
+    } catch (err: any) {
+      // A range Google cannot parse ("Nope!A1") is the caller's error, not a 500.
+      if (err?.code === 400) { res.status(400).json({ error: err.message || 'Invalid range' }); return; }
       sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to inspect cells' });
     }
   });

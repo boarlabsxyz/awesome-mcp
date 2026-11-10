@@ -21,9 +21,10 @@
 - **Deliberately not built:** `pasteData`, and Drive upload (the Drive REST plane is GET-only; a CSV can't be imported without passing through the model).
 
 ### Cells, validation, charts (NOT exercised live)
+- **`deleteSpreadsheetRowsOrColumns` wraps every failure as "Nothing was deleted: …"** — Google also refuses deleting all non-frozen rows, which the local check cannot see.
 - **`deleteSpreadsheetRowsOrColumns` is a tool, not a batch op, and MCP-only** — the batch schema is shared with REST and filters no types, so a batch op would put a destructive delete on the API key. Refuses deleting every row/column (Google does) and re-reads the grid for `confirmed`.
 - **`readSpreadsheet` now forwards `valueRenderOption`** — it was accepted and dropped, so `FORMULA` returned displayed values. REST `/read` and `/ranges` take it too.
-- **`inspectSpreadsheetCells` lists non-empty cells only, capped (`maxCells`)** and says so. A multi-link cell has no `hyperlink`; links come from `textFormatRuns`.
+- **`inspectSpreadsheetCells` lists cells with content only (value, note, link, rule — `hasCellContent`), not formatting-only blanks, capped (`maxCells`)** and says so. REST maps Google's 400 (bad range) to 400. A multi-link cell has no `hyperlink`; links come from `textFormatRuns`.
 - **`alignment` masks each property separately** — a whole `userEnteredFormat` mask would wipe number formats and colours.
 - **`dataValidation` `dropdownFromRange` is sent as a formula** (`=Sheet!A2:A9`); `clear` sends no rule. `addChart` needs bounded columns (first = categories) and returns `chartIds`.
 - **Check first on a live run:** BAR series `targetAxis: BOTTOM_AXIS`, `headerCount: 1` with a numeric first row.

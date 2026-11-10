@@ -276,6 +276,12 @@ export type InspectSpreadsheetCellsArgs = z.infer<typeof inspectSpreadsheetCells
 const CELL_FIELDS = 'sheets(properties(title),data(startRow,startColumn,rowData(values('
   + 'userEnteredValue,effectiveValue,formattedValue,userEnteredFormat,hyperlink,textFormatRuns,note,dataValidation))))';
 
+/** Whether a cell holds anything beyond formatting: a value, note, link or rule. */
+export function hasCellContent(cell: sheets_v4.Schema$CellData | undefined): boolean {
+  return Boolean(cell && (cell.userEnteredValue || cell.effectiveValue || cell.note || cell.hyperlink
+    || cell.dataValidation || cell.textFormatRuns?.length));
+}
+
 function columnLetter(index: number): string {
   let out = '';
   for (let n = index + 1; n > 0; n = Math.floor((n - 1) / 26)) out = String.fromCharCode(65 + ((n - 1) % 26)) + out;
@@ -301,7 +307,10 @@ export async function performInspectSpreadsheetCells(sheets: sheets_v4.Sheets, a
   for (const block of sheet?.data ?? []) {
     (block.rowData ?? []).forEach((row, r) => {
       (row.values ?? []).forEach((cell, c) => {
-        if (!cell || Object.keys(cell).length === 0) return;
+        // A blank cell that is only coloured or formatted still comes back with
+        // userEnteredFormat; listing it would let a styled band crowd out cells
+        // with content under maxCells.
+        if (!hasCellContent(cell)) return;
         nonEmpty += 1;
         if (cells.length >= args.maxCells) return;
         const links = (cell.textFormatRuns ?? []).map((run) => run.format?.link?.uri).filter(Boolean);
@@ -752,7 +761,18 @@ sheetsServer.addTool({
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);
     log.info(`deleteSpreadsheetRowsOrColumns: ${args.dimension} ${args.startIndex}-${args.endIndex} on ${args.spreadsheetId}`);
-    const r = await performDeleteSpreadsheetRowsOrColumns(sheets, args);
+    let r: Awaited<ReturnType<typeof performDeleteSpreadsheetRowsOrColumns>>;
+    try {
+      r = await performDeleteSpreadsheetRowsOrColumns(sheets, args);
+    } catch (error: any) {
+      log.error(`deleteSpreadsheetRowsOrColumns failed: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
+      if (error.code === 404) throw new UserError(`Spreadsheet not found (ID: ${args.spreadsheetId}).`);
+      if (error.code === 403) throw new UserError(`Permission denied for spreadsheet (ID: ${args.spreadsheetId}). Deleting needs edit access.`);
+      // Google also refuses deleting every NON-FROZEN row or column, which the
+      // local check (every row/column) does not catch; its message says so.
+      throw new UserError(`Nothing was deleted: ${error.message || 'Unknown error'}`);
+    }
     const noun = args.dimension === 'ROWS' ? 'row' : 'column';
     if (!r.confirmed) {
       return `Google accepted deleting ${r.deleted} ${noun}(s) from "${r.sheetTitle}", but the grid reads back as `

@@ -741,3 +741,36 @@ describe('readSpreadsheet forwards valueRenderOption', () => {
     assert.equal((get.mock.calls[0].arguments[0] as any).valueRenderOption, 'FORMULA');
   });
 });
+
+describe('review follow-ups', () => {
+  it('skips formatting-only blank cells when inspecting', async () => {
+    const sheets = mkSheets({ spreadsheets: { get: mock.fn(async () => ({ data: { sheets: [{ properties: { title: 'S' }, data: [{ rowData: [
+      { values: [{ userEnteredFormat: { backgroundColor: { red: 1 } } }, { userEnteredValue: { numberValue: 3 }, userEnteredFormat: {} }, { note: 'only a note' }] },
+    ] }] }] } })) } });
+    const out = await performInspectSpreadsheetCells(sheets, { spreadsheetId: 'ss', range: 'S!A1:C1', maxCells: 500 });
+    assert.deepEqual(out.cells.map((c: any) => c.cell), ['B1', 'C1']);
+    assert.equal(out.nonEmptyCells, 2);
+  });
+
+  it('places charts on a new sheet, at an explicit anchor, and BAR series on the bottom axis', () => {
+    assert.deepEqual(toRequest({ type: 'addChart', chartType: 'LINE', sourceRange: 'A1:B5', newSheet: true }).addChart.chart.position, { newSheet: true });
+    assert.deepEqual(
+      toRequest({ type: 'addChart', chartType: 'LINE', sourceRange: 'A1:B5', anchorCell: 'Data!H2' }).addChart.chart.position.overlayPosition.anchorCell,
+      { sheetId: 77, rowIndex: 1, columnIndex: 7 },
+    );
+    const bar = toRequest({ type: 'addChart', chartType: 'BAR', sourceRange: 'A1:C5' }).addChart.chart.spec.basicChart;
+    assert.deepEqual(bar.series.map((s: any) => s.targetAxis), ['BOTTOM_AXIS', 'BOTTOM_AXIS']);
+  });
+
+  it('the delete tool reports Google refusals as "Nothing was deleted"', async () => {
+    const sized = { ...METADATA, sheets: [{ properties: { sheetId: 0, title: 'Sheet1', gridProperties: { rowCount: 10, columnCount: 26 } } }] };
+    const sheets = mkSheets({ spreadsheets: {
+      get: mock.fn(async () => ({ data: sized })),
+      batchUpdate: mock.fn(async () => { throw mkErr(400, 'You can\'t delete all the rows on the sheet.'); }),
+    } });
+    await assert.rejects(
+      () => callTool('deleteSpreadsheetRowsOrColumns', { spreadsheetId: 'ss', dimension: 'ROWS', startIndex: 2, endIndex: 10 }, { googleSheets: sheets }),
+      (err: any) => err instanceof UserError && /^Nothing was deleted: You can't delete all the rows/.test(err.message),
+    );
+  });
+});

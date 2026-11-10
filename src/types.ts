@@ -481,7 +481,7 @@ const DataValidationRuleSchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('dropdownFromRange'),
-    sourceRange: z.string().describe('A1 range whose values are the choices, e.g. "Lists!A2:A20".'),
+    sourceRange: z.string().describe('A1 range whose values are the choices, e.g. "Lists!A2:A20". Quote a tab name with spaces: "\'My Tab\'!A2:A20".'),
   }),
   z.object({
     kind: z.literal('checkbox'),
@@ -514,7 +514,7 @@ const AddChartOp = z.object({
   chartType: z.enum(['COLUMN', 'BAR', 'LINE', 'AREA', 'SCATTER', 'PIE']),
   sourceRange: z.string().describe('A1 range with a header row: first column = categories (X), each further column = one series. PIE takes exactly two columns.'),
   title: z.string().optional(),
-  anchorCell: z.string().optional().describe('A1 cell for the chart\'s top-left corner, e.g. "Sheet1!H2". Defaults to two columns right of the data. Ignored with newSheet.'),
+  anchorCell: z.string().optional().describe('A1 cell for the chart\'s top-left corner, e.g. "Sheet1!H2". Defaults to the right of the data, leaving one blank column. Ignored with newSheet.'),
   newSheet: z.boolean().optional().describe('Put the chart on its own new sheet instead of over the grid.'),
   legendPosition: z.enum(['BOTTOM_LEGEND', 'TOP_LEGEND', 'LEFT_LEGEND', 'RIGHT_LEGEND', 'NO_LEGEND']).optional().default('BOTTOM_LEGEND'),
 });
