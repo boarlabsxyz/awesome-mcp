@@ -329,6 +329,46 @@ export function operationToRequest(
       };
     }
 
+    case 'alignment': {
+      const gridRange = a1RangeToGridRange(metadata, op.range);
+      const format: sheets_v4.Schema$CellFormat = {};
+      const fields: string[] = [];
+      if (op.horizontalAlignment !== undefined) { format.horizontalAlignment = op.horizontalAlignment; fields.push('horizontalAlignment'); }
+      if (op.verticalAlignment !== undefined) { format.verticalAlignment = op.verticalAlignment; fields.push('verticalAlignment'); }
+      if (op.wrapStrategy !== undefined) { format.wrapStrategy = op.wrapStrategy; fields.push('wrapStrategy'); }
+      if (fields.length === 0) {
+        throw new UserError('alignment operation requires at least one of horizontalAlignment, verticalAlignment, wrapStrategy.');
+      }
+      // One mask entry per property named, so the rest of the cell format
+      // (number format, colours, fonts) is left as it was.
+      return {
+        repeatCell: {
+          range: gridRange,
+          cell: { userEnteredFormat: format },
+          fields: fields.map((f) => `userEnteredFormat.${f}`).join(','),
+        },
+      };
+    }
+
+    case 'dataValidation': {
+      const gridRange = a1RangeToGridRange(metadata, op.range);
+      if (op.rule.kind === 'clear') return { setDataValidation: { range: gridRange } };
+      return {
+        setDataValidation: {
+          range: gridRange,
+          rule: {
+            condition: validationCondition(op.rule),
+            strict: op.strict ?? true,
+            showCustomUi: op.rule.kind === 'dropdown' || op.rule.kind === 'dropdownFromRange',
+            ...(op.inputMessage ? { inputMessage: op.inputMessage } : {}),
+          },
+        },
+      };
+    }
+
+    case 'addChart':
+      return { addChart: { chart: chartSpec(op, metadata) } };
+
     case 'insertDimension': {
       const sheetId = resolveSheetId(metadata, op.sheetName);
       if (op.endIndex < op.startIndex) {
@@ -352,4 +392,90 @@ export function operationToRequest(
       return { insertDimension: req };
     }
   }
+}
+
+type DataValidationRule = Extract<BatchUpdateOperation, { type: 'dataValidation' }>['rule'];
+
+function validationCondition(rule: Exclude<DataValidationRule, { kind: 'clear' }>): sheets_v4.Schema$BooleanCondition {
+  switch (rule.kind) {
+    case 'dropdown':
+      return { type: 'ONE_OF_LIST', values: rule.values.map((userEnteredValue) => ({ userEnteredValue })) };
+    case 'dropdownFromRange': {
+      // ONE_OF_RANGE takes the range as a formula string.
+      const source = rule.sourceRange.startsWith('=') ? rule.sourceRange : `=${rule.sourceRange}`;
+      return { type: 'ONE_OF_RANGE', values: [{ userEnteredValue: source }] };
+    }
+    case 'checkbox':
+      if (rule.uncheckedValue !== undefined && rule.checkedValue === undefined) {
+        throw new UserError('checkbox: uncheckedValue needs checkedValue as well.');
+      }
+      return rule.checkedValue === undefined
+        ? { type: 'BOOLEAN' }
+        : {
+          type: 'BOOLEAN',
+          values: [rule.checkedValue, ...(rule.uncheckedValue !== undefined ? [rule.uncheckedValue] : [])]
+            .map((userEnteredValue) => ({ userEnteredValue })),
+        };
+    case 'number': {
+      const between = rule.condition === 'NUMBER_BETWEEN' || rule.condition === 'NUMBER_NOT_BETWEEN';
+      if (between && rule.value2 === undefined) throw new UserError(`${rule.condition} needs value2.`);
+      if (!between && rule.value2 !== undefined) throw new UserError(`${rule.condition} does not take value2.`);
+      const values = between ? [rule.value, rule.value2!] : [rule.value];
+      return { type: rule.condition, values: values.map((v) => ({ userEnteredValue: String(v) })) };
+    }
+    case 'customFormula':
+      return { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: rule.formula }] };
+  }
+}
+
+type AddChartOperation = Extract<BatchUpdateOperation, { type: 'addChart' }>;
+
+/**
+ * A chart over a block with a header row: first column the categories, each
+ * further column one series. Needs bounded columns, because each series is
+ * addressed by its own column.
+ */
+function chartSpec(op: AddChartOperation, metadata: sheets_v4.Schema$Spreadsheet): sheets_v4.Schema$EmbeddedChart {
+  const source = a1RangeToGridRange(metadata, op.sourceRange);
+  const firstCol = source.startColumnIndex;
+  const endCol = source.endColumnIndex;
+  if (firstCol == null || endCol == null) {
+    throw new UserError(`addChart: sourceRange "${op.sourceRange}" needs explicit columns, e.g. "Sheet1!A1:C20".`);
+  }
+  const columnCount = endCol - firstCol;
+  if (columnCount < 2) throw new UserError('addChart: sourceRange needs a category column and at least one data column.');
+  if (op.chartType === 'PIE' && columnCount !== 2) {
+    throw new UserError('addChart: a PIE chart takes exactly two columns (labels, values).');
+  }
+  const column = (index: number): sheets_v4.Schema$ChartData => ({
+    sourceRange: { sources: [{ ...source, startColumnIndex: index, endColumnIndex: index + 1 }] },
+  });
+
+  const spec: sheets_v4.Schema$ChartSpec = { ...(op.title ? { title: op.title } : {}) };
+  if (op.chartType === 'PIE') {
+    spec.pieChart = { domain: column(firstCol), series: column(firstCol + 1), legendPosition: op.legendPosition ?? 'BOTTOM_LEGEND' };
+  } else {
+    spec.basicChart = {
+      chartType: op.chartType,
+      legendPosition: op.legendPosition ?? 'BOTTOM_LEGEND',
+      headerCount: 1,
+      domains: [{ domain: column(firstCol) }],
+      series: Array.from({ length: columnCount - 1 }, (_, i) => ({
+        series: column(firstCol + 1 + i),
+        // BAR draws horizontally, so its values run along the bottom axis.
+        targetAxis: op.chartType === 'BAR' ? 'BOTTOM_AXIS' : 'LEFT_AXIS',
+      })),
+    };
+  }
+
+  let position: sheets_v4.Schema$EmbeddedObjectPosition;
+  if (op.newSheet) {
+    position = { newSheet: true };
+  } else if (op.anchorCell) {
+    const anchor = a1RangeToGridRange(metadata, op.anchorCell);
+    position = { overlayPosition: { anchorCell: { sheetId: anchor.sheetId, rowIndex: anchor.startRowIndex ?? 0, columnIndex: anchor.startColumnIndex ?? 0 } } };
+  } else {
+    position = { overlayPosition: { anchorCell: { sheetId: source.sheetId, rowIndex: source.startRowIndex ?? 0, columnIndex: endCol + 1 } } };
+  }
+  return { spec, position };
 }

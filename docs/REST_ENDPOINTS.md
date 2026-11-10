@@ -77,13 +77,14 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 |---|---|---|---|
 | `listGoogleSheets` | `GET /api/v1/sheets` | live | List spreadsheets |
 | `getSpreadsheetInfo` | `GET /api/v1/sheets/{spreadsheetId}` | live | Get spreadsheet metadata |
-| `readSpreadsheet` | `GET /api/v1/sheets/{spreadsheetId}/ranges?range={range}` | live | Read a range from a spreadsheet — _GET sibling of the existing POST /api/v1/sheets/{id}/read._ |
+| `readSpreadsheet` | `GET /api/v1/sheets/{spreadsheetId}/ranges?range={range}` | live | Read a range from a spreadsheet — _GET sibling of the existing POST /api/v1/sheets/{id}/read. Optional valueRenderOption: FORMATTED_VALUE (default), UNFORMATTED_VALUE or FORMULA._ |
+| `inspectSpreadsheetCells` | `GET /api/v1/sheets/{spreadsheetId}/cells?range={range}` | live | Inspect cells: formulas, raw and displayed values, formatting, links, notes, validation — _Read-only. Lists non-empty cells only, capped by maxCells (default 500, max 2000); truncated and nonEmptyCells say when the cap cut the list._ |
 | `readRowByField` | `GET /api/v1/sheets/{spreadsheetId}/rows/{rowNumber}` | live | Read a row by row number |
 | `findRowByValue` | `GET /api/v1/sheets/{spreadsheetId}/search` | live | Find a row by column value (?col=&val=) |
 | `createSpreadsheet` | `POST /api/v1/sheets` | live | Create a spreadsheet, optionally seeded with rows — _Body limit 5mb so initialData can carry a bulk seed. Not idempotent: each call creates another spreadsheet. A seed that fails still answers 201 with initialDataWritten false, because the file exists by then._ |
 | `writeSpreadsheet` | `POST /api/v1/sheets/{spreadsheetId}/write` | live | Overwrite a range with a 2D array of values — _Body limit 5mb. Overwrites whatever occupies the range. Was an uncatalogued ChatGPT-compat route; the path is unchanged and it now validates with the MCP tool schema._ |
 | `appendSpreadsheetRows` | `POST /api/v1/sheets/{spreadsheetId}/append` | live | Append rows to the end of a sheet — _Body limit 5mb. Not idempotent: repeating the call appends the rows a second time. Was an uncatalogued ChatGPT-compat route; path unchanged._ |
-| `batchUpdateSpreadsheet` | `POST /api/v1/sheets/{spreadsheetId}/batchUpdate` | live | Apply formatting and sheet-lifecycle operations atomically — _Body limit 5mb. WARNING: the operation list includes deleteSheet, which destroys a tab and every value on it, and a curl has no confirmation step. Reviewed and accepted when this endpoint was added. The whole batch is atomic, so one rejected operation applies none of them._ |
+| `batchUpdateSpreadsheet` | `POST /api/v1/sheets/{spreadsheetId}/batchUpdate` | live | Apply formatting and sheet-lifecycle operations atomically — _Body limit 5mb. WARNING: the operation list includes deleteSheet, which destroys a tab and every value on it, and a curl has no confirmation step. Reviewed and accepted when this endpoint was added. The whole batch is atomic, so one rejected operation applies none of them. addChart answers with the new chartIds. Deleting rows or columns is MCP-only._ |
 | `clearSpreadsheetRange` | `POST /api/v1/sheets/{spreadsheetId}/ranges/clear` | live | Clear every value in a range — _DESTRUCTIVE and irreversible through this API. Exposed with explicit sign-off. POST to an action path rather than DELETE on the range, so the call site reads as deliberate._ |
 
 ### Google Calendar (`calendar`)
@@ -461,4 +462,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 337 endpoints.
+Catalog size: 338 endpoints.
