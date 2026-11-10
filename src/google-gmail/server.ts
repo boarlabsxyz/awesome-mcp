@@ -18,7 +18,7 @@ import {
   handleSendEmail, handleDraftEmail, handleReadEmail, handleSearchEmails,
   handleModifyEmail, handleDeleteEmail, handleBatchModifyEmails, handleBatchDeleteEmails,
   handleListLabels, handleCreateLabel, handleUpdateLabel, handleDeleteLabel,
-  handleGetOrCreateLabel, handleGetAttachment, handleCreateFilter, handleListFilters, handleGetFilter,
+  handleGetOrCreateLabel, handleGetAttachment, handleCreateFilter, handleListFilters, handleGetFilter, handleDeleteFilter,
 } from './toolHandlers.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
@@ -174,7 +174,7 @@ gmailServer.addTool({
 gmailServer.addTool({
   name: 'createFilter',
   annotations: { readOnlyHint: false },
-  description: 'Creates a Gmail filter for incoming mail: match by sender, recipient, subject or search query; label, archive, mark read or star.',
+  description: 'Creates a Gmail filter for incoming mail: match by sender, recipient, subject or search query; label, archive, mark read or star. Undo with deleteFilter.',
   parameters: createFilterSchema,
   execute: async (args, { log, session }) => handleCreateFilter(getGmailClient(session), args, log),
 });
@@ -185,6 +185,16 @@ gmailServer.addTool({
   description: 'Lists the Gmail filters on this account with their criteria and actions.',
   parameters: z.object({}),
   execute: async (_args, { log, session }) => handleListFilters(getGmailClient(session), log),
+});
+
+// MCP-only, like the other deletes without REST sign-off: it is the undo for
+// createFilter, which can archive or mark read mail from a sender.
+gmailServer.addTool({
+  name: 'deleteFilter',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Deletes a Gmail filter so it stops applying to new mail. Mail it already changed is not restored.',
+  parameters: getFilterSchema,
+  execute: async (args, { log, session }) => handleDeleteFilter(getGmailClient(session), args, log),
 });
 
 gmailServer.addTool({

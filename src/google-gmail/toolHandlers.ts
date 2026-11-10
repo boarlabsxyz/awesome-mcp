@@ -39,10 +39,14 @@ async function replyContext(gmail: gmail_v1.Gmail, messageId: string) {
     userId: 'me',
     id: messageId,
     format: 'metadata',
-    metadataHeaders: ['Subject', 'From', 'Reply-To', 'Message-ID', 'References'],
+    metadataHeaders: ['Subject', 'From', 'To', 'Reply-To', 'Message-ID', 'References'],
   });
+  // Every value copied from the parent ends up in a raw header of the draft,
+  // so line breaks are flattened here: a folded or crafted Subject/Reply-To
+  // must not be able to add a header (a hidden Bcc).
   const header = (name: string) =>
-    parent.data.payload?.headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '';
+    (parent.data.payload?.headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '')
+      .replace(/[\r\n]+/g, ' ').trim();
   const messageIdHeader = header('Message-ID');
   if (!parent.data.threadId || !messageIdHeader) {
     throw new UserError(`Message ${messageId} has no thread or Message-ID header, so a reply cannot be attached to it.`);
@@ -54,7 +58,8 @@ async function replyContext(gmail: gmail_v1.Gmail, messageId: string) {
     // RFC 5322: the parent's References, then the parent's own Message-ID.
     references: [header('References'), messageIdHeader].filter(Boolean).join(' '),
     subject: /^re:/i.test(subject) ? subject : `Re: ${subject}`,
-    replyTo: header('Reply-To') || header('From'),
+    // A reply to a message you sent goes to its recipients, not back to you.
+    replyTo: parent.data.labelIds?.includes('SENT') ? header('To') : (header('Reply-To') || header('From')),
   };
 }
 
@@ -120,6 +125,7 @@ export async function handleDraftEmail(
     if (error instanceof UserError) throw error;
     handleGmailError(error, log, 'creating draft', {
       403: "Permission denied. Make sure you have granted Gmail access.",
+      404: args.replyToMessageId ? `Original message not found (ID: ${args.replyToMessageId}).` : 'Not found.',
     });
   }
 }
@@ -498,7 +504,9 @@ export function buildFilter(args: FilterArgs): gmail_v1.Schema$Filter {
   if (args.subject) criteria.subject = args.subject;
   if (args.query) criteria.query = args.query;
   if (args.negatedQuery) criteria.negatedQuery = args.negatedQuery;
-  if (args.hasAttachment !== undefined) criteria.hasAttachment = args.hasAttachment;
+  // Only true narrows anything: Gmail has no "without attachment" criterion,
+  // so false alone would pass the criterion check and match everything.
+  if (args.hasAttachment === true) criteria.hasAttachment = true;
 
   const add = new Set(args.addLabelIds ?? []);
   const remove = new Set(args.removeLabelIds ?? []);
@@ -509,6 +517,10 @@ export function buildFilter(args: FilterArgs): gmail_v1.Schema$Filter {
 
   if (Object.keys(criteria).length === 0) {
     throw new UserError('A filter needs at least one criterion: from, to, subject, query, negatedQuery or hasAttachment.');
+  }
+  const conflicting = [...add].filter((id) => remove.has(id));
+  if (conflicting.length) {
+    throw new UserError(`These labels are both added and removed: ${conflicting.join(', ')} (archive removes INBOX, markRead removes UNREAD, neverSpam removes SPAM).`);
   }
   if (add.size === 0 && remove.size === 0) {
     throw new UserError('A filter needs at least one action: addLabelIds, removeLabelIds, archive, markRead, star or neverSpam.');
@@ -538,6 +550,10 @@ export async function performCreateFilter(gmail: gmail_v1.Gmail, args: FilterArg
 export async function performListFilters(gmail: gmail_v1.Gmail): Promise<gmail_v1.Schema$Filter[]> {
   const response = await gmail.users.settings.filters.list({ userId: 'me' });
   return response.data.filter ?? [];
+}
+
+export async function performDeleteFilter(gmail: gmail_v1.Gmail, filterId: string): Promise<void> {
+  await gmail.users.settings.filters.delete({ userId: 'me', id: filterId });
 }
 
 export async function performGetFilter(gmail: gmail_v1.Gmail, filterId: string): Promise<gmail_v1.Schema$Filter> {
@@ -581,6 +597,16 @@ export async function handleListFilters(gmail: gmail_v1.Gmail, log: LogLike): Pr
     return `${filters.length} filter(s):\n${filters.map(describeFilter).join('\n')}`;
   } catch (error: any) {
     filterError(error, log, 'listing filters');
+  }
+}
+
+export async function handleDeleteFilter(gmail: gmail_v1.Gmail, args: { filterId: string }, log: LogLike): Promise<string> {
+  log.info(`Deleting Gmail filter ${args.filterId}`);
+  try {
+    await performDeleteFilter(gmail, args.filterId);
+    return `Deleted filter ${args.filterId}. Mail it already labelled or archived stays as it is.`;
+  } catch (error: any) {
+    filterError(error, log, 'deleting filter');
   }
 }
 

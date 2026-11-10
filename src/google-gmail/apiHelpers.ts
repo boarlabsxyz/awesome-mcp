@@ -13,9 +13,12 @@ export function createRawEmail(
 ): string {
   const contentType = options?.isHtml ? 'text/html' : 'text/plain';
 
+  // The schemas refuse line breaks in caller-supplied values; this also covers
+  // values that arrive another way (a reply's copied recipient or subject).
+  const oneLine = (value: string) => value.replace(/[\r\n]+/g, ' ');
   const lines: string[] = [
-    `To: ${to}`,
-    `Subject: ${subject}`,
+    `To: ${oneLine(to)}`,
+    `Subject: ${oneLine(subject)}`,
   ];
 
   if (options?.cc) lines.push(`Cc: ${options.cc}`);
