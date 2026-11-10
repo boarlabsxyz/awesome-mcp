@@ -722,6 +722,10 @@
                   "tabId": {
                     "type": "string",
                     "description": "Optional tab ID. Defaults to the first tab."
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "description": "Optional revisionId from a read. If the document changed since, Google rejects the edit (400) and nothing is written. The response carries the new revisionId."
                   }
                 },
                 "required": [
@@ -821,7 +825,7 @@
                     "type": "array",
                     "minItems": 1,
                     "maxItems": 50,
-                    "description": "Each operation needs a `type` plus that type fields. Types: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list.",
+                    "description": "Each operation needs a `type` plus that type fields. Types: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Every operation takes an optional tabId; create_bullet_list takes bulletPreset (NUMBERED_* for a numbered list, BULLET_CHECKBOX for a checklist).",
                     "items": {
                       "type": "object",
                       "required": [
@@ -849,6 +853,10 @@
                   "suggestMode": {
                     "type": "boolean",
                     "description": "If true the whole batch is applied as tracked SUGGESTIONS for a human to accept or reject, and the document itself is unchanged until someone does."
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "description": "Optional revisionId from a read. If the document changed since, Google rejects the edit (400) and nothing is written. The response carries the new revisionId."
                   }
                 },
                 "required": [
@@ -1074,6 +1082,10 @@
                   "tabId": {
                     "type": "string",
                     "description": "Optional tab ID. Defaults to the first tab."
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "description": "Optional revisionId from a read. If the document changed since, Google rejects the edit (400) and nothing is written. The response carries the new revisionId."
                   }
                 },
                 "required": [
@@ -1183,6 +1195,14 @@
                   "style": {
                     "type": "object",
                     "additionalProperties": true
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "description": "Optional revisionId from a read. If the document changed since, Google rejects the edit (400) and nothing is written. The response carries the new revisionId."
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab ID. Defaults to the first tab."
                   }
                 },
                 "required": [
@@ -1299,6 +1319,14 @@
                   "style": {
                     "type": "object",
                     "additionalProperties": true
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "description": "Optional revisionId from a read. If the document changed since, Google rejects the edit (400) and nothing is written. The response carries the new revisionId."
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab ID. Defaults to the first tab."
                   }
                 },
                 "required": [
@@ -3257,6 +3285,773 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/tables/structure": {
+      "post": {
+        "operationId": "modifyDocTableStructure",
+        "summary": "Insert table rows or columns, or merge and unmerge cells",
+        "description": "The table is named by its start index (GET /structure). It is read first, so a wrong index or an out-of-range cell is a 400 naming the table sizes. Deleting rows or columns is MCP-only.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tableStartIndex": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The start index of the table, from inspectDocStructure (elements of type table)."
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab ID the table is in. Defaults to the first tab."
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Optional revisionId from readGoogleDoc or inspectDocStructure. If anyone changed the document since that revision, Google rejects the edit and nothing is written. The response returns the new revisionId to chain edits."
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "insert_rows_above",
+                      "insert_rows_below",
+                      "insert_columns_left",
+                      "insert_columns_right",
+                      "merge_cells",
+                      "unmerge_cells"
+                    ],
+                    "description": "What to do. Inserts are relative to the cell at rowIndex/columnIndex; merge/unmerge act on the cell block starting there."
+                  },
+                  "rowIndex": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Zero-based row of the reference (or top-left) cell."
+                  },
+                  "columnIndex": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Zero-based column of the reference (or top-left) cell."
+                  },
+                  "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "For inserts: how many rows or columns to add (1-20). Defaults to 1."
+                  },
+                  "rowSpan": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "For merge/unmerge: rows in the block. Defaults to 1."
+                  },
+                  "columnSpan": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "For merge/unmerge: columns in the block. Defaults to 1."
+                  }
+                },
+                "required": [
+                  "tableStartIndex",
+                  "action",
+                  "rowIndex",
+                  "columnIndex"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Table changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "type": "string"
+                    },
+                    "tableBefore": {
+                      "type": "object",
+                      "properties": {
+                        "rows": {
+                          "type": "integer"
+                        },
+                        "columns": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "tableAfter": {
+                      "type": "object",
+                      "properties": {
+                        "rows": {
+                          "type": "integer"
+                        },
+                        "columns": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "revisionId": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body (Zod issues keyed by field), or a refusal the caller can fix: unknown tab, no table at that index, cell block outside the table, stale requiredRevisionId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/tables/cell-style": {
+      "post": {
+        "operationId": "formatDocTableCells",
+        "summary": "Format table cells: background, alignment, padding, borders, row height, column width",
+        "description": "Omit rowIndex and columnIndex for the whole table; naming only one formats that row or column across the table. Border parts left out default to black, 1pt, SOLID.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tableStartIndex": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The start index of the table, from inspectDocStructure (elements of type table)."
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab ID the table is in. Defaults to the first tab."
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Optional revisionId from readGoogleDoc or inspectDocStructure. If anyone changed the document since that revision, Google rejects the edit and nothing is written. The response returns the new revisionId to chain edits."
+                  },
+                  "rowIndex": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Zero-based first row of the cell block. Omit row and column to format the whole table."
+                  },
+                  "columnIndex": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Zero-based first column of the cell block."
+                  },
+                  "rowSpan": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Rows in the block. Defaults to 1 when rowIndex is given."
+                  },
+                  "columnSpan": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Columns in the block. Defaults to 1 when columnIndex is given."
+                  },
+                  "backgroundColor": {
+                    "type": "string",
+                    "description": "Cell background color, hex (e.g. \"#FFF2CC\")."
+                  },
+                  "contentAlignment": {
+                    "type": "string",
+                    "enum": [
+                      "TOP",
+                      "MIDDLE",
+                      "BOTTOM"
+                    ],
+                    "description": "Vertical alignment of cell content."
+                  },
+                  "paddingPt": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Padding on all four sides, in points."
+                  },
+                  "borderColor": {
+                    "type": "string",
+                    "description": "Color of all four cell borders, hex."
+                  },
+                  "borderWidthPt": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Width of all four cell borders, in points. 0 hides them."
+                  },
+                  "borderDashStyle": {
+                    "type": "string",
+                    "enum": [
+                      "SOLID",
+                      "DOT",
+                      "DASH"
+                    ],
+                    "description": "Dash style of all four cell borders."
+                  },
+                  "minRowHeightPt": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Minimum height, in points, of every row the block covers."
+                  },
+                  "columnWidthPt": {
+                    "type": "number",
+                    "minimum": 5,
+                    "description": "Fixed width, in points (min 5), of every column the block covers."
+                  }
+                },
+                "required": [
+                  "tableStartIndex"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cells formatted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "cells": {
+                      "type": "object",
+                      "properties": {
+                        "rowIndex": {
+                          "type": "integer"
+                        },
+                        "columnIndex": {
+                          "type": "integer"
+                        },
+                        "rowSpan": {
+                          "type": "integer"
+                        },
+                        "columnSpan": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "cellStyleFields": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "rowHeightSet": {
+                      "type": "boolean"
+                    },
+                    "columnWidthSet": {
+                      "type": "boolean"
+                    },
+                    "revisionId": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body (Zod issues keyed by field), or a refusal the caller can fix: unknown tab, no table at that index, cell block outside the table, stale requiredRevisionId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/tabs": {
+      "post": {
+        "operationId": "createDocumentTab",
+        "summary": "Add a tab, optionally nested under another",
+        "description": "Answers 201 with the new tab as Google reported it. Deleting a tab is MCP-only.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Title of the new tab. Google names it \"Tab N\" if omitted."
+                  },
+                  "parentTabId": {
+                    "type": "string",
+                    "description": "Optional: create the tab nested under this tab (from listDocumentTabs). Omit for a top-level tab."
+                  },
+                  "index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Optional zero-based position among its sibling tabs. Defaults to last."
+                  },
+                  "iconEmoji": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Optional single emoji shown as the tab icon."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Tab created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "tabId": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "index": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "parentTabId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "nestingLevel": {
+                      "type": "integer"
+                    },
+                    "iconEmoji": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body (Zod issues keyed by field), or a refusal the caller can fix: unknown tab, no table at that index, cell block outside the table, stale requiredRevisionId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/tabs/{tabId}/update": {
+      "post": {
+        "operationId": "updateDocumentTab",
+        "summary": "Rename a tab, change its icon or move it among its siblings",
+        "description": "Re-reads the tab after writing: confirmed is true only when every changed field reads back as requested.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          },
+          {
+            "name": "tabId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The tab ID (from GET /tabs)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "New title for the tab."
+                  },
+                  "iconEmoji": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "New single-emoji icon for the tab."
+                  },
+                  "index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "New zero-based position among its sibling tabs."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tab updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "tabId": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "index": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "parentTabId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "nestingLevel": {
+                      "type": "integer"
+                    },
+                    "iconEmoji": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "updatedFields": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "confirmed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body (Zod issues keyed by field), or a refusal the caller can fix: unknown tab, no table at that index, cell block outside the table, stale requiredRevisionId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/footnotes": {
+      "post": {
+        "operationId": "createDocFootnote",
+        "summary": "Add a footnote with its text at a body index",
+        "description": "Two writes: the reference, then the text into the new footnote. If the second fails the 400 names the empty footnote left behind.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "index": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "1-based index in the body where the footnote reference number goes. Must be inside a paragraph."
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The footnote text."
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab ID. Defaults to the first tab."
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Optional revisionId from readGoogleDoc or inspectDocStructure. If anyone changed the document since that revision, Google rejects the edit and nothing is written. The response returns the new revisionId to chain edits."
+                  }
+                },
+                "required": [
+                  "index",
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Footnote created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "footnoteId": {
+                      "type": "string"
+                    },
+                    "index": {
+                      "type": "integer"
+                    },
+                    "revisionId": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body (Zod issues keyed by field), or a refusal the caller can fix: unknown tab, no table at that index, cell block outside the table, stale requiredRevisionId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
             "content": {
               "application/json": {
                 "schema": {

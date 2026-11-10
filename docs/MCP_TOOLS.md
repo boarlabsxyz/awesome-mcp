@@ -7,7 +7,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 ## Index
 
 - [Shared (opt-in per server)](#shared-opt-in-per-server-) (2)
-- [Google Docs](#google-docs) (38)
+- [Google Docs](#google-docs) (45)
 - [Google Sheets](#google-sheets) (12)
 - [Google Calendar](#google-calendar) (6)
 - [Google Drive](#google-drive) (15)
@@ -40,7 +40,7 @@ Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEnd
 
 ## Google Docs
 
-Source: `src/google-docs/server.ts` — 38 tools.
+Source: `src/google-docs/server.ts` — 45 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -48,14 +48,21 @@ Source: `src/google-docs/server.ts` — 38 tools.
 | `searchGoogleDocs` | Searches for Google Documents by name, content, or other criteria across My Drive and shared drives. | `GET /api/v1/docs?q={query}` |
 | `getRecentGoogleDocs` | Gets the most recently modified Google Documents from My Drive and shared drives. | `GET /api/v1/docs/recent` |
 | `exportDocToPdf` | Exports a Google Doc as a PDF file and saves it to Google Drive. Returns the PDF file ID, name, and link. | `POST /api/v1/docs/{documentId}/export/pdf` |
-| `readGoogleDoc` | Reads the content of a specific Google Document, optionally returning structured data. | `GET /api/v1/docs/{documentId}` |
+| `readGoogleDoc` | Reads the content of a specific Google Document, optionally returning structured data. The text format ends with the document's revisionId (for requiredRevisionId); json includes it; for markdown use inspectDocStructure. | `GET /api/v1/docs/{documentId}` |
 | `listDocumentTabs` | Lists all tabs in a Google Document, including their hierarchy, IDs, and structure. | `GET /api/v1/docs/{documentId}/tabs` |
+| `createDocumentTab` | Adds a new tab to a Google Doc, optionally nested under another tab. Returns the new tab ID. | `POST /api/v1/docs/{documentId}/tabs` |
+| `updateDocumentTab` | Renames a document tab, changes its emoji icon, or moves it among its sibling tabs. | `POST /api/v1/docs/{documentId}/tabs/{tabId}/update` |
+| `deleteDocumentTab` | Deletes a document tab with all its content and all tabs nested under it. Not reversible through the API. | — |
 | `appendToGoogleDoc` | Appends text to the very end of a specific Google Document or tab. Equivalent to insertText at the document end; use this when you do not know the end index. | `POST /api/v1/docs/{documentId}/append` |
 | `insertText` | Inserts text at a specific 1-based index within the document body or a specific tab. For end-of-document inserts where you do not have an index, prefer appendToGoogleDoc. | `POST /api/v1/docs/{documentId}/text` |
 | `deleteRange` | Deletes content within a specified range (start index inclusive, end index exclusive) from the document or a specific tab. | `POST /api/v1/docs/{documentId}/ranges/delete` |
 | `applyTextStyle` | Applies character-level formatting to a specific range or found text. Supported style keys: bold, italic, underline, strikethrough, fontSize, fontFamily, foregroundColor, backgroundColor, link. | `POST /api/v1/docs/{documentId}/text-style` |
 | `applyParagraphStyle` | Applies paragraph-level formatting (alignment, spacing, named styles like Heading 1) to the paragraph(s) containing specific text, an index, or a range. | `POST /api/v1/docs/{documentId}/paragraph-style` |
 | `insertTable` | Inserts a new table with the specified dimensions at a given index. | `POST /api/v1/docs/{documentId}/tables` |
+| `modifyTableStructure` | Adds rows or columns to an existing table, or merges/unmerges a block of cells. Find the table start index with inspectDocStructure. | `POST /api/v1/docs/{documentId}/tables/structure` |
+| `deleteTableRowOrColumn` | Deletes one row or column of an existing table, with its content. A merged cell spanning several rows/columns deletes all of them. | — |
+| `formatTableCells` | Formats table cells natively: background, vertical alignment, padding, borders, row height and column width. Omit row/column for the whole table. | `POST /api/v1/docs/{documentId}/tables/cell-style` |
+| `createFootnote` | Adds a real footnote: inserts the reference number at an index in the body and writes the footnote text. | `POST /api/v1/docs/{documentId}/footnotes` |
 | `editTableCell` | NOT IMPLEMENTED — always throws. Editing table cells requires non-trivial index calculation that has not been built yet. Use batchUpdateDoc with raw insert/delete requests if you need to modify table contents. | — |
 | `insertPageBreak` | Inserts a page break at the specified index. | `POST /api/v1/docs/{documentId}/page-breaks` |
 | `insertImageFromUrl` | Inserts an inline image into a Google Document from a publicly accessible URL. | `POST /api/v1/docs/{documentId}/images/from-url` |
@@ -80,7 +87,7 @@ Source: `src/google-docs/server.ts` — 38 tools.
 | `findAndReplace` | Finds all occurrences of a text string in a Google Doc and replaces them. Returns the number of replacements made. | `POST /api/v1/docs/{documentId}/find-replace` |
 | `inspectDocStructure` | Analyzes and returns the structure of a Google Doc: paragraph/table/section counts, headers/footers presence, tab hierarchy. Use detailed mode for element-by-element listing. | `GET /api/v1/docs/{documentId}/structure` |
 | `importDocx` | Converts a .docx file already in Google Drive into a Google Doc. Drive auto-converts the format. Returns the new Google Doc ID and link. | `POST /api/v1/docs/import/docx` |
-| `batchUpdateDoc` | Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Index-based operations are automatically sorted in descending order to prevent index shifting. Set suggestMode to propose the whole batch as tracked suggestions instead of editing directly. | `POST /api/v1/docs/{documentId}/batchUpdate` |
+| `batchUpdateDoc` | Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list (bulletPreset NUMBERED_* for numbered lists). Each operation takes an optional tabId. Index-based operations are automatically sorted in descending order to prevent index shifting. Set suggestMode to propose the whole batch as tracked suggestions instead of editing directly. | `POST /api/v1/docs/{documentId}/batchUpdate` |
 | `importToGoogleDoc` | Import content (text, HTML, or markdown) into a new Google Doc. Google Drive auto-converts the content to Google Docs format. | `POST /api/v1/docs/import` |
 
 ## Google Sheets
@@ -634,4 +641,4 @@ Source: `src/sandbox/server.ts` — 6 tools.
 
 ---
 
-**Grand total: 449 tools across 22 sections.**
+**Grand total: 456 tools across 22 sections.**

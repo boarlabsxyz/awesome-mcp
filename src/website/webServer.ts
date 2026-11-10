@@ -4913,8 +4913,8 @@ function registerRestApiRoutes(app: express.Express): void {
   // POST /api/v1/docs/:documentId/comments - Add a comment
   // === Google Docs writes ===
   //
-  // Nineteen endpoints, one per write tool, registered from a table rather than
-  // written out nineteen times. They differ only in schema, op, status code and
+  // One endpoint per write tool, registered from a table rather than
+  // written out one by one. They differ only in schema, op, status code and
   // response shape, so the hand-written version was ~380 lines of which Sonar
   // measured 23% as duplicated — and every copy of a catch block is somewhere a
   // fix can fail to be applied.
@@ -5062,6 +5062,56 @@ function registerRestApiRoutes(app: express.Express): void {
       load: async () => ({
         schema: (await docsSchemas()).insertTableSchema,
         run: (session, args) => docsOps().then((m) => m.performInsertTable(session.googleDocs, args)),
+      }),
+    },
+    {
+      // Table structure and cell formatting. Row and column DELETE is MCP-only:
+      // it removes content with no REST sign-off.
+      path: '/api/v1/docs/:documentId/tables/structure',
+      notFound: 'Document not found',
+      fallback: 'Failed to modify table',
+      load: async () => ({
+        schema: (await docsSchemas()).modifyTableStructureSchema,
+        run: (session, args) => docsOps().then((m) => m.performModifyTableStructure(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/tables/cell-style',
+      notFound: 'Document not found',
+      fallback: 'Failed to format table cells',
+      load: async () => ({
+        schema: (await docsSchemas()).formatTableCellsSchema,
+        run: (session, args) => docsOps().then((m) => m.performFormatTableCells(session.googleDocs, args)),
+      }),
+    },
+    {
+      // Tab DELETE is MCP-only: it takes the tab's content and every nested tab.
+      path: '/api/v1/docs/:documentId/tabs',
+      status: 201,
+      notFound: 'Document not found',
+      fallback: 'Failed to create tab',
+      load: async () => ({
+        schema: (await docsSchemas()).createDocumentTabSchema,
+        run: (session, args) => docsOps().then((m) => m.performCreateDocumentTab(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/tabs/:tabId/update',
+      notFound: 'Document not found',
+      fallback: 'Failed to update tab',
+      load: async () => ({
+        schema: (await docsSchemas()).updateDocumentTabSchema,
+        run: (session, args) => docsOps().then((m) => m.performUpdateDocumentTab(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/footnotes',
+      status: 201,
+      notFound: 'Document not found',
+      fallback: 'Failed to create footnote',
+      load: async () => ({
+        schema: (await docsSchemas()).createFootnoteSchema,
+        run: (session, args) => docsOps().then((m) => m.performCreateFootnote(session.googleDocs, args)),
       }),
     },
     {
