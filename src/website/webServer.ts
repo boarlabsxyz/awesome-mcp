@@ -5440,6 +5440,12 @@ function registerRestApiRoutes(app: express.Express): void {
       res.status(201).json(projectEvent(event));
     } catch (err: any) {
       console.error('Error creating event:', err);
+      // A refusal the caller can fix (a recurring event without timeZone)
+      // carries no upstream status; Google's own 400 does.
+      if ((err?.name === 'UserError' && typeof err?.code !== 'number') || err?.code === 400) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
       sendUpstreamError(res, err, { notFound: 'Calendar not found', fallback: 'Failed to create event' });
     }
   });
@@ -5461,10 +5467,17 @@ function registerRestApiRoutes(app: express.Express): void {
         res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
         return;
       }
-      const { event } = await performUpdateEvent(req.userSession!.googleCalendar, parsed.data);
-      res.json(projectEvent(event));
+      const { event, guestChanges } = await performUpdateEvent(req.userSession!.googleCalendar, parsed.data);
+      // guestChanges is an added key, present only when the guest list was edited.
+      res.json({ ...projectEvent(event), ...(guestChanges ? { guestChanges } : {}) });
     } catch (err: any) {
       console.error('Error updating event:', err);
+      // Refusals the caller can fix (removing someone not invited, an RSVP with
+      // no invitation) used to answer 500.
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+        res.status(400).json({ error: err.message });
+        return;
+      }
       sendUpstreamError(res, err, { notFound: 'Event not found', fallback: 'Failed to update event' });
     }
   };

@@ -256,6 +256,9 @@ export const createEventSchema = z.object({
   endDateTime: z.string().describe('End time in ISO 8601 format (e.g., "2024-01-15T11:00:00-05:00").'),
   timeZone: z.string().optional().describe('Time zone (e.g., "America/New_York"). Defaults to calendar\'s time zone.'),
   attendees: z.array(z.string()).optional().describe('List of attendee email addresses.'),
+  recurrence: z.array(z.string().regex(/^(RRULE|EXRULE|RDATE|EXDATE)[:;]/, 'Each entry is an RFC 5545 line starting with RRULE:, EXRULE:, RDATE: or EXDATE:.'))
+    .min(1).max(20).optional()
+    .describe('Make it a recurring series, e.g. ["RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=10"]. Requires timeZone. The start/end are the first occurrence.'),
   addGoogleMeet: z.boolean().optional().default(false)
     .describe('If true, generate a Google Meet video conference for this event. The Meet link is returned in the response and attached to the calendar invite.'),
   sendUpdates: z.enum(['all', 'externalOnly', 'none']).optional().default('none')
@@ -274,6 +277,10 @@ export const updateEventSchema = z.object({
   timeZone: z.string().optional().describe('Time zone for the start/end times.'),
   addGoogleMeet: z.boolean().optional().default(false)
     .describe('If true, generate a Google Meet video conference for this event. Ignored if the event already has a conference. The Meet link is returned in the response.'),
+  addAttendees: z.array(z.string().email()).optional()
+    .describe('Invite these guests. Everyone already invited, and their responses, are kept.'),
+  removeAttendees: z.array(z.string().email()).optional()
+    .describe('Uninvite these guests. Every address must be on the event, or nothing is changed.'),
   // RSVP. Only three of Google's four responseStatus values are offered:
   // `needsAction` is the absence of an answer, not an answer, and writing it
   // back would be a way to un-answer an invitation nobody has asked for.
@@ -315,12 +322,19 @@ export async function performCreateEvent(
   calendar: calendar_v3.Calendar,
   args: CreateEventArgs,
 ): Promise<calendar_v3.Schema$Event> {
+  // Google requires a time zone on a recurring event's start and end: without
+  // one the series cannot be expanded across DST, and the insert is refused.
+  if (args.recurrence?.length && !args.timeZone) {
+    throw new UserError('A recurring event needs timeZone (an IANA name such as "Europe/Kyiv"), so its occurrences '
+      + 'keep their local time across daylight-saving changes.');
+  }
   const eventResource: calendar_v3.Schema$Event = {
     summary: args.summary,
     description: args.description,
     location: args.location,
     start: { dateTime: args.startDateTime, timeZone: args.timeZone },
     end: { dateTime: args.endDateTime, timeZone: args.timeZone },
+    ...(args.recurrence?.length ? { recurrence: args.recurrence } : {}),
   };
   if (args.attendees && args.attendees.length > 0) {
     eventResource.attendees = args.attendees.map(email => ({ email }));
@@ -388,7 +402,46 @@ function hasNonRsvpEdits(args: UpdateEventArgs): boolean {
     || args.startDateTime !== undefined
     || args.endDateTime !== undefined
     || args.timeZone !== undefined
-    || Boolean(args.addGoogleMeet);
+    || Boolean(args.addGoogleMeet)
+    || Boolean(args.addAttendees?.length)
+    || Boolean(args.removeAttendees?.length);
+}
+
+export interface GuestChanges {
+  added: string[];
+  alreadyInvited: string[];
+  removed: string[];
+}
+
+/**
+ * The guest list after adding and removing, built on the list Google returned
+ * so every retained guest keeps its row as stored (RSVP, optional, comment).
+ * Matching is case-insensitive, as email addresses are. A removal naming
+ * someone not on the event is refused rather than skipped: the caller believes
+ * that person is invited, and "removed nobody" would read as done.
+ */
+export function applyGuestChanges(
+  existing: calendar_v3.Schema$EventAttendee[],
+  addAttendees: string[] = [],
+  removeAttendees: string[] = [],
+): { attendees: calendar_v3.Schema$EventAttendee[]; changes: GuestChanges } {
+  const key = (email: string | null | undefined) => (email ?? '').trim().toLowerCase();
+  const present = new Set(existing.map((a) => key(a.email)));
+  const notOnEvent = removeAttendees.filter((email) => !present.has(key(email)));
+  if (notOnEvent.length) {
+    throw new UserError(`Not on this event, so they cannot be removed: ${notOnEvent.join(', ')}. Nothing was changed.`);
+  }
+  const removing = new Set(removeAttendees.map(key));
+  const kept = existing.filter((a) => !removing.has(key(a.email)));
+  const changes: GuestChanges = { added: [], alreadyInvited: [], removed: existing.filter((a) => removing.has(key(a.email))).map((a) => a.email ?? '') };
+  const keptKeys = new Set(kept.map((a) => key(a.email)));
+  for (const email of addAttendees) {
+    if (keptKeys.has(key(email))) { changes.alreadyInvited.push(email); continue; }
+    keptKeys.add(key(email));
+    kept.push({ email });
+    changes.added.push(email);
+  }
+  return { attendees: kept, changes };
 }
 
 /**
@@ -437,7 +490,7 @@ function hasNonRsvpEdits(args: UpdateEventArgs): boolean {
 export async function performUpdateEvent(
   calendar: calendar_v3.Calendar,
   args: UpdateEventArgs,
-): Promise<{ event: calendar_v3.Schema$Event; wantsNewMeet: boolean }> {
+): Promise<{ event: calendar_v3.Schema$Event; wantsNewMeet: boolean; guestChanges?: GuestChanges }> {
   const existingResponse = await calendar.events.get({
     calendarId: args.calendarId,
     eventId: args.eventId,
@@ -461,6 +514,15 @@ export async function performUpdateEvent(
       : existingEvent.end,
   };
 
+  // Guest edits come first, so an RSVP in the same call answers on the list
+  // the caller will end up with.
+  let guestChanges: GuestChanges | undefined;
+  if (args.addAttendees?.length || args.removeAttendees?.length) {
+    const merged = applyGuestChanges(existingEvent.attendees || [], args.addAttendees, args.removeAttendees);
+    eventResource.attendees = merged.attendees;
+    guestChanges = merged.changes;
+  }
+
   // RSVP. Refused rather than guessed at when the user is not on the guest list:
   // adding themselves would be inviting themselves to someone else's meeting,
   // which is a different act from answering an invitation, and Google would
@@ -477,7 +539,7 @@ export async function performUpdateEvent(
     }
     // Rebuilt by identity, not by index: the array is the one Google just
     // returned, so mapping it preserves every other guest's response exactly.
-    const answered = (existingEvent.attendees || []).map((a) =>
+    const answered = (eventResource.attendees || []).map((a) =>
       a.self === true ? { ...a, responseStatus: args.myResponseStatus } : a,
     );
     eventResource.attendees = answered;
@@ -513,7 +575,7 @@ export async function performUpdateEvent(
     sendUpdates: args.sendUpdates,
     conferenceDataVersion,
   });
-  return { event: response.data, wantsNewMeet };
+  return { event: response.data, wantsNewMeet, guestChanges };
 }
 
 /**
@@ -539,6 +601,8 @@ export function projectEvent(event: calendar_v3.Schema$Event): Record<string, un
     conferenceData: event.conferenceData || null,
     creator: event.creator?.email || null,
     organizer: event.organizer?.email || null,
+    // Added key: the RRULE/EXDATE lines of a series, null for a single event.
+    recurrence: event.recurrence || null,
     attendees: (event.attendees || []).map((a) => ({
       email: a.email,
       responseStatus: a.responseStatus || 'needsAction',
@@ -557,7 +621,7 @@ export function projectEvent(event: calendar_v3.Schema$Event): Record<string, un
 calendarServer.addTool({
   name: 'createEvent',
   annotations: { readOnlyHint: false },
-  description: 'Creates a new calendar event.',
+  description: 'Creates a new calendar event, or a recurring series with recurrence (RRULE) and timeZone.',
   parameters: createEventSchema,
   execute: async (args, { log, session }) => {
     const calendar = getCalendarClient(session);
@@ -571,11 +635,13 @@ calendarServer.addTool({
         `**Start:** ${event.start?.dateTime || event.start?.date}\n` +
         `**End:** ${event.end?.dateTime || event.end?.date}\n` +
         `**Link:** ${event.htmlLink}`;
+      if (event.recurrence?.length) result += `\n**Repeats:** ${event.recurrence.join('; ')}`;
       result += formatConferenceDetail(event);
       result += formatMeetPendingHint(args.addGoogleMeet, event);
       return result;
     } catch (error: any) {
       log.error(`Error creating event: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
       if (error.code === 403) throw new UserError("Permission denied. Make sure you have write access to this calendar.");
       throw new UserError(`Failed to create event: ${error.message || 'Unknown error'}`);
     }
@@ -585,14 +651,14 @@ calendarServer.addTool({
 calendarServer.addTool({
   name: 'updateEvent',
   annotations: { readOnlyHint: false },
-  description: 'Updates an existing calendar event. Only the fields you pass are changed; everything else on the event is preserved. Also ANSWERS AN INVITATION: pass myResponseStatus ("accepted", "tentative" or "declined") to set your own attendee response without touching anyone else\'s. Note that with the default sendUpdates "none" the organizer is not emailed about your answer — pass sendUpdates "all" if they should be.',
+  description: 'Updates an existing calendar event. Only the fields you pass are changed; everything else on the event is preserved. addAttendees/removeAttendees edit the guest list, keeping everyone else and their responses. Also ANSWERS AN INVITATION: pass myResponseStatus ("accepted", "tentative" or "declined") to set your own attendee response without touching anyone else\'s. Note that with the default sendUpdates "none" the organizer is not emailed about your answer — pass sendUpdates "all" if they should be.',
   parameters: updateEventSchema,
   execute: async (args, { log, session }) => {
     const calendar = getCalendarClient(session);
     log.info(`Updating event: ${args.eventId} in calendar: ${args.calendarId}${args.addGoogleMeet ? ' (adding Google Meet)' : ''}`);
 
     try {
-      const { event, wantsNewMeet } = await performUpdateEvent(calendar, args);
+      const { event, wantsNewMeet, guestChanges } = await performUpdateEvent(calendar, args);
       let result = `Event updated successfully!\n\n` +
         `**Title:** ${event.summary}\n` +
         `**ID:** ${event.id}\n` +
@@ -601,6 +667,24 @@ calendarServer.addTool({
         `**Link:** ${event.htmlLink}`;
       result += formatConferenceDetail(event);
       result += formatMeetPendingHint(wantsNewMeet, event);
+      if (guestChanges) {
+        // Read back off the stored event: a guest Google dropped (an invalid
+        // address, a domain policy) would otherwise read as invited.
+        const stored = new Set((event.attendees || []).map((a) => (a.email ?? '').toLowerCase()));
+        const missing = guestChanges.added.filter((e) => !stored.has(e.toLowerCase()));
+        const lingering = guestChanges.removed.filter((e) => stored.has(e.toLowerCase()));
+        const parts = [
+          guestChanges.added.length ? `invited ${guestChanges.added.join(', ')}` : '',
+          guestChanges.removed.length ? `removed ${guestChanges.removed.join(', ')}` : '',
+          guestChanges.alreadyInvited.length ? `already invited: ${guestChanges.alreadyInvited.join(', ')}` : '',
+        ].filter(Boolean);
+        result += `\n\n**Guests:** ${parts.join('; ')}.`;
+        if (missing.length || lingering.length) {
+          result += `\n⚠ Google's stored guest list does not match: ${missing.length ? `not added ${missing.join(', ')}` : ''}`
+            + `${missing.length && lingering.length ? '; ' : ''}${lingering.length ? `still present ${lingering.join(', ')}` : ''}.`;
+        }
+        if (args.sendUpdates === 'none') result += `\n  Guests were not emailed (sendUpdates "none").`;
+      }
       // RSVP confirmation, read back off the event Google returned rather than
       // echoing what was asked. events.update answers with the stored resource,
       // so this is the authoritative value — and a response Google declined to

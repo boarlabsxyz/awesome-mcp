@@ -538,3 +538,92 @@ describe('self-attendee helpers', () => {
     assert.equal(projected.myResponseStatus, null);
   });
 });
+
+describe('recurring events', () => {
+  it('sends recurrence with the time zone on start and end', async () => {
+    const calendar = mkCalendar();
+    await performCreateEvent(calendar, createEventSchema.parse({
+      summary: 'Weekly', startDateTime: '2026-11-16T10:00:00', endDateTime: '2026-11-16T10:30:00',
+      timeZone: 'Europe/Kyiv', recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=10'],
+    }));
+    const body = calendar.events.insert.mock.calls[0].arguments[0].requestBody;
+    assert.deepEqual(body.recurrence, ['RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=10']);
+    assert.equal(body.start.timeZone, 'Europe/Kyiv');
+  });
+
+  it('refuses a series without a time zone, before calling Google', async () => {
+    const calendar = mkCalendar();
+    await assert.rejects(
+      () => performCreateEvent(calendar, createEventSchema.parse({
+        summary: 'Weekly', startDateTime: '2026-11-16T10:00:00Z', endDateTime: '2026-11-16T10:30:00Z', recurrence: ['RRULE:FREQ=DAILY'],
+      })),
+      (err: any) => err instanceof UserError && /needs timeZone/.test(err.message),
+    );
+    assert.equal(calendar.events.insert.mock.callCount(), 0);
+  });
+
+  it('rejects a recurrence line that is not RFC 5545', () => {
+    assert.equal(createEventSchema.safeParse({ summary: 'x', startDateTime: 'a', endDateTime: 'b', recurrence: ['every monday'] }).success, false);
+  });
+
+  it('a single event carries no recurrence key, and projectEvent reports null', async () => {
+    const calendar = mkCalendar();
+    await performCreateEvent(calendar, createEventSchema.parse({ summary: 'Once', startDateTime: 'a', endDateTime: 'b' }));
+    assert.equal('recurrence' in calendar.events.insert.mock.calls[0].arguments[0].requestBody, false);
+    assert.equal(projectEvent({ id: 'e' }).recurrence, null);
+  });
+});
+
+describe('adding and removing guests', () => {
+  const twoGuests = () => mkCalendar({ events: { get: mock.fn(async () => ({ data: {
+    id: 'evt-1', summary: 'Sync',
+    attendees: [
+      { email: 'Keep@Example.com', responseStatus: 'accepted', optional: true },
+      { email: 'drop@example.com', responseStatus: 'declined' },
+      { email: 'me@example.com', self: true, responseStatus: 'needsAction' },
+    ],
+  } })) } });
+
+  it('keeps retained guests as stored, adds new ones, and removes case-insensitively', async () => {
+    const calendar = twoGuests();
+    const { guestChanges } = await performUpdateEvent(calendar, updateEventSchema.parse({
+      eventId: 'evt-1', addAttendees: ['new@example.com', 'keep@example.com'], removeAttendees: ['DROP@example.com'],
+    }));
+    const sent = calendar.events.update.mock.calls[0].arguments[0].requestBody.attendees;
+    assert.deepEqual(sent, [
+      { email: 'Keep@Example.com', responseStatus: 'accepted', optional: true },
+      { email: 'me@example.com', self: true, responseStatus: 'needsAction' },
+      { email: 'new@example.com' },
+    ]);
+    assert.deepEqual(guestChanges, { added: ['new@example.com'], alreadyInvited: ['keep@example.com'], removed: ['drop@example.com'] });
+  });
+
+  it('refuses removing someone who is not invited, writing nothing', async () => {
+    const calendar = twoGuests();
+    await assert.rejects(
+      () => performUpdateEvent(calendar, updateEventSchema.parse({ eventId: 'evt-1', removeAttendees: ['ghost@example.com'] })),
+      /Not on this event.*ghost@example\.com.*Nothing was changed/s,
+    );
+    assert.equal(calendar.events.update.mock.callCount(), 0);
+  });
+
+  it('applies an RSVP in the same call to the edited list, through the full update', async () => {
+    const calendar = twoGuests();
+    await performUpdateEvent(calendar, updateEventSchema.parse({ eventId: 'evt-1', addAttendees: ['x@example.com'], myResponseStatus: 'accepted' }));
+    assert.equal(calendar.events.patch.mock.callCount(), 0, 'a guest edit is not RSVP-only');
+    const sent = calendar.events.update.mock.calls[0].arguments[0].requestBody.attendees;
+    assert.equal(sent.find((a: any) => a.self).responseStatus, 'accepted');
+    assert.ok(sent.some((a: any) => a.email === 'x@example.com'));
+  });
+
+  it('the tool warns when Google stored a different guest list than asked', async () => {
+    const calendar = twoGuests();
+    calendar.events.update = mock.fn(async (params: any) => ({ data: { id: 'evt-1', ...params.requestBody, attendees: params.requestBody.attendees.filter((a: any) => a.email !== 'new@example.com') } }));
+    const out = await toolMap.get('updateEvent')!.execute(
+      updateEventSchema.parse({ eventId: 'evt-1', addAttendees: ['new@example.com'] }),
+      { session: { googleCalendar: calendar }, log: noopLog },
+    );
+    assert.match(out, /invited new@example\.com/);
+    assert.match(out, /does not match: not added new@example\.com/);
+  });
+});
