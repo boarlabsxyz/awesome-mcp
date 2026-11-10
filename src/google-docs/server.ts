@@ -35,6 +35,13 @@ import {
   applyTextStyleSchema,
   batchUpdateDocSchema,
   assignCommentSchema,
+  createDocumentTabSchema,
+  createFootnoteSchema,
+  deleteDocumentTabSchema,
+  deleteTableRowOrColumnSchema,
+  formatTableCellsSchema,
+  modifyTableStructureSchema,
+  updateDocumentTabSchema,
   deleteCommentReplySchema,
   deleteCommentSchema,
   deleteRangeSchema,
@@ -62,7 +69,14 @@ import {
   performApplyParagraphStyle,
   performApplyTextStyle,
   performBatchUpdateDoc,
+  performCreateDocumentTab,
+  performCreateFootnote,
   performDeleteComment,
+  performDeleteDocumentTab,
+  performDeleteTableRowOrColumn,
+  performFormatTableCells,
+  performModifyTableStructure,
+  performUpdateDocumentTab,
   performDeleteCommentReply,
   performDeleteRange,
   performDeleteSuggestion,
@@ -438,6 +452,11 @@ server.addTool({
 
 // --- Foundational Tools ---
 
+/** Trailing sentence naming the revision a write left the document at, so the next edit can pin to it. */
+function revisionNote(revisionId: string | null | undefined): string {
+  return revisionId ? ` Document revision is now ${revisionId}.` : '';
+}
+
 server.addTool({
 name: 'readGoogleDoc',
 annotations: { readOnlyHint: true },
@@ -462,7 +481,7 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
         // `format: 'text'` — a doc built out of tables read as nearly empty.
         const fields = args.format === 'json' || args.format === 'markdown'
             ? '*' // Get everything for structure analysis
-            : 'body(content(paragraph(elements(textRun(content))),table(tableRows(tableCells(content(paragraph(elements(textRun(content)))))))))';
+            : 'revisionId,body(content(paragraph(elements(textRun(content))),table(tableRows(tableCells(content(paragraph(elements(textRun(content)))))))))';
 
         const res = await docs.documents.get({
             documentId: args.documentId,
@@ -481,7 +500,7 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
             if (!targetTab.documentTab) {
                 throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
             }
-            contentSource = { body: targetTab.documentTab.body };
+            contentSource = { revisionId: res.data.revisionId, body: targetTab.documentTab.body };
             log.info(`Using content from tab: ${targetTab.tabProperties?.title || 'Untitled'}`);
         } else {
             // Use the document body (backward compatible)
@@ -511,6 +530,12 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
             return jsonContent;
         }
 
+        // Every text and markdown read ends with the revision it saw, which is the
+        // id an edit needs to fail instead of overwriting someone else's change.
+        const revisionFooter = res.data.revisionId
+            ? `\n\n[revisionId: ${res.data.revisionId} — pass it as requiredRevisionId to make an edit fail if the document changes first]`
+            : '';
+
         if (args.format === 'markdown') {
             const markdownContent = sanitizeDocText(convertDocsJsonToMarkdown(contentSource));
             const totalLength = markdownContent.length;
@@ -520,12 +545,12 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
             if (args.maxLength && totalLength > args.maxLength) {
                 const truncatedContent = sliceSafe(markdownContent, args.maxLength);
                 return assertTransportSafe(
-                    `${truncatedContent}\n\n... [Markdown truncated to ${args.maxLength} chars of ${totalLength} total. Use maxLength parameter to adjust limit or remove it to get full content.]`,
+                    `${truncatedContent}\n\n... [Markdown truncated to ${args.maxLength} chars of ${totalLength} total. Use maxLength parameter to adjust limit or remove it to get full content.]${revisionFooter}`,
                     { documentId: args.documentId, what: 'markdown' },
                 );
             }
 
-            return assertTransportSafe(markdownContent, { documentId: args.documentId, what: 'markdown' });
+            return assertTransportSafe(markdownContent + revisionFooter, { documentId: args.documentId, what: 'markdown' });
         }
 
         // Default: Text format - extract all text content
@@ -561,7 +586,7 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
             }
         });
 
-        if (!textContent.trim()) return "Document found, but appears empty.";
+        if (!textContent.trim()) return `Document found, but appears empty.${revisionFooter}`;
 
         // Google Docs emits U+000B for shift-enter soft breaks and private-use
         // characters as inline-object placeholders; neither survives a strict
@@ -580,14 +605,14 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
             const truncatedContent = sliceSafe(textContent, args.maxLength);
             log.info(`Truncating content from ${totalLength} to ${args.maxLength} characters`);
             return assertTransportSafe(
-                `Content (truncated to ${args.maxLength} chars of ${totalLength} total):\n---\n${truncatedContent}\n\n... [Document continues for ${totalLength - args.maxLength} more characters. Use maxLength parameter to adjust limit or remove it to get full content.]`,
+                `Content (truncated to ${args.maxLength} chars of ${totalLength} total):\n---\n${truncatedContent}\n\n... [Document continues for ${totalLength - args.maxLength} more characters. Use maxLength parameter to adjust limit or remove it to get full content.]${revisionFooter}`,
                 { documentId: args.documentId, what: 'text' },
             );
         }
 
         // Return full content
         const fullResponse = assertTransportSafe(
-            `Content (${totalLength} characters):\n---\n${textContent}`,
+            `Content (${totalLength} characters):\n---\n${textContent}${revisionFooter}`,
             { documentId: args.documentId, what: 'text' },
         );
         const responseLength = fullResponse.length;
@@ -712,6 +737,55 @@ execute: async (args, { log, session }) => {
 });
 
 server.addTool({
+  name: 'createDocumentTab',
+  annotations: { readOnlyHint: false },
+  description: 'Adds a new tab to a Google Doc, optionally nested under another tab. Returns the new tab ID.',
+  parameters: createDocumentTabSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Creating tab in doc ${args.documentId}${args.parentTabId ? ` under ${args.parentTabId}` : ''}`);
+    const tab = await performCreateDocumentTab(docs, args);
+    return `Created tab "${tab.title}" (ID: ${tab.tabId})${tab.parentTabId ? ` under tab ${tab.parentTabId}` : ''} at position ${tab.index}.`;
+  },
+});
+
+server.addTool({
+  name: 'updateDocumentTab',
+  annotations: { readOnlyHint: false },
+  description: 'Renames a document tab, changes its emoji icon, or moves it among its sibling tabs.',
+  parameters: updateDocumentTabSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Updating tab ${args.tabId} in doc ${args.documentId}`);
+    const tab = await performUpdateDocumentTab(docs, args);
+    const now = `title "${tab.title}", position ${tab.index}${tab.iconEmoji ? `, icon ${tab.iconEmoji}` : ''}`;
+    // Said plainly when the re-read disagrees: Google answered 200, but the tab
+    // does not read back as asked.
+    if (!tab.confirmed) {
+      return `Google accepted the update to tab ${args.tabId} (${tab.updatedFields.join(', ')}), but the tab does not read back as requested: now ${now}.`;
+    }
+    return `Updated tab ${args.tabId} (${tab.updatedFields.join(', ')}): now ${now}.`;
+  },
+});
+
+server.addTool({
+  name: 'deleteDocumentTab',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Deletes a document tab with all its content and all tabs nested under it. Not reversible through the API.',
+  parameters: deleteDocumentTabSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Deleting tab ${args.tabId} in doc ${args.documentId}`);
+    const result = await performDeleteDocumentTab(docs, args);
+    const children = result.childTabsDeleted ? ` and ${result.childTabsDeleted} nested tab(s)` : '';
+    if (!result.confirmed) {
+      return `Google accepted the delete of tab "${result.title}" (${args.tabId}), but the tab still reads back as present.`;
+    }
+    return `Deleted tab "${result.title}" (${args.tabId})${children}.`;
+  },
+});
+
+server.addTool({
   name: 'appendToGoogleDoc',
   annotations: { readOnlyHint: false },
   description: 'Appends text to the very end of a specific Google Document or tab. Equivalent to insertText at the document end; use this when you do not know the end index.',
@@ -740,8 +814,8 @@ server.addTool({
     const docs = await getDocsClient(session);
     log.info(`Inserting text in doc ${args.documentId} at index ${args.index}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
     try {
-      await performInsertText(docs, args);
-      return `Successfully inserted text at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+      const { revisionId } = await performInsertText(docs, args);
+      return `Successfully inserted text at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.${revisionNote(revisionId)}`;
     } catch (error: any) {
       log.error(`Error inserting text in doc ${args.documentId}: ${error.message || error}`);
       if (error instanceof UserError) throw error;
@@ -759,8 +833,8 @@ server.addTool({
     const docs = await getDocsClient(session);
     log.info(`Deleting range ${args.startIndex}-${args.endIndex} in doc ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
     try {
-      await performDeleteRange(docs, args);
-      return `Successfully deleted content in range ${args.startIndex}-${args.endIndex}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+      const { revisionId } = await performDeleteRange(docs, args);
+      return `Successfully deleted content in range ${args.startIndex}-${args.endIndex}${args.tabId ? ` in tab ${args.tabId}` : ''}.${revisionNote(revisionId)}`;
     } catch (error: any) {
       log.error(`Error deleting range in doc ${args.documentId}: ${error.message || error}`);
       if (error instanceof UserError) throw error;
@@ -780,9 +854,9 @@ server.addTool({
     const docs = await getDocsClient(session);
     log.info(`Applying text style in doc ${args.documentId}. Target: ${JSON.stringify(args.target)}, Style: ${JSON.stringify(args.style)}`);
     try {
-      const { startIndex, endIndex, fields } = await performApplyTextStyle(docs, args);
+      const { startIndex, endIndex, fields, revisionId } = await performApplyTextStyle(docs, args);
       if (!fields) return "No valid text styling options were provided.";
-      return `Successfully applied text style (${fields.join(', ')}) to range ${startIndex}-${endIndex}.`;
+      return `Successfully applied text style (${fields.join(', ')}) to range ${startIndex}-${endIndex}${args.tabId ? ` in tab ${args.tabId}` : ''}.${revisionNote(revisionId)}`;
     } catch (error: any) {
       log.error(`Error applying text style in doc ${args.documentId}: ${error.message || error}`);
       if (error instanceof UserError) throw error;
@@ -803,9 +877,9 @@ server.addTool({
     log.info(`Style options: ${JSON.stringify(args.style)}`);
     log.info(`Target specification: ${JSON.stringify(args.target)}`);
     try {
-      const { fields } = await performApplyParagraphStyle(docs, args);
+      const { fields, revisionId } = await performApplyParagraphStyle(docs, args);
       if (!fields) return "No valid paragraph styling options were provided.";
-      return `Successfully applied paragraph styles (${fields.join(', ')}) to the paragraph.`;
+      return `Successfully applied paragraph styles (${fields.join(', ')}) to the paragraph${args.tabId ? ` in tab ${args.tabId}` : ''}.${revisionNote(revisionId)}`;
     } catch (error: any) {
       log.error(`Error applying paragraph style in doc ${args.documentId}:`);
       log.error(error.stack || error.message || error);
@@ -834,6 +908,72 @@ server.addTool({
       if (error instanceof UserError) throw error;
       throw new UserError(`Failed to insert table: ${error.message || 'Unknown error'}`);
     }
+  },
+});
+
+server.addTool({
+  name: 'modifyTableStructure',
+  annotations: { readOnlyHint: false },
+  description: 'Adds rows or columns to an existing table, or merges/unmerges a block of cells. Find the table start index with inspectDocStructure.',
+  parameters: modifyTableStructureSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Modifying table at ${args.tableStartIndex} in doc ${args.documentId}: ${args.action}`);
+    const { tableBefore, tableAfter, revisionId } = await performModifyTableStructure(docs, args);
+    const shape = `${tableBefore.rows}x${tableBefore.columns}`;
+    if (args.action === 'merge_cells' || args.action === 'unmerge_cells') {
+      return `Applied ${args.action} to ${args.rowSpan ?? 1}x${args.columnSpan ?? 1} cells from row ${args.rowIndex}, column ${args.columnIndex} `
+        + `of the ${shape} table.${revisionNote(revisionId)}`;
+    }
+    return `Applied ${args.action} (${args.count ?? 1}) at row ${args.rowIndex}, column ${args.columnIndex}: `
+      + `table is now ${tableAfter.rows}x${tableAfter.columns} (was ${shape}).${revisionNote(revisionId)}`;
+  },
+});
+
+server.addTool({
+  name: 'deleteTableRowOrColumn',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Deletes one row or column of an existing table, with its content. A merged cell spanning several rows/columns deletes all of them.',
+  parameters: deleteTableRowOrColumnSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Deleting table ${args.target} ${args.index} at ${args.tableStartIndex} in doc ${args.documentId}`);
+    const { tableBefore, revisionId } = await performDeleteTableRowOrColumn(docs, args);
+    return `Deleted ${args.target} ${args.index} of the ${tableBefore.rows}x${tableBefore.columns} table at index ${args.tableStartIndex}.`
+      + revisionNote(revisionId);
+  },
+});
+
+server.addTool({
+  name: 'formatTableCells',
+  annotations: { readOnlyHint: false },
+  description: 'Formats table cells natively: background, vertical alignment, padding, borders, row height and column width. Omit row/column for the whole table.',
+  parameters: formatTableCellsSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Formatting table cells at ${args.tableStartIndex} in doc ${args.documentId}`);
+    const { cells, cellStyleFields, rowHeightSet, columnWidthSet, revisionId } = await performFormatTableCells(docs, args);
+    const applied = [
+      ...(cellStyleFields.length ? [`cell style (${cellStyleFields.join(', ')})`] : []),
+      ...(rowHeightSet ? ['row height'] : []),
+      ...(columnWidthSet ? ['column width'] : []),
+    ].join(', ');
+    return `Applied ${applied} to rows ${cells.rowIndex}-${cells.rowIndex + cells.rowSpan - 1}, `
+      + `columns ${cells.columnIndex}-${cells.columnIndex + cells.columnSpan - 1}.${revisionNote(revisionId)}`;
+  },
+});
+
+server.addTool({
+  name: 'createFootnote',
+  annotations: { readOnlyHint: false },
+  description: 'Adds a real footnote: inserts the reference number at an index in the body and writes the footnote text.',
+  parameters: createFootnoteSchema,
+  execute: async (args, { log, session }) => {
+    const docs = await getDocsClient(session);
+    log.info(`Creating footnote at ${args.index} in doc ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
+    const { footnoteId, revisionId } = await performCreateFootnote(docs, args);
+    return `Created footnote ${footnoteId} at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}. `
+      + `Body indices after ${args.index} moved by 1.${revisionNote(revisionId)}`;
   },
 });
 
@@ -1377,6 +1517,9 @@ execute: async (args, { log, session }) => {
   }
 
   const structure: any = GDocsHelpers.parseDocStructure(doc, args.detailed ?? false, args.tabId);
+  // The revision this structure describes: an edit that pins to it fails rather
+  // than landing on indices someone else has since moved.
+  structure.revisionId = doc.revisionId ?? null;
 
   // Detailed mode had no bound at all: one element entry per paragraph across a
   // whole document, in a single response. Cap it, and say what was left out —
@@ -1420,21 +1563,21 @@ server.addTool({
 server.addTool({
   name: 'batchUpdateDoc',
   annotations: { readOnlyHint: false },
-  description: 'Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Index-based operations are automatically sorted in descending order to prevent index shifting. Set suggestMode to propose the whole batch as tracked suggestions instead of editing directly.',
+  description: 'Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list (bulletPreset NUMBERED_* for numbered lists). Each operation takes an optional tabId. Index-based operations are automatically sorted in descending order to prevent index shifting. Set suggestMode to propose the whole batch as tracked suggestions instead of editing directly.',
   parameters: batchUpdateDocSchema,
   execute: async (args, { log, session }) => {
     const docs = await getDocsClient(session);
     log.info(`Batch update on doc ${args.documentId}: ${args.operations.length} operation(s)${args.suggestMode ? ' as suggestions' : ''}`);
-    const { executed, typeCounts, suggested } = await performBatchUpdateDoc(docs, args);
+    const { executed, typeCounts, suggested, revisionId } = await performBatchUpdateDoc(docs, args);
     if (executed === 0) return 'No valid operations to execute.';
     const summary = Object.entries(typeCounts).map(([type, count]) => `${count}x ${type}`).join(', ');
     // Says which mode ran, because a suggested batch leaves the document reading
     // exactly as it did before and would otherwise look like a no-op.
     if (suggested) {
       return `Batch update submitted as SUGGESTIONS: ${args.operations.length} operation(s) proposed (${summary}). `
-        + 'The document is unchanged until someone accepts them — list them with listSuggestions.';
+        + `The document is unchanged until someone accepts them — list them with listSuggestions.${revisionNote(revisionId)}`;
     }
-    return `Batch update completed: ${args.operations.length} operation(s) executed (${summary}).`;
+    return `Batch update completed: ${args.operations.length} operation(s) executed (${summary}).${revisionNote(revisionId)}`;
   },
 });
 server.addTool({

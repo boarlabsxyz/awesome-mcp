@@ -55,6 +55,11 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `applyParagraphStyle` | `POST /api/v1/docs/{documentId}/paragraph-style` | live | Apply paragraph formatting by text, index or range — _A text target is widened to the paragraph containing it, so the resolved range in the response is wider than the text matched._ |
 | `formatMatchingText` | `POST /api/v1/docs/{documentId}/format-matching-text` | live | Format the Nth instance of a string — _Flat-parameter alternative to text-style; same engine underneath._ |
 | `insertTable` | `POST /api/v1/docs/{documentId}/tables` | live | Insert a table of the given dimensions |
+| `modifyTableStructure` | `POST /api/v1/docs/{documentId}/tables/structure` | live | Insert table rows or columns, or merge and unmerge cells — _The table is named by its start index from the structure endpoint and read first, so a wrong index or an out-of-range cell is a 400 naming the table sizes. Deleting rows or columns is MCP-only._ |
+| `formatTableCells` | `POST /api/v1/docs/{documentId}/tables/cell-style` | live | Format table cells: background, alignment, padding, borders, row height, column width — _Omit rowIndex and columnIndex for the whole table; naming only one formats that row or column across the table. Border parts left out default to black, 1pt, SOLID._ |
+| `createDocumentTab` | `POST /api/v1/docs/{documentId}/tabs` | live | Add a tab, optionally nested under another — _Answers 201 with the new tab as Google reported it. Deleting a tab is MCP-only: it takes the tab content and every nested tab._ |
+| `updateDocumentTab` | `POST /api/v1/docs/{documentId}/tabs/{tabId}/update` | live | Rename a tab, change its icon or move it among its siblings — _Re-reads the tab after writing: confirmed is true only when every changed field reads back as requested._ |
+| `createFootnote` | `POST /api/v1/docs/{documentId}/footnotes` | live | Add a footnote with its text at a body index — _Two writes: the reference, then the text into the new footnote. If the second fails the 400 names the empty footnote left behind._ |
 | `insertPageBreak` | `POST /api/v1/docs/{documentId}/page-breaks` | live | Insert a page break at an index |
 | `insertImageFromUrl` | `POST /api/v1/docs/{documentId}/images/from-url` | live | Insert an inline image from a public URL — _Google fetches the URL server-side, so it must be publicly reachable._ |
 | `insertLocalImage` | `POST /api/v1/docs/{documentId}/images` | live | Insert an image from a URL, Drive file, local path or base64 — _Body limit 5mb for the base64 path (hard cap 20mb decoded). Every path except driveFileId UPLOADS a new file to the user Drive and returns its URL._ |
@@ -461,4 +466,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 337 endpoints.
+Catalog size: 342 endpoints.

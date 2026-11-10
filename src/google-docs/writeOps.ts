@@ -18,11 +18,18 @@
 import { docs_v1, drive_v3 } from 'googleapis';
 import { UserError } from 'fastmcp';
 import * as GDocsHelpers from './apiHelpers.js';
-import { TextStyleArgs } from '../types.js';
+import { TextStyleArgs, hexToRgbColor } from '../types.js';
 import type {
   AddCommentArgs,
   AppendToGoogleDocArgs,
   BatchUpdateDocArgs,
+  CreateDocumentTabArgs,
+  CreateFootnoteArgs,
+  DeleteDocumentTabArgs,
+  DeleteTableRowOrColumnArgs,
+  FormatTableCellsArgs,
+  ModifyTableStructureArgs,
+  UpdateDocumentTabArgs,
   DeleteCommentArgs,
   DeleteRangeArgs,
   FindAndReplaceArgs,
@@ -50,27 +57,44 @@ type Docs = docs_v1.Docs;
 type Drive = drive_v3.Drive;
 
 /**
- * Confirm a tab exists and carries content, before anything is written to it.
+ * Confirm tabs exist and carry content, before anything is written to them.
  *
- * Shared because four ops need it and the failure is otherwise silent: Google
+ * Shared because most ops need it and the failure is otherwise silent: Google
  * accepts a write whose location names an unknown tab by applying it to the
  * document body instead, so the caller is told the write succeeded while the text
  * landed somewhere they did not ask for.
+ *
+ * No `fields` mask: a mask cannot recurse into `childTabs`, and the previous
+ * `tabs(tabProperties,documentTab)` left every nested tab out, so a write to a
+ * child tab was refused as "not found".
  */
-async function assertTabExists(docs: Docs, documentId: string, tabId: string): Promise<docs_v1.Schema$Tab> {
-  const docInfo = await docs.documents.get({
-    documentId,
-    includeTabsContent: true,
-    fields: 'tabs(tabProperties,documentTab)',
+async function assertTabsExist(docs: Docs, documentId: string, tabIds: string[]): Promise<docs_v1.Schema$Tab[]> {
+  const docInfo = await docs.documents.get({ documentId, includeTabsContent: true });
+  return tabIds.map((tabId) => {
+    const tab = GDocsHelpers.findTabById(docInfo.data, tabId);
+    if (!tab) throw new UserError(`Tab with ID "${tabId}" not found in document.`);
+    if (!tab.documentTab) throw new UserError(`Tab "${tabId}" does not have content (may not be a document tab).`);
+    return tab;
   });
-  const targetTab = GDocsHelpers.findTabById(docInfo.data, tabId);
-  if (!targetTab) {
-    throw new UserError(`Tab with ID "${tabId}" not found in document.`);
-  }
-  if (!targetTab.documentTab) {
-    throw new UserError(`Tab "${tabId}" does not have content (may not be a document tab).`);
-  }
-  return targetTab;
+}
+
+async function assertTabExists(docs: Docs, documentId: string, tabId: string): Promise<docs_v1.Schema$Tab> {
+  const [tab] = await assertTabsExist(docs, documentId, [tabId]);
+  return tab;
+}
+
+/**
+ * The write control that pins an edit to the revision the caller read. Undefined
+ * when no revision was named, so the request body is unchanged for every caller
+ * that does not use it.
+ */
+function pinnedTo(requiredRevisionId: string | undefined): docs_v1.Schema$WriteControl | undefined {
+  return requiredRevisionId ? { requiredRevisionId } : undefined;
+}
+
+/** The document's revision after a write, for the caller to pin its next edit to. */
+function revisionAfter(response: docs_v1.Schema$BatchUpdateDocumentResponse): string | null {
+  return response.writeControl?.requiredRevisionId ?? null;
 }
 
 // === Text content ===
@@ -115,28 +139,35 @@ export async function performAppendToGoogleDoc(
   return { index: endIndex, appendedNewline, characters: textToInsert.length };
 }
 
-export async function performInsertText(docs: Docs, args: InsertTextArgs): Promise<{ index: number }> {
+export async function performInsertText(
+  docs: Docs,
+  args: InsertTextArgs,
+): Promise<{ index: number; revisionId: string | null }> {
+  const location: docs_v1.Schema$Location = { index: args.index };
   if (args.tabId) {
     await assertTabExists(docs, args.documentId, args.tabId);
-    const location: docs_v1.Schema$Location = { index: args.index, tabId: args.tabId };
-    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
-      { insertText: { location, text: args.textToInsert } },
-    ]);
-  } else {
-    await GDocsHelpers.insertText(docs, args.documentId, args.textToInsert, args.index);
+    location.tabId = args.tabId;
   }
-  return { index: args.index };
+  const response = await GDocsHelpers.executeBatchUpdate(
+    docs,
+    args.documentId,
+    [{ insertText: { location, text: args.textToInsert } }],
+    pinnedTo(args.requiredRevisionId),
+  );
+  return { index: args.index, revisionId: revisionAfter(response) };
 }
 
 export async function performDeleteRange(
   docs: Docs,
   args: DeleteRangeArgs,
-): Promise<{ startIndex: number; endIndex: number }> {
+): Promise<{ startIndex: number; endIndex: number; revisionId: string | null }> {
   if (args.tabId) await assertTabExists(docs, args.documentId, args.tabId);
   const range: docs_v1.Schema$Range = { startIndex: args.startIndex, endIndex: args.endIndex };
   if (args.tabId) range.tabId = args.tabId;
-  await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [{ deleteContentRange: { range } }]);
-  return { startIndex: args.startIndex, endIndex: args.endIndex };
+  const response = await GDocsHelpers.executeBatchUpdate(
+    docs, args.documentId, [{ deleteContentRange: { range } }], pinnedTo(args.requiredRevisionId),
+  );
+  return { startIndex: args.startIndex, endIndex: args.endIndex, revisionId: revisionAfter(response) };
 }
 
 // === Styling ===
@@ -145,12 +176,14 @@ export async function performDeleteRange(
 export async function performApplyTextStyle(
   docs: Docs,
   args: ApplyTextStyleToolArgs,
-): Promise<{ startIndex: number; endIndex: number; fields: string[] | null }> {
+): Promise<{ startIndex: number; endIndex: number; fields: string[] | null; revisionId?: string | null }> {
   let startIndex: number | undefined;
   let endIndex: number | undefined;
 
   if ('textToFind' in args.target) {
-    const range = await GDocsHelpers.findTextRange(docs, args.documentId, args.target.textToFind, args.target.matchInstance);
+    const range = await GDocsHelpers.findTextRange(
+      docs, args.documentId, args.target.textToFind, args.target.matchInstance, args.tabId,
+    );
     if (!range) {
       throw new UserError(`Could not find instance ${args.target.matchInstance} of text "${args.target.textToFind}".`);
     }
@@ -168,17 +201,22 @@ export async function performApplyTextStyle(
     throw new UserError('End index must be greater than start index for styling.');
   }
 
-  const requestInfo = GDocsHelpers.buildUpdateTextStyleRequest(startIndex, endIndex, args.style);
+  const requestInfo = GDocsHelpers.buildUpdateTextStyleRequest(startIndex, endIndex, args.style, args.tabId);
   if (!requestInfo) return { startIndex, endIndex, fields: null };
 
-  await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request]);
-  return { startIndex, endIndex, fields: requestInfo.fields };
+  // An index target never read the tab, and Google applies a write naming an
+  // unknown tab to the first tab instead — so it is checked before writing.
+  if (args.tabId && !('textToFind' in args.target)) await assertTabExists(docs, args.documentId, args.tabId);
+  const response = await GDocsHelpers.executeBatchUpdate(
+    docs, args.documentId, [requestInfo.request], pinnedTo(args.requiredRevisionId),
+  );
+  return { startIndex, endIndex, fields: requestInfo.fields, revisionId: revisionAfter(response) };
 }
 
 export async function performApplyParagraphStyle(
   docs: Docs,
   args: ApplyParagraphStyleToolArgs,
-): Promise<{ startIndex: number; endIndex: number; fields: string[] | null }> {
+): Promise<{ startIndex: number; endIndex: number; fields: string[] | null; revisionId?: string | null }> {
   let startIndex: number | undefined;
   let endIndex: number | undefined;
 
@@ -186,15 +224,17 @@ export async function performApplyParagraphStyle(
     // Two hops: find the text, then widen to the paragraph containing it —
     // a paragraph style applied to a text range alone would not take.
     const textRange = await GDocsHelpers.findTextRange(
-      docs, args.documentId, args.target.textToFind, args.target.matchInstance || 1,
+      docs, args.documentId, args.target.textToFind, args.target.matchInstance || 1, args.tabId,
     );
     if (!textRange) throw new UserError(`Could not find "${args.target.textToFind}" in the document.`);
-    const paragraphRange = await GDocsHelpers.getParagraphRange(docs, args.documentId, textRange.startIndex);
+    const paragraphRange = await GDocsHelpers.getParagraphRange(docs, args.documentId, textRange.startIndex, args.tabId);
     if (!paragraphRange) throw new UserError('Found the text but could not determine the paragraph boundaries.');
     startIndex = paragraphRange.startIndex;
     endIndex = paragraphRange.endIndex;
   } else if ('indexWithinParagraph' in args.target) {
-    const paragraphRange = await GDocsHelpers.getParagraphRange(docs, args.documentId, args.target.indexWithinParagraph);
+    const paragraphRange = await GDocsHelpers.getParagraphRange(
+      docs, args.documentId, args.target.indexWithinParagraph, args.tabId,
+    );
     if (!paragraphRange) {
       throw new UserError(`Could not find paragraph containing index ${args.target.indexWithinParagraph}.`);
     }
@@ -212,11 +252,15 @@ export async function performApplyParagraphStyle(
     throw new UserError(`Invalid paragraph range: end index (${endIndex}) must be greater than start index (${startIndex}).`);
   }
 
-  const requestInfo = GDocsHelpers.buildUpdateParagraphStyleRequest(startIndex, endIndex, args.style);
+  const requestInfo = GDocsHelpers.buildUpdateParagraphStyleRequest(startIndex, endIndex, args.style, args.tabId);
   if (!requestInfo) return { startIndex, endIndex, fields: null };
 
-  await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request]);
-  return { startIndex, endIndex, fields: requestInfo.fields };
+  // Only a text or paragraph lookup has read the tab already.
+  if (args.tabId && 'startIndex' in args.target) await assertTabExists(docs, args.documentId, args.tabId);
+  const response = await GDocsHelpers.executeBatchUpdate(
+    docs, args.documentId, [requestInfo.request], pinnedTo(args.requiredRevisionId),
+  );
+  return { startIndex, endIndex, fields: requestInfo.fields, revisionId: revisionAfter(response) };
 }
 
 export async function performFormatMatchingText(
@@ -293,7 +337,9 @@ export async function performInsertPageBreak(
 export async function performBatchUpdateDoc(
   docs: Docs,
   args: BatchUpdateDocArgs,
-): Promise<{ requested: number; executed: number; typeCounts: Record<string, number>; suggested: boolean }> {
+): Promise<{
+  requested: number; executed: number; typeCounts: Record<string, number>; suggested: boolean; revisionId?: string | null;
+}> {
   // Global replacements change the document's length, so every index captured
   // before them is wrong afterwards. Refused rather than reordered: there is no
   // ordering that makes a mixed batch mean what the caller intended.
@@ -330,20 +376,330 @@ export async function performBatchUpdateDoc(
     return { requested: args.operations.length, executed: 0, typeCounts, suggested: Boolean(args.suggestMode) };
   }
 
+  // Every tab named is checked once up front: Google applies an operation whose
+  // tab does not exist to the first tab, so a typo would edit the wrong tab.
+  const tabIds = [...new Set(args.operations.map((op) => op.tabId).filter((id): id is string => Boolean(id)))];
+  if (tabIds.length > 0) await assertTabsExist(docs, args.documentId, tabIds);
+
   // SUGGEST applies the whole batch as tracked suggestions instead of edits. Sent
   // only when asked for: writeControl is omitted otherwise, so every existing
   // caller's request body is byte-identical to before.
-  await GDocsHelpers.executeBatchUpdate(
+  const writeControl: docs_v1.Schema$WriteControl = {
+    ...(args.suggestMode ? { writeMode: 'SUGGEST' } : {}),
+    ...pinnedTo(args.requiredRevisionId),
+  };
+  const response = await GDocsHelpers.executeBatchUpdate(
     docs,
     args.documentId,
     allRequests,
-    args.suggestMode ? { writeMode: 'SUGGEST' } : undefined,
+    Object.keys(writeControl).length > 0 ? writeControl : undefined,
   );
   return {
     requested: args.operations.length,
     executed: allRequests.length,
     typeCounts,
     suggested: Boolean(args.suggestMode),
+    revisionId: revisionAfter(response),
+  };
+}
+
+// === Tabs ===
+
+/** Properties of a tab as Google reports them, for both surfaces to show. */
+function tabSummary(props: docs_v1.Schema$TabProperties | undefined) {
+  return {
+    tabId: props?.tabId ?? null,
+    title: props?.title ?? null,
+    index: props?.index ?? null,
+    parentTabId: props?.parentTabId ?? null,
+    nestingLevel: props?.nestingLevel ?? 0,
+    iconEmoji: props?.iconEmoji ?? null,
+  };
+}
+
+function countDescendantTabs(tab: docs_v1.Schema$Tab): number {
+  return (tab.childTabs ?? []).reduce((n, child) => n + 1 + countDescendantTabs(child), 0);
+}
+
+export async function performCreateDocumentTab(docs: Docs, args: CreateDocumentTabArgs) {
+  // An unknown parent is checked here rather than left to Google, which treats a
+  // tab id it does not know as "no tab" elsewhere in this API.
+  if (args.parentTabId) await assertTabExists(docs, args.documentId, args.parentTabId);
+  const tabProperties: docs_v1.Schema$TabProperties = {};
+  if (args.title !== undefined) tabProperties.title = args.title;
+  if (args.parentTabId !== undefined) tabProperties.parentTabId = args.parentTabId;
+  if (args.index !== undefined) tabProperties.index = args.index;
+  if (args.iconEmoji !== undefined) tabProperties.iconEmoji = args.iconEmoji;
+
+  const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [{ addDocumentTab: { tabProperties } }]);
+  const created = response.replies?.[0]?.addDocumentTab?.tabProperties;
+  if (!created?.tabId) {
+    throw new Error('Google accepted the request but returned no tab ID, so the new tab cannot be confirmed. Check listDocumentTabs.');
+  }
+  return tabSummary(created);
+}
+
+export async function performUpdateDocumentTab(docs: Docs, args: UpdateDocumentTabArgs) {
+  const tabProperties: docs_v1.Schema$TabProperties = { tabId: args.tabId };
+  const fields: string[] = [];
+  if (args.title !== undefined) { tabProperties.title = args.title; fields.push('title'); }
+  if (args.iconEmoji !== undefined) { tabProperties.iconEmoji = args.iconEmoji; fields.push('iconEmoji'); }
+  if (args.index !== undefined) { tabProperties.index = args.index; fields.push('index'); }
+  if (fields.length === 0) throw new UserError('Nothing to change: give at least one of title, iconEmoji or index.');
+
+  await assertTabExists(docs, args.documentId, args.tabId);
+  await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+    { updateDocumentTabProperties: { tabProperties, fields: fields.join(',') } },
+  ]);
+
+  // Re-read rather than echo the request: `confirmed` is true only when every
+  // field now reads back as asked.
+  const after = await docs.documents.get({ documentId: args.documentId, includeTabsContent: true });
+  const props = GDocsHelpers.findTabById(after.data, args.tabId)?.tabProperties;
+  const confirmed = Boolean(props) && fields.every((f) => (props as any)[f] === (tabProperties as any)[f]);
+  return { ...tabSummary(props), updatedFields: fields, confirmed };
+}
+
+export async function performDeleteDocumentTab(docs: Docs, args: DeleteDocumentTabArgs) {
+  const tab = await assertTabExists(docs, args.documentId, args.tabId);
+  const childTabsDeleted = countDescendantTabs(tab);
+  await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [{ deleteTab: { tabId: args.tabId } }]);
+
+  const after = await docs.documents.get({ documentId: args.documentId, includeTabsContent: true });
+  const confirmed = GDocsHelpers.findTabById(after.data, args.tabId) === null;
+  return { tabId: args.tabId, title: tab.tabProperties?.title ?? null, childTabsDeleted, confirmed };
+}
+
+// === Footnotes ===
+
+export async function performCreateFootnote(docs: Docs, args: CreateFootnoteArgs) {
+  const tab = args.tabId ? { tabId: args.tabId } : {};
+  if (args.tabId) await assertTabExists(docs, args.documentId, args.tabId);
+
+  // Two writes, because the text goes into the footnote's own segment and its id
+  // only exists once the first write returns.
+  const created = await GDocsHelpers.executeBatchUpdate(
+    docs,
+    args.documentId,
+    [{ createFootnote: { location: { index: args.index, ...tab } } }],
+    pinnedTo(args.requiredRevisionId),
+  );
+  const footnoteId = created.replies?.[0]?.createFootnote?.footnoteId;
+  if (!footnoteId) {
+    throw new Error(`Google returned no footnote ID, so it is unknown whether a footnote reference was added at index ${args.index}. `
+      + 'Read the document before retrying.');
+  }
+
+  let filled: docs_v1.Schema$BatchUpdateDocumentResponse;
+  try {
+    filled = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+      { insertText: { endOfSegmentLocation: { segmentId: footnoteId, ...tab }, text: args.text } },
+    ]);
+  } catch (error: any) {
+    throw new UserError(`Footnote ${footnoteId} was created at index ${args.index}, but writing its text failed: `
+      + `${error.message || error}. The empty footnote is still in the document.`);
+  }
+  return { footnoteId, index: args.index, revisionId: revisionAfter(filled) };
+}
+
+// === Tables ===
+
+/**
+ * The table starting at `tableStartIndex`, read before writing so a wrong index
+ * or an out-of-range cell is refused by name. Google's own answer to either is a
+ * bare "Invalid requests[0]" that does not say which.
+ */
+async function readTable(
+  docs: Docs,
+  documentId: string,
+  tableStartIndex: number,
+  tabId: string | undefined,
+): Promise<{ rows: number; columns: number }> {
+  let content: docs_v1.Schema$StructuralElement[] | undefined;
+  if (tabId) {
+    content = (await assertTabExists(docs, documentId, tabId)).documentTab?.body?.content;
+  } else {
+    const res = await docs.documents.get({ documentId, fields: 'body(content(startIndex,table(rows,columns)))' });
+    content = res.data.body?.content;
+  }
+  const tables = (content ?? []).filter((el) => el.table);
+  const table = tables.find((el) => el.startIndex === tableStartIndex)?.table;
+  if (!table) {
+    const starts = tables.map((el) => el.startIndex).join(', ');
+    throw new UserError(`No table starts at index ${tableStartIndex}${tabId ? ` in tab ${tabId}` : ''}. `
+      + (starts ? `Tables start at: ${starts}.` : 'This tab has no top-level tables.')
+      + ' Use inspectDocStructure to find a table\'s start index.');
+  }
+  return { rows: table.rows ?? 0, columns: table.columns ?? 0 };
+}
+
+function assertCellBlock(
+  table: { rows: number; columns: number },
+  rowIndex: number,
+  columnIndex: number,
+  rowSpan = 1,
+  columnSpan = 1,
+): void {
+  if (rowIndex + rowSpan > table.rows || columnIndex + columnSpan > table.columns) {
+    throw new UserError(`Cell block rows ${rowIndex}-${rowIndex + rowSpan - 1}, columns ${columnIndex}-${columnIndex + columnSpan - 1} `
+      + `is outside the ${table.rows}x${table.columns} table (indices are zero-based).`);
+  }
+}
+
+const pt = (magnitude: number): docs_v1.Schema$Dimension => ({ magnitude, unit: 'PT' });
+
+function rgb(hex: string): docs_v1.Schema$OptionalColor {
+  const rgbColor = hexToRgbColor(hex);
+  if (!rgbColor) throw new UserError(`Invalid hex color format: ${hex}`);
+  return { color: { rgbColor } };
+}
+
+export async function performModifyTableStructure(docs: Docs, args: ModifyTableStructureArgs) {
+  const table = await readTable(docs, args.documentId, args.tableStartIndex, args.tabId);
+  const isMerge = args.action === 'merge_cells' || args.action === 'unmerge_cells';
+  const rowSpan = args.rowSpan ?? 1;
+  const columnSpan = args.columnSpan ?? 1;
+  assertCellBlock(table, args.rowIndex, args.columnIndex, isMerge ? rowSpan : 1, isMerge ? columnSpan : 1);
+  if (args.action === 'merge_cells' && rowSpan * columnSpan < 2) {
+    throw new UserError('merge_cells needs a block of at least two cells: set rowSpan and/or columnSpan.');
+  }
+
+  const tableCellLocation: docs_v1.Schema$TableCellLocation = {
+    tableStartLocation: { index: args.tableStartIndex, ...(args.tabId ? { tabId: args.tabId } : {}) },
+    rowIndex: args.rowIndex,
+    columnIndex: args.columnIndex,
+  };
+  const count = args.count ?? 1;
+  const repeat = (request: docs_v1.Schema$Request) => Array.from({ length: count }, () => request);
+
+  let requests: docs_v1.Schema$Request[];
+  let after = { ...table };
+  switch (args.action) {
+    case 'insert_rows_above':
+    case 'insert_rows_below':
+      requests = repeat({ insertTableRow: { tableCellLocation, insertBelow: args.action === 'insert_rows_below' } });
+      after = { ...table, rows: table.rows + count };
+      break;
+    case 'insert_columns_left':
+    case 'insert_columns_right':
+      requests = repeat({ insertTableColumn: { tableCellLocation, insertRight: args.action === 'insert_columns_right' } });
+      after = { ...table, columns: table.columns + count };
+      break;
+    case 'merge_cells':
+      requests = [{ mergeTableCells: { tableRange: { tableCellLocation, rowSpan, columnSpan } } }];
+      break;
+    case 'unmerge_cells':
+      requests = [{ unmergeTableCells: { tableRange: { tableCellLocation, rowSpan, columnSpan } } }];
+      break;
+  }
+
+  const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests, pinnedTo(args.requiredRevisionId));
+  return { action: args.action, tableBefore: table, tableAfter: after, revisionId: revisionAfter(response) };
+}
+
+export async function performDeleteTableRowOrColumn(docs: Docs, args: DeleteTableRowOrColumnArgs) {
+  const table = await readTable(docs, args.documentId, args.tableStartIndex, args.tabId);
+  const isRow = args.target === 'row';
+  const size = isRow ? table.rows : table.columns;
+  if (args.index >= size) {
+    throw new UserError(`The table has ${size} ${args.target}s (indices 0-${size - 1}); there is no ${args.target} ${args.index}.`);
+  }
+  // Google deletes the whole table when its last row or column goes. That is a
+  // different, larger edit than the one asked for, so it is refused.
+  if (size === 1) {
+    throw new UserError(`That is the table's only ${args.target}; deleting it would delete the whole table. `
+      + 'Use deleteRange over the table if that is what you want.');
+  }
+
+  const tableCellLocation: docs_v1.Schema$TableCellLocation = {
+    tableStartLocation: { index: args.tableStartIndex, ...(args.tabId ? { tabId: args.tabId } : {}) },
+    rowIndex: isRow ? args.index : 0,
+    columnIndex: isRow ? 0 : args.index,
+  };
+  const request: docs_v1.Schema$Request = isRow
+    ? { deleteTableRow: { tableCellLocation } }
+    : { deleteTableColumn: { tableCellLocation } };
+  const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], pinnedTo(args.requiredRevisionId));
+  return { target: args.target, index: args.index, tableBefore: table, revisionId: revisionAfter(response) };
+}
+
+export async function performFormatTableCells(docs: Docs, args: FormatTableCellsArgs) {
+  const cellStyle: docs_v1.Schema$TableCellStyle = {};
+  const cellFields: string[] = [];
+  if (args.backgroundColor !== undefined) { cellStyle.backgroundColor = rgb(args.backgroundColor); cellFields.push('backgroundColor'); }
+  if (args.contentAlignment !== undefined) { cellStyle.contentAlignment = args.contentAlignment; cellFields.push('contentAlignment'); }
+  if (args.paddingPt !== undefined) {
+    for (const side of ['paddingTop', 'paddingBottom', 'paddingLeft', 'paddingRight'] as const) {
+      cellStyle[side] = pt(args.paddingPt);
+      cellFields.push(side);
+    }
+  }
+  if (args.borderColor !== undefined || args.borderWidthPt !== undefined || args.borderDashStyle !== undefined) {
+    // A border is written whole, so unnamed parts get a stated default rather
+    // than being reset to Google's (which may not be what the cell had).
+    const border: docs_v1.Schema$TableCellBorder = {
+      color: rgb(args.borderColor ?? '#000000'),
+      width: pt(args.borderWidthPt ?? 1),
+      dashStyle: args.borderDashStyle ?? 'SOLID',
+    };
+    for (const side of ['borderTop', 'borderBottom', 'borderLeft', 'borderRight'] as const) {
+      cellStyle[side] = border;
+      cellFields.push(side);
+    }
+  }
+  if (cellFields.length === 0 && args.minRowHeightPt === undefined && args.columnWidthPt === undefined) {
+    throw new UserError('Nothing to format: give at least one of backgroundColor, contentAlignment, paddingPt, '
+      + 'borderColor/borderWidthPt/borderDashStyle, minRowHeightPt or columnWidthPt.');
+  }
+
+  const table = await readTable(docs, args.documentId, args.tableStartIndex, args.tabId);
+  // Naming only a row formats that row across every column, and vice versa.
+  const rowIndex = args.rowIndex ?? 0;
+  const columnIndex = args.columnIndex ?? 0;
+  const rowSpan = args.rowIndex === undefined ? table.rows : (args.rowSpan ?? 1);
+  const columnSpan = args.columnIndex === undefined ? table.columns : (args.columnSpan ?? 1);
+  assertCellBlock(table, rowIndex, columnIndex, rowSpan, columnSpan);
+
+  const tableStartLocation: docs_v1.Schema$Location = { index: args.tableStartIndex, ...(args.tabId ? { tabId: args.tabId } : {}) };
+  const span = (start: number, length: number) => Array.from({ length }, (_, i) => start + i);
+  const requests: docs_v1.Schema$Request[] = [];
+  if (cellFields.length > 0) {
+    requests.push({
+      updateTableCellStyle: {
+        tableRange: { tableCellLocation: { tableStartLocation, rowIndex, columnIndex }, rowSpan, columnSpan },
+        tableCellStyle: cellStyle,
+        fields: cellFields.join(','),
+      },
+    });
+  }
+  if (args.minRowHeightPt !== undefined) {
+    requests.push({
+      updateTableRowStyle: {
+        tableStartLocation,
+        rowIndices: span(rowIndex, rowSpan),
+        tableRowStyle: { minRowHeight: pt(args.minRowHeightPt) },
+        fields: 'minRowHeight',
+      },
+    });
+  }
+  if (args.columnWidthPt !== undefined) {
+    requests.push({
+      updateTableColumnProperties: {
+        tableStartLocation,
+        columnIndices: span(columnIndex, columnSpan),
+        tableColumnProperties: { widthType: 'FIXED_WIDTH', width: pt(args.columnWidthPt) },
+        fields: 'width,widthType',
+      },
+    });
+  }
+
+  const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests, pinnedTo(args.requiredRevisionId));
+  return {
+    cells: { rowIndex, columnIndex, rowSpan, columnSpan },
+    cellStyleFields: cellFields,
+    rowHeightSet: args.minRowHeightPt !== undefined,
+    columnWidthSet: args.columnWidthPt !== undefined,
+    revisionId: revisionAfter(response),
   };
 }
 
