@@ -5781,15 +5781,14 @@ function registerRestApiRoutes(app: express.Express): void {
   // GET /api/v1/drive/files - Search all of Drive, or list recent files (no q)
   app.get('/api/v1/drive/files', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const { searchDriveFilesSchema, performSearchDriveFiles } = await import('../google-drive/filesOps.js');
+      const { searchDriveFilesSchema, performSearchDriveFiles, parseQueryBoolean } = await import('../google-drive/filesOps.js');
       const maxResults = qstr(req.query.maxResults);
-      const bool = (v: string | undefined) => (v === undefined ? undefined : v === 'true');
       const parsed = searchDriveFilesSchema.safeParse({
         query: qstr(req.query.q) || undefined,
         searchIn: qstr(req.query.searchIn) || undefined,
         mimeType: qstr(req.query.mimeType) || undefined,
         modifiedAfter: qstr(req.query.modifiedAfter) || undefined,
-        includeTrashed: bool(qstr(req.query.includeTrashed) || undefined),
+        includeTrashed: parseQueryBoolean('includeTrashed', qstr(req.query.includeTrashed) || undefined),
         maxResults: maxResults ? Number(maxResults) : undefined,
         pageToken: qstr(req.query.pageToken) || undefined,
         driveId: qstr(req.query.driveId) || undefined,
@@ -5800,6 +5799,8 @@ function registerRestApiRoutes(app: express.Express): void {
       }
       res.json(await performSearchDriveFiles(req.userSession!.googleDrive, parsed.data));
     } catch (err) {
+      const mapped = (await import('../google-drive/filesOps.js')).driveRestErrorResponse(err);
+      if (mapped) { res.status(mapped.status).json(mapped.body); return; }
       sendUpstreamError(res, err, { notFound: 'Not found', fallback: 'Failed to search Drive' });
     }
   });
@@ -5820,6 +5821,8 @@ function registerRestApiRoutes(app: express.Express): void {
       }
       res.json(await performListDriveChanges(req.userSession!.googleDrive, parsed.data));
     } catch (err) {
+      const mapped = (await import('../google-drive/filesOps.js')).driveRestErrorResponse(err);
+      if (mapped) { res.status(mapped.status).json(mapped.body); return; }
       sendUpstreamError(res, err, { notFound: 'Not found', fallback: 'Failed to read the change feed' });
     }
   });
@@ -5837,11 +5840,10 @@ function registerRestApiRoutes(app: express.Express): void {
       res.status(201).json(result);
     } catch (err: any) {
       // Refusals the caller can fix (both or neither content field, too big, a
-      // conversion Drive cannot do) carry no upstream status.
-      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
-        res.status(400).json({ error: err.message });
-        return;
-      }
+      // conversion Drive cannot do) carry no upstream status; Drive's own 400 is
+      // the caller's too.
+      const mapped = (await import('../google-drive/filesOps.js')).driveRestErrorResponse(err);
+      if (mapped) { res.status(mapped.status).json(mapped.body); return; }
       sendUpstreamError(res, err, { notFound: 'Parent folder not found', fallback: 'Failed to upload file' });
     }
   });
@@ -5864,9 +5866,12 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/drive/folders/:folderId/contents', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const drive = req.userSession!.googleDrive;
-      const maxResults = parseInt(req.query.maxResults as string) || 50;
+      // Same 1-100 bound as the MCP tool; the folder id is escaped like every
+      // other value in a Drive query.
+      const maxResults = Math.min(Math.max(parseInt(req.query.maxResults as string) || 50, 1), 100);
       const pageToken = qstr(req.query.pageToken) || undefined;
-      const q = `'${req.params.folderId}' in parents and trashed = false`;
+      const { escapeDriveQueryLiteral } = await import('../google-drive/toolHandlers.js');
+      const q = `'${escapeDriveQueryLiteral(req.params.folderId as string)}' in parents and trashed = false`;
       const result = await drive.files.list({
         q, pageSize: maxResults, orderBy: 'folder,name',
         ...(pageToken ? { pageToken } : {}),

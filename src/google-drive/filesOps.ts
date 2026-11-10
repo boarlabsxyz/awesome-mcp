@@ -79,7 +79,8 @@ export async function performSearchDriveFiles(drive: Drive, args: SearchDriveFil
 
 export const listDriveChangesSchema = z.object({
   pageToken: z.string().optional()
-    .describe('Token from a previous call (newStartPageToken or nextPageToken). Omit on the first call to get a starting token: changes are recorded from that moment on.'),
+    .describe('Token from a previous call (newStartPageToken or nextPageToken). Omit on the first call to get a starting token: changes are recorded from that moment on. '
+      + 'A token belongs to one feed: pass the same driveId (or none) it was issued with.'),
   maxResults: z.number().int().min(1).max(1000).optional().default(100).describe('Changes per page (1-1000).'),
   driveId: z.string().optional().describe('Optional shared drive ID, to follow that drive instead of My Drive.'),
 });
@@ -148,6 +149,11 @@ export async function performUploadDriveFile(drive: Drive, args: UploadDriveFile
   const bytes = args.contentBase64 !== undefined
     ? Buffer.from(args.contentBase64, 'base64')
     : Buffer.from(args.textContent!, 'utf8');
+  // Buffer.from skips characters that are not base64, so corrupt input would
+  // upload as a different file and report success.
+  if (args.contentBase64 !== undefined && !/^[A-Za-z0-9+/\s]*={0,2}\s*$/.test(args.contentBase64)) {
+    throw new UserError('contentBase64 is not valid base64.');
+  }
   if (args.contentBase64 !== undefined && bytes.length === 0) throw new UserError('contentBase64 decoded to zero bytes.');
   if (bytes.length > MAX_UPLOAD_BYTES) {
     throw new UserError(`The file is ${bytes.length} bytes; the limit here is ${MAX_UPLOAD_BYTES} (20 MB).`);
@@ -183,4 +189,28 @@ export async function performUploadDriveFile(drive: Drive, args: UploadDriveFile
     bytes: bytes.length,
     converted: Boolean(targetMimeType) && file.mimeType === targetMimeType,
   };
+}
+
+// === REST helpers ===
+
+/** A query-string boolean: true/1 or false/0, any case. Anything else is refused, not read as false. */
+export function parseQueryBoolean(name: string, value: string | undefined): boolean | undefined {
+  if (value === undefined || value === '') return undefined;
+  const v = value.toLowerCase();
+  if (v === 'true' || v === '1') return true;
+  if (v === 'false' || v === '0') return false;
+  throw new UserError(`${name} must be true or false, got "${value}".`);
+}
+
+/**
+ * The REST answer for a Drive error that is the caller's to fix, or null to
+ * let sendUpstreamError map it (404/403/500). Drive answers 400 for a bad
+ * pageToken, a malformed modifiedAfter or a corpora/driveId mismatch; those
+ * were 500s. A local refusal (UserError with no status) is a 400 too.
+ */
+export function driveRestErrorResponse(err: any): { status: number; body: { error: string } } | null {
+  if (err?.name === 'UserError' && typeof err?.code !== 'number') return { status: 400, body: { error: err.message } };
+  const status = typeof err?.code === 'number' ? err.code : err?.response?.status;
+  if (status === 400) return { status: 400, body: { error: err?.message || 'Invalid request' } };
+  return null;
 }

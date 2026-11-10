@@ -127,3 +127,30 @@ describe('listFolderContents pagination', () => {
     assert.match(out, /MORE remain — call again with pageToken "n2"/);
   });
 });
+
+describe('REST helpers (review follow-up)', () => {
+  it('parses query booleans strictly instead of reading anything unknown as false', async () => {
+    const { parseQueryBoolean } = await import('../google-drive/filesOps.js');
+    assert.equal(parseQueryBoolean('includeTrashed', 'TRUE'), true);
+    assert.equal(parseQueryBoolean('includeTrashed', '1'), true);
+    assert.equal(parseQueryBoolean('includeTrashed', '0'), false);
+    assert.equal(parseQueryBoolean('includeTrashed', undefined), undefined);
+    assert.throws(() => parseQueryBoolean('includeTrashed', 'yes'), /must be true or false/);
+  });
+
+  it('maps local refusals and Drive 400s to 400, leaving 403/404/5xx to sendUpstreamError', async () => {
+    const { driveRestErrorResponse } = await import('../google-drive/filesOps.js');
+    assert.equal(driveRestErrorResponse(new UserError('Give exactly one'))?.status, 400);
+    assert.equal(driveRestErrorResponse(Object.assign(new Error('Invalid pageToken'), { code: 400 }))?.status, 400);
+    assert.equal(driveRestErrorResponse(Object.assign(new Error('x'), { response: { status: 400 } }))?.status, 400);
+    assert.equal(driveRestErrorResponse(Object.assign(new Error('forbidden'), { code: 403 })), null);
+    assert.equal(driveRestErrorResponse(Object.assign(new Error('boom'), { code: 500 })), null);
+  });
+
+  it('refuses base64 with characters Buffer would silently skip', async () => {
+    await assert.rejects(
+      () => performUploadDriveFile(mkDrive(), { fileName: 'a', sourceMimeType: 'text/plain', contentBase64: 'not*base64!' }),
+      /not valid base64/,
+    );
+  });
+});
