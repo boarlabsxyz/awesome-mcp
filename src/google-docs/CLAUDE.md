@@ -22,6 +22,9 @@
 - **`requiredRevisionId` is sent only when given** — unpinned writes keep their old request body. A stale id is a 400 rewritten to say nothing was written. Reads (`readGoogleDoc` footer, `inspectDocStructure`) expose `revisionId`; writes return the new one.
 - **`createFootnote` is two writes** (reference, then `insertText` at `endOfSegmentLocation` of the new segment); a failed second write names the empty footnote left behind.
 - **Tables are named by start index** and read before writing, so a wrong index or an out-of-range cell is refused by name (Google says only "Invalid requests[0]"). `deleteTableRowOrColumn` refuses the last row/column: Google would delete the whole table.
+- **Table writes re-read the table** — inserts and deletes report `confirmed` from the re-read shape (a delete of a merged cell can take more than one); merge/unmerge are `confirmed: null` (no size change to prove).
+- **`readGoogleDoc` appends the revision to the text format only** — markdown stays pure, json carries `revisionId`, the empty-doc answer is unchanged.
+- **A failed footnote text write keeps the upstream status** on its UserError, so REST does not blame the caller for a 403/5xx.
 - **`formatTableCells` writes borders whole** — unnamed parts default to black/1pt/SOLID rather than Google's reset.
 - **`updateDocumentTab` / `deleteDocumentTab` re-read** and report `confirmed`. `parentTabId` is not updatable (not offered).
 - **MCP-only (no REST sign-off):** `deleteDocumentTab`, `deleteTableRowOrColumn`. `batchUpdateDoc` has no tab/table-delete operation, so REST cannot reach them either.

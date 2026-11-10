@@ -4913,8 +4913,8 @@ function registerRestApiRoutes(app: express.Express): void {
   // POST /api/v1/docs/:documentId/comments - Add a comment
   // === Google Docs writes ===
   //
-  // Nineteen endpoints, one per write tool, registered from a table rather than
-  // written out nineteen times. They differ only in schema, op, status code and
+  // One endpoint per write tool, registered from a table rather than
+  // written out one by one. They differ only in schema, op, status code and
   // response shape, so the hand-written version was ~380 lines of which Sonar
   // measured 23% as duplicated — and every copy of a catch block is somewhere a
   // fix can fail to be applied.

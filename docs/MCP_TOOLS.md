@@ -48,7 +48,7 @@ Source: `src/google-docs/server.ts` — 45 tools.
 | `searchGoogleDocs` | Searches for Google Documents by name, content, or other criteria across My Drive and shared drives. | `GET /api/v1/docs?q={query}` |
 | `getRecentGoogleDocs` | Gets the most recently modified Google Documents from My Drive and shared drives. | `GET /api/v1/docs/recent` |
 | `exportDocToPdf` | Exports a Google Doc as a PDF file and saves it to Google Drive. Returns the PDF file ID, name, and link. | `POST /api/v1/docs/{documentId}/export/pdf` |
-| `readGoogleDoc` | Reads the content of a specific Google Document, optionally returning structured data. | `GET /api/v1/docs/{documentId}` |
+| `readGoogleDoc` | Reads the content of a specific Google Document, optionally returning structured data. The text format ends with the document's revisionId (for requiredRevisionId); json includes it; for markdown use inspectDocStructure. | `GET /api/v1/docs/{documentId}` |
 | `listDocumentTabs` | Lists all tabs in a Google Document, including their hierarchy, IDs, and structure. | `GET /api/v1/docs/{documentId}/tabs` |
 | `createDocumentTab` | Adds a new tab to a Google Doc, optionally nested under another tab. Returns the new tab ID. | `POST /api/v1/docs/{documentId}/tabs` |
 | `updateDocumentTab` | Renames a document tab, changes its emoji icon, or moves it among its sibling tabs. | `POST /api/v1/docs/{documentId}/tabs/{tabId}/update` |

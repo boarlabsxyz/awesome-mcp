@@ -496,8 +496,12 @@ export async function performCreateFootnote(docs: Docs, args: CreateFootnoteArgs
       { insertText: { endOfSegmentLocation: { segmentId: footnoteId, ...tab }, text: args.text } },
     ]);
   } catch (error: any) {
-    throw new UserError(`Footnote ${footnoteId} was created at index ${args.index}, but writing its text failed: `
+    const partial = new UserError(`Footnote ${footnoteId} was created at index ${args.index}, but writing its text failed: `
       + `${error.message || error}. The empty footnote is still in the document.`);
+    // Keep the upstream status, so REST answers a 403/5xx as what it was rather
+    // than as the caller's 400.
+    if (typeof error?.code === 'number') (partial as any).code = error.code;
+    throw partial;
   }
   return { footnoteId, index: args.index, revisionId: revisionAfter(filled) };
 }
@@ -594,7 +598,27 @@ export async function performModifyTableStructure(docs: Docs, args: ModifyTableS
   }
 
   const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests, pinnedTo(args.requiredRevisionId));
-  return { action: args.action, tableBefore: table, tableAfter: after, revisionId: revisionAfter(response) };
+  return {
+    action: args.action,
+    tableBefore: table,
+    tableAfter: after,
+    // Re-read rather than echo the arithmetic. Merges change no row or column
+    // count, so the re-read cannot prove them: null, not true.
+    confirmed: isMerge ? null : await tableHasShape(docs, args.documentId, args.tableStartIndex, args.tabId, after),
+    revisionId: revisionAfter(response),
+  };
+}
+
+/** Whether the table now has the expected shape; null when it cannot be re-read. */
+async function tableHasShape(
+  docs: Docs, documentId: string, tableStartIndex: number, tabId: string | undefined, expected: { rows: number; columns: number },
+): Promise<boolean | null> {
+  try {
+    const now = await readTable(docs, documentId, tableStartIndex, tabId);
+    return now.rows === expected.rows && now.columns === expected.columns;
+  } catch {
+    return null;
+  }
 }
 
 export async function performDeleteTableRowOrColumn(docs: Docs, args: DeleteTableRowOrColumnArgs) {
@@ -620,7 +644,11 @@ export async function performDeleteTableRowOrColumn(docs: Docs, args: DeleteTabl
     ? { deleteTableRow: { tableCellLocation } }
     : { deleteTableColumn: { tableCellLocation } };
   const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], pinnedTo(args.requiredRevisionId));
-  return { target: args.target, index: args.index, tableBefore: table, revisionId: revisionAfter(response) };
+  // A merged cell spanning several rows/columns takes all of them, so "one
+  // fewer" is a lower bound: confirmed only when exactly one went.
+  const expected = isRow ? { rows: table.rows - 1, columns: table.columns } : { rows: table.rows, columns: table.columns - 1 };
+  const confirmed = await tableHasShape(docs, args.documentId, args.tableStartIndex, args.tabId, expected);
+  return { target: args.target, index: args.index, tableBefore: table, confirmed, revisionId: revisionAfter(response) };
 }
 
 export async function performFormatTableCells(docs: Docs, args: FormatTableCellsArgs) {

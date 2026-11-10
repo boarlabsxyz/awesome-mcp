@@ -1258,3 +1258,83 @@ describe('table structure and cell formatting', () => {
     assert.equal(docs.documents.get.mock.callCount(), 0);
   });
 });
+
+describe('review follow-ups', () => {
+  /** A doc whose table at index 5 reads back with `after` once anything is written. */
+  function shapeChanging(before: { rows: number; columns: number }, after: { rows: number; columns: number }) {
+    let written = false;
+    const body = () => ({ content: [{ startIndex: 5, table: written ? after : before }] });
+    return mkDocs({ documents: {
+      get: mock.fn(async () => ({ data: { body: body() } })),
+      batchUpdate: mock.fn(async () => { written = true; return { data: { replies: [{}] } }; }),
+    } });
+  }
+
+  it('confirms an insert from the re-read table, and reports a mismatch as false', async () => {
+    const ok = await performModifyTableStructure(shapeChanging({ rows: 2, columns: 3 }, { rows: 3, columns: 3 }), {
+      documentId: 'd1', tableStartIndex: 5, action: 'insert_rows_below', rowIndex: 0, columnIndex: 0,
+    } as any);
+    assert.equal(ok.confirmed, true);
+    const off = await performModifyTableStructure(shapeChanging({ rows: 2, columns: 3 }, { rows: 2, columns: 3 }), {
+      documentId: 'd1', tableStartIndex: 5, action: 'insert_rows_below', rowIndex: 0, columnIndex: 0,
+    } as any);
+    assert.equal(off.confirmed, false);
+  });
+
+  it('reports a merge as unconfirmed (null), never as proven', async () => {
+    const r = await performModifyTableStructure(shapeChanging({ rows: 2, columns: 3 }, { rows: 2, columns: 3 }), {
+      documentId: 'd1', tableStartIndex: 5, action: 'merge_cells', rowIndex: 0, columnIndex: 0, columnSpan: 2,
+    } as any);
+    assert.equal(r.confirmed, null);
+  });
+
+  it('confirms a row delete only when exactly one row went', async () => {
+    const one = await performDeleteTableRowOrColumn(shapeChanging({ rows: 3, columns: 2 }, { rows: 2, columns: 2 }), {
+      documentId: 'd1', tableStartIndex: 5, target: 'row', index: 1,
+    } as any);
+    assert.equal(one.confirmed, true);
+    const merged = await performDeleteTableRowOrColumn(shapeChanging({ rows: 3, columns: 2 }, { rows: 1, columns: 2 }), {
+      documentId: 'd1', tableStartIndex: 5, target: 'row', index: 1,
+    } as any);
+    assert.equal(merged.confirmed, false);
+  });
+
+  it('keeps the upstream status when a footnote\'s text write fails', async () => {
+    let call = 0;
+    const docs = mkDocs({ documents: { batchUpdate: mock.fn(async () => {
+      call += 1;
+      if (call === 1) return { data: { replies: [{ createFootnote: { footnoteId: 'kix.fn1' } }] } };
+      throw Object.assign(new Error('The caller does not have permission'), { code: 403 });
+    }) } });
+    await assert.rejects(
+      () => performCreateFootnote(docs, { documentId: 'd1', index: 4, text: 'x' } as any),
+      (err: any) => err.code === 403 && /kix\.fn1/.test(err.message),
+    );
+  });
+
+  it('widens a paragraph target inside the named tab', async () => {
+    const text = 'Tab para\n';
+    const docs = mkDocs({ documents: { get: mock.fn(async () => ({ data: { tabs: [
+      { tabProperties: { tabId: 't.2' }, documentTab: { body: { content: [
+        { startIndex: 1, endIndex: 1 + text.length, paragraph: { elements: [{ startIndex: 1, endIndex: 1 + text.length, textRun: { content: text } }] } },
+      ] } } },
+    ] } })) } });
+    await performApplyParagraphStyle(docs, { documentId: 'd1', tabId: 't.2', target: { textToFind: 'para', matchInstance: 1 }, style: { alignment: 'CENTER' } } as any);
+    assert.deepEqual(sentRequests(docs)[0].updateParagraphStyle.range, { startIndex: 1, endIndex: 1 + text.length, tabId: 't.2' });
+  });
+
+  it('formats one column across every row when only columnIndex is given', async () => {
+    const docs = shapeChanging({ rows: 4, columns: 3 }, { rows: 4, columns: 3 });
+    const r = await performFormatTableCells(docs, { documentId: 'd1', tableStartIndex: 5, columnIndex: 2, backgroundColor: '#EEE' } as any);
+    assert.deepEqual(r.cells, { rowIndex: 0, columnIndex: 2, rowSpan: 4, columnSpan: 1 });
+  });
+
+  it('refuses a batch naming an unknown tab before writing', async () => {
+    const docs = mkDocs({ documents: { get: mock.fn(async () => ({ data: { tabs: [{ tabProperties: { tabId: 't.1' }, documentTab: { body: {} } }] } })) } });
+    await assert.rejects(
+      () => performBatchUpdateDoc(docs, { documentId: 'd1', operations: [{ type: 'insert_text', index: 1, text: 'x', tabId: 't.9' }] } as any),
+      /Tab with ID "t\.9" not found/,
+    );
+    assert.equal(docs.documents.batchUpdate.mock.callCount(), 0);
+  });
+});

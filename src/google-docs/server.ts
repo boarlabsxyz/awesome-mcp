@@ -460,7 +460,7 @@ function revisionNote(revisionId: string | null | undefined): string {
 server.addTool({
 name: 'readGoogleDoc',
 annotations: { readOnlyHint: true },
-description: 'Reads the content of a specific Google Document, optionally returning structured data.',
+description: 'Reads the content of a specific Google Document, optionally returning structured data. The text format ends with the document\'s revisionId (for requiredRevisionId); json includes it; for markdown use inspectDocStructure.',
 parameters: DocumentIdParameter.extend({
 format: z.enum(['text', 'json', 'markdown']).optional().default('text')
 .describe("Output format: 'text' (plain text), 'json' (raw API structure, complex), 'markdown' (experimental conversion)."),
@@ -530,8 +530,11 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
             return jsonContent;
         }
 
-        // Every text and markdown read ends with the revision it saw, which is the
-        // id an edit needs to fail instead of overwriting someone else's change.
+        // A text read ends with the revision it saw, which is the id an edit needs
+        // to fail instead of overwriting someone else's change. Only the text
+        // format: markdown stays pure markdown for piping, json carries
+        // revisionId in the document itself, and the empty-document answer is
+        // unchanged. inspectDocStructure returns the revision for any of them.
         const revisionFooter = res.data.revisionId
             ? `\n\n[revisionId: ${res.data.revisionId} — pass it as requiredRevisionId to make an edit fail if the document changes first]`
             : '';
@@ -545,12 +548,12 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
             if (args.maxLength && totalLength > args.maxLength) {
                 const truncatedContent = sliceSafe(markdownContent, args.maxLength);
                 return assertTransportSafe(
-                    `${truncatedContent}\n\n... [Markdown truncated to ${args.maxLength} chars of ${totalLength} total. Use maxLength parameter to adjust limit or remove it to get full content.]${revisionFooter}`,
+                    `${truncatedContent}\n\n... [Markdown truncated to ${args.maxLength} chars of ${totalLength} total. Use maxLength parameter to adjust limit or remove it to get full content.]`,
                     { documentId: args.documentId, what: 'markdown' },
                 );
             }
 
-            return assertTransportSafe(markdownContent + revisionFooter, { documentId: args.documentId, what: 'markdown' });
+            return assertTransportSafe(markdownContent, { documentId: args.documentId, what: 'markdown' });
         }
 
         // Default: Text format - extract all text content
@@ -586,7 +589,7 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
             }
         });
 
-        if (!textContent.trim()) return `Document found, but appears empty.${revisionFooter}`;
+        if (!textContent.trim()) return "Document found, but appears empty.";
 
         // Google Docs emits U+000B for shift-enter soft breaks and private-use
         // characters as inline-object placeholders; neither survives a strict
@@ -919,14 +922,17 @@ server.addTool({
   execute: async (args, { log, session }) => {
     const docs = await getDocsClient(session);
     log.info(`Modifying table at ${args.tableStartIndex} in doc ${args.documentId}: ${args.action}`);
-    const { tableBefore, tableAfter, revisionId } = await performModifyTableStructure(docs, args);
+    const { tableBefore, tableAfter, confirmed, revisionId } = await performModifyTableStructure(docs, args);
     const shape = `${tableBefore.rows}x${tableBefore.columns}`;
     if (args.action === 'merge_cells' || args.action === 'unmerge_cells') {
-      return `Applied ${args.action} to ${args.rowSpan ?? 1}x${args.columnSpan ?? 1} cells from row ${args.rowIndex}, column ${args.columnIndex} `
-        + `of the ${shape} table.${revisionNote(revisionId)}`;
+      return `Google accepted ${args.action} on ${args.rowSpan ?? 1}x${args.columnSpan ?? 1} cells from row ${args.rowIndex}, column ${args.columnIndex} `
+        + `of the ${shape} table (not confirmed: a merge does not change the table's size, so a re-read cannot prove it).${revisionNote(revisionId)}`;
     }
+    const readBack = confirmed === true ? '' : confirmed === false
+      ? ' ⚠ The table does not read back at that size; re-read it with inspectDocStructure.'
+      : ' (could not re-read the table to confirm)';
     return `Applied ${args.action} (${args.count ?? 1}) at row ${args.rowIndex}, column ${args.columnIndex}: `
-      + `table is now ${tableAfter.rows}x${tableAfter.columns} (was ${shape}).${revisionNote(revisionId)}`;
+      + `table should now be ${tableAfter.rows}x${tableAfter.columns} (was ${shape}).${readBack}${revisionNote(revisionId)}`;
   },
 });
 
@@ -938,9 +944,12 @@ server.addTool({
   execute: async (args, { log, session }) => {
     const docs = await getDocsClient(session);
     log.info(`Deleting table ${args.target} ${args.index} at ${args.tableStartIndex} in doc ${args.documentId}`);
-    const { tableBefore, revisionId } = await performDeleteTableRowOrColumn(docs, args);
+    const { tableBefore, confirmed, revisionId } = await performDeleteTableRowOrColumn(docs, args);
+    const readBack = confirmed === true ? '' : confirmed === false
+      ? ' ⚠ The table did not shrink by exactly one: a merged cell may have taken more, or nothing was deleted. Re-read it.'
+      : ' (could not re-read the table to confirm)';
     return `Deleted ${args.target} ${args.index} of the ${tableBefore.rows}x${tableBefore.columns} table at index ${args.tableStartIndex}.`
-      + revisionNote(revisionId);
+      + readBack + revisionNote(revisionId);
   },
 });
 
