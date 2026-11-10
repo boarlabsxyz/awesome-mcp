@@ -9,7 +9,7 @@ export function createRawEmail(
   to: string,
   subject: string,
   body: string,
-  options?: { cc?: string; bcc?: string; isHtml?: boolean }
+  options?: { cc?: string; bcc?: string; isHtml?: boolean; inReplyTo?: string; references?: string }
 ): string {
   const contentType = options?.isHtml ? 'text/html' : 'text/plain';
 
@@ -20,6 +20,10 @@ export function createRawEmail(
 
   if (options?.cc) lines.push(`Cc: ${options.cc}`);
   if (options?.bcc) lines.push(`Bcc: ${options.bcc}`);
+  // Threading headers are copied from another message, so line breaks are
+  // stripped: a crafted Message-ID must not be able to add a header.
+  if (options?.inReplyTo) lines.push(`In-Reply-To: ${options.inReplyTo.replace(/[\r\n]+/g, ' ')}`);
+  if (options?.references) lines.push(`References: ${options.references.replace(/[\r\n]+/g, ' ')}`);
 
   lines.push(`MIME-Version: 1.0`);
   lines.push(`Content-Type: ${contentType}; charset="UTF-8"`);

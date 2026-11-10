@@ -10,7 +10,7 @@ import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import {
   sendEmailSchema, draftEmailSchema, modifyEmailSchema, deleteEmailSchema,
   batchModifyEmailsSchema, batchDeleteEmailsSchema, createLabelSchema, updateLabelSchema,
-  deleteLabelSchema, getOrCreateLabelSchema,
+  deleteLabelSchema, getOrCreateLabelSchema, createFilterSchema, getFilterSchema,
 } from './schemas.js';
 
 // Tool handlers
@@ -18,7 +18,7 @@ import {
   handleSendEmail, handleDraftEmail, handleReadEmail, handleSearchEmails,
   handleModifyEmail, handleDeleteEmail, handleBatchModifyEmails, handleBatchDeleteEmails,
   handleListLabels, handleCreateLabel, handleUpdateLabel, handleDeleteLabel,
-  handleGetOrCreateLabel, handleGetAttachment,
+  handleGetOrCreateLabel, handleGetAttachment, handleCreateFilter, handleListFilters, handleGetFilter,
 } from './toolHandlers.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
@@ -51,7 +51,7 @@ gmailServer.addTool({
 gmailServer.addTool({
   name: 'draftEmail',
   annotations: { readOnlyHint: false },
-  description: 'Create a draft email without sending it.',
+  description: 'Create a draft email without sending it. Set replyToMessageId to draft a reply inside that conversation.',
   parameters: draftEmailSchema,
   execute: async (args, { log, session }) => handleDraftEmail(getGmailClient(session), args, log),
 });
@@ -167,6 +167,32 @@ gmailServer.addTool({
     attachmentId: z.string().describe('The attachment ID to download.'),
   }),
   execute: async (args, { log, session }) => handleGetAttachment(getGmailClient(session), args, log),
+});
+
+// === FILTERS ===
+
+gmailServer.addTool({
+  name: 'createFilter',
+  annotations: { readOnlyHint: false },
+  description: 'Creates a Gmail filter for incoming mail: match by sender, recipient, subject or search query; label, archive, mark read or star.',
+  parameters: createFilterSchema,
+  execute: async (args, { log, session }) => handleCreateFilter(getGmailClient(session), args, log),
+});
+
+gmailServer.addTool({
+  name: 'listFilters',
+  annotations: { readOnlyHint: true },
+  description: 'Lists the Gmail filters on this account with their criteria and actions.',
+  parameters: z.object({}),
+  execute: async (_args, { log, session }) => handleListFilters(getGmailClient(session), log),
+});
+
+gmailServer.addTool({
+  name: 'getFilter',
+  annotations: { readOnlyHint: true },
+  description: 'Gets one Gmail filter by ID.',
+  parameters: getFilterSchema,
+  execute: async (args, { log, session }) => handleGetFilter(getGmailClient(session), args, log),
 });
 
 export { gmailServer };

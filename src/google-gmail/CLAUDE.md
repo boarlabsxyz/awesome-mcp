@@ -12,6 +12,12 @@
 - **`deleteEmail` and `batchDeleteEmails` move to Trash; nothing here deletes a message permanently.**
 - **`performBatchTrashEmails` reports `trashed`, `failed` and `notAttempted`** — Gmail has no batch trash, so a failure part way leaves some gone. It stops after a batch that fails outright, because the rest would too.
 
+### Reply drafts and filters (NOT exercised live)
+- **`draftEmail` `replyToMessageId` reads the parent's `Message-ID`/`References`** and sets `threadId`, `In-Reply-To`, `References` (parent refs + its id) and a non-doubled `Re:` subject; `to` defaults to `Reply-To` then `From`. `threaded` is read from the stored draft. Copied headers have CR/LF stripped.
+- **Filters need `gmail.settings.basic`** — added to the catalog seed; connections made before it get a 403 rewritten to "Reconnect Gmail" (`isMissingFilterScope`). The scope must also be on the Google Cloud OAuth consent screen, or consent fails for everyone.
+- **No forwarding action** — it needs `gmail.settings.sharing`, which is not requested. No filter delete yet.
+- **A filter needs a criterion and an action, refused before any call** (`buildFilter`); Gmail would 400 without naming which.
+
 ### REST plane
 - **Every write has a REST sibling, with explicit sign-off for the three destructive ones** — the permanent dashboard API key can send mail, trash messages and delete labels.
 - **`/messages/send` and `/drafts` keep their old 200 and response keys** — ChatGPT Custom Actions compat routes, now validated with the tool's schema.

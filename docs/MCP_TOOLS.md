@@ -11,7 +11,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Sheets](#google-sheets) (12)
 - [Google Calendar](#google-calendar) (6)
 - [Google Drive](#google-drive) (15)
-- [Gmail](#gmail) (14)
+- [Gmail](#gmail) (17)
 - [Google Slides](#google-slides) (6)
 - [ClickUp](#clickup) (48)
 - [Slack (bot)](#slack-bot-) (9)
@@ -139,12 +139,12 @@ Source: `src/google-drive/server.ts` — 15 tools.
 
 ## Gmail
 
-Source: `src/google-gmail/server.ts` — 14 tools.
+Source: `src/google-gmail/server.ts` — 17 tools.
 
 | Tool | Description | REST |
 |---|---|---|
 | `sendEmail` | Send an email message. | `POST /api/v1/gmail/messages/send` |
-| `draftEmail` | Create a draft email without sending it. | `POST /api/v1/gmail/drafts` |
+| `draftEmail` | Create a draft email without sending it. Set replyToMessageId to draft a reply inside that conversation. | `POST /api/v1/gmail/drafts` |
 | `readEmail` | Read the full content of an email by its message ID. | `GET /api/v1/gmail/messages/{messageId}` |
 | `searchEmails` | Search emails using Gmail query syntax (e.g., "from:user@example.com", "subject:hello", "is:unread", "newer_than:2d"). | `GET /api/v1/gmail/messages?q={query}` |
 | `modifyEmail` | Modify labels on a single email message (add or remove labels). For more than one message, prefer batchModifyEmails. | `POST /api/v1/gmail/messages/{messageId}/modify` |
@@ -157,6 +157,9 @@ Source: `src/google-gmail/server.ts` — 14 tools.
 | `deleteLabel` | Delete a Gmail label. System labels (INBOX, SENT, etc.) cannot be deleted. | `POST /api/v1/gmail/labels/{labelId}/delete` |
 | `getOrCreateLabel` | Get a label by name, creating it if it does not exist. Returns the label ID. | `POST /api/v1/gmail/labels/get-or-create` |
 | `getAttachment` | Download an email attachment. Returns the content as base64-encoded data. | `GET /api/v1/gmail/messages/{messageId}/attachments/{attachmentId}` |
+| `createFilter` | Creates a Gmail filter for incoming mail: match by sender, recipient, subject or search query; label, archive, mark read or star. | `POST /api/v1/gmail/filters` |
+| `listFilters` | Lists the Gmail filters on this account with their criteria and actions. | `GET /api/v1/gmail/filters` |
+| `getFilter` | Gets one Gmail filter by ID. | `GET /api/v1/gmail/filters/{filterId}` |
 
 ## Google Slides
 
@@ -634,4 +637,4 @@ Source: `src/sandbox/server.ts` — 6 tools.
 
 ---
 
-**Grand total: 449 tools across 22 sections.**
+**Grand total: 452 tools across 22 sections.**

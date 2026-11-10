@@ -41,6 +41,8 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/drive/folders/folder-123',
   '/api/v1/drive/files/file-123/permissions',
   '/api/v1/drive/files/file-123/public',
+  '/api/v1/gmail/filters',
+  '/api/v1/gmail/filters/f-1',
   '/api/v1/gmail/labels',
   '/api/v1/slides/presentation-123/pages/page-123/thumbnail',
   '/api/v1/slides/presentation-123/comments',
@@ -266,6 +268,8 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/hubspot/engagements/notes/n-1/delete',
   // Gmail. /labels is in both arrays: GET lists, POST creates.
   '/api/v1/gmail/messages/send',
+  // '/api/v1/gmail/filters' is in both arrays: GET lists, POST creates.
+  '/api/v1/gmail/filters',
   '/api/v1/gmail/messages/batch-modify',
   '/api/v1/gmail/messages/batch-trash',
   '/api/v1/gmail/messages/m-1/modify',

@@ -13991,6 +13991,291 @@
         }
       }
     },
+    "/api/v1/gmail/filters": {
+      "get": {
+        "operationId": "listGmailFilters",
+        "summary": "List Gmail filters",
+        "responses": {
+          "200": {
+            "description": "Filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "filters": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "criteria": {
+                            "type": "object"
+                          },
+                          "action": {
+                            "type": "object",
+                            "properties": {
+                              "addLabelIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "removeLabelIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied; a connection made before filters were added gets an error naming Reconnect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createGmailFilter",
+        "summary": "Create a Gmail filter for incoming mail",
+        "description": "Applies to mail arriving afterwards. Needs at least one criterion and one action.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "type": "string"
+                  },
+                  "subject": {
+                    "type": "string"
+                  },
+                  "query": {
+                    "type": "string",
+                    "description": "Gmail search query"
+                  },
+                  "negatedQuery": {
+                    "type": "string"
+                  },
+                  "hasAttachment": {
+                    "type": "boolean"
+                  },
+                  "addLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "removeLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "archive": {
+                    "type": "boolean",
+                    "description": "Remove INBOX"
+                  },
+                  "markRead": {
+                    "type": "boolean",
+                    "description": "Remove UNREAD"
+                  },
+                  "star": {
+                    "type": "boolean",
+                    "description": "Add STARRED"
+                  },
+                  "neverSpam": {
+                    "type": "boolean",
+                    "description": "Remove SPAM"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Filter created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "criteria": {
+                      "type": "object"
+                    },
+                    "action": {
+                      "type": "object",
+                      "properties": {
+                        "addLabelIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "removeLabelIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No criterion, no action, or a bad label ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied; a connection made before filters were added gets an error naming Reconnect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/filters/{filterId}": {
+      "get": {
+        "operationId": "getGmailFilter",
+        "summary": "Get one Gmail filter",
+        "parameters": [
+          {
+            "name": "filterId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Filter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "criteria": {
+                      "type": "object"
+                    },
+                    "action": {
+                      "type": "object",
+                      "properties": {
+                        "addLabelIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "removeLabelIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied; a connection made before filters were added gets an error naming Reconnect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Filter not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/gmail/drafts": {
       "post": {
         "operationId": "createDraft",
@@ -14003,8 +14288,6 @@
               "schema": {
                 "type": "object",
                 "required": [
-                  "to",
-                  "subject",
                   "body"
                 ],
                 "properties": {
@@ -14032,6 +14315,10 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Whether the body content is HTML"
+                  },
+                  "replyToMessageId": {
+                    "type": "string",
+                    "description": "Draft a reply in this message's conversation (threadId, In-Reply-To, References, Re: subject). to and subject default from the original; without this field both are required."
                   }
                 }
               }
@@ -14053,6 +14340,15 @@
                     "messageId": {
                       "type": "string",
                       "description": "ID of the draft message"
+                    },
+                    "threadId": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Conversation the draft belongs to"
+                    },
+                    "threaded": {
+                      "type": "boolean",
+                      "description": "Only with replyToMessageId: whether Gmail put the draft in the original conversation"
                     }
                   }
                 }
