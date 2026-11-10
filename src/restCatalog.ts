@@ -535,8 +535,7 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
 /**
  * What applies to EVERY endpoint of a service, said once. Kept out of the
  * per-entry `notes` deliberately: one sentence repeated on every catalog line
- * reads the same to a person and is counted as duplicated new code by the
- * Sonar gate. Same parsing rules as the catalog (scripts/buildRestEndpointsDoc
+ * says nothing more and drifts when one copy is edited. Same parsing rules as the catalog (scripts/buildRestEndpointsDoc
  * reads it with a regex): one line per service, single quotes, no apostrophes.
  */
 export const REST_SERVICE_NOTES: Partial<Record<RestService, string>> = {
