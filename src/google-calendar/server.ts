@@ -426,6 +426,12 @@ export function applyGuestChanges(
   removeAttendees: string[] = [],
 ): { attendees: calendar_v3.Schema$EventAttendee[]; changes: GuestChanges } {
   const key = (email: string | null | undefined) => (email ?? '').trim().toLowerCase();
+  // Adding and removing the same person is not a meaningful request: it would
+  // drop their row (and response) and re-add a bare one.
+  const both = addAttendees.filter((email) => removeAttendees.some((r) => key(r) === key(email)));
+  if (both.length) {
+    throw new UserError(`Both added and removed in one call: ${both.join(', ')}. Nothing was changed.`);
+  }
   const present = new Set(existing.map((a) => key(a.email)));
   const notOnEvent = removeAttendees.filter((email) => !present.has(key(email)));
   if (notOnEvent.length) {
@@ -435,8 +441,11 @@ export function applyGuestChanges(
   const kept = existing.filter((a) => !removing.has(key(a.email)));
   const changes: GuestChanges = { added: [], alreadyInvited: [], removed: existing.filter((a) => removing.has(key(a.email))).map((a) => a.email ?? '') };
   const keptKeys = new Set(kept.map((a) => key(a.email)));
+  const addedNow = new Set<string>();
   for (const email of addAttendees) {
+    if (addedNow.has(key(email))) continue; // repeated in this call: one invite
     if (keptKeys.has(key(email))) { changes.alreadyInvited.push(email); continue; }
+    addedNow.add(key(email));
     keptKeys.add(key(email));
     kept.push({ email });
     changes.added.push(email);
@@ -535,6 +544,13 @@ export async function performUpdateEvent(
         + 'invitation to answer. Google marks the caller\'s own entry with `self: true` and this event has none — '
         + 'which is normal when you are the organizer, or when the event has no guests at all. Nothing was changed, '
         + 'and you were deliberately not added as an attendee (that would be inviting yourself, not replying).',
+      );
+    }
+    // Answering and leaving in one call contradict each other: the update would
+    // uninvite the caller and then read back as an unrecorded answer.
+    if (guestChanges && !(eventResource.attendees || []).some((a) => a.self === true)) {
+      throw new UserError(
+        'Cannot set your response while removing yourself from the guest list in the same call. Nothing was changed.',
       );
     }
     // Rebuilt by identity, not by index: the array is the one Google just
@@ -702,6 +718,7 @@ calendarServer.addTool({
       return result;
     } catch (error: any) {
       log.error(`Error updating event: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
       if (error.code === 404) throw new UserError(`Event not found (ID: ${args.eventId}).`);
       if (error.code === 403) throw new UserError("Permission denied. Make sure you have write access to this event.");
       throw new UserError(`Failed to update event: ${error.message || 'Unknown error'}`);

@@ -627,3 +627,35 @@ describe('adding and removing guests', () => {
     assert.match(out, /does not match: not added new@example\.com/);
   });
 });
+
+describe('guest edit refusals (review follow-up)', () => {
+  const withSelf = () => mkCalendar({ events: { get: mock.fn(async () => ({ data: {
+    id: 'evt-1', attendees: [{ email: 'me@example.com', self: true, responseStatus: 'needsAction' }, { email: 'b@example.com' }],
+  } })) } });
+
+  it('refuses an RSVP while removing yourself, writing nothing', async () => {
+    const calendar = withSelf();
+    await assert.rejects(
+      () => performUpdateEvent(calendar, updateEventSchema.parse({ eventId: 'evt-1', removeAttendees: ['me@example.com'], myResponseStatus: 'accepted' })),
+      /removing yourself/,
+    );
+    assert.equal(calendar.events.update.mock.callCount(), 0);
+    assert.equal(calendar.events.patch.mock.callCount(), 0);
+  });
+
+  it('refuses the same address in add and remove, and counts a repeated add once', async () => {
+    await assert.rejects(
+      () => performUpdateEvent(withSelf(), updateEventSchema.parse({ eventId: 'evt-1', addAttendees: ['B@example.com'], removeAttendees: ['b@example.com'] })),
+      /Both added and removed/,
+    );
+    const { guestChanges } = await performUpdateEvent(withSelf(), updateEventSchema.parse({ eventId: 'evt-1', addAttendees: ['n@x.io', 'N@x.io'] }));
+    assert.deepEqual(guestChanges, { added: ['n@x.io'], alreadyInvited: [], removed: [] });
+  });
+
+  it('the tool passes a refusal through without a "Failed to update event" prefix', async () => {
+    await assert.rejects(
+      () => toolMap.get('updateEvent')!.execute(updateEventSchema.parse({ eventId: 'evt-1', removeAttendees: ['ghost@x.io'] }), { session: { googleCalendar: withSelf() }, log: noopLog }),
+      (err: any) => err instanceof UserError && err.message.startsWith('Not on this event'),
+    );
+  });
+});

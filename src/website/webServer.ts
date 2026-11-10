@@ -5473,8 +5473,9 @@ function registerRestApiRoutes(app: express.Express): void {
     } catch (err: any) {
       console.error('Error updating event:', err);
       // Refusals the caller can fix (removing someone not invited, an RSVP with
-      // no invitation) used to answer 500.
-      if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+      // no invitation) and Google's own 400 (a bad dateTime) used to answer 500.
+      // Same mapping as the create route.
+      if ((err?.name === 'UserError' && typeof err?.code !== 'number') || err?.code === 400) {
         res.status(400).json({ error: err.message });
         return;
       }
