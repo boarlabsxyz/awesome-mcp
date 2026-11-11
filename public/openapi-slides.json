@@ -243,6 +243,10 @@
                       "description": "A single update request (e.g., createSlide, insertText, deleteObject, replaceAllText)"
                     },
                     "description": "A list of updates to apply to the presentation"
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "description": "Optional revisionId from GET /api/v1/slides/{presentationId}. If the presentation changed since, nothing is written and the response is 409."
                   }
                 }
               }
@@ -267,6 +271,11 @@
                         "type": "object"
                       },
                       "description": "The reply of each request in the same order"
+                    },
+                    "revisionId": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "The presentation revision after this update, for the next pinned call."
                     }
                   }
                 }
@@ -295,6 +304,16 @@
           },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The presentation changed after requiredRevisionId was read; nothing was written.",
             "content": {
               "application/json": {
                 "schema": {

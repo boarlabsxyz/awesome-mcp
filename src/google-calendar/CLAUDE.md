@@ -19,6 +19,13 @@
 - `listEvents` renders `My response:` (incl. `needsAction (not answered yet)`); `getEvent` marks `— you`.
 - **No ETag** — a concurrent write between read and write can be overwritten.
 
+### Recurrence and guests (NOT exercised live)
+- **`recurrence` requires `timeZone`** — refused locally; Google refuses a series without one.
+- **`addAttendees`/`removeAttendees` merge into the list `events.get` returned** (`applyGuestChanges`, case-insensitive), keeping retained guests' rows as stored. Removing someone not on the event refuses the whole call. Guest edits apply before an RSVP in the same call.
+- **The tool re-reads the stored guest list** and warns when it differs from what was asked (an address Google dropped).
+- **REST create/update answer 400 for local refusals AND Google's own 400** (both were 500); 404/403 via `sendUpstreamError`.
+- **Refused before writing:** an RSVP while removing yourself, and the same address in add and remove.
+
 ## Source Files
 
 | File | Contains |

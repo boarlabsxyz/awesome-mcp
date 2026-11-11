@@ -96,7 +96,17 @@ export type ParagraphStyleArgs = z.infer<typeof ParagraphStyleParameters>;
 
 // --- Combination Schemas for Tools ---
 
+// Shared by every editing tool that can pin its write to the revision it read.
+export const RequiredRevisionIdParameter = z.string().min(1).optional()
+.describe('Optional revisionId from readGoogleDoc or inspectDocStructure. If anyone changed the document since that '
++ 'revision, Google rejects the edit and nothing is written. The response returns the new revisionId to chain edits.');
+
+export const DocTabIdParameter = z.string().optional()
+.describe('Optional tab ID (from listDocumentTabs). Defaults to the first tab.');
+
 export const ApplyTextStyleToolParameters = DocumentIdParameter.extend({
+tabId: DocTabIdParameter,
+requiredRevisionId: RequiredRevisionIdParameter,
 // Target EITHER by range OR by finding text
 target: z.union([
 RangeParameters,
@@ -110,6 +120,8 @@ styleArgs => Object.values(styleArgs).some(v => v !== undefined),
 export type ApplyTextStyleToolArgs = z.infer<typeof ApplyTextStyleToolParameters>;
 
 export const ApplyParagraphStyleToolParameters = DocumentIdParameter.extend({
+tabId: DocTabIdParameter,
+requiredRevisionId: RequiredRevisionIdParameter,
 // Target EITHER by range OR by finding text (tool logic needs to find paragraph boundaries)
 target: z.union([
 RangeParameters, // User provides paragraph start/end (less likely)
@@ -137,16 +149,21 @@ export const SharedDriveParameters = z.object({
 
 // --- Batch Operation Schema ---
 
+// Indices are per tab, so an index-based operation names the tab it counts in.
+const batchTabId = z.string().optional().describe('Optional tab ID the indices refer to. Defaults to the first tab.');
+
 const InsertTextOp = z.object({
   type: z.literal('insert_text'),
   index: z.number().int().min(1).describe('1-based index where text will be inserted.'),
   text: z.string().min(1).describe('The text to insert.'),
+  tabId: batchTabId,
 });
 
 const DeleteTextOp = z.object({
   type: z.literal('delete_text'),
   startIndex: z.number().int().min(1).describe('Start index (inclusive).'),
   endIndex: z.number().int().min(1).describe('End index (exclusive).'),
+  tabId: batchTabId,
 });
 
 const ReplaceTextOp = z.object({
@@ -154,6 +171,7 @@ const ReplaceTextOp = z.object({
   findText: z.string().min(1).describe('Text to find.'),
   replaceText: z.string().describe('Replacement text.'),
   matchCase: z.boolean().optional().default(false).describe('Case-sensitive match.'),
+  tabId: z.string().optional().describe('Optional tab ID to restrict the replacement to. Defaults to every tab.'),
 });
 
 const FormatTextOp = z.object({
@@ -161,6 +179,7 @@ const FormatTextOp = z.object({
   startIndex: z.number().int().min(1).describe('Start index (inclusive).'),
   endIndex: z.number().int().min(1).describe('End index (exclusive).'),
   style: TextStyleParameters,
+  tabId: batchTabId,
 });
 
 const UpdateParagraphStyleOp = z.object({
@@ -168,6 +187,7 @@ const UpdateParagraphStyleOp = z.object({
   startIndex: z.number().int().min(1).describe('Start index (inclusive).'),
   endIndex: z.number().int().min(1).describe('End index (exclusive).'),
   style: ParagraphStyleParameters,
+  tabId: batchTabId,
 });
 
 const InsertTableOp = z.object({
@@ -175,11 +195,13 @@ const InsertTableOp = z.object({
   index: z.number().int().min(1).describe('1-based index where table will be inserted.'),
   rows: z.number().int().min(1).max(20).describe('Number of rows (1-20).'),
   columns: z.number().int().min(1).max(20).describe('Number of columns (1-20).'),
+  tabId: batchTabId,
 });
 
 const InsertPageBreakOp = z.object({
   type: z.literal('insert_page_break'),
   index: z.number().int().min(1).describe('1-based index where page break will be inserted.'),
+  tabId: batchTabId,
 });
 
 const FindReplaceOp = z.object({
@@ -187,12 +209,37 @@ const FindReplaceOp = z.object({
   findText: z.string().min(1).describe('Text to find.'),
   replaceText: z.string().describe('Replacement text.'),
   matchCase: z.boolean().optional().default(false).describe('Case-sensitive match.'),
+  tabId: z.string().optional().describe('Optional tab ID to restrict the replacement to. Defaults to every tab.'),
 });
+
+// Google's bullet presets. The NUMBERED_* ones make a numbered list; the default
+// stays the disc/circle/square bullets every existing caller already gets.
+export const BULLET_PRESETS = [
+  'BULLET_DISC_CIRCLE_SQUARE',
+  'BULLET_DIAMONDX_ARROW3D_SQUARE',
+  'BULLET_CHECKBOX',
+  'BULLET_ARROW_DIAMOND_DISC',
+  'BULLET_STAR_CIRCLE_SQUARE',
+  'BULLET_ARROW3D_CIRCLE_SQUARE',
+  'BULLET_LEFTTRIANGLE_DIAMOND_DISC',
+  'BULLET_DIAMONDX_HOLLOWDIAMOND_SQUARE',
+  'BULLET_DIAMOND_CIRCLE_SQUARE',
+  'NUMBERED_DECIMAL_ALPHA_ROMAN',
+  'NUMBERED_DECIMAL_ALPHA_ROMAN_PARENS',
+  'NUMBERED_DECIMAL_NESTED',
+  'NUMBERED_UPPERALPHA_ALPHA_ROMAN',
+  'NUMBERED_UPPERROMAN_UPPERALPHA_DECIMAL',
+  'NUMBERED_ZERODECIMAL_ALPHA_ROMAN',
+] as const;
 
 const CreateBulletListOp = z.object({
   type: z.literal('create_bullet_list'),
+  bulletPreset: z.enum(BULLET_PRESETS).optional()
+    .describe('List style. NUMBERED_DECIMAL_ALPHA_ROMAN (1. a. i.) makes a numbered list; BULLET_CHECKBOX a checklist. '
+      + 'Defaults to BULLET_DISC_CIRCLE_SQUARE.'),
   startIndex: z.number().int().min(1).describe('Start index (inclusive).'),
   endIndex: z.number().int().min(1).describe('End index (exclusive).'),
+  tabId: batchTabId,
 });
 
 export const BatchOperationSchema = z.discriminatedUnion('type', [
