@@ -8,7 +8,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 
 - [Shared (opt-in per server)](#shared-opt-in-per-server-) (2)
 - [Google Docs](#google-docs) (45)
-- [Google Sheets](#google-sheets) (12)
+- [Google Sheets](#google-sheets) (14)
 - [Google Calendar](#google-calendar) (6)
 - [Google Drive](#google-drive) (18)
 - [Gmail](#gmail) (14)
@@ -92,7 +92,7 @@ Source: `src/google-docs/server.ts` — 45 tools.
 
 ## Google Sheets
 
-Source: `src/google-sheets/server.ts` — 12 tools.
+Source: `src/google-sheets/server.ts` — 14 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -107,7 +107,9 @@ Source: `src/google-sheets/server.ts` — 12 tools.
 | `findRowByValue` | Search a column for a specific value and return the 1-based row number where it was found. | `GET /api/v1/sheets/{spreadsheetId}/search` |
 | `readRowByField` | Look up a row by searching a column for a value, then return the row as a named JSON object using header names from row 1. | `GET /api/v1/sheets/{spreadsheetId}/rows/{rowNumber}` |
 | `updateCellByFieldName` | Find a row by searching a column for a value, then update a specific field (identified by header name) in that row. Assumes row 1 contains the header names. | — |
-| `batchUpdateSpreadsheet` | Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, column/row sizing, tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet), and grid growth (appendDimension adds rows/columns at the end, insertDimension makes room in the middle). Use appendDimension before a writeSpreadsheet that exceeds the tab's current row count — writeSpreadsheet does not grow the grid. A tab added by addSheet in THIS batch cannot be targeted by a later operation in the same batch (it has no sheetId yet), so size it with addSheet rowCount/columnCount instead. | `POST /api/v1/sheets/{spreadsheetId}/batchUpdate` |
+| `batchUpdateSpreadsheet` | Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, alignment and text wrapping, data validation (dropdowns, checkboxes, number and formula rules), native charts (addChart returns the chart ID), column/row sizing, tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet), and grid growth (appendDimension adds rows/columns at the end, insertDimension makes room in the middle). Use appendDimension before a writeSpreadsheet that exceeds the tab's current row count — writeSpreadsheet does not grow the grid. A tab added by addSheet in THIS batch cannot be targeted by a later operation in the same batch (it has no sheetId yet), so size it with addSheet rowCount/columnCount instead. | `POST /api/v1/sheets/{spreadsheetId}/batchUpdate` |
+| `deleteSpreadsheetRowsOrColumns` | Deletes whole rows or columns from a tab, with their content; the rest shift up or left. Not reversible through the API. | — |
+| `inspectSpreadsheetCells` | Reads cells without changing them: formula text, raw and displayed values, formatting, hyperlinks, notes and validation rules. | `GET /api/v1/sheets/{spreadsheetId}/cells?range={range}` |
 
 ## Google Calendar
 
@@ -644,4 +646,4 @@ Source: `src/sandbox/server.ts` — 6 tools.
 
 ---
 
-**Grand total: 459 tools across 22 sections.**
+**Grand total: 461 tools across 22 sections.**

@@ -5635,14 +5635,23 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // FORMULA returns the formula text instead of its result; UNFORMATTED_VALUE the
+  // raw number behind a currency or date display.
+  const SHEETS_VALUE_RENDER_OPTIONS = ['FORMATTED_VALUE', 'UNFORMATTED_VALUE', 'FORMULA'];
+
   // POST /api/v1/sheets/:spreadsheetId/read - Read a range
   app.post('/api/v1/sheets/:spreadsheetId/read', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const { range } = req.body;
+      const { range, valueRenderOption } = req.body;
       if (!range) { res.status(400).json({ error: 'range is required' }); return; }
+      if (valueRenderOption !== undefined && !SHEETS_VALUE_RENDER_OPTIONS.includes(valueRenderOption)) {
+        res.status(400).json({ error: `valueRenderOption must be one of ${SHEETS_VALUE_RENDER_OPTIONS.join(', ')}` });
+        return;
+      }
       const sheets = req.userSession!.googleSheets;
       const result = await sheets.spreadsheets.values.get({
         spreadsheetId: req.params.spreadsheetId as string, range,
+        ...(valueRenderOption ? { valueRenderOption } : {}),
       });
       res.json({ range: result.data.range, values: result.data.values || [] });
     } catch (err: any) {
@@ -5785,6 +5794,7 @@ function registerRestApiRoutes(app: express.Express): void {
         // against what was sent. The batch is atomic: if this answers, all of
         // them applied.
         operations: result.summaries.map((line) => line.trim()),
+        chartIds: result.chartIds,
       });
     } catch (err: any) {
       console.error('Error applying batch update:', err);
@@ -7145,10 +7155,16 @@ function registerRestApiRoutes(app: express.Express): void {
         res.status(400).json({ error: 'Query param `range` is required (e.g. range=Sheet1!A1:D10)' });
         return;
       }
+      const valueRenderOption = qstr(req.query.valueRenderOption);
+      if (valueRenderOption && !SHEETS_VALUE_RENDER_OPTIONS.includes(valueRenderOption)) {
+        res.status(400).json({ error: `valueRenderOption must be one of ${SHEETS_VALUE_RENDER_OPTIONS.join(', ')}` });
+        return;
+      }
       const sheets = req.userSession!.googleSheets;
       const response = await sheets.spreadsheets.values.get({
         spreadsheetId: req.params.spreadsheetId as string,
         range,
+        ...(valueRenderOption ? { valueRenderOption } : {}),
       });
       const values = response.data.values || [];
       if (negotiateFormat(req) === 'text') {
@@ -7171,6 +7187,29 @@ function registerRestApiRoutes(app: express.Express): void {
       });
     } catch (err) {
       sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to read range' });
+    }
+  });
+
+  // GET /api/v1/sheets/:spreadsheetId/cells - Formulas, values, formatting, links per cell
+  app.get('/api/v1/sheets/:spreadsheetId/cells', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { inspectSpreadsheetCellsSchema, performInspectSpreadsheetCells } = await import('../google-sheets/server.js');
+      const maxCells = qstr(req.query.maxCells);
+      const parsed = inspectSpreadsheetCellsSchema.safeParse({
+        spreadsheetId: req.params.spreadsheetId,
+        range: qstr(req.query.range),
+        ...(maxCells ? { maxCells: Number(maxCells) } : {}),
+      });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid query', issues: parsed.error.flatten() });
+        return;
+      }
+      const result = await performInspectSpreadsheetCells(req.userSession!.googleSheets, parsed.data);
+      res.json({ spreadsheetId: parsed.data.spreadsheetId, ...result });
+    } catch (err: any) {
+      // A range Google cannot parse ("Nope!A1") is the caller's error, not a 500.
+      if (err?.code === 400) { res.status(400).json({ error: err.message || 'Invalid range' }); return; }
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to inspect cells' });
     }
   });
 
