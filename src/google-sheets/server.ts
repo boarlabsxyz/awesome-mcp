@@ -161,7 +161,7 @@ export async function performCreateSpreadsheet(
 export async function performBatchUpdateSpreadsheet(
   sheets: sheets_v4.Sheets,
   args: BatchUpdateSpreadsheetArgs,
-): Promise<{ applied: number; title: string; summaries: string[] }> {
+): Promise<{ applied: number; title: string; summaries: string[]; chartIds: number[] }> {
   const metadata = await SheetsHelpers.getSpreadsheetMetadata(sheets, args.spreadsheetId);
   const batchState = createBatchState(metadata);
 
@@ -171,6 +171,7 @@ export async function performBatchUpdateSpreadsheet(
     try {
       requests.push(operationToRequest(op, metadata, batchState));
       const target = 'range' in op ? op.range
+        : op.type === 'addChart' ? (op.newSheet ? '(new sheet)' : (op.anchorCell ?? '(beside the data)'))
         : ('sheetName' in op && op.sheetName) ? op.sheetName
         : ('sourceSheetName' in op && op.sourceSheetName) ? op.sourceSheetName
         : ('title' in op && op.title) ? op.title
@@ -180,6 +181,8 @@ export async function performBatchUpdateSpreadsheet(
       // whether 5 or 5000 rows were added.
       const detail = op.type === 'appendDimension' ? ` (+${op.length} ${op.dimension})`
         : op.type === 'insertDimension' ? ` (${op.dimension} ${op.startIndex}-${op.endIndex})`
+        : op.type === 'addChart' ? ` (${op.chartType} from ${op.sourceRange})`
+        : op.type === 'dataValidation' ? ` (${op.rule.kind})`
         : '';
       summaries.push(`  ${i}. ${op.type} → ${target}${detail}`);
     } catch (e: any) {
@@ -195,10 +198,143 @@ export async function performBatchUpdateSpreadsheet(
     requestBody: { requests },
   });
 
+  // A chart is only addressable by the id Google assigned, so it is returned.
+  const chartIds = (response.data.replies ?? [])
+    .map((reply) => reply.addChart?.chart?.chartId)
+    .filter((id): id is number => typeof id === 'number');
+
   return {
     applied: response.data.replies?.length ?? requests.length,
     title: metadata.properties?.title ?? args.spreadsheetId,
     summaries,
+    chartIds,
+  };
+}
+
+// Destructive and MCP-only: not on the REST plane and not a batch operation,
+// because the batch schema is shared with REST and filters no operation types.
+export const deleteSpreadsheetRowsOrColumnsSchema = z.object({
+  spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
+  sheetName: z.string().optional().describe('Tab name. Defaults to the first sheet.'),
+  dimension: z.enum(['ROWS', 'COLUMNS']).describe('Delete rows or columns.'),
+  startIndex: z.number().int().min(1).describe('1-based first row/column to delete (inclusive). Column A is 1.'),
+  endIndex: z.number().int().min(1).describe('1-based last row/column to delete (inclusive). Equal to startIndex deletes one.'),
+});
+
+export type DeleteSpreadsheetRowsOrColumnsArgs = z.infer<typeof deleteSpreadsheetRowsOrColumnsSchema>;
+
+/**
+ * Structurally delete rows or columns: everything below/right moves up/left.
+ * The grid is read before and after, so the size change is reported from what
+ * Google now holds rather than from the request.
+ */
+export async function performDeleteSpreadsheetRowsOrColumns(
+  sheets: sheets_v4.Sheets,
+  args: DeleteSpreadsheetRowsOrColumnsArgs,
+): Promise<{ sheetTitle: string; deleted: number; sizeBefore: number; sizeAfter: number | null; confirmed: boolean }> {
+  if (args.endIndex < args.startIndex) throw new UserError('endIndex must be >= startIndex.');
+  const metadata = await SheetsHelpers.getSpreadsheetMetadata(sheets, args.spreadsheetId);
+  const sheetId = SheetsHelpers.resolveSheetId(metadata, args.sheetName);
+  const sizeOf = (meta: sheets_v4.Schema$Spreadsheet) => {
+    const grid = meta.sheets?.find((s) => s.properties?.sheetId === sheetId)?.properties?.gridProperties;
+    return (args.dimension === 'ROWS' ? grid?.rowCount : grid?.columnCount) ?? null;
+  };
+  const sheetTitle = metadata.sheets?.find((s) => s.properties?.sheetId === sheetId)?.properties?.title ?? '(first sheet)';
+  const sizeBefore = sizeOf(metadata) ?? 0;
+  const noun = args.dimension === 'ROWS' ? 'rows' : 'columns';
+  if (args.endIndex > sizeBefore) {
+    throw new UserError(`"${sheetTitle}" has ${sizeBefore} ${noun}; ${args.startIndex}-${args.endIndex} is past the end.`);
+  }
+  // Google refuses to delete every row or column of a sheet; say so by name.
+  if (args.startIndex === 1 && args.endIndex === sizeBefore) {
+    throw new UserError(`That would delete every ${noun.slice(0, -1)} of "${sheetTitle}", which Google does not allow. Delete the sheet instead.`);
+  }
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: args.spreadsheetId,
+    requestBody: {
+      requests: [{
+        deleteDimension: { range: { sheetId, dimension: args.dimension, startIndex: args.startIndex - 1, endIndex: args.endIndex } },
+      }],
+    },
+  });
+
+  const deleted = args.endIndex - args.startIndex + 1;
+  const sizeAfter = sizeOf(await SheetsHelpers.getSpreadsheetMetadata(sheets, args.spreadsheetId));
+  return { sheetTitle, deleted, sizeBefore, sizeAfter, confirmed: sizeAfter === sizeBefore - deleted };
+}
+
+export const inspectSpreadsheetCellsSchema = z.object({
+  spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
+  range: z.string().describe('A1 range to inspect, e.g. "Sheet1!A1:D20". Keep it small: every cell carries its formatting.'),
+  maxCells: z.number().int().min(1).max(2000).optional().default(500)
+    .describe('Cap on cells returned (default 500, max 2000). Cells past the cap are counted, not listed.'),
+});
+
+export type InspectSpreadsheetCellsArgs = z.infer<typeof inspectSpreadsheetCellsSchema>;
+
+const CELL_FIELDS = 'sheets(properties(title),data(startRow,startColumn,rowData(values('
+  + 'userEnteredValue,effectiveValue,formattedValue,userEnteredFormat,hyperlink,textFormatRuns,note,dataValidation))))';
+
+/** Whether a cell holds anything beyond formatting: a value, note, link or rule. */
+export function hasCellContent(cell: sheets_v4.Schema$CellData | undefined): boolean {
+  return Boolean(cell && (cell.userEnteredValue || cell.effectiveValue || cell.note || cell.hyperlink
+    || cell.dataValidation || cell.textFormatRuns?.length));
+}
+
+function columnLetter(index: number): string {
+  let out = '';
+  for (let n = index + 1; n > 0; n = Math.floor((n - 1) / 26)) out = String.fromCharCode(65 + ((n - 1) % 26)) + out;
+  return out;
+}
+
+/**
+ * Formula text, raw and displayed values, formatting, links, notes and
+ * validation per cell, without writing anything. Only non-empty cells are
+ * listed. A cell with several links has no `hyperlink`; its links are on
+ * `textFormatRuns[].format.link`, so both are returned.
+ */
+export async function performInspectSpreadsheetCells(sheets: sheets_v4.Sheets, args: InspectSpreadsheetCellsArgs) {
+  const res = await sheets.spreadsheets.get({
+    spreadsheetId: args.spreadsheetId,
+    ranges: [args.range],
+    includeGridData: true,
+    fields: CELL_FIELDS,
+  });
+  const sheet = res.data.sheets?.[0];
+  const cells: Record<string, unknown>[] = [];
+  let nonEmpty = 0;
+  for (const block of sheet?.data ?? []) {
+    (block.rowData ?? []).forEach((row, r) => {
+      (row.values ?? []).forEach((cell, c) => {
+        // A blank cell that is only coloured or formatted still comes back with
+        // userEnteredFormat; listing it would let a styled band crowd out cells
+        // with content under maxCells.
+        if (!hasCellContent(cell)) return;
+        nonEmpty += 1;
+        if (cells.length >= args.maxCells) return;
+        const links = (cell.textFormatRuns ?? []).map((run) => run.format?.link?.uri).filter(Boolean);
+        cells.push({
+          cell: `${columnLetter((block.startColumn ?? 0) + c)}${(block.startRow ?? 0) + r + 1}`,
+          ...(cell.userEnteredValue?.formulaValue ? { formula: cell.userEnteredValue.formulaValue } : {}),
+          userEnteredValue: cell.userEnteredValue ?? null,
+          effectiveValue: cell.effectiveValue ?? null,
+          formattedValue: cell.formattedValue ?? null,
+          ...(cell.userEnteredFormat ? { format: cell.userEnteredFormat } : {}),
+          ...(cell.hyperlink ? { hyperlink: cell.hyperlink } : {}),
+          ...(links.length ? { links } : {}),
+          ...(cell.note ? { note: cell.note } : {}),
+          ...(cell.dataValidation ? { dataValidation: cell.dataValidation } : {}),
+        });
+      });
+    });
+  }
+  return {
+    sheetTitle: sheet?.properties?.title ?? null,
+    range: args.range,
+    cells,
+    nonEmptyCells: nonEmpty,
+    truncated: nonEmpty > cells.length,
   };
 }
 
@@ -212,14 +348,14 @@ sheetsServer.addTool({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
     range: z.string().describe('A1 notation range to read (e.g., "A1:B10" or "Sheet1!A1:B10").'),
     valueRenderOption: z.enum(['FORMATTED_VALUE', 'UNFORMATTED_VALUE', 'FORMULA']).optional().default('FORMATTED_VALUE')
-      .describe('How values should be rendered in the output.'),
+      .describe('How values should be rendered: FORMATTED_VALUE as displayed, UNFORMATTED_VALUE raw numbers, FORMULA the formula text.'),
   }),
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);
     console.error(`[Sheets Tool] readSpreadsheet called by ${session?.email}: spreadsheetId=${args.spreadsheetId}, range=${args.range}`);
 
     try {
-      const response = await SheetsHelpers.readRange(sheets, args.spreadsheetId, args.range);
+      const response = await SheetsHelpers.readRange(sheets, args.spreadsheetId, args.range, args.valueRenderOption);
       const values = response.values || [];
 
       console.error(`[Sheets Tool] readSpreadsheet success: ${values.length} rows`);
@@ -593,15 +729,16 @@ sheetsServer.addTool({
 sheetsServer.addTool({
   name: 'batchUpdateSpreadsheet',
   annotations: { readOnlyHint: false },
-  description: 'Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, column/row sizing, tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet), and grid growth (appendDimension adds rows/columns at the end, insertDimension makes room in the middle). Use appendDimension before a writeSpreadsheet that exceeds the tab\'s current row count — writeSpreadsheet does not grow the grid. A tab added by addSheet in THIS batch cannot be targeted by a later operation in the same batch (it has no sheetId yet), so size it with addSheet rowCount/columnCount instead.',
+  description: 'Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, alignment and text wrapping, data validation (dropdowns, checkboxes, number and formula rules), native charts (addChart returns the chart ID), column/row sizing, tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet), and grid growth (appendDimension adds rows/columns at the end, insertDimension makes room in the middle). Use appendDimension before a writeSpreadsheet that exceeds the tab\'s current row count — writeSpreadsheet does not grow the grid. A tab added by addSheet in THIS batch cannot be targeted by a later operation in the same batch (it has no sheetId yet), so size it with addSheet rowCount/columnCount instead.',
   parameters: batchUpdateSpreadsheetSchema,
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);
     log.info(`batchUpdateSpreadsheet: ${args.operations.length} ops on ${args.spreadsheetId}`);
 
     try {
-      const { applied, title, summaries } = await performBatchUpdateSpreadsheet(sheets, args);
-      return `Applied ${applied} operation(s) to "${title}".\n${summaries.join('\n')}`;
+      const { applied, title, summaries, chartIds } = await performBatchUpdateSpreadsheet(sheets, args);
+      const charts = chartIds.length ? `\nChart ID(s) created: ${chartIds.join(', ')}` : '';
+      return `Applied ${applied} operation(s) to "${title}".\n${summaries.join('\n')}${charts}`;
     } catch (error: any) {
       log.error(`batchUpdateSpreadsheet failed: ${error.message || error}`);
       if (error instanceof UserError) throw error;
@@ -613,6 +750,59 @@ sheetsServer.addTool({
         : (error.message || 'Unknown error');
       throw new UserError(`Failed to apply batch update: ${detail}`);
     }
+  },
+});
+
+sheetsServer.addTool({
+  name: 'deleteSpreadsheetRowsOrColumns',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Deletes whole rows or columns from a tab, with their content; the rest shift up or left. Not reversible through the API.',
+  parameters: deleteSpreadsheetRowsOrColumnsSchema,
+  execute: async (args, { log, session }) => {
+    const sheets = getSheetsClient(session);
+    log.info(`deleteSpreadsheetRowsOrColumns: ${args.dimension} ${args.startIndex}-${args.endIndex} on ${args.spreadsheetId}`);
+    let r: Awaited<ReturnType<typeof performDeleteSpreadsheetRowsOrColumns>>;
+    try {
+      r = await performDeleteSpreadsheetRowsOrColumns(sheets, args);
+    } catch (error: any) {
+      log.error(`deleteSpreadsheetRowsOrColumns failed: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
+      if (error.code === 404) throw new UserError(`Spreadsheet not found (ID: ${args.spreadsheetId}).`);
+      if (error.code === 403) throw new UserError(`Permission denied for spreadsheet (ID: ${args.spreadsheetId}). Deleting needs edit access.`);
+      // Google also refuses deleting every NON-FROZEN row or column, which the
+      // local check (every row/column) does not catch; its message says so.
+      throw new UserError(`Nothing was deleted: ${error.message || 'Unknown error'}`);
+    }
+    const noun = args.dimension === 'ROWS' ? 'row' : 'column';
+    if (!r.confirmed) {
+      return `Google accepted deleting ${r.deleted} ${noun}(s) from "${r.sheetTitle}", but the grid reads back as `
+        + `${r.sizeAfter ?? 'unknown'} ${noun}s (was ${r.sizeBefore}). Re-read before relying on it.`;
+    }
+    return `Deleted ${noun}s ${args.startIndex}-${args.endIndex} (${r.deleted}) from "${r.sheetTitle}": ${r.sizeBefore} → ${r.sizeAfter} ${noun}s.`;
+  },
+});
+
+sheetsServer.addTool({
+  name: 'inspectSpreadsheetCells',
+  annotations: { readOnlyHint: true },
+  description: 'Reads cells without changing them: formula text, raw and displayed values, formatting, hyperlinks, notes and validation rules.',
+  parameters: inspectSpreadsheetCellsSchema,
+  execute: async (args, { log, session }) => {
+    const sheets = getSheetsClient(session);
+    log.info(`inspectSpreadsheetCells: ${args.range} on ${args.spreadsheetId}`);
+    let result: Awaited<ReturnType<typeof performInspectSpreadsheetCells>>;
+    try {
+      result = await performInspectSpreadsheetCells(sheets, args);
+    } catch (error: any) {
+      if (error.code === 404) throw new UserError(`Spreadsheet not found (ID: ${args.spreadsheetId}).`);
+      if (error.code === 403) throw new UserError(`Permission denied for spreadsheet (ID: ${args.spreadsheetId}).`);
+      throw new UserError(`Failed to inspect cells: ${error.message || 'Unknown error'}`);
+    }
+    if (result.nonEmptyCells === 0) return `No non-empty cells in ${args.range}.`;
+    const head = result.truncated
+      ? `Showing ${result.cells.length} of ${result.nonEmptyCells} non-empty cells in ${args.range} (raise maxCells or narrow the range for the rest).`
+      : `${result.nonEmptyCells} non-empty cell(s) in ${args.range}.`;
+    return `${head}\n${JSON.stringify(result.cells, null, 2)}`;
   },
 });
 

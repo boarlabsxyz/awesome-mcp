@@ -511,6 +511,61 @@ const InsertDimensionOp = z.object({
   inheritFromBefore: z.boolean().optional().describe('Inherit formatting from the row/column BEFORE the insertion point instead of the one after. Cannot be true when startIndex is 1 — nothing precedes the first row/column.'),
 });
 
+const AlignmentOp = z.object({
+  type: z.literal('alignment'),
+  range: z.string().describe('A1 notation range (e.g., "Sheet1!A1:D1").'),
+  horizontalAlignment: z.enum(['LEFT', 'CENTER', 'RIGHT']).optional(),
+  verticalAlignment: z.enum(['TOP', 'MIDDLE', 'BOTTOM']).optional(),
+  wrapStrategy: z.enum(['OVERFLOW_CELL', 'LEGACY_WRAP', 'CLIP', 'WRAP']).optional()
+    .describe('WRAP wraps long text onto new lines; CLIP cuts it at the cell edge; OVERFLOW_CELL spills into empty neighbours.'),
+});
+
+// What a cell accepts. `clear` removes the rule from the range (values stay).
+const DataValidationRuleSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('dropdown'),
+    values: z.array(z.string().min(1)).min(1).max(500).describe('The dropdown choices.'),
+  }),
+  z.object({
+    kind: z.literal('dropdownFromRange'),
+    sourceRange: z.string().describe('A1 range whose values are the choices, e.g. "Lists!A2:A20". Quote a tab name with spaces: "\'My Tab\'!A2:A20".'),
+  }),
+  z.object({
+    kind: z.literal('checkbox'),
+    checkedValue: z.string().optional().describe('Optional custom value stored when ticked (default TRUE).'),
+    uncheckedValue: z.string().optional().describe('Optional custom value stored when unticked (default FALSE). Needs checkedValue.'),
+  }),
+  z.object({
+    kind: z.literal('number'),
+    condition: z.enum(['NUMBER_GREATER', 'NUMBER_GREATER_THAN_EQ', 'NUMBER_LESS', 'NUMBER_LESS_THAN_EQ', 'NUMBER_EQ', 'NUMBER_NOT_EQ', 'NUMBER_BETWEEN', 'NUMBER_NOT_BETWEEN']),
+    value: z.number(),
+    value2: z.number().optional().describe('Upper bound, required for the BETWEEN conditions.'),
+  }),
+  z.object({
+    kind: z.literal('customFormula'),
+    formula: z.string().startsWith('=').describe('Formula that must be TRUE for the input, relative to the top-left cell, e.g. "=LEN(A2)<=50".'),
+  }),
+  z.object({ kind: z.literal('clear') }),
+]);
+
+const DataValidationOp = z.object({
+  type: z.literal('dataValidation'),
+  range: z.string().describe('A1 notation range the rule applies to.'),
+  rule: DataValidationRuleSchema,
+  strict: z.boolean().optional().default(true).describe('Reject invalid input (true) or only flag it with a warning (false).'),
+  inputMessage: z.string().optional().describe('Help text shown when the cell is selected.'),
+});
+
+const AddChartOp = z.object({
+  type: z.literal('addChart'),
+  chartType: z.enum(['COLUMN', 'BAR', 'LINE', 'AREA', 'SCATTER', 'PIE']),
+  sourceRange: z.string().describe('A1 range with a header row: first column = categories (X), each further column = one series. PIE takes exactly two columns.'),
+  title: z.string().optional(),
+  anchorCell: z.string().optional().describe('A1 cell for the chart\'s top-left corner, e.g. "Sheet1!H2". Defaults to the right of the data, leaving one blank column. Ignored with newSheet.'),
+  newSheet: z.boolean().optional().describe('Put the chart on its own new sheet instead of over the grid.'),
+  legendPosition: z.enum(['BOTTOM_LEGEND', 'TOP_LEGEND', 'LEFT_LEGEND', 'RIGHT_LEGEND', 'NO_LEGEND']).optional().default('BOTTOM_LEGEND'),
+});
+
 export const BatchUpdateOperationSchema = z.discriminatedUnion('type', [
   NumberFormatOp,
   TextStyleOp,
@@ -528,6 +583,9 @@ export const BatchUpdateOperationSchema = z.discriminatedUnion('type', [
   AddSheetOp,
   AppendDimensionOp,
   InsertDimensionOp,
+  AlignmentOp,
+  DataValidationOp,
+  AddChartOp,
 ]);
 
 export type BatchUpdateOperation = z.infer<typeof BatchUpdateOperationSchema>;
