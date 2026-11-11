@@ -6079,16 +6079,26 @@ function registerRestApiRoutes(app: express.Express): void {
   // POST /api/v1/slides/:presentationId/batchUpdate - Batch update
   app.post('/api/v1/slides/:presentationId/batchUpdate', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const { requests } = req.body;
+      const { requests, requiredRevisionId } = req.body;
       if (!requests || !Array.isArray(requests)) { res.status(400).json({ error: 'requests array is required' }); return; }
+      if (requiredRevisionId !== undefined && (typeof requiredRevisionId !== 'string' || !requiredRevisionId)) {
+        res.status(400).json({ error: 'requiredRevisionId must be a non-empty string' });
+        return;
+      }
       const slides = req.userSession!.googleSlides;
       const result = await slides.presentations.batchUpdate({
         presentationId: req.params.presentationId as string,
-        requestBody: { requests },
+        requestBody: { requests, ...(requiredRevisionId ? { writeControl: { requiredRevisionId } } : {}) },
       });
-      res.json({ replies: result.data.replies });
+      // revisionId is what the next pinned update should send.
+      res.json({ replies: result.data.replies, revisionId: result.data.writeControl?.requiredRevisionId ?? null });
     } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to batch update presentation' });
+      // Imported lazily, like the other provider modules here, so the web
+      // process does not load the Slides handlers (and FastMCP) at startup.
+      const { slidesBatchUpdateErrorResponse } = await import('../google-slides/toolHandlers.js');
+      const mapped = slidesBatchUpdateErrorResponse(err, req.body?.requiredRevisionId);
+      if (mapped) { res.status(mapped.status).json(mapped.body); return; }
+      sendUpstreamError(res, err, { notFound: 'Presentation not found', fallback: 'Failed to batch update presentation' });
     }
   });
 
