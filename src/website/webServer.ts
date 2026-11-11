@@ -4916,8 +4916,8 @@ function registerRestApiRoutes(app: express.Express): void {
   // POST /api/v1/docs/:documentId/comments - Add a comment
   // === Google Docs writes ===
   //
-  // Nineteen endpoints, one per write tool, registered from a table rather than
-  // written out nineteen times. They differ only in schema, op, status code and
+  // One endpoint per write tool, registered from a table rather than
+  // written out one by one. They differ only in schema, op, status code and
   // response shape, so the hand-written version was ~380 lines of which Sonar
   // measured 23% as duplicated — and every copy of a catch block is somewhere a
   // fix can fail to be applied.
@@ -5065,6 +5065,56 @@ function registerRestApiRoutes(app: express.Express): void {
       load: async () => ({
         schema: (await docsSchemas()).insertTableSchema,
         run: (session, args) => docsOps().then((m) => m.performInsertTable(session.googleDocs, args)),
+      }),
+    },
+    {
+      // Table structure and cell formatting. Row and column DELETE is MCP-only:
+      // it removes content with no REST sign-off.
+      path: '/api/v1/docs/:documentId/tables/structure',
+      notFound: 'Document not found',
+      fallback: 'Failed to modify table',
+      load: async () => ({
+        schema: (await docsSchemas()).modifyTableStructureSchema,
+        run: (session, args) => docsOps().then((m) => m.performModifyTableStructure(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/tables/cell-style',
+      notFound: 'Document not found',
+      fallback: 'Failed to format table cells',
+      load: async () => ({
+        schema: (await docsSchemas()).formatTableCellsSchema,
+        run: (session, args) => docsOps().then((m) => m.performFormatTableCells(session.googleDocs, args)),
+      }),
+    },
+    {
+      // Tab DELETE is MCP-only: it takes the tab's content and every nested tab.
+      path: '/api/v1/docs/:documentId/tabs',
+      status: 201,
+      notFound: 'Document not found',
+      fallback: 'Failed to create tab',
+      load: async () => ({
+        schema: (await docsSchemas()).createDocumentTabSchema,
+        run: (session, args) => docsOps().then((m) => m.performCreateDocumentTab(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/tabs/:tabId/update',
+      notFound: 'Document not found',
+      fallback: 'Failed to update tab',
+      load: async () => ({
+        schema: (await docsSchemas()).updateDocumentTabSchema,
+        run: (session, args) => docsOps().then((m) => m.performUpdateDocumentTab(session.googleDocs, args)),
+      }),
+    },
+    {
+      path: '/api/v1/docs/:documentId/footnotes',
+      status: 201,
+      notFound: 'Document not found',
+      fallback: 'Failed to create footnote',
+      load: async () => ({
+        schema: (await docsSchemas()).createFootnoteSchema,
+        run: (session, args) => docsOps().then((m) => m.performCreateFootnote(session.googleDocs, args)),
       }),
     },
     {
@@ -5443,6 +5493,12 @@ function registerRestApiRoutes(app: express.Express): void {
       res.status(201).json(projectEvent(event));
     } catch (err: any) {
       console.error('Error creating event:', err);
+      // A refusal the caller can fix (a recurring event without timeZone)
+      // carries no upstream status; Google's own 400 does.
+      if ((err?.name === 'UserError' && typeof err?.code !== 'number') || err?.code === 400) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
       sendUpstreamError(res, err, { notFound: 'Calendar not found', fallback: 'Failed to create event' });
     }
   });
@@ -5464,10 +5520,18 @@ function registerRestApiRoutes(app: express.Express): void {
         res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
         return;
       }
-      const { event } = await performUpdateEvent(req.userSession!.googleCalendar, parsed.data);
-      res.json(projectEvent(event));
+      const { event, guestChanges } = await performUpdateEvent(req.userSession!.googleCalendar, parsed.data);
+      // guestChanges is an added key, present only when the guest list was edited.
+      res.json({ ...projectEvent(event), ...(guestChanges ? { guestChanges } : {}) });
     } catch (err: any) {
       console.error('Error updating event:', err);
+      // Refusals the caller can fix (removing someone not invited, an RSVP with
+      // no invitation) and Google's own 400 (a bad dateTime) used to answer 500.
+      // Same mapping as the create route.
+      if ((err?.name === 'UserError' && typeof err?.code !== 'number') || err?.code === 400) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
       sendUpstreamError(res, err, { notFound: 'Event not found', fallback: 'Failed to update event' });
     }
   };
@@ -6094,16 +6158,26 @@ function registerRestApiRoutes(app: express.Express): void {
   // POST /api/v1/slides/:presentationId/batchUpdate - Batch update
   app.post('/api/v1/slides/:presentationId/batchUpdate', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const { requests } = req.body;
+      const { requests, requiredRevisionId } = req.body;
       if (!requests || !Array.isArray(requests)) { res.status(400).json({ error: 'requests array is required' }); return; }
+      if (requiredRevisionId !== undefined && (typeof requiredRevisionId !== 'string' || !requiredRevisionId)) {
+        res.status(400).json({ error: 'requiredRevisionId must be a non-empty string' });
+        return;
+      }
       const slides = req.userSession!.googleSlides;
       const result = await slides.presentations.batchUpdate({
         presentationId: req.params.presentationId as string,
-        requestBody: { requests },
+        requestBody: { requests, ...(requiredRevisionId ? { writeControl: { requiredRevisionId } } : {}) },
       });
-      res.json({ replies: result.data.replies });
+      // revisionId is what the next pinned update should send.
+      res.json({ replies: result.data.replies, revisionId: result.data.writeControl?.requiredRevisionId ?? null });
     } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to batch update presentation' });
+      // Imported lazily, like the other provider modules here, so the web
+      // process does not load the Slides handlers (and FastMCP) at startup.
+      const { slidesBatchUpdateErrorResponse } = await import('../google-slides/toolHandlers.js');
+      const mapped = slidesBatchUpdateErrorResponse(err, req.body?.requiredRevisionId);
+      if (mapped) { res.status(mapped.status).json(mapped.body); return; }
+      sendUpstreamError(res, err, { notFound: 'Presentation not found', fallback: 'Failed to batch update presentation' });
     }
   });
 
@@ -8319,8 +8393,7 @@ function registerRestApiRoutes(app: express.Express): void {
   // brevity: the cross-cutting rules (the safeParse 400, the UserError-versus-
   // upstream-status branch, the status code) live in ONE place where a later fix
   // cannot fail to reach a copy; one handler the tests reach beats thirteen they
-  // do not; and thirteen near-identical handler bodies trip the duplicated-lines
-  // quality gate.
+  // do not.
   //
   // These are ACTION paths (/tasks/{id}/update, not a POST verb on /tasks/{id})
   // because the older ChatGPT-compat routes above already own the bare resource

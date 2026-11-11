@@ -9,7 +9,14 @@ import {
   performApplyParagraphStyle,
   performApplyTextStyle,
   performBatchUpdateDoc,
+  performCreateDocumentTab,
+  performCreateFootnote,
   performDeleteComment,
+  performDeleteDocumentTab,
+  performDeleteTableRowOrColumn,
+  performFormatTableCells,
+  performModifyTableStructure,
+  performUpdateDocumentTab,
   performDeleteCommentReply,
   performDeleteRange,
   performDeleteSuggestion,
@@ -206,7 +213,8 @@ describe('docs text ops', () => {
       const docs = mkDocs();
       const out = await performDeleteRange(docs, { documentId: 'd1', startIndex: 3, endIndex: 9 } as any);
       assert.deepEqual(sentRequests(docs)[0].deleteContentRange.range, { startIndex: 3, endIndex: 9 });
-      assert.deepEqual(out, { startIndex: 3, endIndex: 9 });
+      // revisionId is null because the stub's reply carries no writeControl.
+      assert.deepEqual(out, { startIndex: 3, endIndex: 9, revisionId: null });
     });
 
     it('carries the tabId into the range', async () => {
@@ -988,5 +996,345 @@ describe('docs import ops', () => {
     const sent = drive.files.create.mock.calls[0].arguments[0];
     assert.equal(sent.media.mimeType, 'text/plain');
     assert.equal('parents' in sent.requestBody, false);
+  });
+});
+
+// --- Tabs, footnotes, tables and revision pinning ---
+
+/** A doc with one 2x3 table at index 5 in the body, and tab t.1 with child t.2 holding the same table. */
+function mkTableDoc(overrides: any = {}): any {
+  const table = { startIndex: 5, endIndex: 40, table: { rows: 2, columns: 3 } };
+  const body = { content: [{ startIndex: 1, endIndex: 5, paragraph: { elements: [] } }, table] };
+  return mkDocs({
+    documents: {
+      get: mock.fn(async () => ({
+        data: {
+          revisionId: 'rev-1',
+          body,
+          tabs: [{
+            tabProperties: { tabId: 't.1', title: 'One', index: 0 },
+            documentTab: { body },
+            childTabs: [{ tabProperties: { tabId: 't.2', title: 'Child', index: 0, parentTabId: 't.1' }, documentTab: { body } }],
+          }],
+        },
+      })),
+      batchUpdate: mock.fn(async () => ({ data: { replies: [{}], writeControl: { requiredRevisionId: 'rev-2' } } })),
+      ...overrides,
+    },
+  });
+}
+
+const sentWriteControl = (docs: any, call = 0) =>
+  docs.documents.batchUpdate.mock.calls[call].arguments[0].requestBody.writeControl;
+
+describe('revision pinning', () => {
+  it('sends requiredRevisionId only when given, and reports the revision after the write', async () => {
+    const docs = mkTableDoc();
+    const out = await performInsertText(docs, { documentId: 'd1', textToInsert: 'x', index: 2, requiredRevisionId: 'rev-1' } as any);
+    assert.deepEqual(sentWriteControl(docs), { requiredRevisionId: 'rev-1' });
+    assert.equal(out.revisionId, 'rev-2');
+
+    const unpinned = mkTableDoc();
+    await performInsertText(unpinned, { documentId: 'd1', textToInsert: 'x', index: 2 } as any);
+    assert.equal(sentWriteControl(unpinned), undefined, 'an unpinned write must send the body it always did');
+  });
+
+  it('combines suggest mode and a pinned revision in one write control', async () => {
+    const docs = mkTableDoc();
+    await performBatchUpdateDoc(docs, {
+      documentId: 'd1', suggestMode: true, requiredRevisionId: 'rev-1',
+      operations: [{ type: 'insert_text', index: 2, text: 'x' }],
+    } as any);
+    assert.deepEqual(sentWriteControl(docs), { writeMode: 'SUGGEST', requiredRevisionId: 'rev-1' });
+  });
+
+  it('names a stale revision instead of reporting a malformed request', async () => {
+    const stale = Object.assign(new Error('The required revision ID rev-1 does not match the latest revision.'), { code: 400 });
+    const docs = mkTableDoc({ batchUpdate: mock.fn(async () => { throw stale; }) });
+    await assert.rejects(
+      () => performDeleteRange(docs, { documentId: 'd1', startIndex: 1, endIndex: 3, requiredRevisionId: 'rev-1' } as any),
+      (err: any) => err instanceof UserError && /changed after revision rev-1/.test(err.message) && /nothing was written/.test(err.message),
+    );
+  });
+});
+
+describe('tab-aware formatting', () => {
+  it('finds text in the named tab and sends that tab on the range', async () => {
+    const tabText = 'Only in tab two\n';
+    const docs = mkDocs({ documents: { get: mock.fn(async () => ({
+      data: { tabs: [
+        { tabProperties: { tabId: 't.1' }, documentTab: { body: { content: [] } } },
+        { tabProperties: { tabId: 't.2' }, documentTab: { body: { content: [
+          { startIndex: 1, endIndex: 1 + tabText.length, paragraph: { elements: [{ startIndex: 1, endIndex: 1 + tabText.length, textRun: { content: tabText } }] } },
+        ] } } },
+      ] },
+    })) } });
+    const out = await performApplyTextStyle(docs, {
+      documentId: 'd1', tabId: 't.2', target: { textToFind: 'tab two', matchInstance: 1 }, style: { bold: true },
+    } as any);
+    assert.deepEqual([out.startIndex, out.endIndex], [9, 16]);
+    assert.deepEqual(sentRequests(docs)[0].updateTextStyle.range, { startIndex: 9, endIndex: 16, tabId: 't.2' });
+    assert.equal(docs.documents.get.mock.calls[0].arguments[0].includeTabsContent, true);
+  });
+
+  it('refuses an unknown tab on an index target before writing', async () => {
+    const docs = mkTableDoc();
+    await assert.rejects(
+      () => performApplyParagraphStyle(docs, {
+        documentId: 'd1', tabId: 'nope', target: { startIndex: 1, endIndex: 3 }, style: { alignment: 'CENTER' },
+      } as any),
+      /Tab with ID "nope" not found/,
+    );
+    assert.equal(docs.documents.batchUpdate.mock.callCount(), 0);
+  });
+
+  it('accepts a nested tab, which the old field mask could not see', async () => {
+    const docs = mkTableDoc();
+    await performBatchUpdateDoc(docs, { documentId: 'd1', operations: [{ type: 'insert_text', index: 2, text: 'x', tabId: 't.2' }] } as any);
+    assert.equal(sentRequests(docs)[0].insertText.location.tabId, 't.2');
+  });
+});
+
+describe('document tabs', () => {
+  it('creates a nested tab and returns what Google reported', async () => {
+    const docs = mkTableDoc({ batchUpdate: mock.fn(async () => ({ data: { replies: [{ addDocumentTab: {
+      tabProperties: { tabId: 't.9', title: 'Notes', index: 1, parentTabId: 't.1', nestingLevel: 1 },
+    } }] } })) });
+    const out = await performCreateDocumentTab(docs, { documentId: 'd1', title: 'Notes', parentTabId: 't.1' } as any);
+    assert.deepEqual(sentRequests(docs)[0], { addDocumentTab: { tabProperties: { title: 'Notes', parentTabId: 't.1' } } });
+    assert.equal(out.tabId, 't.9');
+    assert.equal(out.nestingLevel, 1);
+  });
+
+  it('refuses to report a created tab when Google returns no id', async () => {
+    const docs = mkTableDoc({ batchUpdate: mock.fn(async () => ({ data: { replies: [{}] } })) });
+    await assert.rejects(() => performCreateDocumentTab(docs, { documentId: 'd1', title: 'X' } as any), /no tab ID/);
+  });
+
+  it('updates only the named fields and confirms from a re-read', async () => {
+    const docs = mkTableDoc();
+    const out = await performUpdateDocumentTab(docs, { documentId: 'd1', tabId: 't.1', title: 'One' } as any);
+    assert.deepEqual(sentRequests(docs)[0].updateDocumentTabProperties, { tabProperties: { tabId: 't.1', title: 'One' }, fields: 'title' });
+    assert.equal(out.confirmed, true);
+
+    const stale = mkTableDoc();
+    const notApplied = await performUpdateDocumentTab(stale, { documentId: 'd1', tabId: 't.1', title: 'Renamed' } as any);
+    assert.equal(notApplied.confirmed, false, 'a 200 that left the title unchanged must not read as success');
+  });
+
+  it('refuses an update that names nothing to change', async () => {
+    await assert.rejects(() => performUpdateDocumentTab(mkTableDoc(), { documentId: 'd1', tabId: 't.1' } as any), /Nothing to change/);
+  });
+
+  it('deletes a tab, counts the nested tabs that go with it, and confirms it is gone', async () => {
+    let deleted = false;
+    const base = mkTableDoc();
+    const docs = mkTableDoc({
+      get: mock.fn(async (args: any) => {
+        const res = await base.documents.get(args);
+        return deleted ? { data: { ...res.data, tabs: [] } } : res;
+      }),
+      batchUpdate: mock.fn(async () => { deleted = true; return { data: { replies: [{}] } }; }),
+    });
+    const out = await performDeleteDocumentTab(docs, { documentId: 'd1', tabId: 't.1' } as any);
+    assert.deepEqual(sentRequests(docs)[0], { deleteTab: { tabId: 't.1' } });
+    assert.equal(out.childTabsDeleted, 1);
+    assert.equal(out.confirmed, true);
+  });
+});
+
+describe('footnotes', () => {
+  it('creates the reference, then writes the text into the new footnote segment', async () => {
+    const docs = mkTableDoc({ batchUpdate: mock.fn(async (req: any) => ({ data: {
+      replies: [req.requestBody.requests[0].createFootnote ? { createFootnote: { footnoteId: 'kix.fn1' } } : {}],
+      writeControl: { requiredRevisionId: 'rev-3' },
+    } })) });
+    const out = await performCreateFootnote(docs, { documentId: 'd1', index: 4, text: 'Source: X', tabId: 't.1', requiredRevisionId: 'rev-1' } as any);
+    assert.deepEqual(sentRequests(docs, 0)[0], { createFootnote: { location: { index: 4, tabId: 't.1' } } });
+    assert.deepEqual(sentWriteControl(docs, 0), { requiredRevisionId: 'rev-1' });
+    assert.deepEqual(sentRequests(docs, 1)[0], { insertText: { endOfSegmentLocation: { segmentId: 'kix.fn1', tabId: 't.1' }, text: 'Source: X' } });
+    assert.deepEqual(out, { footnoteId: 'kix.fn1', index: 4, revisionId: 'rev-3' });
+  });
+
+  it('names the empty footnote left behind when the text write fails', async () => {
+    let call = 0;
+    const docs = mkTableDoc({ batchUpdate: mock.fn(async () => {
+      call += 1;
+      if (call === 1) return { data: { replies: [{ createFootnote: { footnoteId: 'kix.fn1' } }] } };
+      throw new Error('boom');
+    }) });
+    await assert.rejects(
+      () => performCreateFootnote(docs, { documentId: 'd1', index: 4, text: 'x' } as any),
+      (err: any) => err instanceof UserError && /kix\.fn1/.test(err.message) && /empty footnote is still in the document/.test(err.message),
+    );
+  });
+});
+
+describe('table structure and cell formatting', () => {
+  it('inserts N rows below the reference cell and reports the new shape', async () => {
+    const docs = mkTableDoc();
+    const out = await performModifyTableStructure(docs, {
+      documentId: 'd1', tableStartIndex: 5, action: 'insert_rows_below', rowIndex: 1, columnIndex: 0, count: 2,
+    } as any);
+    const reqs = sentRequests(docs);
+    assert.equal(reqs.length, 2);
+    assert.deepEqual(reqs[0].insertTableRow, {
+      tableCellLocation: { tableStartLocation: { index: 5 }, rowIndex: 1, columnIndex: 0 }, insertBelow: true,
+    });
+    assert.deepEqual(out.tableAfter, { rows: 4, columns: 3 });
+  });
+
+  it('merges a cell block in a tab', async () => {
+    const docs = mkTableDoc();
+    await performModifyTableStructure(docs, {
+      documentId: 'd1', tableStartIndex: 5, tabId: 't.1', action: 'merge_cells', rowIndex: 0, columnIndex: 0, columnSpan: 3,
+    } as any);
+    assert.deepEqual(sentRequests(docs)[0].mergeTableCells.tableRange, {
+      tableCellLocation: { tableStartLocation: { index: 5, tabId: 't.1' }, rowIndex: 0, columnIndex: 0 }, rowSpan: 1, columnSpan: 3,
+    });
+  });
+
+  it('refuses a one-cell merge, a block outside the table, and an index with no table', async () => {
+    await assert.rejects(() => performModifyTableStructure(mkTableDoc(), {
+      documentId: 'd1', tableStartIndex: 5, action: 'merge_cells', rowIndex: 0, columnIndex: 0,
+    } as any), /at least two cells/);
+    await assert.rejects(() => performModifyTableStructure(mkTableDoc(), {
+      documentId: 'd1', tableStartIndex: 5, action: 'merge_cells', rowIndex: 1, columnIndex: 2, rowSpan: 2,
+    } as any), /outside the 2x3 table/);
+    await assert.rejects(() => performModifyTableStructure(mkTableDoc(), {
+      documentId: 'd1', tableStartIndex: 6, action: 'insert_rows_above', rowIndex: 0, columnIndex: 0,
+    } as any), /No table starts at index 6\. Tables start at: 5/);
+  });
+
+  it('deletes a column but refuses to delete the last row, which would remove the table', async () => {
+    const docs = mkTableDoc();
+    await performDeleteTableRowOrColumn(docs, { documentId: 'd1', tableStartIndex: 5, target: 'column', index: 2 } as any);
+    assert.deepEqual(sentRequests(docs)[0].deleteTableColumn.tableCellLocation, {
+      tableStartLocation: { index: 5 }, rowIndex: 0, columnIndex: 2,
+    });
+
+    const oneRow = mkTableDoc({ get: mock.fn(async () => ({ data: { body: { content: [{ startIndex: 5, table: { rows: 1, columns: 2 } }] } } })) });
+    await assert.rejects(
+      () => performDeleteTableRowOrColumn(oneRow, { documentId: 'd1', tableStartIndex: 5, target: 'row', index: 0 } as any),
+      /would delete the whole table/,
+    );
+    await assert.rejects(
+      () => performDeleteTableRowOrColumn(mkTableDoc(), { documentId: 'd1', tableStartIndex: 5, target: 'row', index: 2 } as any),
+      /there is no row 2/,
+    );
+  });
+
+  it('formats a header row across every column, with row height and border defaults', async () => {
+    const docs = mkTableDoc();
+    const out = await performFormatTableCells(docs, {
+      documentId: 'd1', tableStartIndex: 5, rowIndex: 0, backgroundColor: '#FFF2CC', borderWidthPt: 2, minRowHeightPt: 20,
+    } as any);
+    const [cellReq, rowReq] = sentRequests(docs);
+    assert.deepEqual(cellReq.updateTableCellStyle.tableRange, {
+      tableCellLocation: { tableStartLocation: { index: 5 }, rowIndex: 0, columnIndex: 0 }, rowSpan: 1, columnSpan: 3,
+    });
+    assert.equal(cellReq.updateTableCellStyle.fields, 'backgroundColor,borderTop,borderBottom,borderLeft,borderRight');
+    assert.deepEqual(cellReq.updateTableCellStyle.tableCellStyle.borderTop, {
+      color: { color: { rgbColor: { red: 0, green: 0, blue: 0 } } }, width: { magnitude: 2, unit: 'PT' }, dashStyle: 'SOLID',
+    });
+    assert.deepEqual(rowReq.updateTableRowStyle, {
+      tableStartLocation: { index: 5 }, rowIndices: [0], tableRowStyle: { minRowHeight: { magnitude: 20, unit: 'PT' } }, fields: 'minRowHeight',
+    });
+    assert.equal(out.revisionId, 'rev-2');
+  });
+
+  it('sets fixed column widths for the named columns only', async () => {
+    const docs = mkTableDoc();
+    await performFormatTableCells(docs, { documentId: 'd1', tableStartIndex: 5, columnIndex: 1, columnSpan: 2, columnWidthPt: 90 } as any);
+    const reqs = sentRequests(docs);
+    assert.equal(reqs.length, 1);
+    assert.deepEqual(reqs[0].updateTableColumnProperties.columnIndices, [1, 2]);
+    assert.equal(reqs[0].updateTableColumnProperties.fields, 'width,widthType');
+  });
+
+  it('refuses a call that names no formatting, before reading the doc', async () => {
+    const docs = mkTableDoc();
+    await assert.rejects(() => performFormatTableCells(docs, { documentId: 'd1', tableStartIndex: 5 } as any), /Nothing to format/);
+    assert.equal(docs.documents.get.mock.callCount(), 0);
+  });
+});
+
+describe('review follow-ups', () => {
+  /** A doc whose table at index 5 reads back with `after` once anything is written. */
+  function shapeChanging(before: { rows: number; columns: number }, after: { rows: number; columns: number }) {
+    let written = false;
+    const body = () => ({ content: [{ startIndex: 5, table: written ? after : before }] });
+    return mkDocs({ documents: {
+      get: mock.fn(async () => ({ data: { body: body() } })),
+      batchUpdate: mock.fn(async () => { written = true; return { data: { replies: [{}] } }; }),
+    } });
+  }
+
+  it('confirms an insert from the re-read table, and reports a mismatch as false', async () => {
+    const ok = await performModifyTableStructure(shapeChanging({ rows: 2, columns: 3 }, { rows: 3, columns: 3 }), {
+      documentId: 'd1', tableStartIndex: 5, action: 'insert_rows_below', rowIndex: 0, columnIndex: 0,
+    } as any);
+    assert.equal(ok.confirmed, true);
+    const off = await performModifyTableStructure(shapeChanging({ rows: 2, columns: 3 }, { rows: 2, columns: 3 }), {
+      documentId: 'd1', tableStartIndex: 5, action: 'insert_rows_below', rowIndex: 0, columnIndex: 0,
+    } as any);
+    assert.equal(off.confirmed, false);
+  });
+
+  it('reports a merge as unconfirmed (null), never as proven', async () => {
+    const r = await performModifyTableStructure(shapeChanging({ rows: 2, columns: 3 }, { rows: 2, columns: 3 }), {
+      documentId: 'd1', tableStartIndex: 5, action: 'merge_cells', rowIndex: 0, columnIndex: 0, columnSpan: 2,
+    } as any);
+    assert.equal(r.confirmed, null);
+  });
+
+  it('confirms a row delete only when exactly one row went', async () => {
+    const one = await performDeleteTableRowOrColumn(shapeChanging({ rows: 3, columns: 2 }, { rows: 2, columns: 2 }), {
+      documentId: 'd1', tableStartIndex: 5, target: 'row', index: 1,
+    } as any);
+    assert.equal(one.confirmed, true);
+    const merged = await performDeleteTableRowOrColumn(shapeChanging({ rows: 3, columns: 2 }, { rows: 1, columns: 2 }), {
+      documentId: 'd1', tableStartIndex: 5, target: 'row', index: 1,
+    } as any);
+    assert.equal(merged.confirmed, false);
+  });
+
+  it('keeps the upstream status when a footnote\'s text write fails', async () => {
+    let call = 0;
+    const docs = mkDocs({ documents: { batchUpdate: mock.fn(async () => {
+      call += 1;
+      if (call === 1) return { data: { replies: [{ createFootnote: { footnoteId: 'kix.fn1' } }] } };
+      throw Object.assign(new Error('The caller does not have permission'), { code: 403 });
+    }) } });
+    await assert.rejects(
+      () => performCreateFootnote(docs, { documentId: 'd1', index: 4, text: 'x' } as any),
+      (err: any) => err.code === 403 && /kix\.fn1/.test(err.message),
+    );
+  });
+
+  it('widens a paragraph target inside the named tab', async () => {
+    const text = 'Tab para\n';
+    const docs = mkDocs({ documents: { get: mock.fn(async () => ({ data: { tabs: [
+      { tabProperties: { tabId: 't.2' }, documentTab: { body: { content: [
+        { startIndex: 1, endIndex: 1 + text.length, paragraph: { elements: [{ startIndex: 1, endIndex: 1 + text.length, textRun: { content: text } }] } },
+      ] } } },
+    ] } })) } });
+    await performApplyParagraphStyle(docs, { documentId: 'd1', tabId: 't.2', target: { textToFind: 'para', matchInstance: 1 }, style: { alignment: 'CENTER' } } as any);
+    assert.deepEqual(sentRequests(docs)[0].updateParagraphStyle.range, { startIndex: 1, endIndex: 1 + text.length, tabId: 't.2' });
+  });
+
+  it('formats one column across every row when only columnIndex is given', async () => {
+    const docs = shapeChanging({ rows: 4, columns: 3 }, { rows: 4, columns: 3 });
+    const r = await performFormatTableCells(docs, { documentId: 'd1', tableStartIndex: 5, columnIndex: 2, backgroundColor: '#EEE' } as any);
+    assert.deepEqual(r.cells, { rowIndex: 0, columnIndex: 2, rowSpan: 4, columnSpan: 1 });
+  });
+
+  it('refuses a batch naming an unknown tab before writing', async () => {
+    const docs = mkDocs({ documents: { get: mock.fn(async () => ({ data: { tabs: [{ tabProperties: { tabId: 't.1' }, documentTab: { body: {} } }] } })) } });
+    await assert.rejects(
+      () => performBatchUpdateDoc(docs, { documentId: 'd1', operations: [{ type: 'insert_text', index: 1, text: 'x', tabId: 't.9' }] } as any),
+      /Tab with ID "t\.9" not found/,
+    );
+    assert.equal(docs.documents.batchUpdate.mock.callCount(), 0);
   });
 });

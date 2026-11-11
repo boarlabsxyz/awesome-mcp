@@ -155,7 +155,7 @@ The tool keeps its formatter and error mapping; the route keeps its status codes
 Two payoffs beyond tidiness:
 
 - A shared projection means a `POST`, its legacy `PATCH` twin and the MCP tool cannot answer the same resource three slightly different ways. Point the legacy verb at the same handler function while you are there.
-- It is the only way to get the change past the coverage gate (below), because an exported op can be driven against a stub client while a route handler cannot.
+- It is the only way to cover the change with tests (see Coverage, below), because an exported op can be driven against a stub client while a route handler cannot.
 
 **Read-modify-write needs care when you extract it.** If the upstream call is a full replacement (Google's `events.update`, most `PUT`s), the op must start from the whole fetched resource and override only what the caller named. A whitelist of fields silently *deletes* everything it forgot — in this repo that meant every event update dropped `recurrence`, so changing a weekly meeting's title stopped it repeating. Spread the fetched object; do not rebuild it.
 
@@ -193,14 +193,14 @@ Two rules fall out of that, both learned the hard way:
 
 Narrow it by **name**, not `instanceof`: `webServer.ts` imports no part of FastMCP, and pulling the framework into the web process to classify one error is not worth it. `FastMCPError` sets `name = new.target.name`, so `err?.name === 'UserError'` is reliable.
 
-## The coverage gate
+## Coverage
 
-CI runs a SonarCloud quality gate that **fails the PR below 80% coverage of new code**, counting lines *and* branches. A write-endpoint change is unusually exposed to it, for a reason worth knowing up front: **the handler's success path cannot be covered by any test in this repo.**
+CI does not check coverage; keep a change's new code at 80% or more, lines *and* branches, by measuring it yourself. A write-endpoint change is the hard case, for a reason worth knowing up front: **the handler's success path cannot be covered by any test in this repo.**
 
 - For Google services the client comes off `req.userSession`, built from real tokens by `createUserSessionFromConnection`. There is no injection seam.
 - Stubbing `globalThis.fetch` — the trick `restRoutes.providers.test.ts` uses for HubSpot and Redmine — does not reach `googleapis`: `gaxios` imports **bundled `node-fetch`**, not the global.
 
-**If the provider's server module is the entry point, its tool bodies are uncoverable until you make it importable.** `src/google-docs/server.ts` called `startServer()` at import, so no test could import it and its ~770 executable lines — every tool body — sat at 0% coverage, which Sonar counts in full. Guard the boot:
+**If the provider's server module is the entry point, its tool bodies are uncoverable until you make it importable.** `src/google-docs/server.ts` called `startServer()` at import, so no test could import it and its ~770 executable lines — every tool body — sat at 0% coverage. Guard the boot:
 
 ```ts
 // Phrased as "start unless testing", NOT "start if this is the entry point":
@@ -219,7 +219,7 @@ So plan for the handler lines staying uncovered and make the extracted op carry 
 - Capture the tool bodies too, by patching `FastMCP.prototype.addTool` before importing the server (the ClickUp suite's trick), which covers each `execute`'s formatter and error mapping.
 - Keep the route-level tests on the `safeParse` branch: they are cheap, need no mock, and prove auth runs before validation.
 
-**Measure locally rather than pushing to find out** — the gate blends lines and branches, so a per-file *line* reading reads as passing when the real number is several points lower, and each CI round trip is ~12 minutes. Two steps:
+**Measure only the lines the branch added, lines and branches together** — a per-file *line* reading counts old code and ignores branches, so it reads several points higher than the new code really is. Two steps:
 
 ```bash
 # 1. lcov over the files you touched, from the suites that touch them
@@ -232,16 +232,9 @@ python3 .claude/skills/add-rest-endpoint/assets/scripts/new-code-coverage.py /tm
   src/google-sheets/server.ts src/website/webServer.ts
 ```
 
-It prints per-file lines and branches, the uncovered line numbers to aim at, and the gate verdict using Sonar's own formula. Calibration: on the Sheets/Calendar pass it reported **83.9%** where CI's gate then measured **83.5%** — close enough to trust, which is why it also warns when the margin is under two points. Pass the same files you gave `c8`; one you forgot is reported as *not instrumented* rather than counted as zero.
+It prints per-file lines and branches, the uncovered line numbers to aim at, and a verdict against 80% (`--gate` changes it). It warns when the margin is under two points, since its reading can be slightly off. Pass the same files you gave `c8`; one you forgot is reported as *not instrumented* rather than counted as zero.
 
-Also worth knowing before you start: a coverage reading taken **before** the review round is not the one that ships. Fixing review findings adds production lines of its own, and on this PR that alone moved the gate from 81.2% to 79.9% — below the threshold it had already passed.
-
-Read the per-file breakdown from Sonar itself when a run has already happened — it names exactly which files are dragging:
-
-```bash
-curl -s "https://sonarcloud.io/api/qualitygates/project_status?projectKey=<key>&pullRequest=<n>"
-curl -s "https://sonarcloud.io/api/measures/component_tree?component=<key>&pullRequest=<n>&metricKeys=new_lines_to_cover,new_uncovered_lines,new_coverage&qualifiers=FIL"
-```
+Also worth knowing before you start: a coverage reading taken **before** the review round is not the one that ships. Fixing review findings adds production lines of its own, and on one PR that alone moved it from 81.2% to 79.9%.
 
 Finally: **do not chase a defensive branch you cannot reach honestly.** A `String(cause)` fallback behind a helper that always wraps, or a `throw e` that only fires on a bug in your own translation, are better left uncovered with a comment saying so than reached by contorting the code.
 
