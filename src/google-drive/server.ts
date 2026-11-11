@@ -25,6 +25,17 @@ import {
   handleShareDriveFile,
   handleCheckPublicAccess,
 } from './toolHandlers.js';
+import {
+  listDriveChangesSchema,
+  performListDriveChanges,
+  performSearchDriveFiles,
+  performUploadDriveFile,
+  searchDriveFilesSchema,
+  uploadDriveFileSchema,
+} from './filesOps.js';
+import { describeDriveError } from './driveErrors.js';
+import { UserError } from 'fastmcp';
+import type { drive_v3 } from 'googleapis';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
@@ -65,6 +76,7 @@ driveServer.addTool({
     includeSubfolders: z.boolean().optional().default(true).describe('Whether to include subfolders in results.'),
     includeFiles: z.boolean().optional().default(true).describe('Whether to include files in results.'),
     maxResults: z.number().int().min(1).max(100).optional().default(50).describe('Maximum number of items to return.'),
+    pageToken: z.string().optional().describe('Token from a previous call, to list the next page.'),
   }).merge(SharedDriveParameters),
   execute: async (args, { log, session }) => handleListFolderContents(getDriveClient(session), args, log),
 });
@@ -231,6 +243,75 @@ driveServer.addTool({
     fileId: z.string().describe('The Drive file ID to check.'),
   }),
   execute: async (args, { log, session }) => (await handleCheckPublicAccess(getDriveClient(session), args, log)) as string,
+});
+
+/** One line per file, shared by search and the change feed. */
+function fileLine(file: drive_v3.Schema$File): string {
+  const modified = file.modifiedTime ? new Date(file.modifiedTime).toISOString().slice(0, 16).replace('T', ' ') : 'unknown';
+  const by = file.lastModifyingUser?.displayName ? ` by ${file.lastModifyingUser.displayName}` : '';
+  return `**${file.name}** (${file.mimeType})\n   ID: ${file.id} · modified ${modified}${by}${file.driveId ? ' · shared drive' : ''}\n   ${file.webViewLink ?? ''}`;
+}
+
+/** Drive errors in Google's own words (403 reason, 404), not a guessed cause. */
+function driveFailure(error: any, what: string): never {
+  if (error instanceof UserError) throw error;
+  throw new UserError(describeDriveError(error, what, 'https://www.googleapis.com/auth/drive'));
+}
+
+driveServer.addTool({
+  name: 'searchDriveFiles',
+  annotations: { readOnlyHint: true },
+  description: 'Searches all of Drive (any file type, any folder) by name or content, or lists recently modified files when no query is given. Paginated.',
+  parameters: searchDriveFilesSchema,
+  execute: async (args, { log, session }) => {
+    log.info(`searchDriveFiles: ${args.query ?? '(recent)'} type=${args.mimeType ?? 'any'}`);
+    let r: Awaited<ReturnType<typeof performSearchDriveFiles>>;
+    try { r = await performSearchDriveFiles(getDriveClient(session), args); } catch (e) { driveFailure(e, 'search Drive'); }
+    const more = r.nextPageToken ? `\nMORE results: call again with pageToken "${r.nextPageToken}".` : '';
+    const partial = r.incompleteSearch ? '\nDrive could not search every location (incompleteSearch), so files may be missing even without more pages.' : '';
+    if (r.files.length === 0) return `No files found.${partial}`;
+    return `${r.files.length} file(s), sorted by ${r.sortedBy}:\n\n${r.files.map((f, i) => `${i + 1}. ${fileLine(f)}`).join('\n\n')}${more}${partial}`;
+  },
+});
+
+driveServer.addTool({
+  name: 'listDriveChanges',
+  annotations: { readOnlyHint: true },
+  description: 'Follows the Drive change feed: what was created, edited, trashed or removed since a token. First call (no pageToken) returns the token to poll with.',
+  parameters: listDriveChangesSchema,
+  execute: async (args, { log, session }) => {
+    log.info(`listDriveChanges: ${args.pageToken ? 'from token' : 'start'}`);
+    let r: Awaited<ReturnType<typeof performListDriveChanges>>;
+    try { r = await performListDriveChanges(getDriveClient(session), args); } catch (e) { driveFailure(e, 'read the change feed'); }
+    if (r.startPageToken) {
+      return `Change feed started. Nothing is listed yet: Drive records changes from now on. Call again later with pageToken "${r.startPageToken}".`;
+    }
+    const lines = r.changes.map((c, i) => {
+      const when = c.time ?? 'unknown time';
+      if (c.removed || !c.file) return `${i + 1}. ${when} — file ${c.fileId} removed or no longer visible to you`;
+      return `${i + 1}. ${when} — ${c.file.trashed ? 'TRASHED ' : ''}${fileLine(c.file)}`;
+    });
+    const next = r.nextPageToken
+      ? `\nMORE changes are waiting: call again now with pageToken "${r.nextPageToken}".`
+      : `\nEnd of feed. Poll later with pageToken "${r.newStartPageToken}".`;
+    return `${r.changes.length} change(s):\n\n${lines.join('\n') || '(none)'}${next}`;
+  },
+});
+
+driveServer.addTool({
+  name: 'uploadDriveFile',
+  annotations: { readOnlyHint: false },
+  description: 'Uploads a file (base64 bytes or text) to Drive, optionally converting it into a Google Doc, Sheet or Slides. Up to 20 MB.',
+  parameters: uploadDriveFileSchema,
+  execute: async (args, { log, session }) => {
+    log.info(`uploadDriveFile: ${args.fileName} (${args.sourceMimeType})${args.convertTo ? ` → ${args.convertTo}` : ''}`);
+    let r: Awaited<ReturnType<typeof performUploadDriveFile>>;
+    try { r = await performUploadDriveFile(getDriveClient(session), args); } catch (e) { driveFailure(e, 'upload the file'); }
+    const conversion = args.convertTo
+      ? (r.converted ? ` Converted to a Google ${args.convertTo}.` : ` Conversion to a Google ${args.convertTo} was asked for, but Drive stored it as ${r.file.mimeType}.`)
+      : '';
+    return `Uploaded "${r.file.name}" (${r.bytes} bytes) — ID ${r.file.id}.${conversion}\n${r.file.webViewLink ?? ''}`;
+  },
 });
 
 export { driveServer };
