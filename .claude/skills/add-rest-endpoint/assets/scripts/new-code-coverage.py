@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Report SonarCloud-style new-code coverage for the current branch, locally.
+"""Report coverage of the lines this branch added, lines and branches together.
 
-Why this exists: the CI quality gate fails a PR below 80% coverage of NEW code,
-counting lines *and* branches, and each CI round trip is ~12 minutes. A per-file
+Why this exists: CI does not check coverage, and the bar is 80% of NEW code,
+counting lines *and* branches. A per-file
 line percentage (from `c8 --reporter=text`) reads as passing while the real
 number is several points lower, because it ignores both the branch component and
 the fact that only *added* lines count.
