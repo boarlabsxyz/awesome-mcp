@@ -571,3 +571,206 @@ describe('a write that runs off the end of the grid says how to make room', () =
     );
   });
 });
+
+// --- Alignment, data validation, charts, row/column delete, cell inspection ---
+
+const { operationToRequest } = await import('../google-sheets/formatHelpers.js');
+const { BatchUpdateOperationSchema } = await import('../types.js');
+const {
+  performDeleteSpreadsheetRowsOrColumns,
+  performInspectSpreadsheetCells,
+  inspectSpreadsheetCellsSchema,
+} = sheetsModule as any;
+
+const toRequest = (op: any) => operationToRequest(BatchUpdateOperationSchema.parse(op), METADATA as any) as any;
+
+describe('sheets batch: alignment', () => {
+  it('masks only the properties named, so other formatting survives', () => {
+    const req = toRequest({ type: 'alignment', range: 'Data!A1:C1', horizontalAlignment: 'CENTER', wrapStrategy: 'WRAP' });
+    assert.equal(req.repeatCell.fields, 'userEnteredFormat.horizontalAlignment,userEnteredFormat.wrapStrategy');
+    assert.deepEqual(req.repeatCell.cell.userEnteredFormat, { horizontalAlignment: 'CENTER', wrapStrategy: 'WRAP' });
+    assert.equal(req.repeatCell.range.sheetId, 77);
+  });
+
+  it('refuses an alignment op that names nothing', () => {
+    assert.throws(() => toRequest({ type: 'alignment', range: 'A1' }), /at least one of/);
+  });
+});
+
+describe('sheets batch: data validation', () => {
+  it('builds a dropdown with the in-cell chooser and strict by default', () => {
+    const rule = toRequest({ type: 'dataValidation', range: 'A2:A50', rule: { kind: 'dropdown', values: ['Open', 'Done'] } }).setDataValidation.rule;
+    assert.deepEqual(rule.condition, { type: 'ONE_OF_LIST', values: [{ userEnteredValue: 'Open' }, { userEnteredValue: 'Done' }] });
+    assert.equal(rule.strict, true);
+    assert.equal(rule.showCustomUi, true);
+  });
+
+  it('turns a source range into the formula ONE_OF_RANGE expects', () => {
+    const rule = toRequest({ type: 'dataValidation', range: 'A2:A9', rule: { kind: 'dropdownFromRange', sourceRange: 'Lists!A2:A20' } }).setDataValidation.rule;
+    assert.deepEqual(rule.condition.values, [{ userEnteredValue: '=Lists!A2:A20' }]);
+  });
+
+  it('builds plain and custom-valued checkboxes, and refuses an unchecked value alone', () => {
+    assert.deepEqual(toRequest({ type: 'dataValidation', range: 'B2:B9', rule: { kind: 'checkbox' } }).setDataValidation.rule.condition, { type: 'BOOLEAN' });
+    assert.deepEqual(
+      toRequest({ type: 'dataValidation', range: 'B2:B9', rule: { kind: 'checkbox', checkedValue: 'yes', uncheckedValue: 'no' } }).setDataValidation.rule.condition.values,
+      [{ userEnteredValue: 'yes' }, { userEnteredValue: 'no' }],
+    );
+    assert.throws(() => toRequest({ type: 'dataValidation', range: 'B2', rule: { kind: 'checkbox', uncheckedValue: 'no' } }), /needs checkedValue/);
+  });
+
+  it('checks the operand count of number rules', () => {
+    const rule = toRequest({ type: 'dataValidation', range: 'C2', rule: { kind: 'number', condition: 'NUMBER_BETWEEN', value: 1, value2: 5 } }).setDataValidation.rule;
+    assert.deepEqual(rule.condition.values, [{ userEnteredValue: '1' }, { userEnteredValue: '5' }]);
+    assert.throws(() => toRequest({ type: 'dataValidation', range: 'C2', rule: { kind: 'number', condition: 'NUMBER_BETWEEN', value: 1 } }), /needs value2/);
+  });
+
+  it('clears by sending the range with no rule', () => {
+    assert.deepEqual(Object.keys(toRequest({ type: 'dataValidation', range: 'C2', rule: { kind: 'clear' } }).setDataValidation), ['range']);
+  });
+});
+
+describe('sheets batch: addChart', () => {
+  it('makes the first column the domain and each further column a series, anchored beside the data', () => {
+    const chart = toRequest({ type: 'addChart', chartType: 'COLUMN', sourceRange: 'Data!A1:C10', title: 'Sales' }).addChart.chart;
+    const basic = chart.spec.basicChart;
+    assert.equal(chart.spec.title, 'Sales');
+    assert.equal(basic.headerCount, 1);
+    assert.equal(basic.domains[0].domain.sourceRange.sources[0].startColumnIndex, 0);
+    assert.deepEqual(basic.series.map((s: any) => s.series.sourceRange.sources[0].startColumnIndex), [1, 2]);
+    assert.deepEqual(chart.position.overlayPosition.anchorCell, { sheetId: 77, rowIndex: 0, columnIndex: 4 });
+  });
+
+  it('builds a pie from exactly two columns and refuses three', () => {
+    const pie = toRequest({ type: 'addChart', chartType: 'PIE', sourceRange: 'A1:B5', newSheet: true }).addChart.chart;
+    assert.ok(pie.spec.pieChart);
+    assert.deepEqual(pie.position, { newSheet: true });
+    assert.throws(() => toRequest({ type: 'addChart', chartType: 'PIE', sourceRange: 'A1:C5' }), /exactly two columns/);
+  });
+
+  it('refuses a source with one column or no column bounds', () => {
+    assert.throws(() => toRequest({ type: 'addChart', chartType: 'LINE', sourceRange: 'A1:A5' }), /at least one data column/);
+    assert.throws(() => toRequest({ type: 'addChart', chartType: 'LINE', sourceRange: '1:5' }), /explicit columns/);
+  });
+
+  it('returns the chart ids Google assigned', async () => {
+    const sheets = mkSheets({ spreadsheets: { batchUpdate: mock.fn(async () => ({ data: { replies: [{ addChart: { chart: { chartId: 9001 } } }] } })) } });
+    const out = await performBatchUpdateSpreadsheet(sheets, {
+      spreadsheetId: 'ss', operations: [{ type: 'addChart', chartType: 'BAR', sourceRange: 'A1:B4', legendPosition: 'BOTTOM_LEGEND' }],
+    });
+    assert.deepEqual(out.chartIds, [9001]);
+    assert.match(out.summaries[0], /addChart → \(beside the data\) \(BAR from A1:B4\)/);
+  });
+});
+
+describe('deleteSpreadsheetRowsOrColumns', () => {
+  const sized = (rows: number) => ({ ...METADATA, sheets: [{ properties: { sheetId: 0, title: 'Sheet1', gridProperties: { rowCount: rows, columnCount: 26 } } }] });
+
+  it('sends a 0-based half-open range and confirms from the grid size after', async () => {
+    let rows = 100;
+    const sheets = mkSheets({ spreadsheets: {
+      get: mock.fn(async () => ({ data: sized(rows) })),
+      batchUpdate: mock.fn(async () => { rows -= 3; return { data: { replies: [{}] } }; }),
+    } });
+    const out = await performDeleteSpreadsheetRowsOrColumns(sheets, { spreadsheetId: 'ss', dimension: 'ROWS', startIndex: 5, endIndex: 7 });
+    assert.deepEqual(sheets.spreadsheets.batchUpdate.mock.calls[0].arguments[0].requestBody.requests[0].deleteDimension.range,
+      { sheetId: 0, dimension: 'ROWS', startIndex: 4, endIndex: 7 });
+    assert.deepEqual([out.deleted, out.sizeBefore, out.sizeAfter, out.confirmed], [3, 100, 97, true]);
+  });
+
+  it('reports confirmed false when the grid did not shrink', async () => {
+    const sheets = mkSheets({ spreadsheets: { get: mock.fn(async () => ({ data: sized(100) })) } });
+    const out = await performDeleteSpreadsheetRowsOrColumns(sheets, { spreadsheetId: 'ss', dimension: 'ROWS', startIndex: 5, endIndex: 5 });
+    assert.equal(out.confirmed, false);
+  });
+
+  it('refuses ranges past the grid, every row, and an inverted range, before writing', async () => {
+    const sheets = mkSheets({ spreadsheets: { get: mock.fn(async () => ({ data: sized(10) })) } });
+    await assert.rejects(() => performDeleteSpreadsheetRowsOrColumns(sheets, { spreadsheetId: 'ss', dimension: 'ROWS', startIndex: 5, endIndex: 11 }), /past the end/);
+    await assert.rejects(() => performDeleteSpreadsheetRowsOrColumns(sheets, { spreadsheetId: 'ss', dimension: 'ROWS', startIndex: 1, endIndex: 10 }), /every row/);
+    await assert.rejects(() => performDeleteSpreadsheetRowsOrColumns(sheets, { spreadsheetId: 'ss', dimension: 'ROWS', startIndex: 5, endIndex: 4 }), /endIndex must be >= startIndex/);
+    assert.equal(sheets.spreadsheets.batchUpdate.mock.callCount(), 0);
+  });
+});
+
+describe('inspectSpreadsheetCells', () => {
+  const grid = {
+    sheets: [{
+      properties: { title: 'Data' },
+      data: [{
+        startRow: 1, startColumn: 1,
+        rowData: [
+          { values: [
+            { userEnteredValue: { formulaValue: '=SUM(C3:C9)' }, effectiveValue: { numberValue: 42 }, formattedValue: '42' },
+            {},
+            { userEnteredValue: { stringValue: 'see' }, textFormatRuns: [{ format: { link: { uri: 'https://a' } } }, { format: { link: { uri: 'https://b' } } }] },
+          ] },
+        ],
+      }],
+    }],
+  };
+
+  it('names cells in A1, keeps formulas, lists multi-link cells and skips empty ones', async () => {
+    const sheets = mkSheets({ spreadsheets: { get: mock.fn(async () => ({ data: grid })) } });
+    const out = await performInspectSpreadsheetCells(sheets, inspectSpreadsheetCellsSchema.parse({ spreadsheetId: 'ss', range: 'Data!B2:D2' }));
+    assert.equal(out.nonEmptyCells, 2);
+    assert.equal(out.truncated, false);
+    assert.equal(out.cells[0].cell, 'B2');
+    assert.equal(out.cells[0].formula, '=SUM(C3:C9)');
+    assert.deepEqual(out.cells[1].links, ['https://a', 'https://b']);
+    assert.equal(out.cells[1].cell, 'D2');
+    const req = sheets.spreadsheets.get.mock.calls[0].arguments[0];
+    assert.equal(req.includeGridData, true);
+    assert.deepEqual(req.ranges, ['Data!B2:D2']);
+  });
+
+  it('says when maxCells cut the list short', async () => {
+    const sheets = mkSheets({ spreadsheets: { get: mock.fn(async () => ({ data: grid })) } });
+    const out = await performInspectSpreadsheetCells(sheets, { spreadsheetId: 'ss', range: 'Data!B2:D2', maxCells: 1 });
+    assert.equal(out.cells.length, 1);
+    assert.equal(out.truncated, true);
+    assert.equal(out.nonEmptyCells, 2);
+  });
+});
+
+describe('readSpreadsheet forwards valueRenderOption', () => {
+  it('asks Google for formulas when FORMULA is requested', async () => {
+    const get = mock.fn(async (_req: any) => ({ data: { values: [["=A1+1"]] } }));
+    const sheets = mkSheets({ values: { get } });
+    await callTool('readSpreadsheet', { spreadsheetId: 'ss', range: 'A1', valueRenderOption: 'FORMULA' }, { googleSheets: sheets });
+    assert.equal((get.mock.calls[0].arguments[0] as any).valueRenderOption, 'FORMULA');
+  });
+});
+
+describe('review follow-ups', () => {
+  it('skips formatting-only blank cells when inspecting', async () => {
+    const sheets = mkSheets({ spreadsheets: { get: mock.fn(async () => ({ data: { sheets: [{ properties: { title: 'S' }, data: [{ rowData: [
+      { values: [{ userEnteredFormat: { backgroundColor: { red: 1 } } }, { userEnteredValue: { numberValue: 3 }, userEnteredFormat: {} }, { note: 'only a note' }] },
+    ] }] }] } })) } });
+    const out = await performInspectSpreadsheetCells(sheets, { spreadsheetId: 'ss', range: 'S!A1:C1', maxCells: 500 });
+    assert.deepEqual(out.cells.map((c: any) => c.cell), ['B1', 'C1']);
+    assert.equal(out.nonEmptyCells, 2);
+  });
+
+  it('places charts on a new sheet, at an explicit anchor, and BAR series on the bottom axis', () => {
+    assert.deepEqual(toRequest({ type: 'addChart', chartType: 'LINE', sourceRange: 'A1:B5', newSheet: true }).addChart.chart.position, { newSheet: true });
+    assert.deepEqual(
+      toRequest({ type: 'addChart', chartType: 'LINE', sourceRange: 'A1:B5', anchorCell: 'Data!H2' }).addChart.chart.position.overlayPosition.anchorCell,
+      { sheetId: 77, rowIndex: 1, columnIndex: 7 },
+    );
+    const bar = toRequest({ type: 'addChart', chartType: 'BAR', sourceRange: 'A1:C5' }).addChart.chart.spec.basicChart;
+    assert.deepEqual(bar.series.map((s: any) => s.targetAxis), ['BOTTOM_AXIS', 'BOTTOM_AXIS']);
+  });
+
+  it('the delete tool reports Google refusals as "Nothing was deleted"', async () => {
+    const sized = { ...METADATA, sheets: [{ properties: { sheetId: 0, title: 'Sheet1', gridProperties: { rowCount: 10, columnCount: 26 } } }] };
+    const sheets = mkSheets({ spreadsheets: {
+      get: mock.fn(async () => ({ data: sized })),
+      batchUpdate: mock.fn(async () => { throw mkErr(400, 'You can\'t delete all the rows on the sheet.'); }),
+    } });
+    await assert.rejects(
+      () => callTool('deleteSpreadsheetRowsOrColumns', { spreadsheetId: 'ss', dimension: 'ROWS', startIndex: 2, endIndex: 10 }, { googleSheets: sheets }),
+      (err: any) => err instanceof UserError && /^Nothing was deleted: You can't delete all the rows/.test(err.message),
+    );
+  });
+});
