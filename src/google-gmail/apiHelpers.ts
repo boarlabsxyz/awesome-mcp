@@ -9,17 +9,24 @@ export function createRawEmail(
   to: string,
   subject: string,
   body: string,
-  options?: { cc?: string; bcc?: string; isHtml?: boolean }
+  options?: { cc?: string; bcc?: string; isHtml?: boolean; inReplyTo?: string; references?: string }
 ): string {
   const contentType = options?.isHtml ? 'text/html' : 'text/plain';
 
+  // The schemas refuse line breaks in caller-supplied values; this also covers
+  // values that arrive another way (a reply's copied recipient or subject).
+  const oneLine = (value: string) => value.replace(/[\r\n]+/g, ' ');
   const lines: string[] = [
-    `To: ${to}`,
-    `Subject: ${subject}`,
+    `To: ${oneLine(to)}`,
+    `Subject: ${oneLine(subject)}`,
   ];
 
   if (options?.cc) lines.push(`Cc: ${options.cc}`);
   if (options?.bcc) lines.push(`Bcc: ${options.bcc}`);
+  // Threading headers are copied from another message, so line breaks are
+  // stripped: a crafted Message-ID must not be able to add a header.
+  if (options?.inReplyTo) lines.push(`In-Reply-To: ${options.inReplyTo.replace(/[\r\n]+/g, ' ')}`);
+  if (options?.references) lines.push(`References: ${options.references.replace(/[\r\n]+/g, ' ')}`);
 
   lines.push(`MIME-Version: 1.0`);
   lines.push(`Content-Type: ${contentType}; charset="UTF-8"`);

@@ -83,10 +83,11 @@ describe('send and draft keep the legacy response shape', () => {
     assert.match(raw, /^To: a@b\.c\r\nSubject: Hi\r\nCc: c@d\.e\r\n/);
   });
 
-  it('draftEmail answers 200 with id and messageId only', async () => {
+  it('draftEmail answers 200 with the legacy id and messageId, plus threadId', async () => {
     const { status, body } = await drive('draftEmail', {}, { to: 'a@b.c', subject: 'Hi', body: 'x' });
     assert.equal(status, 200);
-    assert.deepEqual(body, { id: 'd1', messageId: 'm2' });
+    // threadId is an added key; id and messageId keep their names and values.
+    assert.deepEqual(body, { id: 'd1', messageId: 'm2', threadId: null });
   });
 });
 
@@ -227,5 +228,54 @@ describe('gmailPassthroughStatus', () => {
     for (const err of [{ code: 404 }, { code: 403 }, { code: 401 }, { code: 'ECONNRESET' }, null]) {
       assert.equal(gmailPassthroughStatus(err), undefined);
     }
+  });
+});
+
+describe('reply drafts and filters over REST', () => {
+  const parent = {
+    get: mock.fn(async () => ({ data: { id: 'p1', threadId: 'th-9', payload: { headers: [
+      { name: 'Subject', value: 'Quote' }, { name: 'From', value: 'Ann <ann@x.io>' },
+      { name: 'Message-ID', value: '<p1@x.io>' }, { name: 'References', value: '<p0@x.io>' },
+    ] } } })),
+  };
+
+  it('drafts a reply in the original thread and reports threaded from what Gmail stored', async () => {
+    const gmail = mockGmail({ messages: parent });
+    gmail.users.drafts.create = mock.fn(async () => ({ data: { id: 'd1', message: { id: 'm2', threadId: 'th-9' } } }));
+    const { status, body } = await drive('draftEmail', {}, { body: 'Thanks', replyToMessageId: 'p1' }, gmail);
+    assert.equal(status, 200);
+    assert.deepEqual(body, { id: 'd1', messageId: 'm2', threadId: 'th-9', threaded: true });
+    const sent = gmail.users.drafts.create.mock.calls[0].arguments[0].requestBody.message;
+    assert.equal(sent.threadId, 'th-9');
+    const raw = decode(sent.raw);
+    assert.match(raw, /^To: Ann <ann@x\.io>\r\nSubject: Re: Quote\r\n/);
+    assert.match(raw, /\r\nIn-Reply-To: <p1@x\.io>\r\nReferences: <p0@x\.io> <p1@x\.io>\r\n/);
+  });
+
+  it('refuses a draft with neither to nor replyToMessageId', async () => {
+    await assert.rejects(() => drive('draftEmail', {}, { subject: 'Hi', body: 'x' }), /Give "to"/);
+  });
+
+  it('creates a filter from the convenience flags, answering 201', async () => {
+    const gmail = mockGmail();
+    gmail.users.settings = { filters: { create: mock.fn(async (req: any) => ({ data: { id: 'f1', ...req.requestBody } })) } };
+    const { status, body } = await drive('createFilter', {}, { from: 'news@x.io', archive: true, markRead: true, addLabelIds: ['L1'] }, gmail);
+    assert.equal(status, 201);
+    assert.deepEqual((body as any).criteria, { from: 'news@x.io' });
+    assert.deepEqual((body as any).action, { addLabelIds: ['L1'], removeLabelIds: ['INBOX', 'UNREAD'] });
+  });
+
+  it('answers 403 naming Reconnect when the connection lacks the settings scope', async () => {
+    const gmail = mockGmail();
+    const scopeErr = Object.assign(new Error('Request had insufficient authentication scopes.'), { code: 403, errors: [{ reason: 'insufficientPermissions' }] });
+    gmail.users.settings = { filters: { create: mock.fn(async () => { throw scopeErr; }) } };
+    const { status, body } = await drive('createFilter', {}, { from: 'a@x.io', star: true }, gmail);
+    assert.equal(status, 403);
+    assert.match((body as any).error, /Reconnect Gmail/);
+  });
+
+  it('refuses a filter with no criterion or no action', async () => {
+    await assert.rejects(() => drive('createFilter', {}, { star: true }), /at least one criterion/);
+    await assert.rejects(() => drive('createFilter', {}, { from: 'a@x.io' }), /at least one action/);
   });
 });

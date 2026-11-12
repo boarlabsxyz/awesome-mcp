@@ -1392,6 +1392,9 @@ const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
   // global 100kb would 413 the use case. Covers /write, /append, /batchUpdate,
   // /ranges/clear and POST /api/v1/sheets (createSpreadsheet.initialData).
   '/api/v1/sheets',
+  // uploadDriveFile: the file itself, base64. A prefix mount, so it also lets
+  // /files/:id/copy take a large body; nothing else under /api/v1/drive does.
+  '/api/v1/drive/files',
   // An Outline document body is markdown of arbitrary length, and createDocument
   // / updateDocument exist on this plane precisely so a whole page can be
   // pushed in one request. Covers the collection and comment writes too.
@@ -5852,6 +5855,76 @@ function registerRestApiRoutes(app: express.Express): void {
 
   // === Google Drive REST API ===
 
+  // GET /api/v1/drive/files - Search all of Drive, or list recent files (no q)
+  app.get('/api/v1/drive/files', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { searchDriveFilesSchema, performSearchDriveFiles, parseQueryBoolean } = await import('../google-drive/filesOps.js');
+      const maxResults = qstr(req.query.maxResults);
+      const parsed = searchDriveFilesSchema.safeParse({
+        query: qstr(req.query.q) || undefined,
+        searchIn: qstr(req.query.searchIn) || undefined,
+        mimeType: qstr(req.query.mimeType) || undefined,
+        modifiedAfter: qstr(req.query.modifiedAfter) || undefined,
+        includeTrashed: parseQueryBoolean('includeTrashed', qstr(req.query.includeTrashed) || undefined),
+        maxResults: maxResults ? Number(maxResults) : undefined,
+        pageToken: qstr(req.query.pageToken) || undefined,
+        driveId: qstr(req.query.driveId) || undefined,
+      });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid query', issues: parsed.error.flatten() });
+        return;
+      }
+      res.json(await performSearchDriveFiles(req.userSession!.googleDrive, parsed.data));
+    } catch (err) {
+      const mapped = (await import('../google-drive/filesOps.js')).driveRestErrorResponse(err);
+      if (mapped) { res.status(mapped.status).json(mapped.body); return; }
+      sendUpstreamError(res, err, { notFound: 'Not found', fallback: 'Failed to search Drive' });
+    }
+  });
+
+  // GET /api/v1/drive/changes - The change feed (no pageToken: get a start token)
+  app.get('/api/v1/drive/changes', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { listDriveChangesSchema, performListDriveChanges } = await import('../google-drive/filesOps.js');
+      const maxResults = qstr(req.query.maxResults);
+      const parsed = listDriveChangesSchema.safeParse({
+        pageToken: qstr(req.query.pageToken) || undefined,
+        driveId: qstr(req.query.driveId) || undefined,
+        maxResults: maxResults ? Number(maxResults) : undefined,
+      });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid query', issues: parsed.error.flatten() });
+        return;
+      }
+      res.json(await performListDriveChanges(req.userSession!.googleDrive, parsed.data));
+    } catch (err) {
+      const mapped = (await import('../google-drive/filesOps.js')).driveRestErrorResponse(err);
+      if (mapped) { res.status(mapped.status).json(mapped.body); return; }
+      sendUpstreamError(res, err, { notFound: 'Not found', fallback: 'Failed to read the change feed' });
+    }
+  });
+
+  // POST /api/v1/drive/files - Upload a file (optionally converting it)
+  app.post('/api/v1/drive/files', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { uploadDriveFileSchema, performUploadDriveFile } = await import('../google-drive/filesOps.js');
+      const parsed = uploadDriveFileSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const result = await performUploadDriveFile(req.userSession!.googleDrive, parsed.data);
+      res.status(201).json(result);
+    } catch (err: any) {
+      // Refusals the caller can fix (both or neither content field, too big, a
+      // conversion Drive cannot do) carry no upstream status; Drive's own 400 is
+      // the caller's too.
+      const mapped = (await import('../google-drive/filesOps.js')).driveRestErrorResponse(err);
+      if (mapped) { res.status(mapped.status).json(mapped.body); return; }
+      sendUpstreamError(res, err, { notFound: 'Parent folder not found', fallback: 'Failed to upload file' });
+    }
+  });
+
   // GET /api/v1/drive/files/:fileId - Get file info
   app.get('/api/v1/drive/files/:fileId', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
@@ -5870,14 +5943,20 @@ function registerRestApiRoutes(app: express.Express): void {
   app.get('/api/v1/drive/folders/:folderId/contents', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const drive = req.userSession!.googleDrive;
-      const maxResults = parseInt(req.query.maxResults as string) || 50;
-      const q = `'${req.params.folderId}' in parents and trashed = false`;
+      // Same 1-100 bound as the MCP tool; the folder id is escaped like every
+      // other value in a Drive query.
+      const maxResults = Math.min(Math.max(parseInt(req.query.maxResults as string) || 50, 1), 100);
+      const pageToken = qstr(req.query.pageToken) || undefined;
+      const { escapeDriveQueryLiteral } = await import('../google-drive/toolHandlers.js');
+      const q = `'${escapeDriveQueryLiteral(req.params.folderId as string)}' in parents and trashed = false`;
       const result = await drive.files.list({
         q, pageSize: maxResults, orderBy: 'folder,name',
-        fields: 'files(id,name,mimeType,size,modifiedTime,owners)',
+        ...(pageToken ? { pageToken } : {}),
+        fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime,owners)',
         supportsAllDrives: true, includeItemsFromAllDrives: true,
       });
-      res.json({ items: result.data.files || [] });
+      // nextPageToken is non-null when the folder has more items than this page.
+      res.json({ items: result.data.files || [], nextPageToken: result.data.nextPageToken ?? null });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to list folder contents' });
     }
@@ -6016,6 +6095,12 @@ function registerRestApiRoutes(app: express.Express): void {
         res.status(result.status).json(result.body);
       } catch (err: any) {
         console.error(`Error in Gmail ${route.tool}:`, err);
+        // A refusal the caller can fix (a draft with neither to nor
+        // replyToMessageId, a filter with no criterion) carries no status.
+        if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+          res.status(400).json({ error: err.message });
+          return;
+        }
         const status = gmailPassthroughStatus(err);
         if (status) { res.status(status).json({ error: err.message || route.fallback }); return; }
         sendUpstreamError(res, err, { notFound: route.notFound, fallback: route.fallback });
@@ -7016,6 +7101,29 @@ function registerRestApiRoutes(app: express.Express): void {
       });
     } catch (err) {
       sendUpstreamError(res, err, { notFound: 'File not found', fallback: 'Failed to check public access' });
+    }
+  });
+
+  // GET /api/v1/gmail/filters - List filters; GET /api/v1/gmail/filters/:filterId - One filter
+  app.get('/api/v1/gmail/filters', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { performListFilters } = await import('../google-gmail/toolHandlers.js');
+      res.json({ filters: await performListFilters(req.userSession!.googleGmail) });
+    } catch (err) {
+      const { isMissingFilterScope, RECONNECT_FOR_FILTERS } = await import('../google-gmail/toolHandlers.js');
+      if (isMissingFilterScope(err)) { res.status(403).json({ error: RECONNECT_FOR_FILTERS }); return; }
+      sendUpstreamError(res, err, { fallback: 'Failed to list filters' });
+    }
+  });
+
+  app.get('/api/v1/gmail/filters/:filterId', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { performGetFilter } = await import('../google-gmail/toolHandlers.js');
+      res.json(await performGetFilter(req.userSession!.googleGmail, req.params.filterId as string));
+    } catch (err) {
+      const { isMissingFilterScope, RECONNECT_FOR_FILTERS } = await import('../google-gmail/toolHandlers.js');
+      if (isMissingFilterScope(err)) { res.status(403).json({ error: RECONNECT_FOR_FILTERS }); return; }
+      sendUpstreamError(res, err, { notFound: 'Filter not found', fallback: 'Failed to get filter' });
     }
   });
 

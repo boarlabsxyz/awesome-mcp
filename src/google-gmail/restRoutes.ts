@@ -15,8 +15,9 @@ import type { ZodTypeAny } from 'zod';
 
 import * as schemas from './schemas.js';
 import {
-  isSystemLabel, labelChanges, performBatchModifyEmails, performBatchTrashEmails, performCreateLabel,
-  performDraftEmail, performGetOrCreateLabel, performModifyEmail, performSendEmail, performUpdateLabel,
+  isMissingFilterScope, isSystemLabel, labelChanges, performBatchModifyEmails, performBatchTrashEmails,
+  performCreateFilter, performCreateLabel, performDraftEmail, performGetOrCreateLabel, performModifyEmail,
+  performSendEmail, performUpdateLabel, RECONNECT_FOR_FILTERS,
 } from './toolHandlers.js';
 
 /** The parts of an Express request a descriptor reads. */
@@ -78,7 +79,16 @@ export const GMAIL_WRITE_ROUTES: ReadonlyArray<GmailWriteRoute> = [
     params: () => ({}),
     run: async (gmail, args) => {
       const draft = await performDraftEmail(gmail, args);
-      return { status: 200, body: { id: draft.id, messageId: draft.message?.id } };
+      // threadId and threaded are new keys; id and messageId stay as they were.
+      return {
+        status: 200,
+        body: {
+          id: draft.id,
+          messageId: draft.message?.id,
+          threadId: draft.message?.threadId ?? null,
+          ...(args.replyToMessageId ? { threaded: draft.threaded === true } : {}),
+        },
+      };
     },
     fallback: 'Failed to create draft',
   },
@@ -131,6 +141,21 @@ export const GMAIL_WRITE_ROUTES: ReadonlyArray<GmailWriteRoute> = [
       return { status: 200, body: { trashed: true, id: args.messageId } };
     },
     notFound: 'Email not found', fallback: 'Failed to trash email',
+  },
+
+  // ---- Filters ----
+  {
+    path: '/api/v1/gmail/filters', tool: 'createFilter', schema: schemas.createFilterSchema,
+    params: () => ({}),
+    run: async (gmail, args) => {
+      try {
+        return { status: 201, body: await performCreateFilter(gmail, args) };
+      } catch (err) {
+        if (isMissingFilterScope(err)) return { status: 403, body: { error: RECONNECT_FOR_FILTERS } };
+        throw err;
+      }
+    },
+    fallback: 'Failed to create filter',
   },
 
   // ---- Labels ----

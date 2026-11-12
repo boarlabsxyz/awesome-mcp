@@ -9813,6 +9813,15 @@
               "maximum": 1000
             },
             "description": "Maximum number of items to return"
+          },
+          {
+            "name": "pageToken",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "nextPageToken from the previous page."
           }
         ],
         "responses": {
@@ -9831,6 +9840,11 @@
                       "items": {
                         "$ref": "#/components/schemas/File"
                       }
+                    },
+                    "nextPageToken": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Non-null when more items remain."
                     }
                   }
                 }
@@ -9941,6 +9955,477 @@
           },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/drive/files": {
+      "get": {
+        "operationId": "searchDriveFiles",
+        "summary": "Search all of Drive by name or content, or list recent files",
+        "description": "Any file type and folder. Omit q for the most recently modified files. Paginated with nextPageToken; incompleteSearch true means Drive skipped some locations. A fullText search is ordered by relevance.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Text to look for. Omit to list the most recently modified files."
+          },
+          {
+            "name": "searchIn",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "name",
+                "content",
+                "both"
+              ],
+              "default": "both"
+            },
+            "description": "Match the query against file names, file content, or both."
+          },
+          {
+            "name": "mimeType",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional type filter: document, spreadsheet, presentation, folder, form, pdf, or any MIME type (e.g. \"image/png\")."
+          },
+          {
+            "name": "modifiedAfter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only files modified after this RFC 3339 time, e.g. \"2026-11-01T00:00:00Z\"."
+          },
+          {
+            "name": "includeTrashed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Include files in the trash."
+          },
+          {
+            "name": "maxResults",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "description": "Files per page (1-100)."
+          },
+          {
+            "name": "pageToken",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "nextPageToken from a previous call, to get the next page."
+          },
+          {
+            "name": "includeSharedDrives",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Include items from shared drives. Defaults to true."
+          },
+          {
+            "name": "driveId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter to a specific shared drive ID."
+          },
+          {
+            "name": "corpora",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "user",
+                "drive",
+                "allDrives",
+                "domain"
+              ]
+            },
+            "description": "Source of files: user (My Drive), drive (specific), allDrives, domain."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "mimeType": {
+                            "type": "string"
+                          },
+                          "modifiedTime": {
+                            "type": "string"
+                          },
+                          "webViewLink": {
+                            "type": "string"
+                          },
+                          "driveId": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "nextPageToken": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "incompleteSearch": {
+                      "type": "boolean"
+                    },
+                    "sortedBy": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "uploadDriveFile",
+        "summary": "Upload a file, optionally converting it to a Google Doc, Sheet or Slides",
+        "description": "Body limit 5mb (about 3.7 MB of file as base64). Not idempotent. convertTo is checked against what Drive can import from sourceMimeType.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fileName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Name for the file in Drive, e.g. \"budget.xlsx\"."
+                  },
+                  "sourceMimeType": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "MIME type of the content, e.g. \"text/csv\", \"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\", \"application/pdf\"."
+                  },
+                  "contentBase64": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The file bytes, base64-encoded. Give this or textContent."
+                  },
+                  "textContent": {
+                    "type": "string",
+                    "description": "The file as UTF-8 text (CSV, Markdown, HTML, plain text). Give this or contentBase64."
+                  },
+                  "parentFolderId": {
+                    "type": "string",
+                    "description": "Folder (or shared drive) to put it in. Defaults to My Drive root."
+                  },
+                  "convertTo": {
+                    "type": "string",
+                    "enum": [
+                      "document",
+                      "spreadsheet",
+                      "presentation"
+                    ],
+                    "description": "Convert into a native Google Doc, Sheet or Slides file. Checked against what Drive can import from sourceMimeType."
+                  }
+                },
+                "required": [
+                  "fileName",
+                  "sourceMimeType"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "file": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "mimeType": {
+                          "type": "string"
+                        },
+                        "modifiedTime": {
+                          "type": "string"
+                        },
+                        "webViewLink": {
+                          "type": "string"
+                        },
+                        "driveId": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "bytes": {
+                      "type": "integer"
+                    },
+                    "converted": {
+                      "type": "boolean",
+                      "description": "true only when Drive stored it as the requested Google type."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, both or neither content field, over 20 MB, or a conversion Drive cannot do",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Parent folder not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/drive/changes": {
+      "get": {
+        "operationId": "listDriveChanges",
+        "summary": "Follow the Drive change feed",
+        "description": "Without pageToken returns startPageToken and no changes. nextPageToken means more changes now; newStartPageToken means the end of the feed, poll later with it.",
+        "parameters": [
+          {
+            "name": "pageToken",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Token from a previous call (newStartPageToken or nextPageToken). Omit on the first call to get a starting token: changes are recorded from that moment on."
+          },
+          {
+            "name": "maxResults",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "description": "Changes per page (1-1000)."
+          },
+          {
+            "name": "driveId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional shared drive ID, to follow that drive instead of My Drive."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Changes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "changes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "changeType": {
+                            "type": "string"
+                          },
+                          "time": {
+                            "type": "string"
+                          },
+                          "removed": {
+                            "type": "boolean"
+                          },
+                          "fileId": {
+                            "type": "string"
+                          },
+                          "file": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "mimeType": {
+                                "type": "string"
+                              },
+                              "modifiedTime": {
+                                "type": "string"
+                              },
+                              "webViewLink": {
+                                "type": "string"
+                              },
+                              "driveId": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "startPageToken": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "nextPageToken": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "newStartPageToken": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
             "content": {
               "application/json": {
                 "schema": {
@@ -14857,6 +15342,291 @@
         }
       }
     },
+    "/api/v1/gmail/filters": {
+      "get": {
+        "operationId": "listGmailFilters",
+        "summary": "List Gmail filters",
+        "responses": {
+          "200": {
+            "description": "Filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "filters": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "criteria": {
+                            "type": "object"
+                          },
+                          "action": {
+                            "type": "object",
+                            "properties": {
+                              "addLabelIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "removeLabelIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied; a connection made before filters were added gets an error naming Reconnect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createGmailFilter",
+        "summary": "Create a Gmail filter for incoming mail",
+        "description": "Applies to mail arriving afterwards. Needs at least one criterion and one action.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "type": "string"
+                  },
+                  "subject": {
+                    "type": "string"
+                  },
+                  "query": {
+                    "type": "string",
+                    "description": "Gmail search query"
+                  },
+                  "negatedQuery": {
+                    "type": "string"
+                  },
+                  "hasAttachment": {
+                    "type": "boolean"
+                  },
+                  "addLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "removeLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "archive": {
+                    "type": "boolean",
+                    "description": "Remove INBOX"
+                  },
+                  "markRead": {
+                    "type": "boolean",
+                    "description": "Remove UNREAD"
+                  },
+                  "star": {
+                    "type": "boolean",
+                    "description": "Add STARRED"
+                  },
+                  "neverSpam": {
+                    "type": "boolean",
+                    "description": "Remove SPAM"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Filter created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "criteria": {
+                      "type": "object"
+                    },
+                    "action": {
+                      "type": "object",
+                      "properties": {
+                        "addLabelIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "removeLabelIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No criterion, no action, or a bad label ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied; a connection made before filters were added gets an error naming Reconnect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/filters/{filterId}": {
+      "get": {
+        "operationId": "getGmailFilter",
+        "summary": "Get one Gmail filter",
+        "parameters": [
+          {
+            "name": "filterId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Filter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "criteria": {
+                      "type": "object"
+                    },
+                    "action": {
+                      "type": "object",
+                      "properties": {
+                        "addLabelIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "removeLabelIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied; a connection made before filters were added gets an error naming Reconnect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Filter not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/gmail/drafts": {
       "post": {
         "operationId": "createDraft",
@@ -14869,8 +15639,6 @@
               "schema": {
                 "type": "object",
                 "required": [
-                  "to",
-                  "subject",
                   "body"
                 ],
                 "properties": {
@@ -14898,6 +15666,10 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Whether the body content is HTML"
+                  },
+                  "replyToMessageId": {
+                    "type": "string",
+                    "description": "Draft a reply in this message's conversation (threadId, In-Reply-To, References, Re: subject). to and subject default from the original; without this field both are required."
                   }
                 }
               }
@@ -14919,6 +15691,15 @@
                     "messageId": {
                       "type": "string",
                       "description": "ID of the draft message"
+                    },
+                    "threadId": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Conversation the draft belongs to"
+                    },
+                    "threaded": {
+                      "type": "boolean",
+                      "description": "Only with replyToMessageId: whether Gmail put the draft in the original conversation"
                     }
                   }
                 }

@@ -41,12 +41,16 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/drive/folders/folder-123',
   '/api/v1/drive/files/file-123/permissions',
   '/api/v1/drive/files/file-123/public',
+  '/api/v1/gmail/filters',
+  '/api/v1/gmail/filters/f-1',
   '/api/v1/gmail/labels',
   '/api/v1/slides/presentation-123/pages/page-123/thumbnail',
   '/api/v1/slides/presentation-123/comments',
   '/api/v1/sheets/sheet-123/ranges?range=A1:B2',
   '/api/v1/sheets/sheet-123/cells?range=A1:B2',
   '/api/v1/sheets/sheet-123/rows/1',
+  '/api/v1/drive/files?q=budget',
+  '/api/v1/drive/changes',
   '/api/v1/sheets/sheet-123/search?col=A&val=x',
   '/api/v1/clickup/docs/doc-123?workspaceId=w-1',
   '/api/v1/clickup/docs/doc-123/pages/page-123?workspaceId=w-1',
@@ -194,6 +198,8 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
 // here proves the gate runs ahead of validation and an unauthenticated caller
 // can't probe the schema by watching 400s.
 const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
+  // Drive upload. '/api/v1/drive/files' is in both arrays: GET searches, POST uploads.
+  '/api/v1/drive/files',
   // Storage. /find is a READ served over POST (the where conditions).
   '/api/v1/storage/collections/people/find',
   '/api/v1/storage/collections/people/records',
@@ -282,6 +288,8 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/hubspot/engagements/notes/n-1/delete',
   // Gmail. /labels is in both arrays: GET lists, POST creates.
   '/api/v1/gmail/messages/send',
+  // '/api/v1/gmail/filters' is in both arrays: GET lists, POST creates.
+  '/api/v1/gmail/filters',
   '/api/v1/gmail/messages/batch-modify',
   '/api/v1/gmail/messages/batch-trash',
   '/api/v1/gmail/messages/m-1/modify',

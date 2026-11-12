@@ -544,6 +544,9 @@ export async function seedDefaultCatalogs(): Promise<void> {
     mcpUrl: googleGmailMcpUrl,
     scopes: [
       'https://www.googleapis.com/auth/gmail.modify',
+      // Filters (createFilter/listFilters/getFilter). Connections made before
+      // it was added must reconnect; the tools say so on the 403.
+      'https://www.googleapis.com/auth/gmail.settings.basic',
     ],
     googleClientId: googleGmailClientId,
     googleClientSecret: googleGmailClientSecret,
@@ -551,6 +554,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
       'https://www.googleapis.com/auth/userinfo.email',
       'https://www.googleapis.com/auth/userinfo.profile',
       'https://www.googleapis.com/auth/gmail.modify',
+      'https://www.googleapis.com/auth/gmail.settings.basic',
     ],
     isLocal: process.env.GOOGLE_GMAIL_MCP_URL ? false : true,
     isActive: true,

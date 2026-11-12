@@ -10,8 +10,8 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Docs](#google-docs) (45)
 - [Google Sheets](#google-sheets) (14)
 - [Google Calendar](#google-calendar) (6)
-- [Google Drive](#google-drive) (15)
-- [Gmail](#gmail) (14)
+- [Google Drive](#google-drive) (18)
+- [Gmail](#gmail) (18)
 - [Google Slides](#google-slides) (6)
 - [ClickUp](#clickup) (48)
 - [Slack (bot)](#slack-bot-) (9)
@@ -126,7 +126,7 @@ Source: `src/google-calendar/server.ts` — 6 tools.
 
 ## Google Drive
 
-Source: `src/google-drive/server.ts` — 15 tools.
+Source: `src/google-drive/server.ts` — 18 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -145,15 +145,18 @@ Source: `src/google-drive/server.ts` — 15 tools.
 | `getFilePermissions` | Retrieve all permissions on a Google Drive file or folder. Shows who has access, their roles, and sharing status. | `GET /api/v1/drive/files/{fileId}/permissions` |
 | `shareDriveFile` | Share a Google Drive file or folder by creating a permission. Required fields by type: type=user\|group → emailAddress; type=domain → domain; type=anyone → no extra field. | — |
 | `checkPublicAccess` | List the file's direct permissions and report whether an "anyone with link" grant exists on the file itself. Does NOT follow folder-inherited, domain-wide, or shared-drive policies, so a file inside a public folder may report private here. | `GET /api/v1/drive/files/{fileId}/public` |
+| `searchDriveFiles` | Searches all of Drive (any file type, any folder) by name or content, or lists recently modified files when no query is given. Paginated. | `GET /api/v1/drive/files?q={query}` |
+| `listDriveChanges` | Follows the Drive change feed: what was created, edited, trashed or removed since a token. First call (no pageToken) returns the token to poll with. | `GET /api/v1/drive/changes` |
+| `uploadDriveFile` | Uploads a file (base64 bytes or text) to Drive, optionally converting it into a Google Doc, Sheet or Slides. Up to 20 MB. | `POST /api/v1/drive/files` |
 
 ## Gmail
 
-Source: `src/google-gmail/server.ts` — 14 tools.
+Source: `src/google-gmail/server.ts` — 18 tools.
 
 | Tool | Description | REST |
 |---|---|---|
 | `sendEmail` | Send an email message. | `POST /api/v1/gmail/messages/send` |
-| `draftEmail` | Create a draft email without sending it. | `POST /api/v1/gmail/drafts` |
+| `draftEmail` | Create a draft email without sending it. Set replyToMessageId to draft a reply inside that conversation. | `POST /api/v1/gmail/drafts` |
 | `readEmail` | Read the full content of an email by its message ID. | `GET /api/v1/gmail/messages/{messageId}` |
 | `searchEmails` | Search emails using Gmail query syntax (e.g., "from:user@example.com", "subject:hello", "is:unread", "newer_than:2d"). | `GET /api/v1/gmail/messages?q={query}` |
 | `modifyEmail` | Modify labels on a single email message (add or remove labels). For more than one message, prefer batchModifyEmails. | `POST /api/v1/gmail/messages/{messageId}/modify` |
@@ -166,6 +169,10 @@ Source: `src/google-gmail/server.ts` — 14 tools.
 | `deleteLabel` | Delete a Gmail label. System labels (INBOX, SENT, etc.) cannot be deleted. | `POST /api/v1/gmail/labels/{labelId}/delete` |
 | `getOrCreateLabel` | Get a label by name, creating it if it does not exist. Returns the label ID. | `POST /api/v1/gmail/labels/get-or-create` |
 | `getAttachment` | Download an email attachment. Returns the content as base64-encoded data. | `GET /api/v1/gmail/messages/{messageId}/attachments/{attachmentId}` |
+| `createFilter` | Creates a Gmail filter for incoming mail: match by sender, recipient, subject or search query; label, archive, mark read or star. Undo with deleteFilter. | `POST /api/v1/gmail/filters` |
+| `listFilters` | Lists the Gmail filters on this account with their criteria and actions. | `GET /api/v1/gmail/filters` |
+| `deleteFilter` | Deletes a Gmail filter so it stops applying to new mail. Mail it already changed is not restored. | — |
+| `getFilter` | Gets one Gmail filter by ID. | `GET /api/v1/gmail/filters/{filterId}` |
 
 ## Google Slides
 
@@ -643,4 +650,4 @@ Source: `src/sandbox/server.ts` — 6 tools.
 
 ---
 
-**Grand total: 458 tools across 22 sections.**
+**Grand total: 465 tools across 22 sections.**
