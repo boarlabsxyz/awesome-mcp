@@ -6092,6 +6092,12 @@ function registerRestApiRoutes(app: express.Express): void {
         res.status(result.status).json(result.body);
       } catch (err: any) {
         console.error(`Error in Gmail ${route.tool}:`, err);
+        // A refusal the caller can fix (a draft with neither to nor
+        // replyToMessageId, a filter with no criterion) carries no status.
+        if (err?.name === 'UserError' && typeof err?.code !== 'number') {
+          res.status(400).json({ error: err.message });
+          return;
+        }
         const status = gmailPassthroughStatus(err);
         if (status) { res.status(status).json({ error: err.message || route.fallback }); return; }
         sendUpstreamError(res, err, { notFound: route.notFound, fallback: route.fallback });
@@ -7092,6 +7098,29 @@ function registerRestApiRoutes(app: express.Express): void {
       });
     } catch (err) {
       sendUpstreamError(res, err, { notFound: 'File not found', fallback: 'Failed to check public access' });
+    }
+  });
+
+  // GET /api/v1/gmail/filters - List filters; GET /api/v1/gmail/filters/:filterId - One filter
+  app.get('/api/v1/gmail/filters', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { performListFilters } = await import('../google-gmail/toolHandlers.js');
+      res.json({ filters: await performListFilters(req.userSession!.googleGmail) });
+    } catch (err) {
+      const { isMissingFilterScope, RECONNECT_FOR_FILTERS } = await import('../google-gmail/toolHandlers.js');
+      if (isMissingFilterScope(err)) { res.status(403).json({ error: RECONNECT_FOR_FILTERS }); return; }
+      sendUpstreamError(res, err, { fallback: 'Failed to list filters' });
+    }
+  });
+
+  app.get('/api/v1/gmail/filters/:filterId', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { performGetFilter } = await import('../google-gmail/toolHandlers.js');
+      res.json(await performGetFilter(req.userSession!.googleGmail, req.params.filterId as string));
+    } catch (err) {
+      const { isMissingFilterScope, RECONNECT_FOR_FILTERS } = await import('../google-gmail/toolHandlers.js');
+      if (isMissingFilterScope(err)) { res.status(403).json({ error: RECONNECT_FOR_FILTERS }); return; }
+      sendUpstreamError(res, err, { notFound: 'Filter not found', fallback: 'Failed to get filter' });
     }
   });
 

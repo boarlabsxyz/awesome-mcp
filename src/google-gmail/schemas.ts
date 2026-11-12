@@ -27,7 +27,41 @@ const messageListVisibility = z.enum(['show', 'hide']);
 
 export const sendEmailSchema = z.object(emailFields);
 
-export const draftEmailSchema = z.object(emailFields);
+// A reply draft takes `to` and `subject` from the original when they are left
+// out, so both are optional here; a draft that is not a reply still needs
+// them, which the op refuses by name (a Zod refine would surface as a bare
+// InvalidParams).
+export const draftEmailSchema = z.object({
+  ...emailFields,
+  to: emailFields.to.optional(),
+  subject: emailFields.subject.optional(),
+  replyToMessageId: z.string().min(1).optional()
+    .describe('Make the draft a reply in that message\'s conversation: same thread, In-Reply-To/References set, "Re:" subject and the sender as recipient unless to/subject are given.'),
+});
+
+// === Filters ===
+//
+// gmail.settings.basic, a scope connections made before it was added do not
+// hold: they get a 403 that names Reconnect.
+
+export const createFilterSchema = z.object({
+  from: headerValue('Match mail from this sender (address or name).').optional(),
+  to: headerValue('Match mail to this recipient.').optional(),
+  subject: headerValue('Match mail whose subject contains this.').optional(),
+  query: z.string().optional().describe('Match mail that a Gmail search query matches, e.g. "invoice has:attachment".'),
+  negatedQuery: z.string().optional().describe('Exclude mail that this Gmail search query matches.'),
+  hasAttachment: z.boolean().optional().describe('Only mail with attachments.'),
+  addLabelIds: z.array(z.string()).optional().describe('Label IDs to apply (getOrCreateLabel gives an ID for a name).'),
+  removeLabelIds: z.array(z.string()).optional().describe('Label IDs to remove, e.g. INBOX (skip the inbox) or UNREAD (mark read).'),
+  archive: z.boolean().optional().describe('Skip the inbox (same as removing INBOX).'),
+  markRead: z.boolean().optional().describe('Mark as read (same as removing UNREAD).'),
+  star: z.boolean().optional().describe('Star it (same as adding STARRED).'),
+  neverSpam: z.boolean().optional().describe('Never send it to Spam (same as removing SPAM).'),
+});
+
+export const getFilterSchema = z.object({
+  filterId: z.string().describe('The filter ID, from listFilters.'),
+});
 
 export const modifyEmailSchema = z.object({
   messageId: z.string().describe('The Gmail message ID to modify.'),

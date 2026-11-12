@@ -125,13 +125,16 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `searchEmails` | `GET /api/v1/gmail/messages?q={query}` | live | Search emails |
 | `readEmail` | `GET /api/v1/gmail/messages/{messageId}` | live | Read an email (JSON or markdown via Accept) |
 | `getAttachment` | `GET /api/v1/gmail/messages/{messageId}/attachments/{attachmentId}` | live | Download an email attachment — _Returns Gmail base64url-encoded payload as JSON {size, data}; caller decodes._ |
+| `listFilters` | `GET /api/v1/gmail/filters` | live | List Gmail filters — _Needs gmail.settings.basic: a connection made before it was added gets 403 naming Reconnect._ |
+| `getFilter` | `GET /api/v1/gmail/filters/{filterId}` | live | Get one Gmail filter |
 | `listLabels` | `GET /api/v1/gmail/labels` | live | List Gmail labels |
 | `sendEmail` | `POST /api/v1/gmail/messages/send` | live | Send an email — _Served long before it was catalogued, so the path and response keys are unchanged; the body now validates with the tool schema, which also refuses a line break in a header field. Body limit 5mb. NOT idempotent - a retried call sends the message twice._ |
-| `draftEmail` | `POST /api/v1/gmail/drafts` | live | Create a draft email — _Served long before it was catalogued, so the path and response keys are unchanged; the body now validates with the tool schema, which also refuses a line break in a header field. Body limit 5mb._ |
+| `draftEmail` | `POST /api/v1/gmail/drafts` | live | Create a draft email — _Served long before it was catalogued, so the path and response keys are unchanged; the body now validates with the tool schema, which also refuses a line break in a header field. Body limit 5mb. replyToMessageId drafts a reply in that conversation (threadId, In-Reply-To, References, Re: subject; to and subject default from the original) and the response adds threadId and threaded, read from the draft Gmail stored._ |
 | `batchModifyEmails` | `POST /api/v1/gmail/messages/batch-modify` | live | Change labels on up to 1000 emails — _Gmail answers 204 with no per-message result, so confirmed is always null: requested counts the IDs sent, not the messages changed. 400 when no label is named._ |
 | `batchDeleteEmails` | `POST /api/v1/gmail/messages/batch-trash` | live | Move up to 1000 emails to the trash — _DESTRUCTIVE. Exposed with explicit sign-off. Moves messages to Trash, recoverable for 30 days. Gmail has no batch trash, so a failure part way is reported per message: trashed, failed and notAttempted. 200 unless nothing was trashed._ |
 | `modifyEmail` | `POST /api/v1/gmail/messages/{messageId}/modify` | live | Change labels on one email — _POST sibling of the older PATCH on the message, which stays for existing callers. 400 when no label is named._ |
 | `deleteEmail` | `POST /api/v1/gmail/messages/{messageId}/trash` | live | Move one email to the trash — _DESTRUCTIVE. Exposed with explicit sign-off, though the older DELETE on the message already reached this. Moves it to Trash, recoverable for 30 days._ |
+| `createFilter` | `POST /api/v1/gmail/filters` | live | Create a Gmail filter for incoming mail — _Answers 201. Applies to mail arriving afterwards, not to existing mail. Needs at least one criterion and one action; forwarding is not offered (it needs the gmail.settings.sharing scope). A filter can hide mail (archive, markRead) and there is NO delete on this plane: undo it with the deleteFilter MCP tool, which is MCP-only like the other deletes. Exposed on that basis as a non-destructive write. Needs gmail.settings.basic: older connections get 403 naming Reconnect._ |
 | `getOrCreateLabel` | `POST /api/v1/gmail/labels/get-or-create` | live | Find a label by name or create it — _201 with created true when the label was made, 200 with created false when it already existed. Matches the name case-insensitively._ |
 | `createLabel` | `POST /api/v1/gmail/labels` | live | Create a Gmail label — _201 with the created label. 409 when the name is taken._ |
 | `updateLabel` | `POST /api/v1/gmail/labels/{labelId}` | live | Update a Gmail label — _Only the named fields change. 400 when no field is given._ |
@@ -470,4 +473,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 346 endpoints.
+Catalog size: 349 endpoints.
