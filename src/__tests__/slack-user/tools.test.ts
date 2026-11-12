@@ -49,10 +49,13 @@ describe('slack-user tool registry', () => {
     assert.equal(registrations.length, toolMap.size, 'duplicate tool name registered');
   });
 
-  it('registers the 8 original tools, editMessage, diagnoseChannelAccess, 2 search tools, 5 event tools and 2 shared tools', () => {
+  it('registers the 8 original tools, editMessage, diagnoseChannelAccess, 2 search tools, 5 event tools, the workspace tools and 2 shared tools', () => {
     const expected = [
       'listChannels', 'readChannelHistory', 'readThreadReplies', 'downloadFile',
       'postMessage', 'replyInThread', 'editMessage', 'listUsers', 'openDm',
+      'createChannel', 'addReaction', 'getUserProfile', 'listChannelMembers', 'uploadFile', 'scheduleMessage',
+      'createCanvas', 'getCanvasContent', 'findCanvasSections', 'editCanvas',
+      'createList', 'getListItems', 'getListItem', 'createListItem', 'updateListItem',
       'diagnoseChannelAccess',
       ...SEARCH_TOOLS,
       ...EVENT_TOOLS,
@@ -175,18 +178,29 @@ const serverSource = readFileSync(
 );
 
 /** Source text of one addTool({...}) block, found by brace matching. */
+// Tools shared with slack-bot are registered from src/slack/workspaceTools.ts,
+// where the channel check is the injected `guardChannel` — which this server
+// wires to enforceAccess (asserted below). Their bodies are read from there,
+// with `guardChannel(` standing for `enforceAccess(`.
+const workspaceSource = readFileSync(new URL('../../slack/workspaceTools.ts', import.meta.url), 'utf8');
+
 function toolSource(name: string): string {
-  const start = serverSource.indexOf(`name: '${name}'`);
-  assert.ok(start > 0, `${name} not found in server source`);
-  const open = serverSource.lastIndexOf('addTool({', start);
+  const inServer = serverSource.indexOf(`name: '${name}'`) > 0;
+  const source = inServer ? serverSource : workspaceSource;
+  const start = source.indexOf(`name: '${name}'`);
+  assert.ok(start > 0, `${name} not found in server or workspace-tools source`);
+  const open = source.lastIndexOf('addTool({', start);
   assert.ok(open > 0, `${name} is not inside an addTool call`);
   let depth = 0;
-  for (let i = open + 'addTool('.length; i < serverSource.length; i++) {
-    const ch = serverSource[i];
+  for (let i = open + 'addTool('.length; i < source.length; i++) {
+    const ch = source[i];
     if (ch === '{') depth++;
     else if (ch === '}') {
       depth--;
-      if (depth === 0) return serverSource.slice(open, i + 1);
+      if (depth === 0) {
+        const block = source.slice(open, i + 1);
+        return inServer ? block : block.replaceAll('guardChannel(', 'enforceAccess(');
+      }
     }
   }
   throw new Error(`unterminated addTool block for ${name}`);
@@ -236,6 +250,20 @@ describe('slack-user access gating', () => {
         `${name} must call enforceAccess`,
       );
     }
+  });
+
+  it('runs the file guard in every canvas and list tool before calling Slack', () => {
+    for (const name of ['getCanvasContent', 'findCanvasSections', 'editCanvas', 'getListItems', 'getListItem', 'createListItem', 'updateListItem']) {
+      const block = toolSource(name);
+      const guard = block.indexOf('guardFile(');
+      assert.ok(guard > 0, `${name} must call guardFile`);
+      const firstCall = block.search(/client\.|perform[A-Z]/);
+      assert.ok(firstCall === -1 || guard < firstCall, `${name} must guard before calling Slack`);
+    }
+  });
+
+  it('wires the shared workspace tools to enforceAccess and the file guard', () => {
+    assert.match(serverSource, /registerSlackWorkspaceTools\(slackUserServer, \{[^}]*guardChannel: enforceAccess,[^}]*guardFile: guardSharedFile,/s);
   });
 
   it('keeps every UNGATED_BY_DESIGN entry real', () => {

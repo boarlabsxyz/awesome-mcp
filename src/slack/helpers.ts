@@ -164,10 +164,18 @@ export function formatMessage(msg: any, userNames: Map<string, string>, channelI
  * the rewritten messages below no longer contain Slack's error code — so
  * matching the text, as the read routes do, would turn every one into a 500.
  */
-function refusal(status: number, message: string): UserError {
+export function refusal(status: number, message: string): UserError {
   const err = new UserError(message);
   (err as UserError & { status: number }).status = status;
   return err;
+}
+
+/** The users a DM is opened with: one 1-on-1, or 2-8 for a group DM. */
+export function resolveDmUsers(args: { userId?: string; userIds?: string[] }): string[] {
+  if ((args.userId === undefined) === (args.userIds === undefined)) {
+    throw new UserError('Give userId for a 1-on-1 DM or userIds for a group DM, not both or neither.');
+  }
+  return args.userIds ?? [args.userId!];
 }
 
 export function assertWritesEnabled(): void {

@@ -59,6 +59,11 @@ export function slackWriteErrorStatus(err: unknown): number {
   const msg = String((err as { message?: unknown })?.message ?? '').toLowerCase();
   if (msg.includes('is_archived') || msg.includes('restricted_action')) return 403;
   if (msg.includes('no_text') || msg.includes('invalid_arguments') || msg.includes('msg_too_long')) return 400;
+  // Codes the workspace tools (channels, scheduling, canvases, lists) can meet.
+  if (msg.includes('name_taken')) return 409;
+  if (/invalid_name|invalid_column_id|invalid_row_id|time_in_past|time_too_far|invalid_time|canvas_editing_failed/.test(msg)) return 400;
+  if (/message_not_found|file_not_found|list_not_found|canvas_not_found/.test(msg)) return 404;
+  if (/paid_teams_only|free_teams_cannot|feature_not_enabled|not_allowed_token_type/.test(msg)) return 403;
   const mapped = mapSlackErrorToHttpStatus(err);
   return mapped === 401 ? 502 : mapped;
 }

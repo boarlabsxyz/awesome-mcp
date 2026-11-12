@@ -26,6 +26,8 @@ import { resolveTeamNames, formatTeamLabel } from './teamNames.js';
 import type { SlackAccessRules } from '../mcpConnectionStore.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
+import { guardFileByShares, registerSlackWorkspaceTools } from '../slack/workspaceTools.js';
+import { resolveDmUsers } from '../slack/helpers.js';
 
 export const slackUserServer = instrumentServer(new FastMCP<UserSession>({
   name: 'Slack MCP Server',
@@ -680,15 +682,35 @@ slackUserServer.addTool({
 slackUserServer.addTool({
   name: 'openDm',
   annotations: { readOnlyHint: false },
-  description: 'Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage.',
+  description: 'Open (or retrieve) a DM: 1-on-1 with userId, or a group DM with userIds (2-8 people). Returns the channel ID to use with postMessage.',
   parameters: z.object({
-    userId: z.string().describe('The Slack user ID to open a DM with (e.g., U01234ABCDE).'),
+    userId: z.string().optional().describe('The Slack user ID to open a 1-on-1 DM with (e.g., U01234ABCDE).'),
+    userIds: z.array(z.string()).min(2).max(8).optional().describe('Open a group DM with these users (2-8). Give this or userId.'),
   }),
   execute: async (args, { session }) => {
     const client = getSlackUserClient(session);
-    const result = await client.conversationsOpen(args.userId);
-    return `DM channel opened: ${result.channel.id}\n\nYou can now use postMessage with channelId "${result.channel.id}" to send a direct message.`;
+    const users = resolveDmUsers(args);
+    const result = await client.conversationsOpen(users.join(','));
+    const kind = users.length > 1 ? `Group DM with ${users.length} people` : 'DM channel';
+    return `${kind} opened: ${result.channel.id}\n\nYou can now use postMessage with channelId "${result.channel.id}" to send a direct message.`;
   },
+});
+
+/**
+ * Canvases and lists are files, so they are checked by where they are shared:
+ * readable if ANY channel they are shared into passes the rules (the same
+ * posture as searchFiles). One shared only into denied channels is refused,
+ * or it could be read by ID around the rules. One with no reported share
+ * passes only if the caller created it (see guardFileByShares).
+ */
+async function guardSharedFile(client: SlackClient, session: UserSession, fileId: string): Promise<void> {
+  await guardFileByShares(client, fileId, (channelId) => enforceAccess(client, session, channelId));
+}
+
+registerSlackWorkspaceTools(slackUserServer, {
+  getClient: getSlackUserClient,
+  guardChannel: enforceAccess,
+  guardFile: guardSharedFile,
 });
 
 // === Channel event subscriptions ===

@@ -33884,6 +33884,31 @@
             "description": "Resource not found"
           }
         }
+      },
+      "post": {
+        "operationId": "createSlackChannel",
+        "summary": "Create a public or private channel",
+        "description": "Create a public or private channel. Mirrors the MCP tool `createChannel`. Takes a JSON body and returns JSON. Answers 201. Needs channels:manage (bot) or channels:write/groups:write (user). Not idempotent: a taken name is refused by Slack (name_taken). 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
       }
     },
     "/api/v1/slack/channels/{channelId}/messages": {
@@ -34105,6 +34130,464 @@
           },
           "404": {
             "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/users/{userId}": {
+      "get": {
+        "operationId": "getSlackUserProfile",
+        "summary": "Get a full user profile",
+        "description": "Get a full user profile. Mirrors the MCP tool `getUserProfile`. Returns upstream JSON by default; pass Accept: text/plain for markdown. Email needs users:read.email; custom fields need users.profile:read, and customFieldsError says why they are missing.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/channels/{channelId}/members": {
+      "get": {
+        "operationId": "listSlackChannelMembers",
+        "summary": "List the members of a channel",
+        "description": "List the members of a channel. Mirrors the MCP tool `listChannelMembers`. Returns upstream JSON by default; pass Accept: text/plain for markdown. User IDs only, paginated with nextCursor.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "channelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/canvases/{canvasId}": {
+      "get": {
+        "operationId": "getSlackCanvas",
+        "summary": "Read a canvas as markdown or HTML",
+        "description": "Read a canvas as markdown or HTML. Mirrors the MCP tool `getCanvasContent`. Returns upstream JSON by default; pass Accept: text/plain for markdown. ?contentType=html for HTML. Needs canvases:read.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "canvasId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/lists/{listId}/items": {
+      "get": {
+        "operationId": "listSlackListItems",
+        "summary": "Read the records of a Slack List",
+        "description": "Read the records of a Slack List. Mirrors the MCP tool `getListItems`. Returns upstream JSON by default; pass Accept: text/plain for markdown. Paid workspaces only. includeList (default true) adds the title and column schema. Paginated with nextCursor.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSlackListItem",
+        "summary": "Add a record to a Slack List",
+        "description": "Add a record to a Slack List. Mirrors the MCP tool `createListItem`. Takes a JSON body and returns JSON. Answers 201. Each field names its columnId and exactly one typed value. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/lists/{listId}/items/{itemId}": {
+      "get": {
+        "operationId": "getSlackListItem",
+        "summary": "Read one Slack List record",
+        "description": "Read one Slack List record. Mirrors the MCP tool `getListItem`. Returns upstream JSON by default; pass Accept: text/plain for markdown. Paid workspaces only.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "itemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/channels/{channelId}/messages/{ts}/reactions": {
+      "post": {
+        "operationId": "addSlackReaction",
+        "summary": "Add an emoji reaction to a message",
+        "description": "Add an emoji reaction to a message. Mirrors the MCP tool `addReaction`. Takes a JSON body and returns JSON. A reaction already there answers 200 with alreadyPresent true. Needs reactions:write. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "channelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ts",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/channels/{channelId}/scheduled-messages": {
+      "post": {
+        "operationId": "scheduleSlackMessage",
+        "summary": "Schedule a message for later delivery",
+        "description": "Schedule a message for later delivery. Mirrors the MCP tool `scheduleMessage`. Takes a JSON body and returns JSON. Answers 201 with scheduledMessageId. postAt must be in the future and within 120 days. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "channelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/files": {
+      "post": {
+        "operationId": "uploadSlackFile",
+        "summary": "Upload a file and optionally share it into a channel",
+        "description": "Upload a file and optionally share it into a channel. Mirrors the MCP tool `uploadFile`. Takes a JSON body and returns JSON. Answers 201. Body limit 5mb (about 3.7 MB of file as base64). sharedConfirmed is null when Slack has not finished sharing yet. Needs files:write. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/canvases": {
+      "post": {
+        "operationId": "createSlackCanvas",
+        "summary": "Create a standalone or channel canvas",
+        "description": "Create a standalone or channel canvas. Mirrors the MCP tool `createCanvas`. Takes a JSON body and returns JSON. Answers 201 with canvasId. Needs canvases:write. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/canvases/{canvasId}/edit": {
+      "post": {
+        "operationId": "editSlackCanvas",
+        "summary": "Insert into, replace a section of, or rename a canvas",
+        "description": "Insert into, replace a section of, or rename a canvas. Mirrors the MCP tool `editCanvas`. Takes a JSON body and returns JSON. No delete and no whole-canvas replace: replace_section needs sectionId. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "canvasId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/lists": {
+      "post": {
+        "operationId": "createSlackList",
+        "summary": "Create a Slack List",
+        "description": "Create a Slack List. Mirrors the MCP tool `createList`. Takes a JSON body and returns JSON. Answers 201. Paid workspaces only; needs lists:write. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/lists/{listId}/items/{itemId}/update": {
+      "post": {
+        "operationId": "updateSlackListItem",
+        "summary": "Update fields of a Slack List record",
+        "description": "Update fields of a Slack List record. Mirrors the MCP tool `updateListItem`. Takes a JSON body and returns JSON. Re-reads the record: confirmed is false, with notReadBack, when a column did not stick. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "itemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
           }
         }
       }

@@ -8,6 +8,8 @@ import { SlackClient } from './apiHelpers.js';
 import { resolveUsers, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, postMessageFields, replyInThreadFields, editMessageFields, messageFormatParam } from './helpers.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
+import { registerSlackWorkspaceTools } from './workspaceTools.js';
+import { resolveDmUsers } from './helpers.js';
 
 export const slackBotServer = instrumentServer(new FastMCP<UserSession>({
   name: 'Slack Bot MCP Server',
@@ -206,13 +208,20 @@ slackBotServer.addTool({
 slackBotServer.addTool({
   name: 'openDm',
   annotations: { readOnlyHint: false },
-  description: 'Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage.',
+  description: 'Open (or retrieve) a DM: 1-on-1 with userId, or a group DM with userIds (2-8 people). Returns the channel ID to use with postMessage.',
   parameters: z.object({
-    userId: z.string().describe('The Slack user ID to open a DM with (e.g., U01234ABCDE).'),
+    userId: z.string().optional().describe('The Slack user ID to open a 1-on-1 DM with (e.g., U01234ABCDE).'),
+    userIds: z.array(z.string()).min(2).max(8).optional().describe('Open a group DM with these users (2-8). Give this or userId.'),
   }),
   execute: async (args, { session }) => {
     const client = getSlackClient(session);
-    const result = await client.conversationsOpen(args.userId);
-    return `DM channel opened: ${result.channel.id}\n\nYou can now use postMessage with channelId "${result.channel.id}" to send a direct message.`;
+    const users = resolveDmUsers(args);
+    const result = await client.conversationsOpen(users.join(','));
+    const kind = users.length > 1 ? `Group DM with ${users.length} people` : 'DM channel';
+    return `${kind} opened: ${result.channel.id}\n\nYou can now use postMessage with channelId "${result.channel.id}" to send a direct message.`;
   },
 });
+
+// Channels, reactions, profiles, uploads, scheduling, canvases and lists. No
+// guards: the bot server has no access rules.
+registerSlackWorkspaceTools(slackBotServer, { getClient: getSlackClient });
