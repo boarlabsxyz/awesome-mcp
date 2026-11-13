@@ -144,7 +144,9 @@ export async function runToolCheck<C extends object>(spec: ToolCheckSpec<C>): Pr
   // leaked sessions accumulate across a whole run rather than dying with it.
   try {
     await writeForensicsBundle({
-      testName: `${spec.tool}.${spec.shape}`,
+      // Service-qualified: slack and slack-bot both register readChannelHistory,
+      // and an unqualified name would have one overwrite the other's bundle.
+      testName: `${spec.service}.${spec.tool}.${spec.shape}`,
       client: `direct-${spec.account}`,
       prompt: `${spec.tool}(${JSON.stringify(args ?? {}, null, 2)}) via ${mcp.describe()}`,
       response:
