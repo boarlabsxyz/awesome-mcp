@@ -259,6 +259,18 @@ jobs:
             sleep 0.2
           done
 
+      - name: Detect connectors that need reconnecting
+        # A connector whose OAuth scopes grew needs existing users to reconnect; the
+        # generator turns this list into an "Action needed" section.
+        env:
+          FROM_REF: ${{ steps.range.outputs.previous }}
+          TO_REF: HEAD
+        run: |
+          node .github/scripts/detect-scope-changes.mjs \
+            --from "$FROM_REF" \
+            --to "$TO_REF" \
+            --out /tmp/scope_changes.json
+
       - name: Generate release notes
         env:
           TAG: ${{ inputs.tag }}
@@ -277,6 +289,7 @@ jobs:
             --date "$RELEASE_DATE" \
             --commits /tmp/commits.txt \
             --tasks /tmp/task_map.txt \
+            --scope-changes /tmp/scope_changes.json \
             --output-dir /tmp/release
 
       - name: Inject release block into updates.html
