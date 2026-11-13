@@ -107,6 +107,46 @@ function cleanSubject(subject) {
   return subject.replace(typeRegex, '').replace(/\s*CU-[a-z0-9]+/gi, '').trim();
 }
 
+// --- Connector labels: every bullet says which connector it is about ---
+// The names people see on the dashboard, minus "MCP". 'Website' is the site and dashboard
+// themselves; 'All connectors' is a change every connector gets at once.
+const CONNECTORS = [
+  'Google Docs', 'Google Sheets', 'Google Slides', 'Google Drive', 'Gmail', 'Google Calendar',
+  'Slack', 'ClickUp', 'HubSpot', 'Outline', 'PeopleForce', 'Redmine', 'GitHub',
+  'Browserbase', 'Pinecone', 'Supabase', 'Storage', 'Sandbox', 'Website', 'All connectors',
+];
+
+// Conventional-commit scope -> label, for the fallback path. Unknown scopes get no label.
+const SCOPE_CONNECTORS = {
+  docs: 'Google Docs', 'google-docs': 'Google Docs', sheets: 'Google Sheets', 'google-sheets': 'Google Sheets',
+  slides: 'Google Slides', 'google-slides': 'Google Slides', drive: 'Google Drive', 'google-drive': 'Google Drive',
+  gmail: 'Gmail', 'google-gmail': 'Gmail', calendar: 'Google Calendar', 'google-calendar': 'Google Calendar',
+  slack: 'Slack', 'slack-user': 'Slack', 'slack-bot': 'Slack', clickup: 'ClickUp', hubspot: 'HubSpot',
+  outline: 'Outline', peopleforce: 'PeopleForce', 'peopleforce-v4': 'PeopleForce', redmine: 'Redmine',
+  github: 'GitHub', browserbase: 'Browserbase', pinecone: 'Pinecone', supabase: 'Supabase',
+  storage: 'Storage', sandbox: 'Sandbox', dashboard: 'Website', website: 'Website', ui: 'Website',
+  integrations: 'Website',
+};
+
+function normalizeConnector(name) {
+  if (typeof name !== 'string') return null;
+  return CONNECTORS.find(c => c.toLowerCase() === name.trim().toLowerCase()) ?? null;
+}
+
+// "feat(slack,docs): ..." -> "Slack, Google Docs"
+function connectorFromSubject(subject) {
+  const scope = subject.match(typeRegex)?.[2]?.slice(1, -1);
+  if (!scope) return null;
+  const names = [...new Set(scope.split(',').map(s => SCOPE_CONNECTORS[s.trim().toLowerCase()]).filter(Boolean))];
+  return names.length ? names.join(', ') : null;
+}
+
+// Same-connector bullets next to each other, connectors in order of first appearance.
+function groupByConnector(items) {
+  const order = [...new Set(items.map(it => it.connector ?? ''))];
+  return [...items].sort((a, b) => order.indexOf(a.connector ?? '') - order.indexOf(b.connector ?? ''));
+}
+
 // --- Normalized shape both paths produce ---
 // { primaryTag: 'feature'|'fix'|'improvement', sections: [{heading, items: [{text, taskIds}]}] }
 
@@ -173,7 +213,7 @@ async function generateFromAI() {
     '    {',
     '      "heading": string,   // e.g. "What\'s New", "New Integrations", "Bug Fixes", "Improvements"',
     '      "items": [',
-    '        { "text": string, "clickupIds": [string] }   // clickupIds are the CU-... ids (without prefix) this bullet relates to; may be []',
+    '        { "text": string, "connector": string, "clickupIds": [string] }   // clickupIds are the CU-... ids (without prefix) this bullet relates to; may be []',
     '      ]',
     '    }',
     '  ]',
@@ -185,7 +225,10 @@ async function generateFromAI() {
     '- Omit every admin-side change, including new features and bug fixes, and treat commits scoped to admin, admin-mcp, or usage as admin-side. If a commit mixes admin-side and user-facing work, describe only the user-facing part.',
     '- "Admin" here means platform admins only. Keep changes that affect regular users, even if the word appears (e.g. "Fixed Redmine time entries not loading for non-admin accounts").',
     '- primaryTag = "feature" if any new capability, else "fix" if only user-visible bug fixes, else "improvement".',
-    '- Group related items under one bullet where sensible (e.g. "Added PDF export and page-break support to Google Docs" rather than two bullets).',
+    `- connector is exactly one of: ${CONNECTORS.join(', ')}. Use "Website" for the site and dashboard, and "All connectors" only for a change every connector gets.`,
+    '- Each bullet is about ONE connector. A change to two connectors is two bullets; never merge items from different connectors.',
+    '- The connector is shown as a label before the text, so do not start the text with the connector name (write "Reply drafts stay in the original thread", not "Gmail: reply drafts...").',
+    '- Group related items for the same connector under one bullet where sensible (e.g. "Added PDF export and page-break support" rather than two bullets).',
     '- Keep bullets short — one line each, no trailing period required.',
     '- Do not write reconnect instructions or name permission scopes. An "Action needed" section telling people to reconnect the connectors listed above is added after your output. A feature bullet may end with "(reconnect to use it)" when it depends on one of those connectors.',
   ].join('\n');
@@ -286,12 +329,13 @@ async function generateFromAI() {
     .filter(s => s && typeof s.heading === 'string' && Array.isArray(s.items) && s.items.length > 0)
     .map(s => ({
       heading: s.heading.trim(),
-      items: s.items
+      items: groupByConnector(s.items
         .filter(it => it && typeof it.text === 'string' && it.text.trim())
         .map(it => ({
           text: it.text.trim(),
+          connector: normalizeConnector(it.connector),
           taskIds: Array.isArray(it.clickupIds) ? it.clickupIds.map(id => String(id).toLowerCase()) : [],
-        })),
+        }))),
     }))
     .filter(s => s.items.length > 0) : [];
 
@@ -316,7 +360,7 @@ function generateFromCommits() {
     const type = match ? match[1] : null;
     if (type && internalTypes.has(type)) continue;
 
-    const item = { text: cleanSubject(commit.subject), taskIds: extractTaskIds(commit) };
+    const item = { text: cleanSubject(commit.subject), connector: connectorFromSubject(commit.subject), taskIds: extractTaskIds(commit) };
     if (!item.text) continue;
     if (type === 'feat') feat.push(item);
     else if (type === 'fix') fix.push(item);
@@ -324,9 +368,9 @@ function generateFromCommits() {
   }
 
   const sections = [];
-  if (feat.length) sections.push({ heading: "What's New", items: feat });
-  if (fix.length) sections.push({ heading: 'Bug Fixes', items: fix });
-  if (other.length) sections.push({ heading: 'Improvements', items: other });
+  if (feat.length) sections.push({ heading: "What's New", items: groupByConnector(feat) });
+  if (fix.length) sections.push({ heading: 'Bug Fixes', items: groupByConnector(fix) });
+  if (other.length) sections.push({ heading: 'Improvements', items: groupByConnector(other) });
 
   const primaryTag = feat.length ? 'feature' : fix.length ? 'fix' : 'improvement';
   return { primaryTag, sections };
@@ -356,6 +400,11 @@ function formatDate() {
 
 function enrichWithTasks(item, format) {
   let text = format === 'html' ? escapeHtml(item.text) : item.text;
+  if (item.connector) {
+    text = format === 'html' ? `<strong>${escapeHtml(item.connector)}:</strong> ${text}`
+      : format === 'slack' ? `*${item.connector}:* ${text}`
+      : `${item.connector}: ${text}`;
+  }
   for (const id of item.taskIds) {
     const task = tasks.get(id);
     if (!task) continue;
