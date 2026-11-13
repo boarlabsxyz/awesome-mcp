@@ -9,6 +9,9 @@
 //      Claude decides sections + primaryTag.
 //   2. Otherwise (or on API failure) fall back to conventional-commit categorization so the
 //      workflow never breaks on network hiccups or a missing key.
+//   3. Either way, connectors whose OAuth scopes grew (--scope-changes, written by
+//      detect-scope-changes.mjs) get an "Action needed" reconnect section. It is added
+//      here rather than left to the model, so it can't be filtered out or reworded away.
 //
 // We use OpenRouter rather than the Anthropic API directly so the same key can be
 // re-routed to a different provider/model in the future by editing OPENROUTER_MODEL below
@@ -29,9 +32,10 @@ const commitsFile = getArg('commits');
 const tasksFile = getArg('tasks');
 const outputDir = getArg('output-dir');
 const dateArg = getArg('date');
+const scopeChangesFile = getArg('scope-changes');
 
 if (!tag || !commitsFile || !outputDir) {
-  console.error('Usage: generate-release-notes.mjs --tag <tag> --commits <file> --tasks <file> --output-dir <dir> [--date <ISO>]');
+  console.error('Usage: generate-release-notes.mjs --tag <tag> --commits <file> --tasks <file> --output-dir <dir> [--date <ISO>] [--scope-changes <file>]');
   process.exit(1);
 }
 
@@ -73,8 +77,22 @@ function parseTasks(file) {
   }
 }
 
+// [{ slug, name, added }] from detect-scope-changes.mjs. A missing or unreadable file
+// means no reconnect section, never a failed release.
+function parseScopeChanges(file) {
+  if (!file) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    return Array.isArray(parsed) ? parsed.filter(c => c && typeof c.name === 'string' && Array.isArray(c.added) && c.added.length) : [];
+  } catch (err) {
+    console.warn(`Could not read scope changes from ${file}: ${err.message}. No reconnect section.`);
+    return [];
+  }
+}
+
 const commits = parseCommits(commitsFile);
 const tasks = tasksFile ? parseTasks(tasksFile) : new Map();
+const scopeChanges = parseScopeChanges(scopeChangesFile);
 
 // --- Extract CU- ids and clean subjects (shared between AI + fallback paths) ---
 const typeRegex = /^(feat|fix|docs|style|refactor|perf|test|chore|ci|revert)(\(.+?\))?!?:\s*/;
@@ -115,6 +133,10 @@ async function generateFromAI() {
     ? [...tasks.entries()].map(([id, t]) => `- CU-${id}: ${t.title}`).join('\n')
     : '(none)';
 
+  const reconnectLines = scopeChanges.length
+    ? scopeChanges.map(c => `- ${c.name}: ${c.added.join(', ')}`).join('\n')
+    : '(none)';
+
   const systemPrompt = [
     'You write release notes for Awesome MCP, a hosted platform that gives Claude and ChatGPT users access to their Google Docs, Sheets, Calendar, Drive, Outline wiki, ClickUp, PeopleForce HR, and other services through MCP.',
     'Readers are non-technical end users. They care about:',
@@ -140,6 +162,9 @@ async function generateFromAI() {
     'Related ClickUp task titles (for extra context; not all are user-facing):',
     taskLines,
     '',
+    'Connectors that ask for new permissions in this release (existing connections must be reconnected to use what they unlock):',
+    reconnectLines,
+    '',
     'Produce ONE JSON object (no markdown fences, no prose before or after) that matches this schema exactly:',
     '{',
     '  "hasUserFacingChanges": boolean,',
@@ -162,6 +187,7 @@ async function generateFromAI() {
     '- primaryTag = "feature" if any new capability, else "fix" if only user-visible bug fixes, else "improvement".',
     '- Group related items under one bullet where sensible (e.g. "Added PDF export and page-break support to Google Docs" rather than two bullets).',
     '- Keep bullets short — one line each, no trailing period required.',
+    '- Do not write reconnect instructions or name permission scopes. An "Action needed" section telling people to reconnect the connectors listed above is added after your output. A feature bullet may end with "(reconnect to use it)" when it depends on one of those connectors.',
   ].join('\n');
 
   console.log(`Calling ${OPENROUTER_MODEL} via OpenRouter to summarize ${commits.length} commit(s)...`);
@@ -306,6 +332,18 @@ function generateFromCommits() {
   return { primaryTag, sections };
 }
 
+// --- Reconnect section (deterministic, appended to either path) ---
+function reconnectSection() {
+  if (scopeChanges.length === 0) return null;
+  return {
+    heading: 'Action needed',
+    items: scopeChanges.map(c => ({
+      text: `Reconnect ${c.name} from your dashboard: some new features need extra permissions, and an existing connection keeps the old ones until you reconnect`,
+      taskIds: [],
+    })),
+  };
+}
+
 // --- Helpers ---
 function escapeHtml(text) {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -412,6 +450,14 @@ function generateEmail(summary, unlinked) {
 
 // --- Main ---
 const summary = (await generateFromAI()) ?? generateFromCommits();
+
+// First, so it is the first thing read. A release whose only user-facing change is a
+// new scope still has something to say.
+const reconnect = reconnectSection();
+if (reconnect) {
+  summary.sections = [reconnect, ...summary.sections];
+  delete summary.empty;
+}
 
 // Nothing user-facing means nothing to publish. The workflows treat a missing output
 // file as "skip this channel", so write none of them.
