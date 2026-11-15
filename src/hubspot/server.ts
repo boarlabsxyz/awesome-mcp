@@ -365,14 +365,15 @@ export const createPipelineSchema = z.object({
   stages: z.array(z.object(stageFields)).min(1).describe('The stages, in order. HubSpot requires at least one.'),
 });
 
-export const updatePipelineSchema = z
-  .object({
-    objectType: pipelineObjectType,
-    pipelineId: z.string().describe('Pipeline ID.'),
-    label: z.string().min(1).optional().describe('New name.'),
-    displayOrder: z.number().int().optional().describe('New position among pipelines.'),
-  })
-  .refine(a => a.label !== undefined || a.displayOrder !== undefined, { message: 'Provide label and/or displayOrder.' });
+// The "at least one field" checks for the two updates live in their perform
+// functions, not a .refine: a Zod refusal reaches the model as a bare
+// InvalidParams, and a refine leaves no .shape for the schema walkers.
+export const updatePipelineSchema = z.object({
+  objectType: pipelineObjectType,
+  pipelineId: z.string().describe('Pipeline ID.'),
+  label: z.string().min(1).optional().describe('New name.'),
+  displayOrder: z.number().int().optional().describe('New position among pipelines.'),
+});
 
 export const createPipelineStageSchema = z.object({
   objectType: pipelineObjectType,
@@ -380,19 +381,15 @@ export const createPipelineStageSchema = z.object({
   ...stageFields,
 });
 
-export const updatePipelineStageSchema = z
-  .object({
-    objectType: pipelineObjectType,
-    pipelineId: z.string().describe('Pipeline ID.'),
-    stageId: z.string().describe('Stage ID.'),
-    label: stageFields.label.optional(),
-    displayOrder: stageFields.displayOrder,
-    probability: stageFields.probability,
-    ticketState: stageFields.ticketState,
-  })
-  .refine(a => [a.label, a.displayOrder, a.probability, a.ticketState].some(v => v !== undefined), {
-    message: 'Provide at least one of label, displayOrder, probability, ticketState.',
-  });
+export const updatePipelineStageSchema = z.object({
+  objectType: pipelineObjectType,
+  pipelineId: z.string().describe('Pipeline ID.'),
+  stageId: z.string().describe('Stage ID.'),
+  label: stageFields.label.optional(),
+  displayOrder: stageFields.displayOrder,
+  probability: stageFields.probability,
+  ticketState: stageFields.ticketState,
+});
 
 // Cap on how many engagement detail records getCompanyActivity fetches.
 const MAX_ACTIVITY_FETCH = 100;
@@ -924,7 +921,14 @@ export async function performUpdateEngagement(
 ): Promise<{ engagement: HubSpotObject; confirmed: Record<string, boolean | null> }> {
   await client.updateEngagement(args.engagementType, args.engagementId, args.properties);
   const keys = Object.keys(args.properties);
-  const engagement = await client.getEngagement(args.engagementType, args.engagementId, keys);
+  // The PATCH already succeeded: a failed re-read (e.g. no sales-email-read for
+  // an email) leaves every property unconfirmed, not the update failed.
+  let engagement: HubSpotObject;
+  try {
+    engagement = await client.getEngagement(args.engagementType, args.engagementId, keys);
+  } catch {
+    return { engagement: { id: args.engagementId }, confirmed: Object.fromEntries(keys.map(k => [k, null])) };
+  }
   const stored = (engagement.properties ?? {}) as Record<string, unknown>;
   const confirmed = Object.fromEntries(keys.map(k => [k, k in stored && stored[k] !== null ? sameValue(args.properties[k], stored[k]) : null]));
   return { engagement, confirmed };
@@ -1035,17 +1039,23 @@ export async function performCreatePipeline(client: HubSpotClient, args: z.infer
 }
 
 export async function performUpdatePipeline(client: HubSpotClient, args: z.infer<typeof updatePipelineSchema>) {
+  if (args.label === undefined && args.displayOrder === undefined) throw new UserError('Provide label and/or displayOrder.');
   return client.updatePipeline(args.objectType, args.pipelineId, {
     ...(args.label !== undefined ? { label: args.label } : {}),
     ...(args.displayOrder !== undefined ? { displayOrder: args.displayOrder } : {}),
   });
 }
 
+// No default displayOrder: 0 would put the new stage first (or tie with the
+// first one); omitted, HubSpot places it.
 export async function performCreatePipelineStage(client: HubSpotClient, args: z.infer<typeof createPipelineStageSchema>) {
-  return client.createPipelineStage(args.objectType, args.pipelineId, { displayOrder: args.displayOrder ?? 0, ...stageBody(args.objectType, args, true) });
+  return client.createPipelineStage(args.objectType, args.pipelineId, stageBody(args.objectType, args, true));
 }
 
 export async function performUpdatePipelineStage(client: HubSpotClient, args: z.infer<typeof updatePipelineStageSchema>) {
+  if ([args.label, args.displayOrder, args.probability, args.ticketState].every(v => v === undefined)) {
+    throw new UserError('Provide at least one of label, displayOrder, probability, ticketState.');
+  }
   return client.updatePipelineStage(args.objectType, args.pipelineId, args.stageId, stageBody(args.objectType, args, false));
 }
 

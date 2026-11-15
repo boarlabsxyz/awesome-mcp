@@ -9,6 +9,7 @@ import {
   searchTicketsSchema,
   performCreatePipeline,
   performUpdatePipelineStage,
+  performCreatePipelineStage,
   createPipelineSchema,
   deleteEngagementRestSchema,
   deleteEngagementSchema,
@@ -104,6 +105,20 @@ test('pipeline stages get the metadata their object type requires', async () => 
   await assert.rejects(() => performUpdatePipelineStage(client(), {
     objectType: 'deals', pipelineId: 'p', stageId: 's', ticketState: 'OPEN',
   }), /ticketState applies to ticket stages/);
+});
+
+test('an update naming nothing is refused before any call, and a new stage has no forced position', async () => {
+  const calls = router(() => ({ body: { id: 's1' } }));
+  await assert.rejects(() => performUpdatePipelineStage(client(), { objectType: 'tickets', pipelineId: 'p', stageId: 's' }), /at least one/);
+  assert.equal(calls.length, 0);
+  await performCreatePipelineStage(client(), { objectType: 'tickets', pipelineId: 'p', label: 'Waiting', ticketState: 'OPEN' });
+  assert.equal('displayOrder' in calls[0].body, false);
+});
+
+test('a failed re-read after an engagement update leaves it unconfirmed, not failed', async () => {
+  router((method) => (method === 'PATCH' ? { body: { id: 'e1' } } : { status: 403, body: { message: 'missing scope' } }));
+  const r = await performUpdateEngagement(client(), { engagementType: 'emails', engagementId: 'e1', properties: { hs_email_subject: 'x' } });
+  assert.deepEqual(r.confirmed, { hs_email_subject: null });
 });
 
 test('listPipelines reads ticket pipelines and shows each stage open/closed state', async () => {

@@ -34852,7 +34852,7 @@
       "post": {
         "operationId": "updateHubSpotPipeline",
         "summary": "Rename or reorder a HubSpot pipeline",
-        "description": "Rename or reorder a HubSpot pipeline. Mirrors the MCP tool `updatePipeline`. Takes a JSON body and returns JSON. Partial update (PATCH): stages are untouched.",
+        "description": "Rename or reorder a HubSpot pipeline. Mirrors the MCP tool `updatePipeline`. Takes a JSON body and returns JSON. Changes the portal for everyone in it, with no confirmation step (the permanent dashboard key can call it), like the property-schema writes. Partial update (PATCH): stages are untouched.",
         "tags": [
           "hubspot"
         ],
@@ -34897,7 +34897,7 @@
       "post": {
         "operationId": "createHubSpotPipelineStage",
         "summary": "Add a stage to a HubSpot pipeline",
-        "description": "Add a stage to a HubSpot pipeline. Mirrors the MCP tool `createPipelineStage`. Takes a JSON body and returns JSON. Answers 201. Deal stages need probability, ticket stages ticketState.",
+        "description": "Add a stage to a HubSpot pipeline. Mirrors the MCP tool `createPipelineStage`. Takes a JSON body and returns JSON. Changes the portal for everyone in it, with no confirmation step, like the property-schema writes. Answers 201. Deal stages need probability, ticket stages ticketState; displayOrder omitted lets HubSpot place it.",
         "tags": [
           "hubspot"
         ],
@@ -34942,7 +34942,7 @@
       "post": {
         "operationId": "updateHubSpotPipelineStage",
         "summary": "Edit a HubSpot pipeline stage",
-        "description": "Edit a HubSpot pipeline stage. Mirrors the MCP tool `updatePipelineStage`. Takes a JSON body and returns JSON. Label, order, probability (deals) or ticketState (tickets). Deleting a stage is not exposed.",
+        "description": "Edit a HubSpot pipeline stage. Mirrors the MCP tool `updatePipelineStage`. Takes a JSON body and returns JSON. Changes the portal for everyone in it, with no confirmation step: a new probability changes deal forecasts, a ticketState flip changes which tickets count as open. Label, order, probability (deals) or ticketState (tickets). Deleting a stage is not exposed.",
         "tags": [
           "hubspot"
         ],
