@@ -59,7 +59,9 @@ function targetFor(apiKey: string, settings?: BrowserbaseSettings): McpProxyTarg
   return {
     // The constant origin; settings only add Browserbase's documented query
     // parameters (settings.ts). The model key rides here because Browserbase
-    // documents no header for it; this URL never leaves the server.
+    // documents no header for it. This URL never leaves our server (the
+    // transport builds messages from `label`, never the URL), but Browserbase's
+    // own access logs may record it — the documented trade-off.
     url: hostedUrlFor(HOSTED_MCP_URL, settings),
     clientInfo: CLIENT_INFO,
     // Header auth, not the `browserbaseApiKey` query parameter, which
@@ -140,15 +142,28 @@ export async function proxyHostedTool(
   options: ProxyOptions = {},
   settings?: BrowserbaseSettings,
 ): Promise<string> {
+  // The user's model key runs inside Browserbase on extract/observe/act, and a
+  // provider error can quote it verbatim ("Incorrect API key provided: …"),
+  // which no `modelApiKey=` pattern catches. Its exact value is removed from
+  // everything this returns or throws.
+  const key = settings?.modelApiKey;
+  const scrub = (text: string) => (key ? text.split(key).join('[redacted]') : text);
   let result: ProxyToolResult;
   try {
     result = await callHostedTool(apiKey, name, args, options, settings);
   } catch (err: any) {
-    if (err instanceof UserError) throw err;
-    throw new UserError(explainHostedError(name, err?.message ?? String(err)));
+    if (err instanceof UserError) {
+      if (key && err.message.includes(key)) {
+        const scrubbed: any = new UserError(scrub(err.message));
+        if ((err as any).status !== undefined) scrubbed.status = (err as any).status;
+        throw scrubbed;
+      }
+      throw err;
+    }
+    throw new UserError(explainHostedError(name, scrub(err?.message ?? String(err))));
   }
-  if (result.isError) throw new UserError(explainHostedError(name, result.text));
-  return result.text;
+  if (result.isError) throw new UserError(explainHostedError(name, scrub(result.text)));
+  return scrub(result.text);
 }
 
 /**

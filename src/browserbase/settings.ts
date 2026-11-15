@@ -62,10 +62,13 @@ export function mergeBrowserbaseSettings(
   // stored secret nobody needs is only exposure.
   if (out.modelName && key) out.modelApiKey = key;
 
+  // An omitted flag keeps its stored value, so a REST client posting only a
+  // model does not silently switch proxies or keep-alive off.
   for (const flag of ['keepAlive', 'proxies', 'verified'] as const) {
-    if (r[flag] === undefined) continue;
-    if (typeof r[flag] !== 'boolean') return { error: `${flag} must be true or false` };
-    if (r[flag]) out[flag] = true;
+    const value = r[flag] === undefined ? stored?.[flag] : r[flag];
+    if (value === undefined) continue;
+    if (typeof value !== 'boolean') return { error: `${flag} must be true or false` };
+    if (value) out[flag] = true;
   }
   return { settings: out };
 }

@@ -5,7 +5,7 @@ import crypto from 'crypto';
 
 import { hostedUrlFor, mergeBrowserbaseSettings, publicBrowserbaseSettings, BROWSERBASE_DEFAULT_MODEL } from '../../browserbase/settings.js';
 import { redactSecrets } from '../../browserbase/responseSafety.js';
-import { hostedProxyFor } from '../../browserbase/ops.js';
+import { hostedProxyFor, opEnd } from '../../browserbase/ops.js';
 import { createWebOnlyApp, mergeProviderReconnectTokens } from '../../website/webServer.js';
 import { createSession } from '../../website/sessionStore.js';
 import { createOrUpdateUser, getUserByGoogleId, UserTokens } from '../../userStore.js';
@@ -28,6 +28,45 @@ describe('Browserbase settings', () => {
       { settings: { modelName: 'openai/gpt-4.1', modelApiKey: KEY, proxies: true } });
     assert.match((mergeBrowserbaseSettings(stored, { modelName: 'openai/gpt-4.1', modelApiKey: null }) as any).error, /needs its provider's API key/);
     assert.deepEqual(mergeBrowserbaseSettings(stored, { modelName: '', modelApiKey: null }), { settings: {} });
+  });
+
+  it('keeps stored flags a request leaves out', () => {
+    assert.deepEqual(mergeBrowserbaseSettings({ proxies: true, keepAlive: true }, { verified: true }),
+      { settings: { proxies: true, keepAlive: true, verified: true } });
+    assert.deepEqual(mergeBrowserbaseSettings({ proxies: true }, { proxies: false }), { settings: {} });
+  });
+
+  it('scrubs the bare model key from an upstream error', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: any, init: any) => {
+      const body = JSON.parse(init.body);
+      const result = body.method === 'tools/call'
+        ? { isError: true, content: [{ type: 'text', text: `AI_APICallError: Incorrect API key provided: ${KEY}` }] }
+        : { protocolVersion: '2025-03-26', capabilities: {}, serverInfo: { name: 'x', version: '1' } };
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }), {
+        status: 200, headers: { 'content-type': 'application/json', 'mcp-session-id': 's' },
+      });
+    }) as typeof fetch;
+    try {
+      const { proxyHostedTool } = await import('../../browserbase/mcpProxyClient.js');
+      await assert.rejects(
+        () => proxyHostedTool('bb_key', 'extract', { instruction: 'x', sessionId: 's1' }, {}, { modelName: 'openai/gpt-4.1', modelApiKey: KEY }),
+        (e: any) => !String(e.message).includes(KEY) && /\[redacted\]/.test(e.message),
+      );
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('end releases the session too, and only then says billing stopped', async () => {
+    const proxy = async () => 'ok';
+    let released = 0;
+    const ok = await opEnd(proxy as any, { releaseSession: async () => { released++; } } as any, { sessionId: 's1' });
+    assert.equal(released, 1);
+    assert.match(ok, /no longer billing/);
+    const failed = await opEnd(proxy as any, { releaseSession: async () => { throw new Error('409'); } } as any, { sessionId: 's1' });
+    assert.doesNotMatch(failed, /no longer billing/);
+    assert.match(failed, /may still be running/);
   });
 
   it('refuses malformed input', () => {

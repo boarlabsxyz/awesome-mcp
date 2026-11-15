@@ -236,7 +236,21 @@ export async function opEnd(
     // and the payload is a CDP fragment that tells the caller nothing. Echoing
     // a redacted version would just be noise with a redaction note attached.
     void text;
-    return `Browser session closed${suffix}. It is no longer billing.`;
+    if (!sessionId) {
+      return 'Browser session closed. With keep-alive on, a session can outlive this call — run listBrowserSessions to check nothing is still RUNNING.';
+    }
+    // A keep-alive session (connection Settings) may survive the hosted `end`.
+    // An explicit release is idempotent, so it is always sent, and "no longer
+    // billing" is claimed only when Browserbase accepted it.
+    try {
+      await client.releaseSession(sessionId);
+      return `Browser session closed${suffix}. It is no longer billing.`;
+    } catch (releaseErr: any) {
+      return (
+        `Browser session closed${suffix}, but the follow-up release was not accepted (${releaseErr?.message ?? releaseErr}). ` +
+        `If keep-alive is on it may still be running: check getBrowserSession and forceEndBrowserSession if needed.`
+      );
+    }
   } catch (proxyErr: any) {
     if (!sessionId) {
       throw new UserError(
