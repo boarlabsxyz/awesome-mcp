@@ -1202,12 +1202,25 @@
     "/api/v1/hubspot/pipelines": {
       "get": {
         "operationId": "listHubSpotPipelines",
-        "summary": "List HubSpot deal pipelines with their ordered stages",
+        "summary": "List HubSpot deal or ticket pipelines with their ordered stages",
         "description": "One call returns every pipeline with its stages, which is how a dealstage ID on a deal record becomes a stage name. Mirrors the MCP tool `listPipelines`.",
         "tags": [
           "hubspot"
         ],
         "parameters": [
+          {
+            "name": "objectType",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "deals",
+                "tickets"
+              ],
+              "default": "deals"
+            },
+            "description": "deals (default) or tickets. Ticket stages carry their open/closed state."
+          },
           {
             "name": "format",
             "in": "query",

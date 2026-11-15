@@ -319,7 +319,10 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `getContact` | `GET /api/v1/hubspot/contacts/{contactId}` | live | Get a single HubSpot contact — _Pass ?properties=a,b for specific properties._ |
 | `getActiveDeals` | `GET /api/v1/hubspot/deals` | live | Get most recently active HubSpot deals — _Needs the crm.objects.deals.read scope - already-connected users must reconnect before any deal endpoint answers._ |
 | `getDeal` | `GET /api/v1/hubspot/deals/{dealId}` | live | Get a single HubSpot deal — _Deal IDs come from the deals list, the company-deals endpoint, or the searchDeals MCP tool._ |
-| `listPipelines` | `GET /api/v1/hubspot/pipelines` | live | List HubSpot deal pipelines with their ordered stages — _Use it to resolve a dealstage ID to a stage name._ |
+| `listPipelines` | `GET /api/v1/hubspot/pipelines` | live | List HubSpot deal pipelines with their ordered stages — _Use it to resolve a dealstage ID to a stage name. ?objectType=tickets lists ticket pipelines, each stage with its open/closed state._ |
+| `searchTickets` | `GET /api/v1/hubspot/tickets/search` | live | Search HubSpot tickets by state, pipeline, stage, text and last change — _state=open (default), closed or any - read from each stage open/closed state in its pipeline. pipelineId, stageId, q, modifiedAfter (ISO), limit (max 100), after._ |
+| `listUsers` | `GET /api/v1/hubspot/users` | live | List HubSpot account users — _Needs settings.users.read: existing connections reconnect. limit, after._ |
+| `listTeams` | `GET /api/v1/hubspot/teams` | live | List HubSpot teams — _Needs settings.users.teams.read: existing connections reconnect._ |
 | `getRecentConversations` | `GET /api/v1/hubspot/conversations` | live | Get recent HubSpot conversation threads — _Each thread is fetched with its messages, so this is N+1 upstream calls - keep ?limit modest. ?after pages._ |
 | `getTickets` | `GET /api/v1/hubspot/tickets` | live | Get HubSpot tickets by criteria — _criteria=default (closed or modified in the last day) or criteria=Closed. Datetime filters go out as epoch millis; ISO-8601 400s upstream._ |
 | `getTicketConversationThreads` | `GET /api/v1/hubspot/tickets/{ticketId}/conversation-threads` | live | Get conversation threads for a HubSpot ticket |
@@ -330,6 +333,14 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `createNote` | `POST /api/v1/hubspot/notes` | live | Create a HubSpot note and optionally attach it to a record — _Body limit 5mb. hs_timestamp defaults to now. The response reports whether the timeline association succeeded - a failed association is an orphaned note, not a silent success._ |
 | `logCall` | `POST /api/v1/hubspot/calls` | live | Log a HubSpot call activity — _Body limit 5mb - the point is posting a transcript without it crossing the LLM context. Same association reporting as notes._ |
 | `logMeeting` | `POST /api/v1/hubspot/meetings` | live | Log a HubSpot meeting activity — _Body limit 5mb for full minutes. Same association reporting as notes._ |
+| `logEmail` | `POST /api/v1/hubspot/emails` | live | Log an email on the HubSpot timeline and optionally attach it to a record — _Records an email; sends nothing. Body limit 5mb. direction defaults to EMAIL. Same association reporting as notes; tickets are a valid target._ |
+| `updateEngagement` | `POST /api/v1/hubspot/engagements/{engagementType}/{engagementId}/update` | live | Edit a HubSpot note, task, call, meeting or logged email — _Only the named properties change. Each is re-read: confirmed maps every property to true, false (reads back differently) or null (not returned)._ |
+| `createTicket` | `POST /api/v1/hubspot/tickets` | live | Create a HubSpot ticket — _Answers 201. pipelineStage is required by HubSpot; pipeline defaults to 0. Not idempotent._ |
+| `updateTicket` | `POST /api/v1/hubspot/tickets/{ticketId}/update` | live | Update a HubSpot ticket — _Only the named properties change (hs_pipeline_stage moves it). 200 with the ticket re-read._ |
+| `createPipeline` | `POST /api/v1/hubspot/pipelines/{objectType}` | live | Create a HubSpot deal or ticket pipeline with its stages — _Changes the portal for everyone in it. Deal stages need probability, ticket stages ticketState (400 otherwise). Free accounts cannot add pipelines. Archiving or replacing a pipeline is not exposed._ |
+| `updatePipeline` | `POST /api/v1/hubspot/pipelines/{objectType}/{pipelineId}/update` | live | Rename or reorder a HubSpot pipeline — _Partial update (PATCH): stages are untouched._ |
+| `createPipelineStage` | `POST /api/v1/hubspot/pipelines/{objectType}/{pipelineId}/stages` | live | Add a stage to a HubSpot pipeline — _Answers 201. Deal stages need probability, ticket stages ticketState._ |
+| `updatePipelineStage` | `POST /api/v1/hubspot/pipelines/{objectType}/{pipelineId}/stages/{stageId}/update` | live | Edit a HubSpot pipeline stage — _Label, order, probability (deals) or ticketState (tickets). Deleting a stage is not exposed._ |
 | `createTask` | `POST /api/v1/hubspot/tasks` | live | Create a HubSpot task and optionally attach it to a record — _Body limit 5mb. 201 even if attaching it failed: association.attached false marks an orphaned task, so do not retry. Not idempotent._ |
 | `updateCompany` | `POST /api/v1/hubspot/companies/{companyId}` | live | Update a HubSpot company — _Only the named properties change. POST rather than PATCH because the catalog scope is GET and POST. 200 with the company re-read from HubSpot, whose PATCH echo omits populated fields. 400 when properties is empty._ |
 | `updateContact` | `POST /api/v1/hubspot/contacts/{contactId}` | live | Update a HubSpot contact — _Only the named properties change. POST rather than PATCH because the catalog scope is GET and POST. 200 with the contact re-read from HubSpot. 400 when properties is empty._ |
@@ -487,4 +498,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 363 endpoints.
+Catalog size: 374 endpoints.

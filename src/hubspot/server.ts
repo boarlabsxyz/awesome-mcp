@@ -34,6 +34,8 @@ import {
   formatEngagement,
   formatObjectList,
   formatPipelines,
+  formatUsers,
+  formatTeams,
   formatProperty,
   formatThreads,
   formatTickets,
@@ -163,6 +165,10 @@ function addRecentListTool(opts: {
   });
 }
 
+// Records an activity can be attached to. Wider than objectTypeParam: tickets
+// take activities (the `tickets` scope is granted) but not the property tools.
+const engagementTargetParam = z.enum(['companies', 'contacts', 'deals', 'tickets']);
+
 // Fields shared by every engagement-write tool: an optional timestamp (defaults
 // to now) and an optional record to attach the activity to (both-or-neither).
 const engagementAssociationShape = {
@@ -170,9 +176,9 @@ const engagementAssociationShape = {
     .union([z.string(), z.number()])
     .optional()
     .describe('Activity time as ISO-8601 or epoch milliseconds. Defaults to now.'),
-  associateToObjectType: objectTypeParam
+  associateToObjectType: engagementTargetParam
     .optional()
-    .describe('Record type to attach this activity to (companies, contacts, or deals), so it shows on that timeline.'),
+    .describe('Record type to attach this activity to (companies, contacts, deals, or tickets), so it shows on that timeline.'),
   associateToObjectId: z.string().optional().describe('ID of the record to attach this activity to.'),
 };
 const TARGET_MSG = 'Provide both associateToObjectType and associateToObjectId, or neither.';
@@ -279,12 +285,114 @@ export const createTaskSchema = z
   })
   .refine(bothOrNeitherTarget, { message: TARGET_MSG });
 
+const engagementTypeParam = z.enum(['notes', 'tasks', 'calls', 'meetings', 'emails']);
+
 export const deleteEngagementSchema = z.object({
-  engagementType: z
-    .enum(['notes', 'tasks', 'calls', 'meetings'])
+  engagementType: engagementTypeParam
     .describe('Type of engagement to delete (plural, matching the tool that created it).'),
   engagementId: z.string().describe('HubSpot ID of the engagement (returned when it was created).'),
 });
+
+/**
+ * The REST delete keeps the four types it was signed off for. Logged emails
+ * arrived later and, as a new destructive operation, are deletable over MCP
+ * only (where the client can confirm).
+ */
+export const deleteEngagementRestSchema = deleteEngagementSchema.extend({
+  engagementType: z.enum(['notes', 'tasks', 'calls', 'meetings'])
+    .describe('Type of engagement to delete: notes, tasks, calls or meetings (logged emails only over MCP).'),
+});
+
+export const logEmailSchema = z
+  .object({
+    subject: z.string().optional().describe('Email subject (hs_email_subject).'),
+    text: z.string().optional().describe('Email body as plain text (hs_email_text).'),
+    html: z.string().optional().describe('Email body as HTML (hs_email_html).'),
+    direction: z.enum(['EMAIL', 'INCOMING_EMAIL', 'FORWARDED_EMAIL']).optional().default('EMAIL')
+      .describe('EMAIL = sent by your team, INCOMING_EMAIL = a reply received, FORWARDED_EMAIL (hs_email_direction).'),
+    status: z.enum(['BOUNCED', 'FAILED', 'SCHEDULED', 'SENDING', 'SENT']).optional().describe('Send status to record (hs_email_status).'),
+    ...engagementAssociationShape,
+  })
+  .refine(bothOrNeitherTarget, { message: TARGET_MSG });
+
+export const updateEngagementSchema = z.object({
+  engagementType: engagementTypeParam.describe('Type of the activity: notes, tasks, calls, meetings or emails.'),
+  engagementId: z.string().describe('HubSpot ID of the activity.'),
+  properties: updatedProperties,
+});
+
+const ticketPriority = z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']);
+
+export const createTicketSchema = z.object({
+  subject: z.string().min(1).describe('Ticket name (subject).'),
+  content: z.string().optional().describe('Ticket description (content).'),
+  pipeline: z.string().optional().default('0').describe('Ticket pipeline ID (from listPipelines objectType tickets). Default "0", the default support pipeline.'),
+  pipelineStage: z.string().describe('Stage ID within that pipeline (hs_pipeline_stage) — HubSpot requires one.'),
+  priority: ticketPriority.optional().describe('hs_ticket_priority.'),
+  properties: z.record(z.string(), z.any()).optional().describe('Any other ticket properties.'),
+});
+
+export const updateTicketSchema = z.object({
+  ticketId: z.string().describe('HubSpot ticket ID to update.'),
+  properties: updatedProperties,
+});
+
+export const searchTicketsSchema = z.object({
+  state: z.enum(['open', 'closed', 'any']).optional().default('open')
+    .describe('open/closed by the stage\'s ticket state in its pipeline (default open); any = no state filter.'),
+  pipelineId: z.string().optional().describe('Only this ticket pipeline.'),
+  stageId: z.string().optional().describe('Only this stage (overrides state).'),
+  query: z.string().optional().describe('Free-text search.'),
+  modifiedAfter: z.string().optional().describe('Only tickets changed after this time (ISO-8601).'),
+  limit: z.number().int().min(1).max(100).optional().default(25).describe('Max tickets per page (default 25, max 100).'),
+  after: z.string().optional().describe('Paging token from a previous call.'),
+});
+
+const pipelineObjectType = z.enum(['deals', 'tickets']).describe('deals or tickets.');
+
+// A stage needs per-object metadata: deals a win probability, tickets OPEN/CLOSED.
+const stageFields = {
+  label: z.string().min(1).describe('Stage name.'),
+  displayOrder: z.number().int().optional().describe('Position in the pipeline (0 first).'),
+  probability: z.number().min(0).max(1).optional().describe('Deal stages: win probability 0.0–1.0 (1 = closed won, 0 = closed lost). Required for deals.'),
+  ticketState: z.enum(['OPEN', 'CLOSED']).optional().describe('Ticket stages: OPEN or CLOSED. Required for tickets.'),
+};
+
+export const createPipelineSchema = z.object({
+  objectType: pipelineObjectType,
+  label: z.string().min(1).describe('Pipeline name.'),
+  displayOrder: z.number().int().optional().describe('Position among pipelines.'),
+  stages: z.array(z.object(stageFields)).min(1).describe('The stages, in order. HubSpot requires at least one.'),
+});
+
+export const updatePipelineSchema = z
+  .object({
+    objectType: pipelineObjectType,
+    pipelineId: z.string().describe('Pipeline ID.'),
+    label: z.string().min(1).optional().describe('New name.'),
+    displayOrder: z.number().int().optional().describe('New position among pipelines.'),
+  })
+  .refine(a => a.label !== undefined || a.displayOrder !== undefined, { message: 'Provide label and/or displayOrder.' });
+
+export const createPipelineStageSchema = z.object({
+  objectType: pipelineObjectType,
+  pipelineId: z.string().describe('Pipeline ID.'),
+  ...stageFields,
+});
+
+export const updatePipelineStageSchema = z
+  .object({
+    objectType: pipelineObjectType,
+    pipelineId: z.string().describe('Pipeline ID.'),
+    stageId: z.string().describe('Stage ID.'),
+    label: stageFields.label.optional(),
+    displayOrder: stageFields.displayOrder,
+    probability: stageFields.probability,
+    ticketState: stageFields.ticketState,
+  })
+  .refine(a => [a.label, a.displayOrder, a.probability, a.ticketState].some(v => v !== undefined), {
+    message: 'Provide at least one of label, displayOrder, probability, ticketState.',
+  });
 
 // Cap on how many engagement detail records getCompanyActivity fetches.
 const MAX_ACTIVITY_FETCH = 100;
@@ -634,16 +742,17 @@ export async function opUpdateDeal(
 
 // Resolve stage IDs to human-readable names: one GET returns every pipeline
 // with its ordered stages, covering both "list pipelines" and "list stages".
-export async function opListPipelines(client: HubSpotClient, _args: Record<string, never>): Promise<string> {
-  const page = await client.listDealPipelines();
-  return formatPipelines(page.results ?? []);
+export async function opListPipelines(client: HubSpotClient, args: { objectType?: 'deals' | 'tickets' }): Promise<string> {
+  const objectType = args.objectType ?? 'deals';
+  const page = objectType === 'deals' ? await client.listDealPipelines() : await client.listPipelines(objectType);
+  return formatPipelines(page.results ?? [], objectType === 'deals' ? 'deal' : 'ticket');
 }
 
 // --- Engagement (activity) write ops ---
 
 type EngagementArgs = {
   hs_timestamp?: string | number;
-  associateToObjectType?: HubSpotObjectType;
+  associateToObjectType?: HubSpotObjectType | 'tickets';
   associateToObjectId?: string;
 };
 
@@ -779,6 +888,165 @@ export async function opLogCall(
   if (args.durationMs !== undefined) props.hs_call_duration = args.durationMs;
   if (args.direction !== undefined) props.hs_call_direction = args.direction;
   return opCreateEngagement(client, 'calls', 'call', props, args, nowMs);
+}
+
+/** HubSpot properties for a logged email; both surfaces build them here. Logging does NOT send anything. */
+export function emailProperties(args: { subject?: string; text?: string; html?: string; direction?: string; status?: string }): Record<string, unknown> {
+  const props: Record<string, unknown> = { hs_email_direction: args.direction ?? 'EMAIL' };
+  if (args.subject !== undefined) props.hs_email_subject = args.subject;
+  if (args.text !== undefined) props.hs_email_text = args.text;
+  if (args.html !== undefined) props.hs_email_html = args.html;
+  if (args.status !== undefined) props.hs_email_status = args.status;
+  return props;
+}
+
+export async function opLogEmail(
+  client: HubSpotClient,
+  args: EngagementArgs & { subject?: string; text?: string; html?: string; direction?: string; status?: string },
+  nowMs: number = Date.now(),
+): Promise<string> {
+  return opCreateEngagement(client, 'emails', 'email', emailProperties(args), args, nowMs);
+}
+
+/** HubSpot property values come back as strings; compare what was sent the same way. */
+const sameValue = (sent: unknown, stored: unknown) =>
+  stored !== undefined && stored !== null && String(stored) === String(sent);
+
+/**
+ * PATCH an activity, then re-read the changed properties: HubSpot's echo omits
+ * populated fields, so it cannot prove the write. Per property: true (reads
+ * back as sent), false (different), null (not returned — e.g. a value HubSpot
+ * normalises such as a date, or a property this activity type lacks).
+ */
+export async function performUpdateEngagement(
+  client: HubSpotClient,
+  args: { engagementType: HubSpotEngagementType; engagementId: string; properties: Record<string, unknown> },
+): Promise<{ engagement: HubSpotObject; confirmed: Record<string, boolean | null> }> {
+  await client.updateEngagement(args.engagementType, args.engagementId, args.properties);
+  const keys = Object.keys(args.properties);
+  const engagement = await client.getEngagement(args.engagementType, args.engagementId, keys);
+  const stored = (engagement.properties ?? {}) as Record<string, unknown>;
+  const confirmed = Object.fromEntries(keys.map(k => [k, k in stored && stored[k] !== null ? sameValue(args.properties[k], stored[k]) : null]));
+  return { engagement, confirmed };
+}
+
+export async function opUpdateEngagement(client: HubSpotClient, args: Parameters<typeof performUpdateEngagement>[1]): Promise<string> {
+  const { engagement, confirmed } = await performUpdateEngagement(client, args);
+  const label = args.engagementType.slice(0, -1);
+  const differ = Object.entries(confirmed).filter(([, v]) => v === false).map(([k]) => k);
+  const unknown = Object.entries(confirmed).filter(([, v]) => v === null).map(([k]) => k);
+  const note = differ.length ? `\n\n⚠ These read back differently from what was sent: ${differ.join(', ')}.`
+    : unknown.length ? `\n\nCould not confirm on re-read (not returned, or normalised by HubSpot): ${unknown.join(', ')}.` : '';
+  return `Updated ${label} ${args.engagementId}.\n\n${formatEngagement(engagement, label)}${note}`;
+}
+
+// --- Tickets ---
+
+export async function performCreateTicket(
+  client: HubSpotClient,
+  args: { subject: string; content?: string; pipeline: string; pipelineStage: string; priority?: string; properties?: Record<string, unknown> },
+): Promise<HubSpotObject> {
+  return client.createTicket({
+    ...(args.properties ?? {}),
+    subject: args.subject,
+    hs_pipeline: args.pipeline,
+    hs_pipeline_stage: args.pipelineStage,
+    ...(args.content !== undefined ? { content: args.content } : {}),
+    ...(args.priority !== undefined ? { hs_ticket_priority: args.priority } : {}),
+  });
+}
+
+/** PATCH then re-read: the echo omits populated fields (same contract as updateDeal). */
+export async function performUpdateTicket(client: HubSpotClient, args: { ticketId: string; properties: Record<string, unknown> }): Promise<HubSpotObject> {
+  await client.updateTicket(args.ticketId, args.properties);
+  return client.getTicket(args.ticketId, [...new Set([...TICKET_PROPERTIES, ...Object.keys(args.properties)])]);
+}
+
+/**
+ * Ticket search without getTickets' fixed criteria. "Open" and "closed" are
+ * not ticket properties: each pipeline STAGE carries metadata.ticketState, so
+ * the stage IDs in that state are read from the ticket pipelines and the
+ * search filters hs_pipeline_stage IN those IDs.
+ */
+export async function fetchTicketsSearch(
+  client: HubSpotClient,
+  args: z.infer<typeof searchTicketsSchema>,
+): Promise<HubSpotSearchResponse & { stageFilter?: string[] }> {
+  const filters: Array<Record<string, unknown>> = [];
+  let stageFilter: string[] | undefined;
+  if (args.pipelineId) filters.push({ propertyName: 'hs_pipeline', operator: 'EQ', value: args.pipelineId });
+  if (args.stageId) {
+    filters.push({ propertyName: 'hs_pipeline_stage', operator: 'EQ', value: args.stageId });
+  } else if (args.state !== 'any') {
+    const want = args.state === 'open' ? 'OPEN' : 'CLOSED';
+    const pipelines = (await client.listPipelines('tickets')).results ?? [];
+    stageFilter = pipelines
+      .filter(p => !args.pipelineId || p.id === args.pipelineId)
+      .flatMap(p => p.stages ?? [])
+      .filter(s => s.metadata?.ticketState === want && s.id)
+      .map(s => s.id as string);
+    if (stageFilter.length === 0) {
+      throw new UserError(`No ticket pipeline stage is marked ${want}${args.pipelineId ? ` in pipeline ${args.pipelineId}` : ''}, so nothing can match state "${args.state}". Use state "any" or a stageId.`);
+    }
+    filters.push({ propertyName: 'hs_pipeline_stage', operator: 'IN', values: stageFilter });
+  }
+  if (args.modifiedAfter) {
+    const ms = Date.parse(args.modifiedAfter);
+    if (Number.isNaN(ms)) throw new UserError(`modifiedAfter is not a date: ${args.modifiedAfter}`);
+    // The search API compares datetimes as epoch milliseconds; ISO 400s.
+    filters.push({ propertyName: 'hs_lastmodifieddate', operator: 'GT', value: String(ms) });
+  }
+  const body = {
+    ...(filters.length ? { filterGroups: [{ filters }] } : {}),
+    ...(args.query ? { query: args.query } : {}),
+    sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }],
+    limit: args.limit,
+    ...(args.after ? { after: args.after } : {}),
+    properties: TICKET_PROPERTIES,
+  };
+  const res = await client.searchTickets(body, { maxRetries: 2, retryDelay: 1 });
+  return { ...res, stageFilter };
+}
+
+// --- Pipelines ---
+
+/** Stage body with the metadata HubSpot requires for this object type. */
+function stageBody(objectType: 'deals' | 'tickets', s: { label?: string; displayOrder?: number; probability?: number; ticketState?: string }, requireMetadata: boolean) {
+  if (objectType === 'deals' && s.ticketState !== undefined) throw new UserError('ticketState applies to ticket stages; deal stages take probability.');
+  if (objectType === 'tickets' && s.probability !== undefined) throw new UserError('probability applies to deal stages; ticket stages take ticketState.');
+  if (requireMetadata && objectType === 'deals' && s.probability === undefined) throw new UserError(`Deal stage "${s.label}" needs probability (0.0–1.0).`);
+  if (requireMetadata && objectType === 'tickets' && s.ticketState === undefined) throw new UserError(`Ticket stage "${s.label}" needs ticketState (OPEN or CLOSED).`);
+  const metadata = objectType === 'deals'
+    ? (s.probability !== undefined ? { probability: String(s.probability) } : undefined)
+    : (s.ticketState !== undefined ? { ticketState: s.ticketState } : undefined);
+  return {
+    ...(s.label !== undefined ? { label: s.label } : {}),
+    ...(s.displayOrder !== undefined ? { displayOrder: s.displayOrder } : {}),
+    ...(metadata ? { metadata } : {}),
+  };
+}
+
+export async function performCreatePipeline(client: HubSpotClient, args: z.infer<typeof createPipelineSchema>) {
+  return client.createPipeline(args.objectType, {
+    label: args.label,
+    displayOrder: args.displayOrder ?? 0,
+    stages: args.stages.map((s, i) => ({ displayOrder: i, ...stageBody(args.objectType, s, true) })),
+  });
+}
+
+export async function performUpdatePipeline(client: HubSpotClient, args: z.infer<typeof updatePipelineSchema>) {
+  return client.updatePipeline(args.objectType, args.pipelineId, {
+    ...(args.label !== undefined ? { label: args.label } : {}),
+    ...(args.displayOrder !== undefined ? { displayOrder: args.displayOrder } : {}),
+  });
+}
+
+export async function performCreatePipelineStage(client: HubSpotClient, args: z.infer<typeof createPipelineStageSchema>) {
+  return client.createPipelineStage(args.objectType, args.pipelineId, { displayOrder: args.displayOrder ?? 0, ...stageBody(args.objectType, args, true) });
+}
+
+export async function performUpdatePipelineStage(client: HubSpotClient, args: z.infer<typeof updatePipelineStageSchema>) {
+  return client.updatePipelineStage(args.objectType, args.pipelineId, args.stageId, stageBody(args.objectType, args, false));
 }
 
 export async function opLogMeeting(
@@ -1155,12 +1423,97 @@ hubspotServer.addTool({
 hubspotServer.addTool({
   name: 'listPipelines',
   annotations: { readOnlyHint: true },
-  description: 'List HubSpot deal pipelines and their stages (with stage IDs), so deal stage IDs can be resolved to human-readable names.',
-  parameters: z.object({}),
+  description: 'List HubSpot deal or ticket pipelines and their stages (with stage IDs, deal win probability or ticket open/closed state), so stage IDs can be resolved to names.',
+  parameters: z.object({
+    objectType: z.enum(['deals', 'tickets']).optional().default('deals').describe('deals (default) or tickets.'),
+  }),
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to list pipelines', session, log, (client) => {
       log.info('listPipelines');
       return opListPipelines(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'createPipeline',
+  annotations: { readOnlyHint: false },
+  description: 'Create a deal or ticket pipeline with its stages. Deal stages need probability (0.0–1.0), ticket stages ticketState (OPEN/CLOSED). '
+    + 'Free HubSpot accounts cannot add pipelines; HubSpot refuses it.',
+  parameters: createPipelineSchema,
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to create pipeline', session, log, async (client) => {
+      log.info(`createPipeline ${args.objectType} "${args.label}"`);
+      const p = await performCreatePipeline(client, args);
+      return `Created ${args.objectType === 'deals' ? 'deal' : 'ticket'} pipeline.\n\n${formatPipelines([p], args.objectType === 'deals' ? 'deal' : 'ticket')}`;
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'updatePipeline',
+  annotations: { readOnlyHint: false },
+  description: 'Rename or reorder a deal or ticket pipeline. Partial update: stages are left as they are.',
+  parameters: updatePipelineSchema,
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to update pipeline', session, log, async (client) => {
+      log.info(`updatePipeline ${args.objectType} ${args.pipelineId}`);
+      const p = await performUpdatePipeline(client, args);
+      return `Updated pipeline.\n\n${formatPipelines([p], args.objectType === 'deals' ? 'deal' : 'ticket')}`;
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'createPipelineStage',
+  annotations: { readOnlyHint: false },
+  description: 'Add a stage to a deal or ticket pipeline. Deal stages need probability, ticket stages ticketState.',
+  parameters: createPipelineStageSchema,
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to create pipeline stage', session, log, async (client) => {
+      log.info(`createPipelineStage ${args.objectType} ${args.pipelineId}`);
+      const st = await performCreatePipelineStage(client, args);
+      return `Created stage "${st.label ?? args.label}" (id ${st.id ?? '?'}).`;
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'updatePipelineStage',
+  annotations: { readOnlyHint: false },
+  description: 'Rename, reorder, or change the probability (deals) or open/closed state (tickets) of a pipeline stage.',
+  parameters: updatePipelineStageSchema,
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to update pipeline stage', session, log, async (client) => {
+      log.info(`updatePipelineStage ${args.objectType} ${args.pipelineId}/${args.stageId}`);
+      const st = await performUpdatePipelineStage(client, args);
+      return `Updated stage "${st.label ?? ''}" (id ${st.id ?? args.stageId}).`;
+    }),
+});
+
+// --- Users and teams ---
+
+hubspotServer.addTool({
+  name: 'listUsers',
+  annotations: { readOnlyHint: true },
+  description: 'List the users of the HubSpot account (name, email, primary team) — e.g. to find an owner. Paginated with after. Needs settings.users.read (reconnect if missing).',
+  parameters: z.object({
+    limit: z.number().int().min(1).max(100).optional().default(100).describe('Max users per page (default 100).'),
+    after: z.string().optional().describe('Paging token from a previous call.'),
+  }),
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to list users', session, log, async (client) => {
+      log.info('listUsers');
+      const page = await client.listUsers(args);
+      return formatUsers(page.results ?? [], page.paging?.next?.after);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'listTeams',
+  annotations: { readOnlyHint: true },
+  description: 'List the teams in the HubSpot account with their member counts. Needs settings.users.teams.read (reconnect if missing).',
+  parameters: z.object({}),
+  execute: (_args, { log, session }) =>
+    withHubSpotClient('Failed to list teams', session, log, async (client) => {
+      log.info('listTeams');
+      return formatTeams((await client.listTeams()).results ?? []);
     }),
 });
 
@@ -1197,6 +1550,44 @@ hubspotServer.addTool({
     withHubSpotClient('Failed to get tickets', session, log, (client) => {
       log.info(`getTickets criteria=${args.criteria} limit=${args.limit}`);
       return opGetTickets(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'searchTickets',
+  annotations: { readOnlyHint: true },
+  description: 'Search HubSpot tickets by open/closed state (from each stage\'s pipeline state), pipeline, stage, text and last change, newest change first. Paginated with after.',
+  parameters: searchTicketsSchema,
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to search tickets', session, log, async (client) => {
+      log.info(`searchTickets state=${args.state} pipeline=${args.pipelineId ?? 'any'}`);
+      const res = await fetchTicketsSearch(client, args);
+      return formatTickets(res.results ?? [], res.total, res.paging?.next?.after);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'createTicket',
+  annotations: { readOnlyHint: false },
+  description: 'Create a HubSpot ticket in a pipeline stage (get IDs from listPipelines with objectType tickets). Attach notes or emails to it with associateToObjectType tickets.',
+  parameters: createTicketSchema,
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to create ticket', session, log, async (client) => {
+      log.info(`createTicket pipeline=${args.pipeline} stage=${args.pipelineStage}`);
+      const t = await performCreateTicket(client, args);
+      return `Created ticket.\n\n${formatEngagement(t, 'Ticket')}`;
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'updateTicket',
+  annotations: { readOnlyHint: false },
+  description: 'Update a HubSpot ticket\'s properties (e.g. subject, content, hs_pipeline_stage to move it, hs_ticket_priority). Re-read after the update.',
+  parameters: updateTicketSchema,
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to update ticket', session, log, async (client) => {
+      log.info(`updateTicket id=${args.ticketId}`);
+      return `Updated ticket.\n\n${formatEngagement(await performUpdateTicket(client, args), 'Ticket')}`;
     }),
 });
 
@@ -1313,10 +1704,35 @@ hubspotServer.addTool({
 });
 
 hubspotServer.addTool({
+  name: 'logEmail',
+  annotations: { readOnlyHint: false },
+  description: 'Log an email on the CRM timeline and optionally attach it to a company, contact, deal or ticket. This RECORDS an email; it does not send one.',
+  parameters: logEmailSchema,
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to log email', session, log, (client) => {
+      log.info(`logEmail associate=${args.associateToObjectType ?? 'none'}`);
+      return opLogEmail(client, args);
+    }),
+});
+
+hubspotServer.addTool({
+  name: 'updateEngagement',
+  annotations: { readOnlyHint: false },
+  description: 'Edit an existing note, task, call, meeting or logged email by ID: set any of its properties (e.g. hs_note_body, hs_task_status, hs_call_body). '
+    + 'Each changed property is re-read and reported if it does not read back as sent.',
+  parameters: updateEngagementSchema,
+  execute: (args, { log, session }) =>
+    withHubSpotClient('Failed to update engagement', session, log, (client) => {
+      log.info(`updateEngagement type=${args.engagementType} id=${args.engagementId}`);
+      return opUpdateEngagement(client, args);
+    }),
+});
+
+hubspotServer.addTool({
   name: 'deleteEngagement',
   annotations: { readOnlyHint: false, destructiveHint: true },
   description:
-    'Delete a note, task, call, or meeting by ID — the cleanup counterpart to createNote/createTask/logCall/logMeeting.',
+    'Delete a note, task, call, meeting or logged email by ID — the cleanup counterpart to createNote/createTask/logCall/logMeeting/logEmail.',
   parameters: deleteEngagementSchema,
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to delete engagement', session, log, (client) => {

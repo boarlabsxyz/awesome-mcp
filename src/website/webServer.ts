@@ -9644,12 +9644,75 @@ function registerRestApiRoutes(app: express.Express): void {
     try {
       const client = await hubspotRestClient(req, res);
       if (!client) return;
+      const objectType = qstr(req.query.objectType, 'deals');
+      if (objectType !== 'deals' && objectType !== 'tickets') {
+        res.status(400).json({ error: "objectType must be 'deals' or 'tickets'" });
+        return;
+      }
       const { formatPipelines } = await import('../hubspot/apiHelpers.js');
-      const result = await client.listDealPipelines();
-      respondNegotiated(req, res, result, () => formatPipelines(result.results ?? []));
+      const result = objectType === 'deals' ? await client.listDealPipelines() : await client.listPipelines(objectType);
+      respondNegotiated(req, res, result, () => formatPipelines(result.results ?? [], objectType === 'deals' ? 'deal' : 'ticket'));
     } catch (err: any) {
       console.error('Error listing HubSpot pipelines:', err);
       await sendHubSpotError(req, res, err, { notFound: 'Pipelines not found', fallback: 'Failed to list pipelines' });
+    }
+  });
+
+  // GET /api/v1/hubspot/tickets/search - Tickets by open/closed state, pipeline, stage, text, last change
+  app.get('/api/v1/hubspot/tickets/search', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { searchTicketsSchema, fetchTicketsSearch } = await import('../hubspot/server.js');
+      const parsed = searchTicketsSchema.safeParse({
+        state: qstr(req.query.state) || undefined,
+        pipelineId: qstr(req.query.pipelineId) || undefined,
+        stageId: qstr(req.query.stageId) || undefined,
+        query: qstr(req.query.q) || undefined,
+        modifiedAfter: qstr(req.query.modifiedAfter) || undefined,
+        limit: req.query.limit !== undefined ? qint(req.query.limit, 25, { min: 1, max: 100 }) : undefined,
+        after: qstr(req.query.after) || undefined,
+      });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid query', issues: parsed.error.flatten() });
+        return;
+      }
+      const { formatTickets } = await import('../hubspot/apiHelpers.js');
+      const result = await fetchTicketsSearch(client, parsed.data);
+      respondNegotiated(req, res, result, () => formatTickets(result.results ?? [], result.total, result.paging?.next?.after));
+    } catch (err: any) {
+      console.error('Error searching HubSpot tickets:', err);
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') { res.status(400).json({ error: err.message }); return; }
+      const status = hubspotPassthroughStatus(err);
+      if (status) { res.status(status).json({ error: err.message || 'Failed to search tickets' }); return; }
+      await sendHubSpotError(req, res, err, { notFound: 'Tickets not found', fallback: 'Failed to search tickets' });
+    }
+  });
+
+  // GET /api/v1/hubspot/users and /teams - Account users and teams (settings.users.read / .teams.read)
+  app.get('/api/v1/hubspot/users', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { formatUsers } = await import('../hubspot/apiHelpers.js');
+      const result = await client.listUsers({ limit: qint(req.query.limit, 100, { min: 1, max: 100 }), after: qstr(req.query.after) || undefined });
+      respondNegotiated(req, res, result, () => formatUsers(result.results ?? [], result.paging?.next?.after));
+    } catch (err: any) {
+      console.error('Error listing HubSpot users:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Users not found', fallback: 'Failed to list users' });
+    }
+  });
+
+  app.get('/api/v1/hubspot/teams', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { formatTeams } = await import('../hubspot/apiHelpers.js');
+      const result = await client.listTeams();
+      respondNegotiated(req, res, result, () => formatTeams(result.results ?? []));
+    } catch (err: any) {
+      console.error('Error listing HubSpot teams:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Teams not found', fallback: 'Failed to list teams' });
     }
   });
 
@@ -9831,9 +9894,9 @@ function registerRestApiRoutes(app: express.Express): void {
   // contract — and the honesty about a failed association — lives in one place.
   const HUBSPOT_ENGAGEMENT_ROUTES: ReadonlyArray<{
     path: string;
-    type: 'notes' | 'tasks' | 'calls' | 'meetings';
+    type: 'notes' | 'tasks' | 'calls' | 'meetings' | 'emails';
     label: string;
-    schemaName: 'createNoteSchema' | 'createTaskSchema' | 'logCallSchema' | 'logMeetingSchema';
+    schemaName: 'createNoteSchema' | 'createTaskSchema' | 'logCallSchema' | 'logMeetingSchema' | 'logEmailSchema';
     properties: (args: any, hubspot: typeof import('../hubspot/server.js')) => Record<string, unknown>;
     fallback: string;
   }> = [
@@ -9878,6 +9941,15 @@ function registerRestApiRoutes(app: express.Express): void {
         hs_meeting_end_time: a.endTime,
       }),
       fallback: 'Failed to log meeting',
+    },
+    {
+      // Records an email on the timeline; nothing is sent.
+      path: '/api/v1/hubspot/emails',
+      type: 'emails',
+      label: 'email',
+      schemaName: 'logEmailSchema',
+      properties: (a, hubspot) => hubspot.emailProperties(a),
+      fallback: 'Failed to log email',
     },
   ];
 
@@ -9930,6 +10002,8 @@ function registerRestApiRoutes(app: express.Express): void {
         res.status(result.status).json(result.body);
       } catch (err: any) {
         console.error(`Error in HubSpot ${route.tool}:`, err);
+        // Our own refusals (e.g. a deal stage without probability) are the caller's to fix.
+        if (err?.name === 'UserError' && typeof err?.code !== 'number') { res.status(400).json({ error: err.message }); return; }
         const status = hubspotPassthroughStatus(err);
         if (status) { res.status(status).json({ error: err.message || route.fallback }); return; }
         await sendHubSpotError(req, res, err, { notFound: route.notFound, fallback: route.fallback });

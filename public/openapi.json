@@ -17681,12 +17681,25 @@
     "/api/v1/hubspot/pipelines": {
       "get": {
         "operationId": "listHubSpotPipelines",
-        "summary": "List HubSpot deal pipelines with their ordered stages",
+        "summary": "List HubSpot deal or ticket pipelines with their ordered stages",
         "description": "One call returns every pipeline with its stages, which is how a dealstage ID on a deal record becomes a stage name. Mirrors the MCP tool `listPipelines`.",
         "tags": [
           "hubspot"
         ],
         "parameters": [
+          {
+            "name": "objectType",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "deals",
+                "tickets"
+              ],
+              "default": "deals"
+            },
+            "description": "deals (default) or tickets. Ticket stages carry their open/closed state."
+          },
           {
             "name": "format",
             "in": "query",
@@ -17959,6 +17972,31 @@
                 }
               }
             }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createHubSpotTicket",
+        "summary": "Create a HubSpot ticket",
+        "description": "Create a HubSpot ticket. Mirrors the MCP tool `createTicket`. Takes a JSON body and returns JSON. Answers 201. pipelineStage is required by HubSpot; pipeline defaults to 0. Not idempotent.",
+        "tags": [
+          "hubspot"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
           }
         }
       }
@@ -34566,6 +34604,367 @@
           },
           {
             "name": "itemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/tickets/search": {
+      "get": {
+        "operationId": "searchHubSpotTickets",
+        "summary": "Search HubSpot tickets by state, pipeline, stage, text and last change",
+        "description": "Search HubSpot tickets by state, pipeline, stage, text and last change. Mirrors the MCP tool `searchTickets`. Returns upstream JSON by default; pass Accept: text/plain for markdown. state=open (default), closed or any - read from each stage open/closed state in its pipeline. pipelineId, stageId, q, modifiedAfter (ISO), limit (max 100), after.",
+        "tags": [
+          "hubspot"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/users": {
+      "get": {
+        "operationId": "listHubSpotUsers",
+        "summary": "List HubSpot account users",
+        "description": "List HubSpot account users. Mirrors the MCP tool `listUsers`. Returns upstream JSON by default; pass Accept: text/plain for markdown. Needs settings.users.read: existing connections reconnect. limit, after.",
+        "tags": [
+          "hubspot"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/teams": {
+      "get": {
+        "operationId": "listHubSpotTeams",
+        "summary": "List HubSpot teams",
+        "description": "List HubSpot teams. Mirrors the MCP tool `listTeams`. Returns upstream JSON by default; pass Accept: text/plain for markdown. Needs settings.users.teams.read: existing connections reconnect.",
+        "tags": [
+          "hubspot"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/emails": {
+      "post": {
+        "operationId": "logHubSpotEmail",
+        "summary": "Log an email on the HubSpot timeline and optionally attach it to a record",
+        "description": "Log an email on the HubSpot timeline and optionally attach it to a record. Mirrors the MCP tool `logEmail`. Takes a JSON body and returns JSON. Records an email; sends nothing. Body limit 5mb. direction defaults to EMAIL. Same association reporting as notes; tickets are a valid target.",
+        "tags": [
+          "hubspot"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/engagements/{engagementType}/{engagementId}/update": {
+      "post": {
+        "operationId": "updateHubSpotEngagement",
+        "summary": "Edit a HubSpot note, task, call, meeting or logged email",
+        "description": "Edit a HubSpot note, task, call, meeting or logged email. Mirrors the MCP tool `updateEngagement`. Takes a JSON body and returns JSON. Only the named properties change. Each is re-read: confirmed maps every property to true, false (reads back differently) or null (not returned).",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "engagementType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "engagementId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/tickets/{ticketId}/update": {
+      "post": {
+        "operationId": "updateHubSpotTicket",
+        "summary": "Update a HubSpot ticket",
+        "description": "Update a HubSpot ticket. Mirrors the MCP tool `updateTicket`. Takes a JSON body and returns JSON. Only the named properties change (hs_pipeline_stage moves it). 200 with the ticket re-read.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "ticketId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/pipelines/{objectType}": {
+      "post": {
+        "operationId": "createHubSpotPipeline",
+        "summary": "Create a HubSpot deal or ticket pipeline with its stages",
+        "description": "Create a HubSpot deal or ticket pipeline with its stages. Mirrors the MCP tool `createPipeline`. Takes a JSON body and returns JSON. Changes the portal for everyone in it. Deal stages need probability, ticket stages ticketState (400 otherwise). Free accounts cannot add pipelines. Archiving or replacing a pipeline is not exposed.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/pipelines/{objectType}/{pipelineId}/update": {
+      "post": {
+        "operationId": "updateHubSpotPipeline",
+        "summary": "Rename or reorder a HubSpot pipeline",
+        "description": "Rename or reorder a HubSpot pipeline. Mirrors the MCP tool `updatePipeline`. Takes a JSON body and returns JSON. Partial update (PATCH): stages are untouched.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pipelineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/pipelines/{objectType}/{pipelineId}/stages": {
+      "post": {
+        "operationId": "createHubSpotPipelineStage",
+        "summary": "Add a stage to a HubSpot pipeline",
+        "description": "Add a stage to a HubSpot pipeline. Mirrors the MCP tool `createPipelineStage`. Takes a JSON body and returns JSON. Answers 201. Deal stages need probability, ticket stages ticketState.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pipelineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/pipelines/{objectType}/{pipelineId}/stages/{stageId}/update": {
+      "post": {
+        "operationId": "updateHubSpotPipelineStage",
+        "summary": "Edit a HubSpot pipeline stage",
+        "description": "Edit a HubSpot pipeline stage. Mirrors the MCP tool `updatePipelineStage`. Takes a JSON body and returns JSON. Label, order, probability (deals) or ticketState (tickets). Deleting a stage is not exposed.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pipelineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stageId",
             "in": "path",
             "required": true,
             "schema": {

@@ -19,7 +19,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Outline](#outline) (27)
 - [PeopleForce](#peopleforce) (45)
 - [PeopleForce v4](#peopleforce-v4) (44)
-- [HubSpot](#hubspot) (23)
+- [HubSpot](#hubspot) (34)
 - [Redmine](#redmine) (46)
 - [Browserbase](#browserbase) (9)
 - [GitHub](#github) (27)
@@ -421,7 +421,7 @@ Source: `src/peopleforce-v4/server.ts` — 44 tools.
 
 ## HubSpot
 
-Source: `src/hubspot/server.ts` — 23 tools.
+Source: `src/hubspot/server.ts` — 34 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -436,9 +436,18 @@ Source: `src/hubspot/server.ts` — 23 tools.
 | `getDeal` | Get a specific deal by ID from HubSpot. | `GET /api/v1/hubspot/deals/{dealId}` |
 | `createDeal` | Create a new deal in HubSpot. Set dealstage/pipeline via properties (use listPipelines to resolve stage IDs). | `POST /api/v1/hubspot/deals` |
 | `updateDeal` | Update an existing deal record in HubSpot (e.g. move stage, change amount). | `POST /api/v1/hubspot/deals/{dealId}` |
-| `listPipelines` | List HubSpot deal pipelines and their stages (with stage IDs), so deal stage IDs can be resolved to human-readable names. | `GET /api/v1/hubspot/pipelines` |
+| `listPipelines` | List HubSpot deal or ticket pipelines and their stages (with stage IDs, deal win probability or ticket open/closed state), so stage IDs can be resolved to names. | `GET /api/v1/hubspot/pipelines` |
+| `createPipeline` | Create a deal or ticket pipeline with its stages. Deal stages need probability (0.0–1.0), ticket stages ticketState (OPEN/CLOSED). Free HubSpot accounts cannot add pipelines; HubSpot refuses it. | `POST /api/v1/hubspot/pipelines/{objectType}` |
+| `updatePipeline` | Rename or reorder a deal or ticket pipeline. Partial update: stages are left as they are. | `POST /api/v1/hubspot/pipelines/{objectType}/{pipelineId}/update` |
+| `createPipelineStage` | Add a stage to a deal or ticket pipeline. Deal stages need probability, ticket stages ticketState. | `POST /api/v1/hubspot/pipelines/{objectType}/{pipelineId}/stages` |
+| `updatePipelineStage` | Rename, reorder, or change the probability (deals) or open/closed state (tickets) of a pipeline stage. | `POST /api/v1/hubspot/pipelines/{objectType}/{pipelineId}/stages/{stageId}/update` |
+| `listUsers` | List the users of the HubSpot account (name, email, primary team) — e.g. to find an owner. Paginated with after. Needs settings.users.read (reconnect if missing). | `GET /api/v1/hubspot/users` |
+| `listTeams` | List the teams in the HubSpot account with their member counts. Needs settings.users.teams.read (reconnect if missing). | `GET /api/v1/hubspot/teams` |
 | `getRecentConversations` | Get recent conversation threads from HubSpot with their messages. | `GET /api/v1/hubspot/conversations` |
 | `getTickets` | Get tickets from HubSpot based on configurable selection criteria. | `GET /api/v1/hubspot/tickets` |
+| `searchTickets` | Search HubSpot tickets by open/closed state (from each stage's pipeline state), pipeline, stage, text and last change, newest change first. Paginated with after. | `GET /api/v1/hubspot/tickets/search` |
+| `createTicket` | Create a HubSpot ticket in a pipeline stage (get IDs from listPipelines with objectType tickets). Attach notes or emails to it with associateToObjectType tickets. | `POST /api/v1/hubspot/tickets` |
+| `updateTicket` | Update a HubSpot ticket's properties (e.g. subject, content, hs_pipeline_stage to move it, hs_ticket_priority). Re-read after the update. | `POST /api/v1/hubspot/tickets/{ticketId}/update` |
 | `getTicketConversationThreads` | Get conversation threads (and their messages) associated with a specific ticket. | `GET /api/v1/hubspot/tickets/{ticketId}/conversation-threads` |
 | `getProperty` | Get details of a specific HubSpot property definition. | `GET /api/v1/hubspot/properties/{objectType}/{propertyName}` |
 | `updateProperty` | Update a HubSpot property definition (e.g., add dropdown options). | `POST /api/v1/hubspot/properties/{objectType}/{propertyName}` |
@@ -447,7 +456,9 @@ Source: `src/hubspot/server.ts` — 23 tools.
 | `createTask` | Create a task and optionally attach it to a company, contact, or deal. | `POST /api/v1/hubspot/tasks` |
 | `logCall` | Log a call activity and optionally attach it to a company, contact, or deal. | `POST /api/v1/hubspot/calls` |
 | `logMeeting` | Log a meeting activity and optionally attach it to a company, contact, or deal. | `POST /api/v1/hubspot/meetings` |
-| `deleteEngagement` | Delete a note, task, call, or meeting by ID — the cleanup counterpart to createNote/createTask/logCall/logMeeting. | `POST /api/v1/hubspot/engagements/{engagementType}/{engagementId}/delete` |
+| `logEmail` | Log an email on the CRM timeline and optionally attach it to a company, contact, deal or ticket. This RECORDS an email; it does not send one. | `POST /api/v1/hubspot/emails` |
+| `updateEngagement` | Edit an existing note, task, call, meeting or logged email by ID: set any of its properties (e.g. hs_note_body, hs_task_status, hs_call_body). Each changed property is re-read and reported if it does not read back as sent. | `POST /api/v1/hubspot/engagements/{engagementType}/{engagementId}/update` |
+| `deleteEngagement` | Delete a note, task, call, meeting or logged email by ID — the cleanup counterpart to createNote/createTask/logCall/logMeeting/logEmail. | `POST /api/v1/hubspot/engagements/{engagementType}/{engagementId}/delete` |
 
 ## Redmine
 
@@ -650,4 +661,4 @@ Source: `src/sandbox/server.ts` — 6 tools.
 
 ---
 
-**Grand total: 465 tools across 22 sections.**
+**Grand total: 476 tools across 22 sections.**
