@@ -242,6 +242,11 @@ export const createListFields = {
   description: z.string().optional().describe('Plain-text description.'),
   todoMode: z.boolean().optional().describe('Add task-tracking columns.'),
 };
+export const updateListFields = {
+  name: z.string().min(1).optional().describe('New list name.'),
+  description: z.string().optional().describe('New plain-text description; replaces the old one.'),
+  todoMode: z.boolean().optional().describe('Turn task-tracking columns on or off.'),
+};
 export const createListItemFields = {
   fields: z.array(listFieldSchema).min(1).max(100).describe('One entry per column to fill.'),
   parentItemId: z.string().optional().describe('Create it as a subtask of this record.'),
@@ -262,6 +267,7 @@ export const uploadFileRestSchema = z.object(uploadFileFields).strict();
 export const createCanvasRestSchema = z.object(createCanvasFields).strict();
 export const editCanvasRestSchema = z.object(editCanvasFields).strict();
 export const createListRestSchema = z.object(createListFields).strict();
+export const updateListRestSchema = z.object(updateListFields).strict();
 export const createListItemRestSchema = z.object(createListItemFields).strict();
 export const updateListItemRestSchema = z.object(updateListItemFields).strict();
 
@@ -327,6 +333,26 @@ export async function performCreateList(client: SlackClient, args: Args<typeof c
   assertWritesEnabled();
   const r = await client.slackListsCreate(args);
   return { listId: r.list_id, name: args.name, listMetadata: r.list_metadata ?? null };
+}
+
+export async function performUpdateList(client: SlackClient, listId: string, args: Args<typeof updateListFields>) {
+  if (args.name === undefined && args.description === undefined && args.todoMode === undefined) {
+    throw refusal(400, 'Nothing to change: pass name, description or todoMode.');
+  }
+  assertWritesEnabled();
+  await client.slackListsUpdate(listId, args);
+  // slackLists.update answers only {ok: true}. The re-read's list title is the
+  // one field we can compare; description and todo mode are not echoed in a
+  // documented shape, so they stay unconfirmed (null) rather than assumed.
+  const { list } = await client.slackListsItemsList(listId, { includeList: true, limit: 1 });
+  const storedName = list?.title ?? list?.name;
+  const nameConfirmed = args.name === undefined ? undefined
+    : typeof storedName === 'string' ? storedName === args.name : null;
+  const othersChanged = args.description !== undefined || args.todoMode !== undefined;
+  const confirmed = nameConfirmed === false ? false
+    : nameConfirmed === true && !othersChanged ? true
+    : null;
+  return { listId, confirmed, ...(nameConfirmed !== undefined ? { nameConfirmed } : {}), list: list ?? null };
 }
 
 export async function performCreateListItem(client: SlackClient, listId: string, args: Args<typeof createListItemFields>) {
@@ -528,6 +554,23 @@ export function registerSlackWorkspaceTools(server: FastMCP<UserSession>, opts: 
     execute: async (args, { session }) => {
       const r = await performCreateList(opts.getClient(session), args);
       return `Created list ${r.listId} "${r.name}". Read its columns with getListItems (includeList: true).`;
+    },
+  });
+
+  server.addTool({
+    name: 'updateList',
+    annotations: { readOnlyHint: false },
+    description: 'Renames a Slack List, replaces its description, or turns todo mode on or off (paid workspaces). Pass at least one. '
+      + 'The new name is checked on re-read; description and todo mode are reported unconfirmed, because Slack does not read them back.',
+    parameters: z.object({ listId: z.string().describe('List ID (F…).'), ...updateListFields }),
+    execute: async (args, { session }) => {
+      const client = opts.getClient(session);
+      await guardFile(client, session!, args.listId);
+      const { listId, ...changes } = args;
+      const r = await performUpdateList(client, listId, changes);
+      if (r.confirmed === true) return `Updated list ${listId}; it reads back with the new name.`;
+      if (r.confirmed === false) return `Slack accepted the update to list ${listId}, but its name does not read back as sent.`;
+      return `Slack accepted the update to list ${listId}; the change could not be confirmed on re-read (description and todo mode are not read back).`;
     },
   });
 

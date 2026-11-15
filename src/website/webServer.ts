@@ -5925,6 +5925,23 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // POST /api/v1/drive/upload-sessions - Open a resumable upload for a large file
+  app.post('/api/v1/drive/upload-sessions', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { createDriveUploadSessionSchema, performCreateDriveUploadSession } = await import('../google-drive/filesOps.js');
+      const parsed = createDriveUploadSessionSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      res.status(201).json(await performCreateDriveUploadSession(req.userSession!.googleDrive, parsed.data));
+    } catch (err: any) {
+      const mapped = (await import('../google-drive/filesOps.js')).driveRestErrorResponse(err);
+      if (mapped) { res.status(mapped.status).json(mapped.body); return; }
+      sendUpstreamError(res, err, { notFound: 'Parent folder not found', fallback: 'Failed to open upload session' });
+    }
+  });
+
   // GET /api/v1/drive/files/:fileId - Get file info
   app.get('/api/v1/drive/files/:fileId', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
@@ -7566,6 +7583,13 @@ function registerRestApiRoutes(app: express.Express): void {
       fallback: 'Failed to create list',
       schema: (m) => m.createListRestSchema,
       run: async (m, c, a) => m.performCreateList(c, a),
+    },
+    {
+      path: '/api/v1/slack/lists/:listId/update',
+      status: 200,
+      fallback: 'Failed to update list',
+      schema: (m) => m.updateListRestSchema,
+      run: async (m, c, a, p) => m.performUpdateList(c, p.listId, a),
     },
     {
       path: '/api/v1/slack/lists/:listId/items',
