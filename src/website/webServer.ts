@@ -9057,6 +9057,92 @@ function registerRestApiRoutes(app: express.Express): void {
       },
     },
     {
+      path: '/api/v1/outline/documents/:documentId/revisions',
+      notFound: 'Document not found',
+      fallback: 'Failed to list revisions',
+      run: (client, req) => client.listRevisions({
+        documentId: req.params.documentId as string,
+        limit: qint(req.query.limit, 25, { min: 1, max: 100 }),
+        offset: qint(req.query.offset, 0, { min: 0 }),
+      }),
+    },
+    {
+      path: '/api/v1/outline/documents/:documentId/compare',
+      notFound: 'Document or revision not found',
+      fallback: 'Failed to compare revisions',
+      run: async (client, req) => {
+        const from = qstr(req.query.from);
+        if (!from) throw usrError('from query parameter (a revision ID) is required');
+        const { performCompareRevisions } = await import('../outline/restOps.js');
+        const r = await performCompareRevisions(client, req.params.documentId as string, from, qstr(req.query.to) || undefined);
+        return {
+          from: { id: r.from.id, createdAt: r.from.createdAt ?? null, createdBy: r.from.createdBy?.name ?? null },
+          to: r.to === 'current' ? 'current' : { id: r.to.id, createdAt: r.to.createdAt ?? null, createdBy: r.to.createdBy?.name ?? null },
+          added: r.diff.added,
+          removed: r.diff.removed,
+          summarized: r.diff.summarized,
+          diff: r.diff.text,
+        };
+      },
+    },
+    {
+      path: '/api/v1/outline/revisions/:revisionId',
+      notFound: 'Revision not found',
+      fallback: 'Failed to read revision',
+      run: async (client, req) => {
+        const r = await client.getRevision(req.params.revisionId as string);
+        if (!r) throw notFoundError('Revision not found.');
+        return r;
+      },
+    },
+    {
+      path: '/api/v1/outline/users',
+      notFound: 'User not found',
+      fallback: 'Failed to list users',
+      run: (client, req) => {
+        const filters = ['all', 'active', 'invited', 'suspended'] as const;
+        const raw = qstr(req.query.filter);
+        if (raw && !(filters as ReadonlyArray<string>).includes(raw)) throw usrError(`filter must be one of ${filters.join(', ')}`);
+        return client.listUsers({
+          query: qstr(req.query.q) || undefined,
+          filter: (raw || undefined) as (typeof filters)[number] | undefined,
+          limit: qint(req.query.limit, 25, { min: 1, max: 100 }),
+          offset: qint(req.query.offset, 0, { min: 0 }),
+        });
+      },
+    },
+    {
+      path: '/api/v1/outline/users/:userId',
+      notFound: 'User not found',
+      fallback: 'Failed to read user',
+      run: async (client, req) => {
+        const u = await client.getUser(req.params.userId as string);
+        if (!u) throw notFoundError('User not found.');
+        return u;
+      },
+    },
+    {
+      path: '/api/v1/outline/templates',
+      notFound: 'Template not found',
+      fallback: 'Failed to list templates',
+      run: (client, req) => client.listTemplates({
+        query: qstr(req.query.q) || undefined,
+        collectionId: qstr(req.query.collectionId) || undefined,
+        limit: qint(req.query.limit, 25, { min: 1, max: 100 }),
+        offset: qint(req.query.offset, 0, { min: 0 }),
+      }),
+    },
+    {
+      path: '/api/v1/outline/templates/:templateId',
+      notFound: 'Template not found',
+      fallback: 'Failed to read template',
+      run: async (client, req) => {
+        const t = await client.getTemplate(req.params.templateId as string);
+        if (!t) throw notFoundError('Template not found.');
+        return t;
+      },
+    },
+    {
       path: '/api/v1/outline/attachments/:attachmentId/url',
       notFound: 'Attachment not found',
       fallback: 'Failed to resolve attachment URL',
@@ -9139,6 +9225,49 @@ function registerRestApiRoutes(app: express.Express): void {
       run: (m, c, _a, p) => m.performDocumentLifecycle(c, 'restore', p.documentId),
     },
     {
+      path: '/api/v1/outline/documents/:documentId/unpublish',
+      notFound: 'Document not found',
+      fallback: 'Failed to unpublish document',
+      schema: (m) => m.unpublishDocumentRestSchema,
+      run: (m, c, a, p) => m.performUnpublishDocument(c, p.documentId, a),
+    },
+    {
+      // Static: must precede /documents/:documentId, which would take "import" as an id.
+      path: '/api/v1/outline/documents/import',
+      status: 201,
+      notFound: 'Collection or parent document not found',
+      fallback: 'Failed to import document',
+      schema: (m) => m.importHtmlDocumentRestSchema,
+      run: (m, c, a) => m.performImportHtmlDocument(c, a),
+    },
+    {
+      path: '/api/v1/outline/attachments',
+      status: 201,
+      notFound: 'Document not found',
+      fallback: 'Failed to upload attachment',
+      schema: (m) => m.uploadAttachmentRestSchema,
+      run: (m, c, a) => m.performUploadAttachment(c, a),
+    },
+    {
+      path: '/api/v1/outline/comments/:commentId/update',
+      notFound: 'Comment not found',
+      fallback: 'Failed to update comment',
+      schema: (m) => m.updateCommentRestSchema,
+      run: (m, c, a, p) => m.performUpdateComment(c, p.commentId, a),
+    },
+    {
+      path: '/api/v1/outline/comments/:commentId/resolve',
+      notFound: 'Comment not found',
+      fallback: 'Failed to resolve comment',
+      run: (m, c, _a, p) => m.performCommentResolution(c, 'resolve', p.commentId),
+    },
+    {
+      path: '/api/v1/outline/comments/:commentId/reopen',
+      notFound: 'Comment not found',
+      fallback: 'Failed to reopen comment',
+      run: (m, c, _a, p) => m.performCommentResolution(c, 'unresolve', p.commentId),
+    },
+    {
       path: '/api/v1/outline/documents/:documentId/comments',
       status: 201,
       notFound: 'Document not found',
@@ -9176,6 +9305,19 @@ function registerRestApiRoutes(app: express.Express): void {
       fallback: 'Failed to create collection',
       schema: (m) => m.createCollectionRestSchema,
       run: (m, c, a) => m.performCreateCollection(c, a),
+    },
+    {
+      path: '/api/v1/outline/collections/:collectionId/archive',
+      notFound: 'Collection not found',
+      fallback: 'Failed to archive collection',
+      schema: (m) => m.archiveCollectionRestSchema,
+      run: (m, c, a, p) => m.performCollectionLifecycle(c, 'archive', p.collectionId, a),
+    },
+    {
+      path: '/api/v1/outline/collections/:collectionId/restore',
+      notFound: 'Collection not found',
+      fallback: 'Failed to restore collection',
+      run: (m, c, _a, p) => m.performCollectionLifecycle(c, 'restore', p.collectionId),
     },
     {
       path: '/api/v1/outline/collections/:collectionId',

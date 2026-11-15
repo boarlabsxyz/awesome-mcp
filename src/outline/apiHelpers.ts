@@ -4,6 +4,7 @@
 
 import { UserError } from 'fastmcp';
 import { UserSession } from '../userSession.js';
+import { isPrivateHost } from '../util/baseUrlGuard.js';
 import { refreshOutlineToken } from './oauthCallback.js';
 
 /**
@@ -26,6 +27,10 @@ export type OutlineDocument = {
   publishedAt?: string | null;
   archivedAt?: string | null;
   deletedAt?: string | null;
+  icon?: string | null;
+  color?: string | null;
+  fullWidth?: boolean;
+  templateId?: string | null;
 };
 
 export type OutlineCollection = {
@@ -33,14 +38,68 @@ export type OutlineCollection = {
   name?: string;
   description?: string;
   color?: string;
+  icon?: string | null;
+  archivedAt?: string | null;
 };
 
 export type OutlineComment = {
   id: string;
   createdBy?: { name?: string };
   createdAt?: string;
+  updatedAt?: string;
   anchorText?: string;
+  parentCommentId?: string | null;
+  resolvedAt?: string | null;
+  resolvedBy?: { name?: string } | null;
   data?: unknown;
+};
+
+export type OutlineUser = {
+  id: string;
+  name?: string;
+  email?: string | null;
+  role?: string;
+  avatarUrl?: string | null;
+  lastActiveAt?: string | null;
+  createdAt?: string;
+  isSuspended?: boolean;
+  isAdmin?: boolean;
+  isViewer?: boolean;
+};
+
+export type OutlineTemplate = {
+  id: string;
+  title?: string;
+  text?: string;
+  data?: unknown;
+  icon?: string | null;
+  collectionId?: string | null;
+  updatedAt?: string;
+  createdBy?: { name?: string };
+};
+
+export type OutlineRevision = {
+  id: string;
+  documentId?: string;
+  title?: string;
+  name?: string | null;
+  text?: string;
+  data?: unknown;
+  createdAt?: string;
+  createdBy?: { id?: string; name?: string };
+  collaborators?: Array<{ id?: string; name?: string }>;
+};
+
+/** What attachments.create answers: where and how to send the bytes. */
+export type OutlineAttachmentUpload = {
+  maxUploadSize?: number;
+  /** `post` (multipart form to uploadUrl) or `put` (raw bytes to url). Older servers omit it and use post. */
+  mode?: 'post' | 'put';
+  uploadUrl?: string;
+  form?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  attachment?: { id: string; name?: string; contentType?: string; size?: number; url?: string; documentId?: string | null };
 };
 
 export type OutlineCollectionNode = {
@@ -85,26 +144,29 @@ export class OutlineClient {
     method: string,
     path: string,
     body?: unknown,
-    init?: { redirect?: RequestRedirect },
+    init?: { redirect?: RequestRedirect; timeoutMs?: number },
   ): Promise<{ data?: T; ok: boolean; status: number; finalUrl?: string; json?: any }> {
+    const timeoutMs = init?.timeoutMs ?? 30_000;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30_000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    // A FormData body sets its own multipart Content-Type (with the boundary).
+    const multipart = body instanceof FormData;
     let res: Response;
     try {
       res = await fetch(`${this.baseUrl}${path}`, {
         method,
         headers: {
           Authorization: `Bearer ${this.token}`,
-          'Content-Type': 'application/json',
+          ...(multipart ? {} : { 'Content-Type': 'application/json' }),
           Accept: 'application/json',
         },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
+        body: multipart ? body : body !== undefined ? JSON.stringify(body) : undefined,
         redirect: init?.redirect ?? 'follow',
         signal: controller.signal,
       });
     } catch (err: any) {
       if (err?.name === 'AbortError') {
-        throw new Error(`Outline API ${method} ${path} timed out after 30000ms`);
+        throw new Error(`Outline API ${method} ${path} timed out after ${timeoutMs}ms`);
       }
       throw err;
     } finally {
@@ -129,6 +191,11 @@ export class OutlineClient {
     return res.json;
   }
 
+  private async postMultipart(path: string, form: FormData, timeoutMs: number): Promise<any> {
+    const res = await this.request('POST', path, form, { timeoutMs });
+    return res.json;
+  }
+
   // === Documents ===
 
   getDocument(id: string): Promise<OutlineDocument | undefined> {
@@ -143,6 +210,9 @@ export class OutlineClient {
     publish?: boolean;
     template?: boolean;
     icon?: string;
+    color?: string;
+    fullWidth?: boolean;
+    templateId?: string;
   }): Promise<OutlineDocument | undefined> {
     return this.post('/api/documents.create', input).then(r => r?.data);
   }
@@ -152,10 +222,42 @@ export class OutlineClient {
     title?: string;
     text?: string;
     append?: boolean;
+    /** 'patch' replaces the first occurrence of findText with text (recent Outline only). */
+    editMode?: 'patch';
+    findText?: string;
     template?: boolean;
     icon?: string | null;
+    color?: string | null;
+    fullWidth?: boolean;
+    publish?: boolean;
   }): Promise<OutlineDocument | undefined> {
     return this.post('/api/documents.update', input).then(r => r?.data);
+  }
+
+  /** Back to draft; `detach` also takes it out of its collection. */
+  unpublishDocument(id: string, detach?: boolean): Promise<OutlineDocument | undefined> {
+    return this.post('/api/documents.unpublish', { id, ...(detach !== undefined ? { detach } : {}) }).then(r => r?.data);
+  }
+
+  /**
+   * Create a document from a file (here: HTML), which runs Outline's importer —
+   * remote and base64 images in the HTML are ingested as attachments. Multipart,
+   * and given longer than the 30 s JSON timeout because the importer is slow.
+   */
+  importDocument(input: {
+    fileName: string;
+    contentType: string;
+    content: Uint8Array;
+    collectionId?: string;
+    parentDocumentId?: string;
+    publish?: boolean;
+  }): Promise<OutlineDocument | undefined> {
+    const form = new FormData();
+    form.append('file', new Blob([input.content], { type: input.contentType }), input.fileName);
+    if (input.collectionId) form.append('collectionId', input.collectionId);
+    if (input.parentDocumentId) form.append('parentDocumentId', input.parentDocumentId);
+    if (input.publish !== undefined) form.append('publish', String(input.publish));
+    return this.postMultipart('/api/documents.import', form, 120_000).then(r => r?.data);
   }
 
   moveDocument(input: {
@@ -255,6 +357,7 @@ export class OutlineClient {
     name: string;
     description?: string;
     color?: string;
+    icon?: string;
   }): Promise<OutlineCollection | undefined> {
     return this.post('/api/collections.create', input).then(r => r?.data);
   }
@@ -267,8 +370,18 @@ export class OutlineClient {
     // undefined (which would be dropped and read as "leave it alone").
     description?: string | null;
     color?: string | null;
+    icon?: string | null;
   }): Promise<OutlineCollection | undefined> {
     return this.post('/api/collections.update', input).then(r => r?.data);
+  }
+
+  /** Hides the collection and every document in it; collections.restore undoes it. */
+  archiveCollection(id: string, reason?: string): Promise<OutlineCollection | undefined> {
+    return this.post('/api/collections.archive', { id, ...(reason ? { reason } : {}) }).then(r => r?.data);
+  }
+
+  restoreCollection(id: string): Promise<OutlineCollection | undefined> {
+    return this.post('/api/collections.restore', { id }).then(r => r?.data);
   }
 
   deleteCollection(id: string): Promise<{ success?: boolean }> {
@@ -316,11 +429,140 @@ export class OutlineClient {
     documentId: string;
     text: string;
     parentCommentId?: string;
+    anchorText?: string;
+    anchorPrefix?: string;
+    anchorSuffix?: string;
   }): Promise<OutlineComment | undefined> {
     return this.post('/api/comments.create', input).then(r => r?.data);
   }
 
+  updateComment(id: string, text: string): Promise<OutlineComment | undefined> {
+    return this.post('/api/comments.update', { id, text }).then(r => r?.data);
+  }
+
+  deleteComment(id: string): Promise<{ success?: boolean }> {
+    return this.post('/api/comments.delete', { id });
+  }
+
+  resolveComment(id: string): Promise<OutlineComment | undefined> {
+    return this.post('/api/comments.resolve', { id }).then(r => r?.data);
+  }
+
+  unresolveComment(id: string): Promise<OutlineComment | undefined> {
+    return this.post('/api/comments.unresolve', { id }).then(r => r?.data);
+  }
+
+  // === Users ===
+
+  listUsers(input: {
+    query?: string;
+    filter?: 'all' | 'invited' | 'active' | 'suspended';
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: OutlineUser[]; pagination?: OutlinePagination }> {
+    return this.post('/api/users.list', {
+      ...(input.query ? { query: input.query } : {}),
+      ...(input.filter ? { filter: input.filter } : {}),
+      limit: input.limit ?? 25,
+      offset: input.offset ?? 0,
+    }).then(r => ({ data: (r?.data ?? []) as OutlineUser[], pagination: r?.pagination }));
+  }
+
+  getUser(id: string): Promise<OutlineUser | undefined> {
+    return this.post('/api/users.info', { id }).then(r => r?.data);
+  }
+
+  // === Templates ===
+
+  listTemplates(input: {
+    query?: string;
+    collectionId?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: OutlineTemplate[]; pagination?: OutlinePagination }> {
+    return this.post('/api/templates.list', {
+      ...(input.query ? { query: input.query } : {}),
+      ...(input.collectionId ? { collectionId: input.collectionId } : {}),
+      limit: input.limit ?? 25,
+      offset: input.offset ?? 0,
+    }).then(r => ({ data: (r?.data ?? []) as OutlineTemplate[], pagination: r?.pagination }));
+  }
+
+  getTemplate(id: string): Promise<OutlineTemplate | undefined> {
+    return this.post('/api/templates.info', { id }).then(r => r?.data);
+  }
+
+  // === Revisions ===
+
+  /** Newest first. Listed revisions carry no body; read one with getRevision. */
+  listRevisions(input: { documentId: string; limit?: number; offset?: number }): Promise<{ data: OutlineRevision[]; pagination?: OutlinePagination }> {
+    return this.post('/api/revisions.list', {
+      documentId: input.documentId,
+      limit: input.limit ?? 25,
+      offset: input.offset ?? 0,
+      sort: 'createdAt',
+      direction: 'DESC',
+    }).then(r => ({ data: (r?.data ?? []) as OutlineRevision[], pagination: r?.pagination }));
+  }
+
+  getRevision(id: string): Promise<OutlineRevision | undefined> {
+    return this.post('/api/revisions.info', { id }).then(r => r?.data);
+  }
+
   // === Attachments ===
+
+  /** Create the attachment record and get the upload instructions. Uploads nothing by itself. */
+  createAttachment(input: { name: string; contentType: string; size: number; documentId?: string }): Promise<OutlineAttachmentUpload | undefined> {
+    return this.post('/api/attachments.create', input).then(r => r?.data);
+  }
+
+  /**
+   * Send the bytes where attachments.create said to. A relative uploadUrl is
+   * Outline's own local storage (/api/files.create) and takes our bearer; an
+   * absolute one is a presigned cloud URL and must NOT get it. An absolute URL
+   * pointing at a private address is refused: the address comes from the
+   * (self-hosted) server's answer, and following it blindly would let it aim our
+   * egress at internal hosts.
+   */
+  async uploadAttachmentBytes(upload: OutlineAttachmentUpload, bytes: Uint8Array, contentType: string, fileName: string): Promise<void> {
+    const mode = upload.mode ?? (upload.url && !upload.uploadUrl ? 'put' : 'post');
+    const target = mode === 'put' ? upload.url : upload.uploadUrl;
+    if (!target) throw new Error('Outline returned no upload URL for the attachment.');
+    const local = target.startsWith('/');
+    const url = local ? `${this.baseUrl}${target}` : target;
+    if (!local) {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'https:' || isPrivateHost(parsed.hostname)) {
+        throw new Error(`Refusing to upload to ${parsed.origin}: storage URLs must be public https.`);
+      }
+    }
+    const auth: Record<string, string> = local ? { Authorization: `Bearer ${this.token}` } : {};
+    let body: BodyInit;
+    let headers: Record<string, string>;
+    if (mode === 'put') {
+      body = new Blob([bytes], { type: contentType });
+      headers = { ...auth, ...(upload.headers ?? { 'Content-Type': contentType }) };
+    } else {
+      const form = new FormData();
+      for (const [k, v] of Object.entries(upload.form ?? {})) form.append(k, String(v));
+      form.append('file', new Blob([bytes], { type: contentType }), fileName);
+      body = form;
+      headers = { ...auth };
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120_000);
+    try {
+      const res = await fetch(url, { method: mode === 'put' ? 'PUT' : 'POST', headers, body, redirect: 'error', signal: controller.signal });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        const err: any = new Error(`Attachment upload failed: ${res.status} ${text.slice(0, 300)}`);
+        err.status = res.status === 413 ? 413 : 502;
+        throw err;
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
 
   /** Resolve an attachment ID to a signed download URL by following the redirect. */
   async getAttachmentRedirectUrl(id: string): Promise<string> {
@@ -554,6 +796,7 @@ export function formatComment(comment: OutlineComment): string {
   const user = comment.createdBy?.name ?? 'Unknown User';
   const parts = [`# Comment by ${user}`];
   if (comment.createdAt) parts.push(`Date: ${comment.createdAt}`);
+  if (comment.resolvedAt) parts.push(`Resolved: ${comment.resolvedAt}${comment.resolvedBy?.name ? ` by ${comment.resolvedBy.name}` : ''}`);
   if (comment.anchorText) parts.push('', `Referencing text: "${comment.anchorText}"`);
   if (comment.data !== undefined && comment.data !== null) {
     parts.push('', 'Comment content:', renderCommentBody(comment.data));
@@ -586,6 +829,7 @@ export function formatComments(
     parts.push(`## ${offset + idx + 1}. Comment by ${user}`);
     parts.push(`ID: ${c.id ?? ''}`);
     if (c.createdAt) parts.push(`Date: ${c.createdAt}`);
+    if (c.resolvedAt) parts.push(`Resolved: ${c.resolvedAt}`);
     if (c.anchorText) parts.push('', `Referencing text: "${c.anchorText}"`);
     if (c.data !== undefined && c.data !== null) {
       parts.push('', 'Comment content:', renderCommentBody(c.data), '');
@@ -594,6 +838,143 @@ export function formatComments(
     }
   });
   return parts.join('\n');
+}
+
+/** "Showing 1-25", plus the next offset when the page came back full. */
+function pageLine(count: number, pagination: OutlinePagination | undefined, limit: number, offset: number): string[] {
+  const out = [`Showing ${offset + 1}-${offset + count}${pagination?.total !== undefined ? ` of ${pagination.total}` : ''}`];
+  if (count === limit) out.push(`More may be available. Use offset=${offset + limit} to see more.`);
+  return out;
+}
+
+export function formatUsers(users: OutlineUser[], pagination: OutlinePagination | undefined, limit = 25, offset = 0): string {
+  if (users.length === 0) return offset > 0 ? 'No more users.' : 'No users found.';
+  const parts = ['# Users', '', ...pageLine(users.length, pagination, limit, offset), ''];
+  users.forEach((u, i) => {
+    parts.push(`## ${offset + i + 1}. ${u.name ?? 'Unnamed'}`, ...formatUserFields(u), '');
+  });
+  return parts.join('\n');
+}
+
+export function formatUser(u: OutlineUser): string {
+  return [`# ${u.name ?? 'Unnamed'}`, ...formatUserFields(u)].join('\n');
+}
+
+// Email is only returned to callers allowed to see it (admins, or per the
+// workspace setting); say so rather than print a blank that reads as "no email".
+function formatUserFields(u: OutlineUser): string[] {
+  const lines = [`ID: ${u.id}`];
+  lines.push(`Email: ${u.email ?? '(hidden — not visible to this connection)'}`);
+  const role = u.role ?? (u.isAdmin ? 'admin' : u.isViewer ? 'viewer' : undefined);
+  if (role) lines.push(`Role: ${role}`);
+  if (u.isSuspended) lines.push('Status: suspended');
+  if (u.lastActiveAt) lines.push(`Last active: ${u.lastActiveAt}`);
+  if (u.createdAt) lines.push(`Joined: ${u.createdAt}`);
+  return lines;
+}
+
+export function formatTemplates(templates: OutlineTemplate[], pagination: OutlinePagination | undefined, limit = 25, offset = 0): string {
+  if (templates.length === 0) return offset > 0 ? 'No more templates.' : 'No templates found.';
+  const parts = ['# Templates', '', ...pageLine(templates.length, pagination, limit, offset), ''];
+  templates.forEach((t, i) => {
+    parts.push(`## ${offset + i + 1}. ${t.icon ? `${t.icon} ` : ''}${t.title ?? 'Untitled'}`, `ID: ${t.id}`);
+    parts.push(t.collectionId ? `Collection: ${t.collectionId}` : 'Scope: workspace-wide');
+    if (t.updatedAt) parts.push(`Last Updated: ${t.updatedAt}`);
+    parts.push('');
+  });
+  return parts.join('\n');
+}
+
+/** Markdown body of a template or revision: `text` when Outline sends it, else the ProseMirror `data` rendered. */
+export function bodyMarkdown(item: { text?: string; data?: unknown }): string {
+  if (typeof item.text === 'string') return item.text;
+  return renderProseMirror(item.data) ?? '';
+}
+
+export function formatTemplate(t: OutlineTemplate): string {
+  const lines = [`# ${t.icon ? `${t.icon} ` : ''}${t.title ?? 'Untitled'}`, `ID: ${t.id}`];
+  lines.push(t.collectionId ? `Collection: ${t.collectionId}` : 'Scope: workspace-wide');
+  lines.push('', bodyMarkdown(t) || '(empty template)');
+  return lines.join('\n');
+}
+
+function revisionAuthor(r: OutlineRevision): string {
+  const others = (r.collaborators ?? []).map((c) => c.name).filter((n): n is string => Boolean(n) && n !== r.createdBy?.name);
+  return `${r.createdBy?.name ?? 'Unknown'}${others.length ? ` (with ${others.join(', ')})` : ''}`;
+}
+
+export function formatRevisions(revisions: OutlineRevision[], pagination: OutlinePagination | undefined, limit = 25, offset = 0): string {
+  if (revisions.length === 0) return offset > 0 ? 'No more revisions.' : 'No revisions found for this document.';
+  const parts = ['# Document History (newest first)', '', ...pageLine(revisions.length, pagination, limit, offset), ''];
+  revisions.forEach((r, i) => {
+    parts.push(`${offset + i + 1}. ${r.createdAt ?? 'unknown time'} — ${revisionAuthor(r)}${r.name ? ` — "${r.name}"` : ''}`);
+    parts.push(`   Revision ID: ${r.id}`);
+  });
+  return parts.join('\n');
+}
+
+/** Cap on the line-diff table (old lines x new lines); past it the diff is summarised. */
+const DIFF_CELL_LIMIT = 4_000_000;
+/** Cap on diff lines printed. */
+const DIFF_OUTPUT_LIMIT = 400;
+
+/**
+ * Line diff between two markdown bodies: `-` removed, `+` added, unchanged runs
+ * collapsed. LCS over lines, which is exact but quadratic, so very long bodies
+ * get counts only. Outline has no diff endpoint; this is computed here.
+ */
+export function diffLines(before: string, after: string): { text: string; added: number; removed: number; summarized: boolean } {
+  const a = before.split('\n');
+  const b = after.split('\n');
+  if (a.length * b.length > DIFF_CELL_LIMIT) {
+    const inA = new Set(a);
+    const inB = new Set(b);
+    const added = b.filter((l) => !inA.has(l)).length;
+    const removed = a.filter((l) => !inB.has(l)).length;
+    return { text: `Too long to diff line by line (${a.length} vs ${a.length === b.length ? 'the same number of' : b.length} lines). About ${added} line(s) added and ${removed} removed.`, added, removed, summarized: true };
+  }
+  // lcs[i][j] = LCS length of a[i..] and b[j..], as one flat array.
+  const w = b.length + 1;
+  const lcs = new Uint32Array((a.length + 1) * w);
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      lcs[i * w + j] = a[i] === b[j] ? lcs[(i + 1) * w + j + 1] + 1 : Math.max(lcs[(i + 1) * w + j], lcs[i * w + j + 1]);
+    }
+  }
+  const ops: Array<[' ' | '-' | '+', string]> = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { ops.push([' ', a[i]]); i++; j++; }
+    else if (lcs[(i + 1) * w + j] >= lcs[i * w + j + 1]) ops.push(['-', a[i++]]);
+    else ops.push(['+', b[j++]]);
+  }
+  while (i < a.length) ops.push(['-', a[i++]]);
+  while (j < b.length) ops.push(['+', b[j++]]);
+
+  const added = ops.filter(([k]) => k === '+').length;
+  const removed = ops.filter(([k]) => k === '-').length;
+  const out: string[] = [];
+  const CONTEXT = 2;
+  for (let k = 0; k < ops.length; k++) {
+    const [kind, line] = ops[k];
+    if (kind !== ' ') { out.push(`${kind} ${line}`); continue; }
+    const near = ops.slice(Math.max(0, k - CONTEXT), k + CONTEXT + 1).some(([x]) => x !== ' ');
+    if (near) { out.push(`  ${line}`); continue; }
+    let run = k;
+    while (run + 1 < ops.length && ops[run + 1][0] === ' ' && !ops.slice(run + 1, run + 2 + CONTEXT).some(([x]) => x !== ' ')) run++;
+    out.push(`  … ${run - k + 1} unchanged line(s)`);
+    k = run;
+  }
+  const truncated = out.length > DIFF_OUTPUT_LIMIT;
+  const text = (truncated ? out.slice(0, DIFF_OUTPUT_LIMIT).concat(`… ${out.length - DIFF_OUTPUT_LIMIT} more diff line(s) not shown`) : out).join('\n');
+  return { text: added + removed === 0 ? 'No differences.' : text, added, removed, summarized: false };
+}
+
+/** The "who and when" line for one side of a comparison. */
+export function describeRevision(r: OutlineRevision | 'current'): string {
+  if (r === 'current') return 'the current document';
+  return `revision ${r.id} (${r.createdAt ?? 'unknown time'}, by ${revisionAuthor(r)})`;
 }
 
 // Match /api/attachments.redirect?id=<uuid> in document text.

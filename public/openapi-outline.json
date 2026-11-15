@@ -582,6 +582,19 @@
                   "icon": {
                     "type": "string",
                     "description": "Emoji icon."
+                  },
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+                    "description": "Icon colour, hex like #FF0000."
+                  },
+                  "fullWidth": {
+                    "type": "boolean",
+                    "description": "Display the document full width."
+                  },
+                  "templateId": {
+                    "type": "string",
+                    "description": "Start from this template (from listTemplates). Its content is used when text is empty."
                   }
                 }
               }
@@ -723,7 +736,7 @@
       "post": {
         "operationId": "updateOutlineDocument",
         "summary": "Update an Outline document",
-        "description": "REPLACES title and text unless append is true. append is ignored unless text is supplied. An empty-string icon CLEARS the icon; omitting it leaves it alone.",
+        "description": "REPLACES title and text unless append is true. append is ignored unless text is supplied. An empty-string icon CLEARS the icon; omitting it leaves it alone. With findText, only the first exact occurrence of that markdown is replaced by text (400 if absent, checked before writing); an Outline too old for passage edits is detected, the original text written back, and the call answers 502.",
         "parameters": [
           {
             "name": "documentId",
@@ -761,6 +774,27 @@
                   "icon": {
                     "type": "string",
                     "description": "Emoji icon. An empty string clears it."
+                  },
+                  "findText": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Edit one passage: replace the first exact occurrence of this markdown with text, keeping the rest of the document and its formatting untouched. Needs a recent Outline."
+                  },
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+                    "description": "Icon colour, hex like #FF0000."
+                  },
+                  "fullWidth": {
+                    "type": "boolean",
+                    "description": "Display the document full width (true) or normal width (false)."
+                  },
+                  "publish": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ],
+                    "description": "Publish a draft. To return a published document to draft, use unpublishDocument."
                   }
                 }
               }
@@ -1112,6 +1146,19 @@
                   "parentCommentId": {
                     "type": "string",
                     "description": "Reply to this comment instead of starting a thread."
+                  },
+                  "anchorText": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Make it an inline comment on this exact text in the document (first occurrence unless anchorPrefix/anchorSuffix narrow it). Needs a recent Outline."
+                  },
+                  "anchorPrefix": {
+                    "type": "string",
+                    "description": "Text just before anchorText, to pick the right occurrence."
+                  },
+                  "anchorSuffix": {
+                    "type": "string",
+                    "description": "Text just after anchorText, to pick the right occurrence."
                   }
                 }
               }
@@ -1735,6 +1782,10 @@
                     "type": "string",
                     "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
                     "description": "Hex colour like #RRGGBB or #RGB."
+                  },
+                  "icon": {
+                    "type": "string",
+                    "description": "Optional icon: an emoji, or an Outline icon name."
                   }
                 }
               }
@@ -1842,6 +1893,11 @@
                     "nullable": true,
                     "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
                     "description": "New hex color. Pass null to clear it."
+                  },
+                  "icon": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "New icon (emoji or Outline icon name). Pass null to clear it."
                   }
                 }
               }
@@ -2295,6 +2351,1435 @@
                       "type": "string"
                     },
                     "note": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/documents/{documentId}/unpublish": {
+      "post": {
+        "operationId": "unpublishOutlineDocument",
+        "summary": "Return a published Outline document to draft",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline document ID"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "detach": {
+                    "type": "boolean",
+                    "description": "Also take it out of its collection (default: stays in place as a draft)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Document, now a draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Document"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/documents/import": {
+      "post": {
+        "operationId": "importOutlineHtmlDocument",
+        "summary": "Create an Outline document from HTML",
+        "description": "Runs the Outline importer: remote and base64 images in the HTML are copied in as attachments. Not idempotent.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "html": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The HTML to import. Remote and base64 images in it are copied into Outline as attachments."
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "File name used for the import; Outline takes the title from the HTML <title> or first heading, else this."
+                  },
+                  "collectionId": {
+                    "type": "string",
+                    "description": "Collection to import into. Give this or parentDocumentId."
+                  },
+                  "parentDocumentId": {
+                    "type": "string",
+                    "description": "Import as a child of this document. Give this or collectionId."
+                  },
+                  "publish": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Publish immediately (default true) or leave a draft."
+                  }
+                },
+                "required": [
+                  "html"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Document created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Document"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/attachments": {
+      "post": {
+        "operationId": "uploadOutlineAttachment",
+        "summary": "Upload a file to Outline as an attachment",
+        "description": "Creates the attachment record and sends the bytes. Not inserted into any document: put the returned markdown in with the update route.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fileName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "File name, e.g. \"diagram.png\"."
+                  },
+                  "contentType": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "MIME type, e.g. \"image/png\", \"application/pdf\"."
+                  },
+                  "contentBase64": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The file bytes, base64-encoded. Give this or textContent."
+                  },
+                  "textContent": {
+                    "type": "string",
+                    "description": "The file as UTF-8 text. Give this or contentBase64."
+                  },
+                  "documentId": {
+                    "type": "string",
+                    "description": "Document the attachment belongs to (needs edit access to it). It is not inserted: put the returned markdown into the document with updateDocument."
+                  }
+                },
+                "required": [
+                  "fileName",
+                  "contentType"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Attachment uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "attachmentId": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "markdown": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/collections/{collectionId}/archive": {
+      "post": {
+        "operationId": "archiveOutlineCollection",
+        "summary": "Archive an Outline collection and the documents in it",
+        "description": "Hides the collection and its documents from the sidebar and search; deletes nothing. Reversible via the restore route.",
+        "parameters": [
+          {
+            "name": "collectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline collection ID"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "description": "Optional reason, shown on the archived collection."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Collection archived",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/collections/{collectionId}/restore": {
+      "post": {
+        "operationId": "restoreOutlineCollection",
+        "summary": "Restore an archived Outline collection",
+        "parameters": [
+          {
+            "name": "collectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline collection ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection restored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/comments/{commentId}/update": {
+      "post": {
+        "operationId": "updateOutlineComment",
+        "summary": "Edit the text of an Outline comment",
+        "parameters": [
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline comment ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "New comment text (markdown). Replaces the old text. Only the author (or an admin) can edit."
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Comment updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Comment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/comments/{commentId}/resolve": {
+      "post": {
+        "operationId": "resolveOutlineComment",
+        "summary": "Resolve an Outline comment thread",
+        "parameters": [
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline comment ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resolution result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "comment": {
+                      "$ref": "#/components/schemas/Comment"
+                    },
+                    "confirmed": {
+                      "type": "boolean",
+                      "nullable": true,
+                      "description": "From the returned resolvedAt; null when Outline omits it."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/comments/{commentId}/reopen": {
+      "post": {
+        "operationId": "reopenOutlineComment",
+        "summary": "Reopen a resolved Outline comment thread",
+        "parameters": [
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline comment ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resolution result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "comment": {
+                      "$ref": "#/components/schemas/Comment"
+                    },
+                    "confirmed": {
+                      "type": "boolean",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/users": {
+      "get": {
+        "operationId": "listOutlineUsers",
+        "summary": "List or search Outline workspace users",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Search by name or email"
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "active",
+                "invited",
+                "suspended"
+              ]
+            },
+            "description": "Status filter"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 25,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Max results (1-100)"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            },
+            "description": "Skip N results"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/users/{userId}": {
+      "get": {
+        "operationId": "getOutlineUser",
+        "summary": "Read an Outline user profile",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline user ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/templates": {
+      "get": {
+        "operationId": "listOutlineTemplates",
+        "summary": "List Outline templates",
+        "description": "Needs an Outline with the templates API (404 on older servers).",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by title"
+          },
+          {
+            "name": "collectionId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only templates of this collection"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 25,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Max results (1-100)"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            },
+            "description": "Skip N results"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/templates/{templateId}": {
+      "get": {
+        "operationId": "getOutlineTemplate",
+        "summary": "Read an Outline template",
+        "parameters": [
+          {
+            "name": "templateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline template ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/documents/{documentId}/revisions": {
+      "get": {
+        "operationId": "listOutlineDocumentRevisions",
+        "summary": "List the saved versions of an Outline document",
+        "description": "Newest first, without bodies.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline document ID"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 25,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Max results (1-100)"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            },
+            "description": "Skip N results"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revisions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/revisions/{revisionId}": {
+      "get": {
+        "operationId": "getOutlineRevision",
+        "summary": "Read one saved version of an Outline document",
+        "parameters": [
+          {
+            "name": "revisionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The revision ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/documents/{documentId}/compare": {
+      "get": {
+        "operationId": "compareOutlineDocumentRevisions",
+        "summary": "Diff two versions of an Outline document",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline document ID"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The older revision ID"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The newer revision ID; omit for the current document"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Line diff",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "from": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "to": {},
+                    "added": {
+                      "type": "integer"
+                    },
+                    "removed": {
+                      "type": "integer"
+                    },
+                    "summarized": {
+                      "type": "boolean"
+                    },
+                    "diff": {
                       "type": "string"
                     }
                   }

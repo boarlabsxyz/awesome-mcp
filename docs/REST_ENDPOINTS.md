@@ -247,15 +247,30 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `getCollectionStructure` | `GET /api/v1/outline/collections/{collectionId}/structure` | live | Get the hierarchical document tree for an Outline collection |
 | `exportCollection` | `POST /api/v1/outline/collections/{collectionId}/export` | live | Start an async export of an Outline collection — _POST even though the MCP tool is annotated read-only: this QUEUES a server-side job and each call queues another. A GET would be retried by proxies and retry middleware after a timeout, queueing a second export nobody asked for. Returns a fileOperation id plus state, not the export itself -- poll Outline for completion._ |
 | `exportAllCollections` | `POST /api/v1/outline/exports` | live | Start an async export of the whole Outline workspace — _POST for the same reason as the per-collection export, and it matters more here: a retried GET would queue a second WHOLE-WORKSPACE export. Returns a fileOperation id and state, not the export itself._ |
-| `createDocument` | `POST /api/v1/outline/documents` | live | Create an Outline document — _Answers 201. Body: title, collectionId, text (markdown), parentDocumentId, publish (default true), template, icon. Body limit raised to 5 MB -- a document body is the large payload this plane exists for._ |
-| `updateDocument` | `POST /api/v1/outline/documents/{documentId}` | live | Update an Outline document — _REPLACES title and text unless append is true, so an update that omits nothing still overwrites the body. append is ignored unless text is supplied. An empty-string icon clears the icon; omitting it leaves it alone._ |
+| `createDocument` | `POST /api/v1/outline/documents` | live | Create an Outline document — _Answers 201. Body: title, collectionId, text (markdown), parentDocumentId, publish (default true), template, icon, color (icon colour, hex), fullWidth, templateId. Body limit raised to 5 MB -- a document body is the large payload this plane exists for._ |
+| `updateDocument` | `POST /api/v1/outline/documents/{documentId}` | live | Update an Outline document — _REPLACES title and text unless append is true, so an update that omits nothing still overwrites the body. append is ignored unless text is supplied. findText with text replaces only the first exact occurrence of that markdown (400 if it does not occur, checked before writing); on an Outline too old for passage edits the whole-body replace is detected, the original text written back, and the call answers 502. An empty-string icon clears the icon; omitting it leaves it alone. Also color, fullWidth, and publish: true to publish a draft._ |
 | `moveDocument` | `POST /api/v1/outline/documents/{documentId}/move` | live | Move an Outline document to another collection or parent — _At least one of collectionId or parentDocumentId is required._ |
 | `archiveDocument` | `POST /api/v1/outline/documents/{documentId}/archive` | live | Archive an Outline document — _Reversible via the unarchive route. Removes the document from its collection but keeps it searchable._ |
 | `unarchiveDocument` | `POST /api/v1/outline/documents/{documentId}/unarchive` | live | Unarchive an Outline document — _Shares Outline /api/documents.restore with the restore route: there is NO documents.unarchive endpoint, and calling one would 404. The two paths are kept separate because the intent differs, not the call._ |
 | `restoreDocument` | `POST /api/v1/outline/documents/{documentId}/restore` | live | Restore an Outline document from the trash |
-| `addComment` | `POST /api/v1/outline/documents/{documentId}/comments` | live | Add a comment to an Outline document, or reply to one — _Answers 201. Pass parentCommentId to reply to an existing comment._ |
-| `createCollection` | `POST /api/v1/outline/collections` | live | Create an Outline collection — _Answers 201. Body: name, description, color as a hex like #RRGGBB._ |
-| `updateCollection` | `POST /api/v1/outline/collections/{collectionId}` | live | Update an Outline collection — _At least one of name, description, or color is required._ |
+| `addComment` | `POST /api/v1/outline/documents/{documentId}/comments` | live | Add a comment to an Outline document, or reply to one — _Answers 201. Pass parentCommentId to reply to an existing comment, or anchorText (with optional anchorPrefix/anchorSuffix) for an inline comment on that text._ |
+| `createCollection` | `POST /api/v1/outline/collections` | live | Create an Outline collection — _Answers 201. Body: name, description, color as a hex like #RRGGBB, icon._ |
+| `updateCollection` | `POST /api/v1/outline/collections/{collectionId}` | live | Update an Outline collection — _At least one of name, description, color, or icon is required._ |
+| `unpublishDocument` | `POST /api/v1/outline/documents/{documentId}/unpublish` | live | Return a published Outline document to draft — _Optional body: detach (also remove it from its collection). Reversible: publish again with the update route and publish: true._ |
+| `importHtmlDocument` | `POST /api/v1/outline/documents/import` | live | Create an Outline document from HTML — _Answers 201. Body: html, title, collectionId or parentDocumentId, publish (default true). Outline importer copies remote and base64 images in as attachments. Not idempotent._ |
+| `uploadAttachment` | `POST /api/v1/outline/attachments` | live | Upload a file to Outline as an attachment — _Answers 201 with attachmentId, url and a markdown snippet; it is not inserted into any document. Body: fileName, contentType, contentBase64 or textContent, documentId. Bounded by the 5 MB body limit and the workspace upload limit._ |
+| `archiveCollection` | `POST /api/v1/outline/collections/{collectionId}/archive` | live | Archive an Outline collection and the documents in it — _Reversible via the restore route: hides the collection and its documents from the sidebar and search, deletes nothing. Exposed over REST for that reason; collection delete stays MCP-only. Optional body: reason._ |
+| `restoreCollection` | `POST /api/v1/outline/collections/{collectionId}/restore` | live | Restore an archived Outline collection |
+| `updateComment` | `POST /api/v1/outline/comments/{commentId}/update` | live | Edit the text of an Outline comment — _Body: text (markdown), replacing the old text. Only the author or an admin can edit. Comment delete stays MCP-only._ |
+| `resolveComment` | `POST /api/v1/outline/comments/{commentId}/resolve` | live | Resolve an Outline comment thread — _Top-level comments only. confirmed is read from the returned comment resolvedAt (null when Outline omits it)._ |
+| `reopenComment` | `POST /api/v1/outline/comments/{commentId}/reopen` | live | Reopen a resolved Outline comment thread |
+| `listUsers` | `GET /api/v1/outline/users` | live | List or search Outline workspace users — _Query: q, filter (all, active, invited, suspended), limit, offset. Email is present only where this connection may see it._ |
+| `getUser` | `GET /api/v1/outline/users/{userId}` | live | Read an Outline user profile |
+| `listTemplates` | `GET /api/v1/outline/templates` | live | List Outline templates — _Query: q, collectionId, limit, offset. Needs an Outline with the templates API (404 on older servers)._ |
+| `getTemplate` | `GET /api/v1/outline/templates/{templateId}` | live | Read an Outline template |
+| `listDocumentRevisions` | `GET /api/v1/outline/documents/{documentId}/revisions` | live | List the saved versions of an Outline document — _Newest first, without bodies. limit, offset._ |
+| `getDocumentRevision` | `GET /api/v1/outline/revisions/{revisionId}` | live | Read one saved version of an Outline document |
+| `compareDocumentRevisions` | `GET /api/v1/outline/documents/{documentId}/compare?from={revisionId}` | live | Diff two versions of an Outline document — _from is a revision ID; to (optional) another, else the current document. Line diff computed here; very long bodies are summarised (summarized: true)._ |
 
 ### PeopleForce (`peopleforce`)
 
@@ -487,4 +502,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 363 endpoints.
+Catalog size: 378 endpoints.

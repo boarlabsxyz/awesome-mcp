@@ -1028,6 +1028,33 @@ describe('REST data plane: ClickUp and Outline handler bodies', () => {
       assert.equal((callsTo('documents.update')[0].body as any).icon, null);
     });
 
+    it('routes /documents/import to the importer, not to an update of a document called "import"', async () => {
+      reset();
+      when('/api/documents.import', { json: { data: { id: 'd7', title: 'Imported' } } });
+      const res = await request(app).post('/api/v1/outline/documents/import').set(auth())
+        .send({ html: '<h1>Hi</h1>', collectionId: 'col-1' });
+      assert.equal(res.status, 201);
+      assert.equal(res.body.id, 'd7');
+      assert.equal(callsTo('documents.update').length, 0);
+    });
+
+    it('answers 400 for a passage edit whose findText is not in the document, writing nothing', async () => {
+      reset();
+      when('/api/documents.info', { json: { data: { id: 'd1', text: 'hello world' } } });
+      const res = await request(app).post('/api/v1/outline/documents/d1').set(auth())
+        .send({ findText: 'absent', text: 'x' });
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /does not occur/);
+      assert.equal(callsTo('documents.update').length, 0);
+    });
+
+    it('requires from on a revision compare', async () => {
+      reset();
+      const res = await request(app).get('/api/v1/outline/documents/d1/compare').set(auth());
+      assert.equal(res.status, 400);
+      assert.equal(calls.length, 0);
+    });
+
     it('rejects an update naming no field', async () => {
       reset();
       const res = await request(app).post('/api/v1/outline/documents/d1').set(auth()).send({});
