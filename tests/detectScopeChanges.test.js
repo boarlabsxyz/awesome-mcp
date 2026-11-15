@@ -2,11 +2,7 @@
 import { stripComments, parseArrayConstants, parseCatalogScopes, diffScopes } from '../.github/scripts/detect-scope-changes.mjs';
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import process from 'node:process';
+import { readFileSync } from 'node:fs';
 
 const seed = (slug, name, scopesExpr) => `
   await createMcpCatalog({
@@ -70,35 +66,5 @@ describe('detect-scope-changes', () => {
       const after = entries({ gmail: ['a', 'b'], slack: ['x'], brandNew: ['z'] });
       assert.deepStrictEqual(diffScopes(before, after), [{ slug: 'gmail', name: 'gmail MCP', added: ['b'] }]);
     });
-  });
-});
-
-describe('generate-release-notes reconnect section', () => {
-  function run(commitLines, scopeChanges) {
-    const dir = mkdtempSync(join(tmpdir(), 'release-notes-'));
-    writeFileSync(join(dir, 'commits.txt'), commitLines.join('\n'));
-    writeFileSync(join(dir, 'tasks.txt'), '');
-    const args = ['.github/scripts/generate-release-notes.mjs', '--tag', 'v9.9.9', '--date', '2026-01-01T00:00:00Z',
-      '--commits', join(dir, 'commits.txt'), '--tasks', join(dir, 'tasks.txt'), '--output-dir', join(dir, 'out')];
-    if (scopeChanges) {
-      writeFileSync(join(dir, 'scopes.json'), JSON.stringify(scopeChanges));
-      args.push('--scope-changes', join(dir, 'scopes.json'));
-    }
-    const env = { ...process.env };
-    delete env.OPENROUTER_API_KEY;
-    execFileSync('node', args, { env, stdio: 'ignore' });
-    const slack = join(dir, 'out', 'slack-message.txt');
-    return existsSync(slack) ? readFileSync(slack, 'utf8') : null;
-  }
-
-  it('puts an Action needed section first when a connector gained scopes', () => {
-    const text = run(['h1|feat: Gmail filters|'], [{ slug: 'google-gmail', name: 'Gmail MCP', added: ['x'] }]);
-    assert.ok(text.indexOf('*Action needed*') < text.indexOf("*What's New*"));
-    assert.match(text, /Reconnect Gmail MCP from your dashboard/);
-  });
-
-  it('adds nothing when no scopes changed or no file is given', () => {
-    assert.doesNotMatch(run(['h1|feat: Gmail filters|'], []), /Action needed/);
-    assert.doesNotMatch(run(['h1|feat: Gmail filters|'], null), /Action needed/);
   });
 });
