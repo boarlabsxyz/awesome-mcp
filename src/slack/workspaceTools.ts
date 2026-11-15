@@ -335,16 +335,24 @@ export async function performCreateList(client: SlackClient, args: Args<typeof c
   return { listId: r.list_id, name: args.name, listMetadata: r.list_metadata ?? null };
 }
 
-export async function performUpdateList(client: SlackClient, listId: string, args: Args<typeof updateListFields>) {
+export function assertListChange(args: Args<typeof updateListFields>): void {
   if (args.name === undefined && args.description === undefined && args.todoMode === undefined) {
     throw refusal(400, 'Nothing to change: pass name, description or todoMode.');
   }
+}
+
+export async function performUpdateList(client: SlackClient, listId: string, args: Args<typeof updateListFields>) {
   assertWritesEnabled();
+  assertListChange(args);
   await client.slackListsUpdate(listId, args);
   // slackLists.update answers only {ok: true}. The re-read's list title is the
   // one field we can compare; description and todo mode are not echoed in a
-  // documented shape, so they stay unconfirmed (null) rather than assumed.
-  const { list } = await client.slackListsItemsList(listId, { includeList: true, limit: 1 });
+  // documented shape, so they stay unconfirmed (null) rather than assumed. A
+  // failed re-read leaves the update unconfirmed, not failed: it was applied.
+  let list: Record<string, any> | undefined;
+  try {
+    ({ list } = await client.slackListsItemsList(listId, { includeList: true, limit: 1 }));
+  } catch { /* unconfirmed */ }
   const storedName = list?.title ?? list?.name;
   const nameConfirmed = args.name === undefined ? undefined
     : typeof storedName === 'string' ? storedName === args.name : null;
@@ -564,9 +572,11 @@ export function registerSlackWorkspaceTools(server: FastMCP<UserSession>, opts: 
       + 'The new name is checked on re-read; description and todo mode are reported unconfirmed, because Slack does not read them back.',
     parameters: z.object({ listId: z.string().describe('List ID (F…).'), ...updateListFields }),
     execute: async (args, { session }) => {
-      const client = opts.getClient(session);
-      await guardFile(client, session!, args.listId);
       const { listId, ...changes } = args;
+      // Before guardFile, so an empty call is refused without a Slack lookup.
+      assertListChange(changes);
+      const client = opts.getClient(session);
+      await guardFile(client, session!, listId);
       const r = await performUpdateList(client, listId, changes);
       if (r.confirmed === true) return `Updated list ${listId}; it reads back with the new name.`;
       if (r.confirmed === false) return `Slack accepted the update to list ${listId}, but its name does not read back as sent.`;

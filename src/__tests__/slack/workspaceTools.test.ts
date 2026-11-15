@@ -135,6 +135,16 @@ describe('ops', () => {
     assert.equal((await performUpdateList(mk('x') as any, 'F1', { todoMode: true })).confirmed, null);
   });
 
+  it('reports a list update as unconfirmed, not failed, when the re-read fails', async () => {
+    const client = {
+      slackListsUpdate: mock.fn(async () => ({ ok: true })),
+      slackListsItemsList: mock.fn(async () => { throw new Error('ratelimited'); }),
+    };
+    const r = await performUpdateList(client as any, 'F1', { name: 'Roadmap' });
+    assert.equal(r.confirmed, null);
+    assert.equal(r.list, null);
+  });
+
   it('uploads through the external flow and reports sharing only as confirmed when Slack says so', async () => {
     const client = {
       filesGetUploadUrlExternal: mock.fn(async () => ({ upload_url: 'https://files.slack.com/upload/v1/x', file_id: 'F9' })),

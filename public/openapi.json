@@ -33444,7 +33444,7 @@
       "post": {
         "operationId": "createDriveUploadSession",
         "summary": "Open a resumable upload for a large file; returns the URL to PUT it to",
-        "description": "Open a resumable upload for a large file; returns the URL to PUT it to. Mirrors the MCP tool `createDriveUploadSession`. Takes a JSON body and returns JSON. Answers 201 with uploadUrl. PUT the bytes there (no bearer needed; no size limit of ours), and the PUT response is the new file. The URL alone authorizes that one upload for about a week, so keep it private. convertTo is checked against what Drive can import.",
+        "description": "Open a resumable upload for a large file; returns the URL to PUT it to. Mirrors the MCP tool `createDriveUploadSession`. Takes a JSON body and returns JSON. Answers 201 with uploadUrl. PUT the bytes there (no bearer needed; no size limit of ours), and the PUT response is the new file. The URL alone authorizes that one upload for about a week, so keep it private. convertTo is checked against what Drive can import. Not destructive: nothing exists until the bytes arrive, and the permanent dashboard key can already upload through POST /api/v1/drive/files, so it is accepted here too.",
         "tags": [
           "drive"
         ],
