@@ -40,6 +40,13 @@ export type SupabaseSettings = {
  */
 const ADAPTS_TO_READ_ONLY = new Set(['execute_sql', 'run_notebook']);
 
+/**
+ * Branch tools that take only a branch_id. Supabase does not tie them to the
+ * limited project (they are not project-injected upstream), so under a project
+ * limit a branch of ANOTHER project would be acted on. Refused instead.
+ */
+const BRANCH_ID_ONLY = new Set(['delete_branch', 'merge_branch', 'reset_branch', 'rebase_branch']);
+
 /** A project ref: Supabase uses 20 lowercase letters; accept a little wider, never a URL or path. */
 const PROJECT_REF = /^[a-z0-9]{10,40}$/;
 
@@ -103,13 +110,16 @@ export function argsForSettings(
   if (settings.projectRef && def.group === 'account') {
     throw new UserError(`'${def.name}' is an account tool, and this Supabase connection is limited to project ${settings.projectRef}, which turns account tools off. Remove the project limit in the connection's Settings to use it.`);
   }
+  if (settings.projectRef && BRANCH_ID_ONLY.has(def.name)) {
+    throw new UserError(`'${def.name}' acts on a branch by its ID alone, and Supabase does not check which project that branch belongs to, so this connection (limited to project ${settings.projectRef}) does not offer it. Remove the project limit in the connection's Settings to use it.`);
+  }
   if (settings.readOnly && !def.annotations.readOnlyHint && !ADAPTS_TO_READ_ONLY.has(def.name)) {
     throw new UserError(`'${def.name}' writes, and this Supabase connection is read-only. Turn read-only off in the connection's Settings to use it.`);
   }
   if (!settings.projectRef || !('project_id' in args)) return args;
   const { project_id, ...rest } = args;
   if (project_id !== undefined && project_id !== null && project_id !== settings.projectRef) {
-    throw new UserError(`This Supabase connection is limited to project ${settings.projectRef}; '${String(project_id)}' is a different project. Nothing was run.`);
+    throw new UserError(`This Supabase connection is limited to project ${settings.projectRef}; '${String(project_id)}' is a different project (a branch is its own project too). Nothing was run.`);
   }
   return rest;
 }

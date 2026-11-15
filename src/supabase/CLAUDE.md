@@ -1,6 +1,6 @@
 # Supabase — notes for Claude
 
-**Status: NOT yet exercised live.** Every behaviour below is read off Supabase's published server and docs. On the first live run, check two things first: a 400 on every call (the protocol shape), and whether `confirm_cost_id` is really required for a client that cannot show forms.
+**Status: NOT yet exercised live.** Every behaviour below is read off Supabase's published server and docs. On the first live run, check these first: a 400 on every call (the protocol shape, or a `features` group the hosted platform rejects — `features` is now always sent with all ten groups), and whether `confirm_cost_id` is really required for a client that cannot show forms.
 
 ## Rules and limitations
 
@@ -17,6 +17,8 @@
 - **Sent upstream as query parameters** on the constant origin (`hostedUrlFor`): `project_ref`, `read_only`, `features`. `features` is ALWAYS sent, because upstream leaves storage off unless it is named.
 - **Also enforced locally** (`argsForSettings`), because the tool list is fixed at registration. An off group, an account tool under a project limit, or a write under read-only is refused with the setting named. `execute_sql`/`run_notebook` stay available under read-only (upstream runs them read-only).
 - **A matching `project_id` is dropped** under a project limit, because upstream injects it; a different one is refused.
+- **Under a project limit, `delete_branch`/`merge_branch`/`reset_branch`/`rebase_branch` are refused** — they take only a `branch_id`, which Supabase does not tie to the limited project.
+- **`create_notebook` cells are loosely typed here** (`record`); Supabase validates the strict cell union and its log-dialect hint is not mirrored, so a bad cell fails upstream with Supabase's message.
 - **Preserved across reconnects:** listed in `PRESERVED_ON_RECONNECT` and carried by `pasteReplacementTokens`. An empty setting deletes the key rather than storing `{}`.
 
 ### Confirmations

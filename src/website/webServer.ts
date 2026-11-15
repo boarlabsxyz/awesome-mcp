@@ -3285,8 +3285,11 @@ function registerSharedRoutes(app: express.Express): void {
       if (!owned) return;
       const instanceId = req.params.instanceId as string;
       const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
-      // Spread: the store replaces provider_tokens whole, and the token lives there.
-      const tokens = { ...(owned.connection.providerTokens as any) };
+      // Spread: the store replaces provider_tokens whole, and the token lives
+      // there. Re-read right before writing, so a token refresh that landed
+      // since the ownership check is not overwritten with the older token.
+      const latest = await getMcpConnectionByInstanceId(instanceId);
+      const tokens = { ...((latest ?? owned.connection).providerTokens as any) };
       if (Object.keys(normalized.settings).length) tokens.supabaseSettings = normalized.settings;
       // Nothing set = the default; delete rather than store {}, which would be
       // a non-empty value that survives every reconnect merge.

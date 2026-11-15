@@ -9,6 +9,8 @@ import { createSession } from '../../website/sessionStore.js';
 import { createOrUpdateUser, getUserByGoogleId, UserTokens } from '../../userStore.js';
 import { createMcpInstance, getMcpConnectionByInstanceId, GoogleTokens } from '../../mcpConnectionStore.js';
 import { createMcpCatalog } from '../../mcpCatalogStore.js';
+import { runSupabaseTool } from '../../supabase/apiHelpers.js';
+import { mergeProviderReconnectTokens } from '../../website/webServer.js';
 
 const READ = { readOnlyHint: true };
 const WRITE = { readOnlyHint: false, destructiveHint: true };
@@ -48,7 +50,7 @@ describe('Supabase settings', () => {
     const def = { name: 'list_tables', group: 'database' as const, annotations: READ };
     const settings = { projectRef: 'abcdefghijklmnopqrst' };
     assert.deepEqual(argsForSettings(def, { project_id: 'abcdefghijklmnopqrst', schemas: ['public'] }, settings), { schemas: ['public'] });
-    assert.throws(() => argsForSettings(def, { project_id: 'zzzzzzzzzzzzzzzzzzzz' }, settings), /different project. Nothing was run/);
+    assert.throws(() => argsForSettings(def, { project_id: 'zzzzzzzzzzzzzzzzzzzz' }, settings), /different project.*Nothing was run/);
     assert.deepEqual(argsForSettings(def, { project_id: 'p', schemas: [] }, {}), { project_id: 'p', schemas: [] });
   });
 });
@@ -83,7 +85,6 @@ describe('Supabase settings dashboard routes', () => {
     theirs = (await createMcpInstance(STRANGER_ID, 'supabase', 'Theirs', emptyGoogleTokens, null, 'supabase', { access_token: 'sbp_theirs' } as any, null)).instanceId;
     cookie = `session=${signCookie(await createSession('google-sb-settings'))}`;
   });
-  after(() => {});
 
   const stored = async (id: string) => (await getMcpConnectionByInstanceId(id))?.providerTokens as any;
 
@@ -113,5 +114,63 @@ describe('Supabase settings dashboard routes', () => {
     assert.equal(bad.status, 400);
     const other = await request(app).get(`/api/instances/${theirs}/supabase-settings`).set('Cookie', cookie);
     assert.equal(other.status, 404);
+  });
+});
+
+describe('a call through a connection with settings', () => {
+  const realFetch = globalThis.fetch;
+  const log = { info: () => {}, error: () => {} };
+  const LIST_TABLES = { name: 'list_tables', group: 'database' as const, annotations: READ };
+  let instanceId: string;
+  let seen: Array<{ url: string; body: any }>;
+
+  before(async () => {
+    instanceId = (await createMcpInstance(OWNER_ID, 'supabase', 'Limited', emptyGoogleTokens, null, 'supabase', {
+      access_token: 'sbp_limited', supabaseSettings: { projectRef: 'abcdefghijklmnopqrst', readOnly: true },
+    } as any, null)).instanceId;
+  });
+  const answer = () => {
+    seen = [];
+    globalThis.fetch = (async (url: any, init: any) => {
+      const body = JSON.parse(init.body);
+      seen.push({ url: String(url), body });
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { content: [{ type: 'text', text: 'ok' }] } }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+  };
+  after(() => { globalThis.fetch = realFetch; });
+
+  it('sends the settings as URL options and drops the injected project_id', async () => {
+    answer();
+    const session = { supabaseAccessToken: 'sbp_limited', supabaseInstanceId: instanceId } as any;
+    assert.equal(await runSupabaseTool(LIST_TABLES, { project_id: 'abcdefghijklmnopqrst', schemas: ['public'] }, session, log), 'ok');
+    const url = new URL(seen[0].url);
+    assert.equal(url.searchParams.get('project_ref'), 'abcdefghijklmnopqrst');
+    assert.equal(url.searchParams.get('read_only'), 'true');
+    assert.deepEqual(seen[0].body.params.arguments, { schemas: ['public'] });
+  });
+
+  it('refuses a write, an account tool and a branch-id tool without calling Supabase', async () => {
+    answer();
+    const session = { supabaseAccessToken: 'sbp_limited', supabaseInstanceId: instanceId } as any;
+    await assert.rejects(() => runSupabaseTool({ name: 'apply_migration', group: 'database', annotations: WRITE }, {}, session, log), /read-only/);
+    await assert.rejects(() => runSupabaseTool({ name: 'list_projects', group: 'account', annotations: READ }, {}, session, log), /account tool/);
+    await assert.rejects(() => runSupabaseTool({ name: 'merge_branch', group: 'branching', annotations: WRITE }, { branch_id: 'b' }, session, log), /branch by its ID/);
+    assert.equal(seen.length, 0);
+  });
+
+  it('fails closed when the connection is gone', async () => {
+    answer();
+    const session = { supabaseAccessToken: 'sbp_limited', supabaseInstanceId: 'no-such-instance' } as any;
+    await assert.rejects(() => runSupabaseTool(LIST_TABLES, { project_id: 'x' }, session, log), /nothing was run/);
+    assert.equal(seen.length, 0);
+  });
+
+  it('keeps the settings across an OAuth reconnect', () => {
+    const merged = mergeProviderReconnectTokens({ access_token: 'new' } as Record<string, any>, {
+      access_token: 'old', supabaseSettings: { readOnly: true },
+    });
+    assert.deepEqual((merged as any).supabaseSettings, { readOnly: true });
   });
 });

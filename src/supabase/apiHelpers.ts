@@ -143,12 +143,18 @@ export async function runSupabaseTool(
  */
 export async function getSupabaseSettings(session: UserSession | undefined): Promise<SupabaseSettings> {
   const instanceId = session?.supabaseInstanceId;
+  // Settings belong to a stored connection; a session without one has none.
   if (!instanceId) return {};
+  let connection: { providerTokens?: unknown } | null | undefined;
   try {
     const { getMcpConnectionByInstanceId } = await import('../mcpConnectionStore.js');
-    const connection = await getMcpConnectionByInstanceId(instanceId);
-    return ((connection?.providerTokens as any)?.supabaseSettings ?? {}) as SupabaseSettings;
+    connection = await getMcpConnectionByInstanceId(instanceId);
   } catch {
-    throw new UserError('Could not read this Supabase connection\'s settings (read-only, project limit), so nothing was run. Try again.');
+    connection = undefined;
   }
+  // A connection that is gone (deleted, replaced) is not "no settings".
+  if (!connection) {
+    throw new UserError('Could not read this Supabase connection\'s settings (read-only, project limit), so nothing was run. Try again, or reconnect if the connection was removed.');
+  }
+  return ((connection.providerTokens as any)?.supabaseSettings ?? {}) as SupabaseSettings;
 }
