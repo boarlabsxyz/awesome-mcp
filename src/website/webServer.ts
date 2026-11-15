@@ -8067,7 +8067,8 @@ function registerRestApiRoutes(app: express.Express): void {
     try {
       const from = qstr(req.query.from);
       const to = qstr(req.query.to);
-      const isDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+      const { isoDate } = await import('../util/isoDate.js');
+      const isDate = (v: string) => isoDate.safeParse(v).success;
       if (!isDate(from) || !isDate(to) || from > to) {
         res.status(400).json({ error: 'from and to are required as YYYY-MM-DD, with from not after to' });
         return;

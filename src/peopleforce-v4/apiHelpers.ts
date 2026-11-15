@@ -1192,7 +1192,7 @@ export function mapPeopleForceV4Error(prefix: string, error: any, log: PeopleFor
     throw new UserError(
       `${prefix}: the service account's role does not grant this action (403). Org-structure writes need the matching ` +
         `"Manage …" permission on the role's Company tab; writes to a person's data need Edit rather than View on ` +
-        `that field; leave requests and balances need the Time off permission on a role attached to the key.`,
+        `that field.`,
     );
   }
   if (status === 404) {

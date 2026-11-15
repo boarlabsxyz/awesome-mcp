@@ -23,6 +23,11 @@
 - **Custom fields are tenant-dependent** — never name specific fields in tool descriptions.
 - `formatObjectiveList`/`formatKpiList` surface owner `id`+`email`; KB `body` may be an object (`formatKnowledgeArticle`); `formatCustomFields` strips HTML.
 
+### Salaries, holidays, absences (v3; NOT exercised live)
+- **`listEmployeeSalaries` follows the key's compensation restriction**, not the asking person's; a 403 is that restriction, and the MCP message says so.
+- **`getEmployeeAbsences` = approved (optionally pending) leave + the employee's holidays**, overlap-checked here, 10 pages per source then `truncated`. v2 ignored `employee_id` on /leave_requests; v3 documents it, but rows for anyone else are still dropped (`mine`).
+- **Holidays: the day off can be `observed_on` or `compensated_on`**, not the date itself — both count for overlap. `working: true` is a worked day, listed apart, never as an absence.
+
 ### REST plane
 - **46 GETs + 4 POSTs** (`createLeaveRequest`, `addCandidateNote`, `moveVacancyApplication`, `disqualifyVacancyApplication`) under `/api/v1/peopleforce/*`. **The permanent dashboard API key can mutate leave and recruitment state.**
 - **Validate with the tools' schemas** (`createLeaveRequestSchema`, `moveVacancyApplicationSchema`, `disqualifyVacancyApplicationSchema`, `addCandidateNoteSchema`) via `safeParse` → 400; never hand-roll checks.

@@ -385,7 +385,7 @@ Source: `src/peopleforce-v4/server.ts` — 46 tools.
 | `listBirthdays` | List upcoming birthdays. Defaults upstream to today through 30 days out when no date range is given. | — |
 | `listWorkAnniversaries` | List upcoming work anniversaries. Defaults upstream to today through 30 days out when no date range is given. | — |
 | `listPersonAssets` | List the company assets assigned to a person (laptops, phones, access cards). | — |
-| `listLeaveRequests` | List leave requests across everyone the service account can see, optionally for some people, states, and a date range (from/to keep requests overlapping it). Needs the Time off permission on the key's role (403 without). | — |
+| `listLeaveRequests` | List leave requests across everyone the service account can see, optionally for some people, states, and a date range (from/to keep requests overlapping it). PeopleForce can only narrow "ending on or after from"; the "to" bound is applied to each returned page here, so a page may show fewer rows than it holds — keep paging to the last page. Needs the Time off permission on the key's role (403 without). | — |
 | `listLeaveBalances` | List current leave balances across everyone the service account can see, optionally for some people or leave types. Needs the Time off permission on the key's role (403 without). | — |
 | `listPersonSalaries` | List a person's salary history (amount, currency, pay period, effective date). Needs Compensation granted on the service account's role — without it the call 403s rather than returning an empty list. | — |
 | `getPersonSalary` | Get a single salary record for a person. Needs Compensation granted on the service account's role. | — |

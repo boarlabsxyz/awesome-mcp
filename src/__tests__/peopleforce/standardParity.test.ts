@@ -81,6 +81,30 @@ describe('collectEmployeeAbsences', () => {
     assert.ok(out.indexOf('Vacation') < out.indexOf('Independence Day'), 'date order');
   });
 
+  test('drops leave belonging to someone else, in case PeopleForce ignores the employee filter', async () => {
+    respond = (url) => url.pathname.endsWith('/leave_requests')
+      ? { data: [
+          { id: 1, employee_id: 7, starts_on: '2026-07-01', ends_on: '2026-07-01' },
+          { id: 2, employee_id: 99, starts_on: '2026-07-01', ends_on: '2026-07-01' },
+        ], metadata: { pagination: { page: 1, pages: 1 } } }
+      : { data: [], metadata: { pagination: { page: 1, pages: 1 } } };
+    const a = await collectEmployeeAbsences(pf(), { employeeId: '7', from: '2026-07-01', to: '2026-07-31' });
+    assert.deepEqual(a.leave.map((l) => l.id), [1]);
+  });
+
+  test('a holiday whose day off was moved into the range counts; working-day exceptions are listed apart', async () => {
+    respond = (url) => url.pathname.endsWith('/leave_requests')
+      ? { data: [], metadata: { pagination: { page: 1, pages: 1 } } }
+      : { data: [
+          { name: 'Saturday holiday', occurs_on: '2026-03-07', compensated_on: '2026-03-09' },
+          { name: 'Worked Sunday', occurs_on: '2026-03-08', working: true },
+        ], metadata: { pagination: { page: 1, pages: 1 } } };
+    const a = await collectEmployeeAbsences(pf(), { employeeId: 7, from: '2026-03-08', to: '2026-03-09' });
+    const out = formatEmployeeAbsences(a);
+    assert.match(out, /Saturday holiday \(day off moved to 2026-03-09\) \[public holiday\]/);
+    assert.match(out, /Working-day exceptions[^\n]*\n- 2026-03-08 — Worked Sunday/);
+  });
+
   test('says it is partial when a source has more pages than it reads', async () => {
     respond = (url) => url.pathname.endsWith('/leave_requests')
       ? { data: [{ id: 1, starts_on: '2020-01-01', ends_on: '2020-01-01' }], metadata: { pagination: { page: 1, pages: 50 } } }

@@ -10,8 +10,10 @@
 //   - Filter params that work: `status` (employees), `state` (leave requests).
 //   - Filter params that DO NOT work despite looking obvious: `department_id`
 //     on /employees, `employee_id` on /leave_requests, and any date-range
-//     filter on /leave_requests. Nested endpoints like
-//     /employees/{id}/leave_requests are 404. The response body wraps the
+//     filter on /leave_requests (v2). v3 documents `employee_id` and
+//     `states[]` on its /leave_requests (UNVERIFIED live), so code using them
+//     still drops rows for anyone else rather than trusting the filter.
+//     Nested endpoints like /employees/{id}/leave_requests are 404. The response body wraps the
 //     collection in { data, metadata: { pagination: { page, pages, count,
 //     items } } }.
 
@@ -1555,9 +1557,15 @@ export async function collectEmployeeAbsences(
   const truncated: string[] = [];
   const states = input.includePending ? ['approved', 'pending'] : ['approved'];
   const leave: PeopleForceLeaveRequest[] = [];
+  // v2 ignored employee_id on this endpoint; if v3 did too, every colleague's
+  // leave would come back. Rows for anyone else are dropped, not trusted.
+  const mine = (l: PeopleForceLeaveRequest) => {
+    const id = l.employee_id ?? (l.employee as { id?: unknown } | null | undefined)?.id;
+    return id === undefined || String(id) === String(input.employeeId);
+  };
   for (let page = 1; ; page++) {
     const r = await client.listEmployeeLeaveRequestsV3(input.employeeId, { page, states });
-    leave.push(...(r.data ?? []).filter((l) => overlaps(l.starts_on, l.ends_on, input.from, input.to)));
+    leave.push(...(r.data ?? []).filter((l) => mine(l) && overlaps(l.starts_on, l.ends_on, input.from, input.to)));
     const pages = r.metadata?.pagination?.pages ?? 1;
     if (!(r.data?.length) || page >= pages) break;
     if (page >= ABSENCE_PAGE_LIMIT) { truncated.push(`leave requests (stopped after ${page} of ${pages} pages)`); break; }
@@ -1567,7 +1575,9 @@ export async function collectEmployeeAbsences(
     const r = await client.listEmployeeHolidays(input.employeeId, { page });
     holidays.push(...(r.data ?? []).filter((h) => {
       const { start, end } = holidaySpan(h);
-      return overlaps(start, end, input.from, input.to) || (h.observed_on ? overlaps(h.observed_on, h.observed_on, input.from, input.to) : false);
+      // The day off may be the observed or compensating day, not the holiday itself.
+      return overlaps(start, end, input.from, input.to)
+        || [h.observed_on, h.compensated_on].some((d) => d ? overlaps(d, d, input.from, input.to) : false);
     }));
     const pages = r.metadata?.pagination?.pages ?? 1;
     if (!(r.data?.length) || page >= pages) break;
@@ -1583,11 +1593,16 @@ export function formatEmployeeAbsences(a: EmployeeAbsences): string {
     const amount = l.amount ? `, ${l.amount}${l.tracking_time_in ? ` ${l.tracking_time_in}` : ''}` : '';
     rows.push({ start: l.starts_on ?? '', line: `${span} — ${l.leave_type ?? 'Leave'} (${l.state ?? 'unknown state'}${amount}) [leave request ${l.id ?? '?'}]` });
   }
-  for (const h of a.holidays) rows.push({ start: holidaySpan(h).start ?? '', line: `${holidayLine(h)} [public holiday]` });
+  const workingDays: string[] = [];
+  for (const h of a.holidays) {
+    if (h.working) workingDays.push(holidayLine(h));
+    else rows.push({ start: holidaySpan(h).start ?? '', line: `${holidayLine(h)} [public holiday]` });
+  }
   rows.sort((x, y) => x.start.localeCompare(y.start));
   const parts = [`# Absences for employee ${a.employeeId}, ${a.from} → ${a.to}`, ''];
   if (rows.length === 0) parts.push('No leave or public holidays in this period.');
   else for (const r of rows) parts.push(`- ${r.line}`);
+  if (workingDays.length) parts.push('', 'Working-day exceptions (days that are worked, not off):', ...workingDays.map((l) => `- ${l}`));
   if (a.truncated.length) parts.push('', `⚠ Partial: ${a.truncated.join('; ')}. Entries beyond that are not shown.`);
   return parts.join('\n');
 }
