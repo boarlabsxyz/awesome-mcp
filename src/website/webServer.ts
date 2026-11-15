@@ -649,7 +649,7 @@ export function computeTokenStatus(
  * one of these keys has the same trap — omit the key on the reconnect path and
  * let the stored value win.
  */
-const PRESERVED_ON_RECONNECT = ['refresh_token', 'accessRules', 'baseUrl'] as const;
+const PRESERVED_ON_RECONNECT = ['refresh_token', 'accessRules', 'baseUrl', 'browserbaseSettings'] as const;
 
 /**
  * Non-Google sibling of mergeReconnectTokens: carry forward anything the fresh
@@ -1059,6 +1059,12 @@ function pasteReplacementTokens(
   const replacement: Record<string, any> = { ...freshTokens };
   if (existingRules !== undefined && replacement.accessRules === undefined) {
     replacement.accessRules = existingRules;
+  }
+  // Browserbase settings hold a model key the user typed once; a re-pasted
+  // Browserbase key must not silently drop it (or the model choice).
+  const existingBrowserbase = (existingTokens as any)?.browserbaseSettings;
+  if (existingBrowserbase !== undefined && replacement.browserbaseSettings === undefined) {
+    replacement.browserbaseSettings = existingBrowserbase;
   }
   return replacement;
 }
@@ -3245,6 +3251,48 @@ function registerSharedRoutes(app: express.Express): void {
     }
     return { user, connection };
   }
+
+  // Browserbase settings: model (+ the user's own model API key), keep-alive,
+  // proxies, verified. The key is WRITE-ONLY: GET reports only whether one is
+  // set, and nothing here ever returns or logs it.
+  app.get('/api/instances/:instanceId/browserbase-settings', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const owned = await ownedConnection(req, res, 'browserbase', 'Browserbase');
+      if (!owned) return;
+      const { publicBrowserbaseSettings } = await import('../browserbase/settings.js');
+      res.json({ settings: publicBrowserbaseSettings((owned.connection.providerTokens as any)?.browserbaseSettings) });
+    } catch (err) {
+      console.error('[browserbase-settings] error:', (err as Error)?.message);
+      res.status(500).json({ error: 'Failed to load Browserbase settings' });
+    }
+  });
+
+  app.post('/api/instances/:instanceId/browserbase-settings', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
+    try {
+      const owned = await ownedConnection(req, res, 'browserbase', 'Browserbase');
+      if (!owned) return;
+      const instanceId = req.params.instanceId as string;
+      const { mergeBrowserbaseSettings, publicBrowserbaseSettings } = await import('../browserbase/settings.js');
+      // Re-read right before writing; the merge keeps the stored model key
+      // unless the request replaces or clears it.
+      const latest = await getMcpConnectionByInstanceId(instanceId);
+      const tokens = { ...((latest ?? owned.connection).providerTokens as any) };
+      const merged = mergeBrowserbaseSettings(tokens.browserbaseSettings, (req.body as any)?.settings);
+      if ('error' in merged) { res.status(400).json({ error: merged.error }); return; }
+      if (Object.keys(merged.settings).length) tokens.browserbaseSettings = merged.settings;
+      else delete tokens.browserbaseSettings;
+      const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+      await updateMcpInstanceProviderTokens(instanceId, tokens);
+      const { clearMcpSessionCache } = await import('../userSession.js');
+      clearMcpSessionCache(owned.user.apiKey, instanceId);
+      const visible = publicBrowserbaseSettings(merged.settings);
+      console.error(`User ${owned.user.id} updated Browserbase settings for ${instanceId}: model=${visible.modelName || 'default'} keySet=${visible.modelApiKeySet} keepAlive=${visible.keepAlive} proxies=${visible.proxies} verified=${visible.verified}`);
+      res.json({ success: true, settings: visible });
+    } catch (err) {
+      console.error('[browserbase-settings] error:', (err as Error)?.message);
+      res.status(500).json({ error: 'Failed to save Browserbase settings' });
+    }
+  });
 
   app.get('/api/instances/:instanceId/domain-rules', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
@@ -9368,8 +9416,13 @@ function registerRestApiRoutes(app: express.Express): void {
           args = parsed.data;
         }
 
+        const instanceId = req.userSession?.browserbaseInstanceId;
+        const settings = async () => {
+          if (!instanceId) return undefined;
+          try { return ((await getMcpConnectionByInstanceId(instanceId))?.providerTokens as any)?.browserbaseSettings; } catch { return undefined; }
+        };
         const result = await route.run(
-          { ops, client, proxy: hostedProxyFor(key), req },
+          { ops, client, proxy: hostedProxyFor(key, settings), req },
           args,
           req.params as RouteParams,
         );

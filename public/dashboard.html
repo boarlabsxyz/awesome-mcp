@@ -1165,6 +1165,23 @@
     </div>
   </div>
 
+  <div id="browserbaseSettingsModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="browserbaseSettingsModalTitle">
+    <div class="modal" style="max-width: 550px;">
+      <div class="modal-header">
+        <h3 id="browserbaseSettingsModalTitle">Browserbase Settings</h3>
+        <button class="btn-close" type="button" onclick="closeBrowserbaseSettings()" aria-label="Close dialog">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div id="browserbaseSettingsContent" class="access-rules-content">
+        <p>Loading&hellip;</p>
+      </div>
+      <div style="margin-top: 12px;">
+        <button class="btn-connect-google" type="button" id="saveBrowserbaseSettingsBtn" onclick="saveBrowserbaseSettings()">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
   <div id="pineconeRulesModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="pineconeRulesModalTitle">
     <div class="modal" style="max-width: 600px;">
       <div class="modal-header">
@@ -1281,7 +1298,7 @@
     }
 
     function getTopmostOpenModal() {
-      const candidates = ['accessRulesModal', 'domainRulesModal', 'pineconeRulesModal', 'githubRulesModal', 'addToolModal', 'loginOverlay'];
+      const candidates = ['accessRulesModal', 'domainRulesModal', 'browserbaseSettingsModal', 'pineconeRulesModal', 'githubRulesModal', 'addToolModal', 'loginOverlay'];
       for (const id of candidates) {
         const el = document.getElementById(id);
         if (el && !el.classList.contains('hidden')) return el;
@@ -1296,6 +1313,7 @@
       if (topmost.id === 'addToolModal') closeAddToolModal();
       else if (topmost.id === 'accessRulesModal') closeAccessRules();
       else if (topmost.id === 'domainRulesModal') closeDomainRules();
+      else if (topmost.id === 'browserbaseSettingsModal') closeBrowserbaseSettings();
       else if (topmost.id === 'pineconeRulesModal') closePineconeRules();
       else if (topmost.id === 'githubRulesModal') closeGithubRules();
       // loginOverlay is not dismissible — sign-in required
@@ -1322,6 +1340,7 @@
     attachFocusTrap('addToolModal');
     attachFocusTrap('accessRulesModal');
     attachFocusTrap('domainRulesModal');
+    attachFocusTrap('browserbaseSettingsModal');
     attachFocusTrap('pineconeRulesModal');
     attachFocusTrap('githubRulesModal');
     attachFocusTrap('loginOverlay');
@@ -1695,6 +1714,7 @@
               : ''}
             ${instance.provider === 'slack' ? `<button class="btn-rename" type="button" data-action="access-rules">Access Rules</button>` : ''}
             ${instance.provider === 'github' ? `<button class="btn-rename" type="button" data-action="github-access-rules" title="Limit which organizations this connector may reach. A guardrail, not a security boundary \u2014 see the note in the dialog.">Access Rules</button>` : ''}
+            ${instance.provider === 'browserbase' ? `<button class="btn-rename" type="button" data-action="browserbase-settings" title="Choose the automation model (with your own model API key), keep-alive, proxies and verified browsers.">Settings</button>` : ''}
             ${instance.provider === 'browserbase' ? `<button class="btn-rename" type="button" data-action="domain-rules" title="Limit which sites this browser may navigate to. A guardrail, not a security boundary \u2014 see the note in the dialog.">Domain Rules</button>` : ''}
             ${instance.provider === 'pinecone' ? `<button class="btn-rename" type="button" data-action="pinecone-rules" title="Limit which indexes and namespaces this connection may use, and switch it to read-only.">Access Rules</button>` : ''}
             <button class="btn-delete" type="button" data-action="delete">Delete</button>
@@ -2637,6 +2657,83 @@
       }
     }
 
+    // ---- Browserbase settings ----
+    //
+    // The model API key is write-only: the server only says whether one is set,
+    // so the field starts empty and an empty field means "keep the stored key".
+    let browserbaseSettingsInstanceId = null;
+
+    async function openBrowserbaseSettings(instanceId) {
+      browserbaseSettingsInstanceId = instanceId;
+      openModal(document.getElementById('browserbaseSettingsModal'));
+      const content = document.getElementById('browserbaseSettingsContent');
+      content.innerHTML = '<p>Loading&hellip;</p>';
+      try {
+        const response = await fetch(`/api/instances/${instanceId}/browserbase-settings`, { credentials: 'include' });
+        if (!response.ok) throw new Error('Failed to load');
+        const s = (await response.json()).settings || {};
+        content.innerHTML = `
+          <div class="rules-section">
+            <label for="bbModelName" style="display:block; font-weight:600; margin-bottom:6px;">Automation model</label>
+            <input type="text" id="bbModelName" placeholder="${escapeHtml(s.defaultModel || '')} (Browserbase default)" value="${escapeHtml(s.modelName || '')}" style="width:100%;" />
+            <p style="margin:4px 0 0; color:#aaa; font-size:12px;">provider/model, e.g. openai/gpt-4.1. Leave empty for Browserbase's default, which needs no key.</p>
+          </div>
+          <div class="rules-section">
+            <label for="bbModelApiKey" style="display:block; font-weight:600; margin-bottom:6px;">Model API key</label>
+            <input type="password" id="bbModelApiKey" autocomplete="off" placeholder="${s.modelApiKeySet ? 'A key is saved — type a new one to replace it' : 'Your key for that model provider'}" style="width:100%;" />
+            ${s.modelApiKeySet ? '<label style="display:block; margin-top:4px;"><input type="checkbox" id="bbClearKey" /> Remove the saved key</label>' : ''}
+            <p style="margin:4px 0 0; color:#aaa; font-size:12px;">Stored with this connection and sent only to Browserbase. It is never shown again.</p>
+          </div>
+          <div class="rules-section">
+            <label style="display:block;"><input type="checkbox" id="bbKeepAlive" ${s.keepAlive ? 'checked' : ''} /> Keep sessions alive across disconnects <span style="color:#aaa;">(they keep billing until ended or timed out)</span></label>
+            <label style="display:block;"><input type="checkbox" id="bbProxies" ${s.proxies ? 'checked' : ''} /> Use Browserbase proxies</label>
+            <label style="display:block;"><input type="checkbox" id="bbVerified" ${s.verified ? 'checked' : ''} /> Verified browser (anti-bot)</label>
+            <p style="margin:4px 0 0; color:#aaa; font-size:12px;">Keep-alive, proxies and verified depend on your Browserbase plan.</p>
+          </div>`;
+      } catch (err) {
+        content.innerHTML = `<p style="color: #dc3545;" role="alert">Error: ${escapeHtml(err.message)}</p>`;
+      }
+    }
+
+    function closeBrowserbaseSettings() {
+      closeModal(document.getElementById('browserbaseSettingsModal'));
+      browserbaseSettingsInstanceId = null;
+    }
+
+    async function saveBrowserbaseSettings() {
+      if (!browserbaseSettingsInstanceId) return;
+      const btn = document.getElementById('saveBrowserbaseSettingsBtn');
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      try {
+        const typedKey = (document.getElementById('bbModelApiKey').value || '').trim();
+        const clear = document.getElementById('bbClearKey');
+        const settings = {
+          modelName: (document.getElementById('bbModelName').value || '').trim(),
+          keepAlive: document.getElementById('bbKeepAlive').checked,
+          proxies: document.getElementById('bbProxies').checked,
+          verified: document.getElementById('bbVerified').checked,
+        };
+        if (typedKey) settings.modelApiKey = typedKey;
+        else if (clear && clear.checked) settings.modelApiKey = null;
+        const response = await fetch(`/api/instances/${browserbaseSettingsInstanceId}/browserbase-settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ settings }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'Failed to save Browserbase settings');
+        closeBrowserbaseSettings();
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    }
+
     // ---- Pinecone access rules ----
     //
     // A third self-contained flow, for the reason the Browserbase one is
@@ -3331,6 +3428,7 @@
         case 'copy':         copyUrl(id, btn); break;
         case 'access-rules': openAccessRules(id); break;
         case 'domain-rules': openDomainRules(id); break;
+        case 'browserbase-settings': openBrowserbaseSettings(id); break;
         case 'pinecone-rules': openPineconeRules(id); break;
         case 'github-access-rules': openGithubRules(id); break;
         case 'delete':       deleteInstance(id, row.dataset.instanceName); break;

@@ -28,6 +28,7 @@ import {
 } from '../util/mcpProxyClient.js';
 
 import { safeErrorText } from './responseSafety.js';
+import { hostedUrlFor, type BrowserbaseSettings } from './settings.js';
 
 // Re-exported rather than re-implemented: callers (and the existing tests)
 // import these from here, and they are the same functions.
@@ -54,9 +55,12 @@ export function hostedMcpUrl(): string {
   return HOSTED_MCP_URL;
 }
 
-function targetFor(apiKey: string): McpProxyTarget {
+function targetFor(apiKey: string, settings?: BrowserbaseSettings): McpProxyTarget {
   return {
-    url: HOSTED_MCP_URL,
+    // The constant origin; settings only add Browserbase's documented query
+    // parameters (settings.ts). The model key rides here because Browserbase
+    // documents no header for it; this URL never leaves the server.
+    url: hostedUrlFor(HOSTED_MCP_URL, settings),
     clientInfo: CLIENT_INFO,
     // Header auth, not the `browserbaseApiKey` query parameter, which
     // Browserbase documents as a deprecated fallback. It also keeps the key
@@ -111,9 +115,10 @@ export async function callHostedTool(
   name: BrowserbaseHostedTool,
   args: Record<string, unknown>,
   options: ProxyOptions = {},
+  settings?: BrowserbaseSettings,
 ): Promise<ProxyToolResult> {
   try {
-    return await callProxyTool(targetFor(apiKey), name, args, options);
+    return await callProxyTool(targetFor(apiKey, settings), name, args, options);
   } catch (err: any) {
     if (err?.status === 401 || err?.status === 403) {
       const error: any = new UserError(err.message);
@@ -133,10 +138,11 @@ export async function proxyHostedTool(
   name: BrowserbaseHostedTool,
   args: Record<string, unknown>,
   options: ProxyOptions = {},
+  settings?: BrowserbaseSettings,
 ): Promise<string> {
   let result: ProxyToolResult;
   try {
-    result = await callHostedTool(apiKey, name, args, options);
+    result = await callHostedTool(apiKey, name, args, options, settings);
   } catch (err: any) {
     if (err instanceof UserError) throw err;
     throw new UserError(explainHostedError(name, err?.message ?? String(err)));

@@ -44,6 +44,7 @@ import {
   observeSchema,
   startSchema,
 } from './schemas.js';
+import type { BrowserbaseSettings } from './settings.js';
 
 /** Injected so tests need not stub global fetch. */
 export type HostedProxy = (
@@ -51,9 +52,13 @@ export type HostedProxy = (
   args: Record<string, unknown>,
 ) => Promise<string>;
 
-/** Bind a proxy to one connection's API key. */
-export function hostedProxyFor(apiKey: string): HostedProxy {
-  return (name, args) => proxyHostedTool(apiKey, name, args);
+/**
+ * Bind a proxy to one connection's API key and, optionally, its settings
+ * (model, keep-alive, proxies, verified), read when each call is made so a
+ * change on the dashboard applies to the next call.
+ */
+export function hostedProxyFor(apiKey: string, settings?: () => Promise<BrowserbaseSettings | undefined>): HostedProxy {
+  return async (name, args) => proxyHostedTool(apiKey, name, args, {}, settings ? await settings() : undefined);
 }
 
 /**
