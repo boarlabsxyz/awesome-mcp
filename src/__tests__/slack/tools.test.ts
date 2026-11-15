@@ -46,7 +46,7 @@ describe('slack-bot tool registry', () => {
       'postMessage', 'replyInThread', 'editMessage', 'listUsers', 'openDm',
       'createChannel', 'addReaction', 'getUserProfile', 'listChannelMembers', 'uploadFile', 'scheduleMessage',
       'createCanvas', 'getCanvasContent', 'findCanvasSections', 'editCanvas',
-      'createList', 'getListItems', 'getListItem', 'createListItem', 'updateListItem',
+      'createList', 'updateList', 'getListItems', 'getListItem', 'createListItem', 'updateListItem',
       'mintRestBearerForCurl', 'listRestEndpoints',
     ];
     assert.deepEqual([...toolMap.keys()].sort(), expected.sort());

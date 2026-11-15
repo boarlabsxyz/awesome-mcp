@@ -200,6 +200,7 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
 const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   // Drive upload. '/api/v1/drive/files' is in both arrays: GET searches, POST uploads.
   '/api/v1/drive/files',
+  '/api/v1/drive/upload-sessions',
   // Storage. /find is a READ served over POST (the where conditions).
   '/api/v1/storage/collections/people/find',
   '/api/v1/storage/collections/people/records',
@@ -244,6 +245,7 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/slack/canvases',
   '/api/v1/slack/canvases/F123/edit',
   '/api/v1/slack/lists',
+  '/api/v1/slack/lists/F123/update',
   '/api/v1/slack/lists/F123/items',
   '/api/v1/slack/lists/F123/items/Rec123/update',
   // Redmine

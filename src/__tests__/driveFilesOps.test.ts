@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, it, mock } from 'node:test';
 import { UserError } from 'fastmcp';
 import {
+  createDriveUploadSessionSchema,
   listDriveChangesSchema,
+  performCreateDriveUploadSession,
   performListDriveChanges,
   performSearchDriveFiles,
   performUploadDriveFile,
@@ -152,5 +154,44 @@ describe('REST helpers (review follow-up)', () => {
       () => performUploadDriveFile(mkDrive(), { fileName: 'a', sourceMimeType: 'text/plain', contentBase64: 'not*base64!' }),
       /not valid base64/,
     );
+  });
+});
+
+describe('createDriveUploadSession', () => {
+  const withAuth = (request: any) => Object.assign(mkDrive(), { context: { _options: { auth: { request } } } });
+
+  it('opens a resumable session with the metadata and returns the Location URL', async () => {
+    const request = mock.fn(async (_opts: any) => ({ headers: new Headers({ location: 'https://www.googleapis.com/upload/drive/v3/files?upload_id=abc' }) }));
+    const drive = withAuth(request);
+    const r = await performCreateDriveUploadSession(drive, createDriveUploadSessionSchema.parse({
+      fileName: 'big.csv', sourceMimeType: 'text/csv', sizeBytes: 50_000_000, parentFolderId: 'fold', convertTo: 'spreadsheet',
+    }));
+    assert.equal(r.uploadUrl, 'https://www.googleapis.com/upload/drive/v3/files?upload_id=abc');
+    const opts = request.mock.calls[0].arguments[0];
+    assert.match(opts.url, /uploadType=resumable/);
+    assert.equal(opts.method, 'POST');
+    assert.equal(opts.headers['X-Upload-Content-Type'], 'text/csv');
+    assert.equal(opts.headers['X-Upload-Content-Length'], '50000000');
+    assert.deepEqual(opts.data, { name: 'big.csv', mimeType: 'application/vnd.google-apps.spreadsheet', parents: ['fold'] });
+  });
+
+  it('reads a plain-object Location header too', async () => {
+    const drive = withAuth(mock.fn(async () => ({ headers: { location: 'https://www.googleapis.com/upload/x' } })));
+    const r = await performCreateDriveUploadSession(drive, { fileName: 'a.bin', sourceMimeType: 'application/octet-stream' });
+    assert.equal(r.uploadUrl, 'https://www.googleapis.com/upload/x');
+  });
+
+  it('refuses a conversion Drive cannot do before opening anything', async () => {
+    const request = mock.fn(async () => ({ headers: {} }));
+    await assert.rejects(
+      () => performCreateDriveUploadSession(withAuth(request), { fileName: 'a.pdf', sourceMimeType: 'application/pdf', convertTo: 'spreadsheet' }),
+      (e: any) => e instanceof UserError && /cannot convert/.test(e.message),
+    );
+    assert.equal(request.mock.callCount(), 0);
+  });
+
+  it('fails rather than returning no URL when Drive sends no Location', async () => {
+    const drive = withAuth(mock.fn(async () => ({ headers: {} })));
+    await assert.rejects(() => performCreateDriveUploadSession(drive, { fileName: 'a', sourceMimeType: 'text/plain' }), /no upload session/);
   });
 });

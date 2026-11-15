@@ -32,6 +32,8 @@ import {
   performUploadDriveFile,
   searchDriveFilesSchema,
   uploadDriveFileSchema,
+  createDriveUploadSessionSchema,
+  performCreateDriveUploadSession,
 } from './filesOps.js';
 import { describeDriveError } from './driveErrors.js';
 import { UserError } from 'fastmcp';
@@ -311,6 +313,23 @@ driveServer.addTool({
       ? (r.converted ? ` Converted to a Google ${args.convertTo}.` : ` Conversion to a Google ${args.convertTo} was asked for, but Drive stored it as ${r.file.mimeType}.`)
       : '';
     return `Uploaded "${r.file.name}" (${r.bytes} bytes) — ID ${r.file.id}.${conversion}\n${r.file.webViewLink ?? ''}`;
+  },
+});
+
+driveServer.addTool({
+  name: 'createDriveUploadSession',
+  annotations: { readOnlyHint: false },
+  description: 'For files too big for uploadDriveFile (over 20 MB): opens a Drive resumable upload and returns its upload URL. '
+    + 'A client with a shell then PUTs the file to that URL (curl command included), straight to Google; the response to the PUT is the new file. '
+    + 'Treat the URL as a secret: anyone holding it can upload that one file into this Drive for about a week. Nothing is created until the bytes arrive. '
+    + 'convertTo is checked against what Drive can import.',
+  parameters: createDriveUploadSessionSchema,
+  execute: async (args, { log, session }) => {
+    log.info(`createDriveUploadSession: ${args.fileName} (${args.sourceMimeType})${args.convertTo ? ` → ${args.convertTo}` : ''}`);
+    let r: Awaited<ReturnType<typeof performCreateDriveUploadSession>>;
+    try { r = await performCreateDriveUploadSession(getDriveClient(session), args); } catch (e) { driveFailure(e, 'open the upload session'); }
+    return `Upload session opened for "${args.fileName}". PUT the file to this URL (keep it private):\n${r.uploadUrl}\n\n`
+      + `curl -X PUT -H 'Content-Type: ${r.contentType}' --upload-file <path-to-file> '${r.uploadUrl}'`;
   },
 });
 

@@ -33440,6 +33440,33 @@
         }
       }
     },
+    "/api/v1/drive/upload-sessions": {
+      "post": {
+        "operationId": "createDriveUploadSession",
+        "summary": "Open a resumable upload for a large file; returns the URL to PUT it to",
+        "description": "Open a resumable upload for a large file; returns the URL to PUT it to. Mirrors the MCP tool `createDriveUploadSession`. Takes a JSON body and returns JSON. Answers 201 with uploadUrl. PUT the bytes there (no bearer needed; no size limit of ours), and the PUT response is the new file. The URL alone authorizes that one upload for about a week, so keep it private. convertTo is checked against what Drive can import. Not destructive: nothing exists until the bytes arrive, and the permanent dashboard key can already upload through POST /api/v1/drive/files, so it is accepted here too.",
+        "tags": [
+          "drive"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
     "/api/v1/drive/files/{fileId}/permissions": {
       "get": {
         "operationId": "getFilePermissions",
@@ -34396,7 +34423,7 @@
       "post": {
         "operationId": "scheduleSlackMessage",
         "summary": "Schedule a message for later delivery",
-        "description": "Schedule a message for later delivery. Mirrors the MCP tool `scheduleMessage`. Takes a JSON body and returns JSON. Answers 201 with scheduledMessageId. postAt must be in the future and within 120 days. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "description": "Schedule a message for later delivery. Mirrors the MCP tool `scheduleMessage`. Takes a JSON body and returns JSON. Answers 201 with scheduledMessageId. threadTs schedules a thread reply. postAt must be in the future and within 120 days. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
         "tags": [
           "slack"
         ],
@@ -34527,6 +34554,43 @@
         "description": "Create a Slack List. Mirrors the MCP tool `createList`. Takes a JSON body and returns JSON. Answers 201. Paid workspaces only; needs lists:write. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
         "tags": [
           "slack"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/lists/{listId}/update": {
+      "post": {
+        "operationId": "updateSlackList",
+        "summary": "Rename a Slack List, replace its description or switch todo mode",
+        "description": "Rename a Slack List, replace its description or switch todo mode. Mirrors the MCP tool `updateList`. Takes a JSON body and returns JSON. Pass at least one of name, description, todoMode (400 otherwise). confirmed is true only when the name alone changed and reads back; description and todo mode are not read back (null). Paid workspaces only. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "400": {

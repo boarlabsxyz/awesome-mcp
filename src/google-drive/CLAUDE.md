@@ -10,6 +10,7 @@
 - **REST answers Drive's own 400 (bad pageToken, malformed modifiedAfter) and local refusals with 400** (`driveRestErrorResponse`); `includeTrashed` must be true/false/1/0, not silently false.
 - **Invalid base64 is refused** — `Buffer.from` would skip bad characters and upload a different file.
 - **Upload caps:** 20 MB decoded on MCP; REST is bounded by the 5 MB body limit (`/api/v1/drive/files` is in `REST_LARGE_BODY_PREFIXES`, a prefix mount that also covers `/files/:id/copy`).
+- **Larger files go through `createDriveUploadSession`** — a resumable session opened with the client's own `OAuth2Client.request` (no token copied out); the caller PUTs the bytes straight to Google. The returned URL alone authorizes that one upload for about a week: return it, never log it. UNVERIFIED live: the Location header and the `X-Upload-Content-Length` check.
 
 ## Source Files
 
