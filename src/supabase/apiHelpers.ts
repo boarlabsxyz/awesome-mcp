@@ -11,6 +11,8 @@ import { UserError } from 'fastmcp';
 import type { UserSession } from '../userSession.js';
 
 import { proxySupabaseTool } from './hostedProxy.js';
+import { argsForSettings, type SupabaseSettings } from './settings.js';
+import type { SupabaseToolDef } from './schemas.js';
 import { refreshSupabaseToken, SUPABASE_TOKEN_URL } from './oauthCallback.js';
 
 export type SupabaseToolLog = {
@@ -121,12 +123,32 @@ async function refreshAndPersist(session: UserSession, log: SupabaseToolLog): Pr
  * session in place.
  */
 export async function runSupabaseTool(
-  name: string,
+  def: Pick<SupabaseToolDef, 'name' | 'group' | 'annotations'>,
   args: Record<string, unknown>,
   session: UserSession | undefined,
   log: SupabaseToolLog,
 ): Promise<string> {
+  const settings = await getSupabaseSettings(session);
+  const forwarded = argsForSettings(def, args, settings);
   await maybeRefreshSupabaseToken(session, log);
   const token = getSupabaseAccessToken(session);
-  return proxySupabaseTool(token, name, args);
+  return proxySupabaseTool(token, def.name, forwarded, {}, settings);
+}
+
+/**
+ * The connection's settings, re-read per call (sessions are cached, settings
+ * change from the dashboard). Fails CLOSED: read-only and the project limit
+ * are restrictions the user chose, so a lookup failure must not quietly run
+ * the call without them.
+ */
+export async function getSupabaseSettings(session: UserSession | undefined): Promise<SupabaseSettings> {
+  const instanceId = session?.supabaseInstanceId;
+  if (!instanceId) return {};
+  try {
+    const { getMcpConnectionByInstanceId } = await import('../mcpConnectionStore.js');
+    const connection = await getMcpConnectionByInstanceId(instanceId);
+    return ((connection?.providerTokens as any)?.supabaseSettings ?? {}) as SupabaseSettings;
+  } catch {
+    throw new UserError('Could not read this Supabase connection\'s settings (read-only, project limit), so nothing was run. Try again.');
+  }
 }

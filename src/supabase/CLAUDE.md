@@ -6,10 +6,18 @@
 
 ### Proxy shape
 
-- **All 30 tools proxy Supabase's hosted MCP server** (`https://mcp.supabase.com/mcp`, published as `supabase-community/supabase-mcp`) under their upstream snake_case names. They cover Supabase's default feature groups minus `feedback`; storage, notebooks and edge-function secrets are not mirrored.
+- **All 39 tools proxy Supabase's hosted MCP server** (`https://mcp.supabase.com/mcp`, published as `supabase-community/supabase-mcp`) under their upstream snake_case names. They cover every feature group, including storage, feedback and notebooks. Two things are not mirrored: edge-function secrets, which need URL elicitation, and `delete_notebook`, which always asks for a form this proxy cannot show.
 - **Register each tool with `supabaseTool({...})`, using a literal name and description** — `scripts/buildMcpToolsDoc.mjs` reads them from source text (`supabaseTool` is in its `REGISTRATION_OPENERS`). A computed name or description drops out of `docs/MCP_TOOLS.md`.
 - **The target is `protocol: 'modern'`.** Supabase's handler uses the v2 SDK with `legacy: 'reject'` and answers the 2025 `initialize` handshake with **400**. So `src/util/mcpProxyClient.ts` sends one stateless `tools/call` carrying the 2026-07-28 `_meta` envelope (`io.modelcontextprotocol/{protocolVersion,clientInfo,clientCapabilities}`) plus `mcp-method`/`mcp-name` headers.
 - **Fall back to the legacy `initialize` trio only when the server says it is legacy-only** — `-32022` without the modern version in `data.supported`, or "not initialized". Any other 400 is a real error and is not retried. Browserbase and Pinecone stay on the legacy path.
+
+### Connection settings (`settings.ts`; NOT exercised live)
+
+- **Project limit, read-only and feature groups are per connection** (`providerTokens.supabaseSettings`), set from the dashboard's Settings dialog, and re-read on every call (`getSupabaseSettings`). The re-read **fails closed**: these are restrictions the user chose.
+- **Sent upstream as query parameters** on the constant origin (`hostedUrlFor`): `project_ref`, `read_only`, `features`. `features` is ALWAYS sent, because upstream leaves storage off unless it is named.
+- **Also enforced locally** (`argsForSettings`), because the tool list is fixed at registration. An off group, an account tool under a project limit, or a write under read-only is refused with the setting named. `execute_sql`/`run_notebook` stay available under read-only (upstream runs them read-only).
+- **A matching `project_id` is dropped** under a project limit, because upstream injects it; a different one is refused.
+- **Preserved across reconnects:** listed in `PRESERVED_ON_RECONNECT` and carried by `pasteReplacementTokens`. An empty setting deletes the key rather than storing `{}`.
 
 ### Confirmations
 

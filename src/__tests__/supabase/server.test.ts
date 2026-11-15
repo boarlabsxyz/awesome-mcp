@@ -28,6 +28,9 @@ const EXPECTED_TOOLS = [
   'get_project_url', 'get_publishable_keys', 'generate_typescript_types',
   'list_edge_functions', 'get_edge_function', 'deploy_edge_function',
   'create_branch', 'list_branches', 'delete_branch', 'merge_branch', 'reset_branch', 'rebase_branch',
+  'list_storage_buckets', 'get_storage_config', 'update_storage_config',
+  'submit_feedback', 'delete_feedback',
+  'list_notebooks', 'get_notebook', 'create_notebook', 'run_notebook',
 ];
 
 describe('supabase server registration', () => {
@@ -37,7 +40,8 @@ describe('supabase server registration', () => {
   });
 
   it('marks every tool that can destroy data or change production as destructive', () => {
-    for (const name of ['execute_sql', 'apply_migration', 'deploy_edge_function', 'delete_branch', 'merge_branch', 'reset_branch', 'rebase_branch']) {
+    for (const name of ['execute_sql', 'apply_migration', 'deploy_edge_function', 'delete_branch', 'merge_branch', 'reset_branch', 'rebase_branch',
+      'update_storage_config', 'delete_feedback', 'run_notebook']) {
       assert.equal(toolMap.get(name)?.annotations?.destructiveHint, true, name);
     }
   });
@@ -80,7 +84,11 @@ describe('a proxied call', () => {
     const seen = answerWith({ content: [{ type: 'text', text: '[{"id":"abc"}]' }] });
     const out = await toolMap.get('list_tables')!.execute({ project_id: 'abc', schemas: ['public'], verbose: false }, { log, session });
     assert.equal(out, '[{"id":"abc"}]');
-    assert.equal(seen[0].url, SUPABASE_HOSTED_MCP_URL);
+    // Same origin and path; the query only names the feature groups (storage is
+    // off upstream unless named).
+    const sent = new URL(seen[0].url);
+    assert.equal(`${sent.origin}${sent.pathname}`, SUPABASE_HOSTED_MCP_URL);
+    assert.match(sent.searchParams.get('features') ?? '', /storage/);
     assert.equal(seen[0].init.headers.authorization, 'Bearer sbp_x');
     const payload = JSON.parse(seen[0].init.body);
     assert.equal(payload.params.name, 'list_tables');

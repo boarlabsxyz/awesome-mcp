@@ -649,7 +649,7 @@ export function computeTokenStatus(
  * one of these keys has the same trap — omit the key on the reconnect path and
  * let the stored value win.
  */
-const PRESERVED_ON_RECONNECT = ['refresh_token', 'accessRules', 'baseUrl'] as const;
+const PRESERVED_ON_RECONNECT = ['refresh_token', 'accessRules', 'baseUrl', 'supabaseSettings'] as const;
 
 /**
  * Non-Google sibling of mergeReconnectTokens: carry forward anything the fresh
@@ -1059,6 +1059,12 @@ function pasteReplacementTokens(
   const replacement: Record<string, any> = { ...freshTokens };
   if (existingRules !== undefined && replacement.accessRules === undefined) {
     replacement.accessRules = existingRules;
+  }
+  // Same reasoning for Supabase's read-only / project limit: dropping them on a
+  // re-pasted token would widen what the connection may do.
+  const existingSupabase = (existingTokens as any)?.supabaseSettings;
+  if (existingSupabase !== undefined && replacement.supabaseSettings === undefined) {
+    replacement.supabaseSettings = existingSupabase;
   }
   return replacement;
 }
@@ -3245,6 +3251,56 @@ function registerSharedRoutes(app: express.Express): void {
     }
     return { user, connection };
   }
+
+  // Supabase connection settings: project limit, read-only, feature groups.
+  // Sent to Supabase as query parameters on its hosted URL, and enforced
+  // locally too (src/supabase/settings.ts).
+  app.get('/api/instances/:instanceId/supabase-settings', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const owned = await ownedConnection(req, res, 'supabase', 'Supabase');
+      if (!owned) return;
+      const { SUPABASE_FEATURE_GROUPS } = await import('../supabase/settings.js');
+      const stored = (owned.connection.providerTokens as any)?.supabaseSettings ?? {};
+      res.json({
+        settings: {
+          projectRef: stored.projectRef ?? '',
+          readOnly: Boolean(stored.readOnly),
+          features: stored.features ?? [...SUPABASE_FEATURE_GROUPS],
+        },
+        featureGroups: SUPABASE_FEATURE_GROUPS,
+      });
+    } catch (err) {
+      console.error('[supabase-settings] error:', err);
+      res.status(500).json({ error: 'Failed to load Supabase settings' });
+    }
+  });
+
+  app.post('/api/instances/:instanceId/supabase-settings', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
+    try {
+      const { normalizeSupabaseSettings } = await import('../supabase/settings.js');
+      const normalized = normalizeSupabaseSettings((req.body as any)?.settings);
+      if ('error' in normalized) { res.status(400).json({ error: normalized.error }); return; }
+
+      const owned = await ownedConnection(req, res, 'supabase', 'Supabase');
+      if (!owned) return;
+      const instanceId = req.params.instanceId as string;
+      const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+      // Spread: the store replaces provider_tokens whole, and the token lives there.
+      const tokens = { ...(owned.connection.providerTokens as any) };
+      if (Object.keys(normalized.settings).length) tokens.supabaseSettings = normalized.settings;
+      // Nothing set = the default; delete rather than store {}, which would be
+      // a non-empty value that survives every reconnect merge.
+      else delete tokens.supabaseSettings;
+      await updateMcpInstanceProviderTokens(instanceId, tokens);
+      const { clearMcpSessionCache } = await import('../userSession.js');
+      clearMcpSessionCache(owned.user.apiKey, instanceId);
+      console.error(`User ${owned.user.id} updated Supabase settings for ${instanceId}: ${JSON.stringify(normalized.settings)}`);
+      res.json({ success: true, settings: normalized.settings });
+    } catch (err) {
+      console.error('[supabase-settings] error:', err);
+      res.status(500).json({ error: 'Failed to save Supabase settings' });
+    }
+  });
 
   app.get('/api/instances/:instanceId/domain-rules', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {

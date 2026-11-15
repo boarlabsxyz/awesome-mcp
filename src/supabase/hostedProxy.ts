@@ -27,6 +27,7 @@ import {
   type ProxyToolResult,
   callProxyTool,
 } from '../util/mcpProxyClient.js';
+import { hostedUrlFor, type SupabaseSettings } from './settings.js';
 
 export type { ProxyToolResult };
 
@@ -79,9 +80,11 @@ export function capResult(text: string): string {
   );
 }
 
-function targetFor(accessToken: string): McpProxyTarget {
+function targetFor(accessToken: string, settings?: SupabaseSettings): McpProxyTarget {
   return {
-    url: SUPABASE_HOSTED_MCP_URL,
+    // Same origin always; the connection's settings only add the three
+    // allowlisted query parameters (settings.ts).
+    url: hostedUrlFor(SUPABASE_HOSTED_MCP_URL, settings),
     clientInfo: CLIENT_INFO,
     // Header auth: the hosted server documents `Authorization: Bearer` for a
     // PAT, and it is what its OAuth resource metadata advertises
@@ -107,9 +110,10 @@ export async function callSupabaseHostedTool(
   name: string,
   args: Record<string, unknown>,
   options: ProxyCallOptions = {},
+  settings?: SupabaseSettings,
 ): Promise<ProxyToolResult> {
   try {
-    return await callProxyTool(targetFor(accessToken), name, args, options);
+    return await callProxyTool(targetFor(accessToken, settings), name, args, options);
   } catch (err: any) {
     if (err?.status === 401 || err?.status === 403) {
       const error: any = new UserError(err.message);
@@ -148,10 +152,11 @@ export async function proxySupabaseTool(
   name: string,
   args: Record<string, unknown>,
   options: ProxyCallOptions = {},
+  settings?: SupabaseSettings,
 ): Promise<string> {
   let result: ProxyToolResult;
   try {
-    result = await callSupabaseHostedTool(accessToken, name, args, options);
+    result = await callSupabaseHostedTool(accessToken, name, args, options, settings);
   } catch (err: any) {
     if (err instanceof UserError) throw err;
     throw new UserError(capError(err?.message ?? String(err)));
