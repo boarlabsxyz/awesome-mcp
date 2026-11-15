@@ -56,6 +56,14 @@ import {
 } from './webhookHelpers.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
+import { stripTrailingSlashes } from '../util/url.js';
+import {
+  attachmentFileName,
+  attachmentTotalSize,
+  openAttachment,
+  parseAttachmentUrl,
+  workspaceIsVisible,
+} from './attachments.js';
 
 export const clickUpServer = instrumentServer(new FastMCP<UserSession>({
   name: 'ClickUp MCP Server',
@@ -65,6 +73,9 @@ export const clickUpServer = instrumentServer(new FastMCP<UserSession>({
 
 registerMintRestBearerForCurl(clickUpServer);
 registerListRestEndpoints(clickUpServer);
+
+// Where the REST data plane answers — the same base listRestEndpoints prints.
+const REST_BASE_URL = stripTrailingSlashes(process.env.BASE_URL || 'http://localhost:8080');
 
 function getClickUpClient(session?: UserSession): ClickUpClient {
   if (!session?.clickUpAccessToken) {
@@ -2075,6 +2086,43 @@ clickUpServer.addTool({
     if (page.content) parts.push(`\n${page.content}`);
     else parts.push('\n(empty)');
     return parts.join('\n');
+  },
+});
+
+clickUpServer.addTool({
+  name: 'getAttachmentInfo',
+  annotations: { readOnlyHint: true },
+  description:
+    'Check a ClickUp attachment URL as it appears in a Doc or task (https://t<workspaceId>.p.clickup-attachments.com/…: a meeting recording, image or PDF) ' +
+    'and report its file name, type and size, and whether this connection can fetch it. These URLs are not public — a plain curl gets the ClickUp sign-in page. ' +
+    'Reads one byte; it does not return the file. To save the file, a client that can run shell commands calls the REST route this tool prints, ' +
+    'with a bearer from mintRestBearerForCurl. ClickUp offers no signed link, so there is no way to download it without a shell.',
+  parameters: z.object({
+    workspaceId: z.string().describe('The workspace (team) ID — the digits after "t" in the attachment host.'),
+    url: z.string().describe('The attachment URL exactly as it appears in the doc or task.'),
+  }),
+  execute: async (args, { session }) => {
+    const client = getClickUpClient(session);
+    const url = parseAttachmentUrl(args.url, args.workspaceId);
+    if (!workspaceIsVisible(await client.getWorkspaces(), args.workspaceId)) {
+      throw new UserError(`Workspace ${args.workspaceId} is not visible to this ClickUp connection.`);
+    }
+    const opened = await openAttachment(session!.clickUpAccessToken!, url, { range: 'bytes=0-0' });
+    if (!opened.ok) throw new UserError(opened.error);
+    const res = opened.response;
+    await res.body?.cancel().catch(() => { /* one byte; nothing to keep */ });
+    const size = attachmentTotalSize(res);
+    const restUrl = `${REST_BASE_URL}/api/v1/clickup/workspaces/${encodeURIComponent(args.workspaceId)}/attachments?url=${encodeURIComponent(args.url.trim())}`;
+    return [
+      `Attachment: ${attachmentFileName(url)}`,
+      `  Type: ${res.headers.get('content-type') || 'unknown'}`,
+      `  Size: ${size === null ? 'unknown (ClickUp sent no total)' : `${size.toLocaleString('en-US')} bytes`}`,
+      `  Range requests: ${res.status === 206 ? 'supported (downloads can be resumed)' : 'not supported (the whole file is sent each time)'}`,
+      '  Access: this connection can fetch it',
+      '',
+      'Download (shell clients only — mint the bearer with mintRestBearerForCurl):',
+      `  curl -fL -H "Authorization: Bearer $TOKEN" -o '${attachmentFileName(url).replaceAll("'", '')}' '${restUrl}'`,
+    ].join('\n');
   },
 });
 

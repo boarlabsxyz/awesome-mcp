@@ -83,15 +83,77 @@ describe('ClickUp server tools', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('should have registered all 50 tools', () => {
-    // 48 ClickUp-specific tools (incl. tag-management + filterTeamTasks +
+  it('should have registered all 51 tools', () => {
+    // 49 ClickUp-specific tools (incl. tag-management + filterTeamTasks +
     // subscribeToTaskEvents + getTaskEventHistory + listTaskEventSubscriptions
     // + debugTaskEventSubscription + unsubscribeFromTaskEvents + listTaskTypes
     // + doc-image tools insertImageIntoPage + uploadClickUpDocImage
-    // + Tasks-in-Multiple-Lists addTaskToList + removeTaskFromList) + 2 shared
-    // (mintRestBearerForCurl, listRestEndpoints) registered on every FastMCP
-    // server.
-    assert.equal(toolMap.size, 50);
+    // + Tasks-in-Multiple-Lists addTaskToList + removeTaskFromList
+    // + getAttachmentInfo) + 2 shared (mintRestBearerForCurl,
+    // listRestEndpoints) registered on every FastMCP server.
+    assert.equal(toolMap.size, 51);
+  });
+
+  // === getAttachmentInfo ===
+
+  describe('getAttachmentInfo', () => {
+    const WS = '90151491867';
+    const URL_ = `https://t${WS}.p.clickup-attachments.com/t${WS}/abc/abc.mp4?view=open&filename=demo.mp4`;
+
+    /** GET /team answers with `teams`; the attachments host with `attachment()`. */
+    function stub(teams: unknown, attachment: () => Response): Array<{ url: string; headers: any }> {
+      const sent: Array<{ url: string; headers: any }> = [];
+      globalThis.fetch = (async (input: any, init: any = {}) => {
+        const url = String(input);
+        sent.push({ url, headers: init.headers });
+        if (url.includes('clickup-attachments.com')) return attachment();
+        return new Response(JSON.stringify(teams), { status: 200 });
+      }) as any;
+      return sent;
+    }
+
+    it('reports name, type, total size and Range support from a one-byte read', async () => {
+      const sent = stub({ teams: [{ id: WS }] }, () => new Response('x', {
+        status: 206, headers: { 'content-type': 'video/mp4', 'content-range': 'bytes 0-0/123456789' },
+      }));
+      const out = await callTool('getAttachmentInfo', { workspaceId: WS, url: URL_ });
+      assert.match(out, /Attachment: demo\.mp4/);
+      assert.match(out, /Type: video\/mp4/);
+      assert.match(out, /Size: 123,456,789 bytes/);
+      assert.match(out, /Range requests: supported/);
+      assert.match(out, /\/api\/v1\/clickup\/workspaces\/90151491867\/attachments\?url=https%3A%2F%2F/);
+      const probe = sent.find((s) => s.url.includes('clickup-attachments.com'))!;
+      assert.equal(probe.headers.Range, 'bytes=0-0');
+      assert.equal(probe.headers.Authorization, 'Bearer tok');
+    });
+
+    it('says so when ClickUp sends the sign-in flow instead of the file', async () => {
+      stub({ teams: [{ id: WS }] }, () => new Response(null, {
+        status: 302, headers: { location: 'https://app.clickup.com/login' },
+      }));
+      await assert.rejects(
+        callTool('getAttachmentInfo', { workspaceId: WS, url: URL_ }),
+        /did not accept this connection's token/,
+      );
+    });
+
+    it('refuses a URL on another host without fetching it', async () => {
+      const sent = stub({ teams: [{ id: WS }] }, () => new Response('x'));
+      await assert.rejects(
+        callTool('getAttachmentInfo', { workspaceId: WS, url: 'https://example.com/t90151491867/a.mp4' }),
+        /Only ClickUp attachment URLs/,
+      );
+      assert.equal(sent.length, 0);
+    });
+
+    it('refuses a workspace the connection cannot see', async () => {
+      const sent = stub({ teams: [{ id: '1' }] }, () => new Response('x'));
+      await assert.rejects(
+        callTool('getAttachmentInfo', { workspaceId: WS, url: URL_ }),
+        /not visible to this ClickUp connection/,
+      );
+      assert.equal(sent.some((s) => s.url.includes('clickup-attachments.com')), false);
+    });
   });
 
   // === getClickUpClient / auth guard ===

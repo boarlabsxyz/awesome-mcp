@@ -33752,6 +33752,40 @@
         }
       }
     },
+    "/api/v1/clickup/workspaces/{workspaceId}/attachments": {
+      "get": {
+        "operationId": "downloadClickUpAttachment",
+        "summary": "Download a file ClickUp hosts as an attachment (a recording or image linked from a doc or task)",
+        "description": "Download a file ClickUp hosts as an attachment (a recording or image linked from a doc or task). Mirrors the MCP tool `getAttachmentInfo`. Returns upstream JSON by default; pass Accept: text/plain for markdown. Streams binary with Content-Type, Content-Length and Content-Disposition, and honours Range (206, or 416 with Content-Range). url must be https://t{workspaceId}.p.clickup-attachments.com/t{workspaceId}/... exactly as linked; any other host is 400 because this server fetches it with the connection token. 404 when the workspace is not visible to the connection. 403 when ClickUp does not accept the token for the file: the sign-in redirect and the login page are refused, never saved as the file. Whether ClickUp accepts the OAuth token on its attachments host is UNVERIFIED live.",
+        "tags": [
+          "clickup"
+        ],
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
     "/api/v1/clickup/docs/{docId}": {
       "get": {
         "operationId": "getDoc",
