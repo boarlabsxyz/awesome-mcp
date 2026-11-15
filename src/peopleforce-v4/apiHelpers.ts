@@ -13,9 +13,11 @@
 //   - The resources are renamed: people, not employees (`/api/v4/employees` is
 //     a 404, verified live 2026-09-17).
 //   - The pagination envelope changed shape (see {@link V4Pagination}).
-//   - v4 covers a *subset* of v3 — no recruitment, leave, knowledge base,
-//     skills, KPIs or employee custom tables — while adding termination data,
-//     surveys, review cycles and compliance cases that v3 never exposed.
+//   - v4 covers a *subset* of v3 — no recruitment, knowledge base, skills,
+//     KPIs, employee custom tables or holidays (leave requests and balances
+//     arrived later, behind the role's Time off permission) — while adding
+//     termination data, surveys, review cycles and compliance cases that v3
+//     never exposed.
 //
 // Everything a caller can get wrong here comes from one property of v4: the
 // service account's ROLE, not the key, decides what exists. A record outside
@@ -26,7 +28,7 @@
 
 import { UserError } from 'fastmcp';
 import { UserSession } from '../userSession.js';
-import { appendQueryParams, type PeopleForceQueryParams } from '../peopleforce/apiHelpers.js';
+import { appendQueryParams, customFieldEntries, type PeopleForceQueryParams } from '../peopleforce/apiHelpers.js';
 
 /** v4 lives on its own version segment — NOT under /api/public/ like v1–v3. */
 const DEFAULT_BASE_URL = 'https://app.peopleforce.io/api/v4';
@@ -182,6 +184,35 @@ export type V4Salary = {
   updated_at?: string;
   custom_fields?: Record<string, unknown>;
 };
+
+/** A leave request. List-wide (every person the role can see), filtered by query. */
+export type V4LeaveRequest = {
+  id?: number;
+  employee_id?: number;
+  leave_type_id?: number;
+  leave_type?: string;
+  state?: string;
+  amount?: string;
+  hours?: string;
+  tracking_time_in?: string;
+  on_demand?: boolean;
+  starts_on?: string;
+  ends_on?: string;
+  comment?: string;
+  employee?: { id?: number; first_name?: string; last_name?: string; full_name?: string; email?: string } | null;
+};
+
+export type V4LeaveBalance = {
+  id?: number;
+  employee_id?: number;
+  employee?: { id?: number; first_name?: string; last_name?: string; full_name?: string } | null;
+  effective_on?: string;
+  balance?: number;
+  leave_type?: { id?: number; name?: string; unit?: string } | null;
+  leave_type_policy?: { id?: number; name?: string } | null;
+};
+
+export const LEAVE_REQUEST_STATE_VALUES = ['pending', 'approved', 'rejected', 'withdrawn'] as const;
 
 export type V4Lifecycle = {
   id?: number;
@@ -470,6 +501,36 @@ export class PeopleForceV4Client {
 
   listPersonAssets(personId: number | string): Promise<V4ListResponse<V4Named>> {
     return this.request('GET', `/people/${pathId(personId)}/assets`);
+  }
+
+  // === Time off (needs the Time off permission on the key's role; 403 without) ===
+
+  /**
+   * v4 filters: `starts_on` = starting on or after, `ends_on` = ending on or
+   * after. There is no "starting on or before", so callers asking for an
+   * overlap with a date range filter the upper bound themselves.
+   */
+  listLeaveRequests(input: V4PageInput & {
+    employeeIds?: number[];
+    states?: string[];
+    startsOnOrAfter?: string;
+    endsOnOrAfter?: string;
+  } = {}): Promise<V4ListResponse<V4LeaveRequest>> {
+    return this.request('GET', '/leave_requests', undefined, {
+      ...pageParams(input),
+      employee_ids: input.employeeIds,
+      states: input.states,
+      starts_on: input.startsOnOrAfter,
+      ends_on: input.endsOnOrAfter,
+    });
+  }
+
+  listLeaveBalances(input: V4PageInput & { employeeIds?: number[]; leaveTypeIds?: number[] } = {}): Promise<V4ListResponse<V4LeaveBalance>> {
+    return this.request('GET', '/leave_balances', undefined, {
+      ...pageParams(input),
+      employee_ids: input.employeeIds,
+      leave_type_ids: input.leaveTypeIds,
+    });
   }
 
   listPersonSalaries(personId: number | string): Promise<V4ListResponse<V4Salary>> {
@@ -782,6 +843,15 @@ const PERSON_GRANTABLE_FIELDS = [
   'division', 'department', 'reporting_to', 'legal_entity', 'gender',
 ] as const;
 
+/** `{ internal_name: { name, value } }` → `Name: value` lines (other shapes fall back to the v2/v3 normaliser). */
+export function v4CustomFieldLines(raw: unknown): string[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const values = Array.isArray(raw) ? raw : Object.values(raw as Record<string, unknown>);
+  const shaped = values.every((v) => v && typeof v === 'object' && 'name' in (v as object));
+  const entries = customFieldEntries((shaped ? values : raw) as any);
+  return entries.map((e) => `${e.name}: ${e.value}`);
+}
+
 function withheldFields(person: V4Person): string[] {
   return PERSON_GRANTABLE_FIELDS.filter(f => !(f in person));
 }
@@ -842,6 +912,11 @@ export function formatPerson(p: V4Person): string {
   put('Created', p.created_at);
   put('Updated', p.updated_at);
 
+  // v4 keys custom fields by internal name, each value {name, value}; the
+  // display name is what a reader wants. Empty values are dropped.
+  const custom = v4CustomFieldLines(p.fields);
+  if (custom.length) lines.push('', 'Custom fields:', ...custom.map((l) => `  ${l}`));
+
   const withheld = withheldFields(p);
   if (withheld.length) {
     lines.push(
@@ -872,6 +947,27 @@ export function formatLocationList(rows: V4Location[], pagination?: V4Pagination
   return renderList('locations', rows, pagination, l => {
     const extra = [l.country_code, l.time_zone, l.address].filter(Boolean).join(', ');
     return `- #${l.id ?? '?'} ${l.name ?? '(unnamed)'}${extra ? ` — ${extra}` : ''}`;
+  });
+}
+
+const leavePerson = (e: V4LeaveRequest['employee'], id?: number) =>
+  e?.full_name || [e?.first_name, e?.last_name].filter(Boolean).join(' ') || `Person #${id ?? e?.id ?? '?'}`;
+
+export function formatLeaveRequestList(rows: V4LeaveRequest[], pagination?: V4Pagination, note?: string): string {
+  const body = renderList('leave requests', rows, pagination, (l) => {
+    const span = !l.ends_on || l.ends_on === l.starts_on ? (l.starts_on ?? '?') : `${l.starts_on} → ${l.ends_on}`;
+    const amount = l.amount ? ` | ${l.amount}${l.tracking_time_in ? ` ${l.tracking_time_in}` : ''}` : '';
+    return `- #${l.id ?? '?'} ${leavePerson(l.employee, l.employee_id)} | ${l.leave_type ?? 'Leave'} | ${span} | ${l.state ?? '?'}${amount}`;
+  });
+  return note ? `${note}\n\n${body}` : body;
+}
+
+export function formatLeaveBalanceList(rows: V4LeaveBalance[], pagination?: V4Pagination): string {
+  return renderList('leave balances', rows, pagination, (b) => {
+    const type = b.leave_type?.name ?? b.leave_type_policy?.name ?? 'Leave';
+    // An omitted balance is "unknown", never 0 — very different answers.
+    const balance = b.balance !== undefined ? `${b.balance}${b.leave_type?.unit ? ` ${b.leave_type.unit}` : ''}` : 'unknown';
+    return `- ${leavePerson(b.employee, b.employee_id)} | ${type} | ${balance}${b.effective_on ? ` | as of ${b.effective_on}` : ''}`;
   });
 }
 
@@ -1096,7 +1192,7 @@ export function mapPeopleForceV4Error(prefix: string, error: any, log: PeopleFor
     throw new UserError(
       `${prefix}: the service account's role does not grant this action (403). Org-structure writes need the matching ` +
         `"Manage …" permission on the role's Company tab; writes to a person's data need Edit rather than View on ` +
-        `that field.`,
+        `that field; leave requests and balances need the Time off permission on a role attached to the key.`,
     );
   }
   if (status === 404) {

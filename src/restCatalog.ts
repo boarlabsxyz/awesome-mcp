@@ -309,10 +309,14 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   // Wired in webServer.ts against requirePeopleForceApiKey. Every one supports
   // ?format=text for the same markdown the MCP tools render — the formatters are
   // imported from peopleforce/apiHelpers.js so the two surfaces cannot drift.
-  // This covers all 41 read tools; the four write tools (createLeaveRequest,
-  // moveVacancyApplication, disqualifyVacancyApplication, addCandidateNote) stay
-  // MCP-only — their request bodies are a handful of scalars, so they fail the
-  // bulk-payload/shell-pipeline test the data plane exists to serve.
+  // Every read tool has a GET here; the four writes (createLeaveRequest,
+  // moveVacancyApplication, disqualifyVacancyApplication, addCandidateNote) are
+  // POSTs below.
+  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/employees/{employeeId}/salaries', summary: 'List an employee salary history', mcpToolName: 'listEmployeeSalaries', openapiOperationId: 'listPeopleForceEmployeeSalaries', status: 'live', notes: 'v3. Needs a Company API key allowed to view compensation; otherwise 403. Follows the key restriction, not the caller.' },
+  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/holidays', summary: 'List company public holidays', mcpToolName: 'listHolidays', openapiOperationId: 'listPeopleForceHolidays', status: 'live', notes: 'v3, paginated (?page=). working: true marks a working-day exception, not a day off.' },
+  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/holiday-policies', summary: 'List holiday policies', mcpToolName: 'listHolidayPolicies', openapiOperationId: 'listPeopleForceHolidayPolicies', status: 'live' },
+  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/employees/{employeeId}/holidays', summary: 'List the public holidays that apply to one employee', mcpToolName: 'listEmployeeHolidays', openapiOperationId: 'listPeopleForceEmployeeHolidays', status: 'live', notes: 'v3, paginated (?page=).' },
+  { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/employees/{employeeId}/absences?from={date}&to={date}', summary: 'Leave and public holidays for one employee between two dates', mcpToolName: 'getEmployeeAbsences', openapiOperationId: 'getPeopleForceEmployeeAbsences', status: 'live', notes: 'Approved leave (plus pending with includePending=true) and holidays, filtered for overlap here. truncated lists any source that stopped after 10 pages.' },
   { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/employees', summary: 'List PeopleForce employees', mcpToolName: 'listEmployees', openapiOperationId: 'listPeopleForceEmployees', status: 'live' },
   { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/employees/{employeeId}', summary: 'Get a single PeopleForce employee', mcpToolName: 'getEmployee', openapiOperationId: 'getPeopleForceEmployee', status: 'live' },
   { service: 'peopleforce', method: 'GET', path: '/api/v1/peopleforce/departments', summary: 'List PeopleForce departments', mcpToolName: 'listDepartments', openapiOperationId: 'listPeopleForceDepartments', status: 'live' },

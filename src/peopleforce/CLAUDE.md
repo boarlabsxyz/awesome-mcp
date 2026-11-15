@@ -24,7 +24,7 @@
 - `formatObjectiveList`/`formatKpiList` surface owner `id`+`email`; KB `body` may be an object (`formatKnowledgeArticle`); `formatCustomFields` strips HTML.
 
 ### REST plane
-- **41 GETs + 4 POSTs** (`createLeaveRequest`, `addCandidateNote`, `moveVacancyApplication`, `disqualifyVacancyApplication`) under `/api/v1/peopleforce/*`. **The permanent dashboard API key can mutate leave and recruitment state.**
+- **46 GETs + 4 POSTs** (`createLeaveRequest`, `addCandidateNote`, `moveVacancyApplication`, `disqualifyVacancyApplication`) under `/api/v1/peopleforce/*`. **The permanent dashboard API key can mutate leave and recruitment state.**
 - **Validate with the tools' schemas** (`createLeaveRequestSchema`, `moveVacancyApplicationSchema`, `disqualifyVacancyApplicationSchema`, `addCandidateNoteSchema`) via `safeParse` → 400; never hand-roll checks.
 - **Path params override body keys.** Move/disqualify re-read the application.
 - **`disqualifyVacancyApplication` is not idempotent.**

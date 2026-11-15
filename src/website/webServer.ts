@@ -7827,6 +7827,20 @@ function registerRestApiRoutes(app: express.Express): void {
     fallback: string;
   }> = [
     {
+      path: '/api/v1/peopleforce/holidays',
+      fetch: (c, page) => c.listHolidays({ page }),
+      format: (h, r) => h.formatHolidayList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Holidays not found',
+      fallback: 'Failed to list holidays',
+    },
+    {
+      path: '/api/v1/peopleforce/holiday-policies',
+      fetch: (c, page) => c.listHolidayPolicies({ page }),
+      format: (h, r) => h.formatHolidayPolicyList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Holiday policies not found',
+      fallback: 'Failed to list holiday policies',
+    },
+    {
       path: '/api/v1/peopleforce/leave-types',
       fetch: (c, page) => c.listLeaveTypes({ page }),
       format: (h, r) => h.formatLeaveTypeList(r.data ?? [], r.metadata?.pagination),
@@ -7980,6 +7994,14 @@ function registerRestApiRoutes(app: express.Express): void {
       fallback: 'Failed to list leave balances',
     },
     {
+      // 403 here usually means the key may not view compensation, not a bad key.
+      path: '/api/v1/peopleforce/employees/:employeeId/salaries',
+      fetch: (c, id) => c.listEmployeeSalaries(id),
+      format: (h, r) => h.formatSalaries(r.data ?? []),
+      notFound: 'Employee not found',
+      fallback: 'Failed to list salaries',
+    },
+    {
       path: '/api/v1/peopleforce/employees/:employeeId/skills',
       fetch: (c, id) => c.listEmployeeSkills(id),
       format: (h, r) => h.formatEmployeeSkills(r.data ?? []),
@@ -8024,6 +8046,45 @@ function registerRestApiRoutes(app: express.Express): void {
       }
     });
   }
+
+  // GET /api/v1/peopleforce/employees/:employeeId/holidays?page= - Holidays that apply to one employee
+  app.get('/api/v1/peopleforce/employees/:employeeId/holidays', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const helpers = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listEmployeeHolidays(req.params.employeeId as string, { page: qint(req.query.page, 1, { min: 1 }) });
+      respondNegotiated(req, res, result, () => helpers.formatHolidayList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce employee holidays:', err);
+      sendUpstreamError(res, err, { notFound: 'Employee not found', fallback: 'Failed to list employee holidays' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/employees/:employeeId/absences?from=&to= - Leave plus public holidays in a date range
+  app.get('/api/v1/peopleforce/employees/:employeeId/absences', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const from = qstr(req.query.from);
+      const to = qstr(req.query.to);
+      const isDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+      if (!isDate(from) || !isDate(to) || from > to) {
+        res.status(400).json({ error: 'from and to are required as YYYY-MM-DD, with from not after to' });
+        return;
+      }
+      const helpers = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await helpers.collectEmployeeAbsences(client, {
+        employeeId: req.params.employeeId as string, from, to, includePending: qflag(req.query.includePending),
+      });
+      respondNegotiated(req, res, result, () => helpers.formatEmployeeAbsences(result));
+    } catch (err: any) {
+      console.error('Error reading PeopleForce absences:', err);
+      sendUpstreamError(res, err, { notFound: 'Employee not found', fallback: 'Failed to read absences' });
+    }
+  });
 
   // GET /api/v1/peopleforce/employees/:employeeId/tables/:tableInternalName
   // tableInternalName is a system slug from /employee-tables, not the display

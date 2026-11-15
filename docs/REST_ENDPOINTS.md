@@ -261,6 +261,11 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 
 | MCP tool | REST endpoint | Status | Summary |
 |---|---|---|---|
+| `listEmployeeSalaries` | `GET /api/v1/peopleforce/employees/{employeeId}/salaries` | live | List an employee salary history — _v3. Needs a Company API key allowed to view compensation; otherwise 403. Follows the key restriction, not the caller._ |
+| `listHolidays` | `GET /api/v1/peopleforce/holidays` | live | List company public holidays — _v3, paginated (?page=). working: true marks a working-day exception, not a day off._ |
+| `listHolidayPolicies` | `GET /api/v1/peopleforce/holiday-policies` | live | List holiday policies |
+| `listEmployeeHolidays` | `GET /api/v1/peopleforce/employees/{employeeId}/holidays` | live | List the public holidays that apply to one employee — _v3, paginated (?page=)._ |
+| `getEmployeeAbsences` | `GET /api/v1/peopleforce/employees/{employeeId}/absences?from={date}&to={date}` | live | Leave and public holidays for one employee between two dates — _Approved leave (plus pending with includePending=true) and holidays, filtered for overlap here. truncated lists any source that stopped after 10 pages._ |
 | `listEmployees` | `GET /api/v1/peopleforce/employees` | live | List PeopleForce employees |
 | `getEmployee` | `GET /api/v1/peopleforce/employees/{employeeId}` | live | Get a single PeopleForce employee |
 | `listDepartments` | `GET /api/v1/peopleforce/departments` | live | List PeopleForce departments |
@@ -487,4 +492,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 363 endpoints.
+Catalog size: 368 endpoints.

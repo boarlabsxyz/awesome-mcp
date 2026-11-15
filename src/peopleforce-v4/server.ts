@@ -6,8 +6,9 @@
 // v1–v3 and a Company key cannot call v4, so the two connectors hold different
 // credentials; and v4's surface is a *different* set, not a superset. What v4
 // does NOT have (all of it still lives on the `peopleforce` connector):
-// recruitment, leave requests/balances/types, knowledge base, skills,
-// competencies, KPIs and employee custom tables. What it adds, and v3 never
+// recruitment, leave types, holidays, knowledge base, skills, competencies,
+// KPIs and employee custom tables. Leave requests and balances it has, behind
+// the role's Time off permission. What it adds, and v3 never
 // had: termination dates + reasons, terminated-people and birthday/anniversary
 // feeds, salaries, lifecycle records, review cycles/responses, Pulse surveys
 // and compliance cases.
@@ -36,6 +37,9 @@ import {
   formatLocationList,
   formatSalaryList,
   formatSalary,
+  formatLeaveRequestList,
+  formatLeaveBalanceList,
+  LEAVE_REQUEST_STATE_VALUES,
   formatLifecycleList,
   formatObjectiveList,
   formatObjective,
@@ -298,6 +302,45 @@ addPersonScopedListTool({
   errorPrefix: 'Error listing person assets',
   fetch: (client, personId) => client.listPersonAssets(personId),
   format: (rows, pagination) => formatNamedList('assets', rows, pagination),
+});
+
+addListTool({
+  name: 'listLeaveRequests',
+  description:
+    'List leave requests across everyone the service account can see, optionally for some people, states, and a date range ' +
+    '(from/to keep requests overlapping it). Needs the Time off permission on the key\'s role (403 without).',
+  errorPrefix: 'Error listing leave requests',
+  parameters: {
+    employeeIds: z.array(z.number().int()).optional().describe('Only these people (person IDs).'),
+    states: z.array(z.enum(LEAVE_REQUEST_STATE_VALUES)).optional().describe('Only these states.'),
+    from: isoDate.optional().describe('Keep requests ending on or after this date (YYYY-MM-DD).'),
+    to: isoDate.optional().describe('Keep requests starting on or before this date (YYYY-MM-DD). Applied to the returned page.'),
+  },
+  fetch: async (client, args: any) => {
+    const res = await client.listLeaveRequests({
+      page: args.page, perPage: args.perPage, offset: args.offset,
+      employeeIds: args.employeeIds, states: args.states, endsOnOrAfter: args.from,
+    });
+    // v4 has no "starts on or before" filter, so the upper bound is applied
+    // here, per page; the page footer still counts the unfiltered page.
+    if (!args.to) return res;
+    return { ...res, data: (res.data ?? []).filter((l) => !l.starts_on || l.starts_on <= args.to) };
+  },
+  format: (rows, pagination) => formatLeaveRequestList(rows, pagination),
+});
+
+addListTool({
+  name: 'listLeaveBalances',
+  description:
+    'List current leave balances across everyone the service account can see, optionally for some people or leave types. ' +
+    'Needs the Time off permission on the key\'s role (403 without).',
+  errorPrefix: 'Error listing leave balances',
+  parameters: {
+    employeeIds: z.array(z.number().int()).optional().describe('Only these people (person IDs).'),
+    leaveTypeIds: z.array(z.number().int()).optional().describe('Only these leave types.'),
+  },
+  fetch: (client, args: any) => client.listLeaveBalances(args),
+  format: formatLeaveBalanceList,
 });
 
 addPersonScopedListTool({
