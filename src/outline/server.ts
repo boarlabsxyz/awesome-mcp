@@ -60,10 +60,14 @@ import {
   performUploadAttachment,
 } from './restOps.js';
 
+// Outline may normalise a colour's case.
+const sameValue = (a: unknown, b: unknown) =>
+  typeof a === 'string' && typeof b === 'string' ? a.toLowerCase() === b.toLowerCase() : a === b;
+
 /** What a write asked for that the returned record does not show — likely an Outline too old for the field. */
 function notReflected(asked: Record<string, unknown>, got: Record<string, unknown> | undefined): string {
   const missing = Object.entries(asked)
-    .filter(([k, v]) => v !== undefined && got !== undefined && got[k] !== v)
+    .filter(([k, v]) => v !== undefined && got !== undefined && !sameValue(got[k], v))
     .map(([k]) => k);
   return missing.length ? ` Not shown on the returned record (your Outline may not support it): ${missing.join(', ')}.` : '';
 }
@@ -275,7 +279,8 @@ outlineServer.addTool({
       log.info(`Updating Outline document ${documentId}${fields.findText !== undefined ? ' (passage edit)' : ''}`);
       const doc = await performUpdateDocument(client, documentId, fields);
       const published = fields.publish ? (doc.publishedAt ? ' Published.' : ' publish was sent, but the document shows no publish date.') : '';
-      return `Document updated successfully: ${doc.title ?? 'Untitled'}.${published}`
+      const passage = doc.passageEditVerified === null ? ' The passage edit could not be checked on re-read; look at the document.' : '';
+      return `Document updated successfully: ${doc.title ?? 'Untitled'}.${published}${passage}`
         + notReflected({ color: fields.color, fullWidth: fields.fullWidth }, doc);
     });
   },

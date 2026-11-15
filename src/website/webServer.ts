@@ -8836,6 +8836,14 @@ function registerRestApiRoutes(app: express.Express): void {
       res.status(400).json({ error: (err as any).message });
       return;
     }
+    // Statuses our own ops set: 502 (Outline replaced the whole body on a
+    // passage edit, a storage upload failed) and 413 (storage refused the size).
+    // sendUpstreamError would flatten both to 500.
+    const own = (err as any)?.status;
+    if (own === 502 || own === 413) {
+      res.status(own).json({ error: (err as any).message });
+      return;
+    }
     console.error(`Outline REST call failed (${fallback}):`, err);
     sendUpstreamError(res, err, { notFound, fallback });
   }

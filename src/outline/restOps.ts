@@ -154,30 +154,52 @@ export async function performUpdateDocument(
     publish: args.publish,
   });
   if (!doc) throw upstreamEmpty('Outline accepted the request but returned no document.');
-  if (args.findText !== undefined && before) await guardPatch(client, documentId, before.text ?? '', args.findText, args.text!, doc.text);
+  if (args.findText !== undefined && before) {
+    // true: the text around the passage survived; null: could not be read back.
+    const passageEditVerified = await guardPatch(client, documentId, before.text ?? '', args.findText, doc.text);
+    return { ...doc, passageEditVerified };
+  }
   return doc;
+}
+
+/** Words only: Outline re-serialises markdown, so escapes, list markers and spacing may differ from what was sent. */
+function words(s: string): string[] {
+  return s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+/** Whether the text before and after the passage (a few words each side) is still in `body`. */
+function surroundingsSurvived(original: string, findText: string, body: string): boolean {
+  const idx = original.indexOf(findText);
+  const head = words(original.slice(0, idx)).slice(-6).join(' ');
+  const tail = words(original.slice(idx + findText.length)).slice(0, 6).join(' ');
+  const now = ` ${words(body).join(' ')} `;
+  return (!head || now.includes(` ${head} `)) && (!tail || now.includes(` ${tail} `));
 }
 
 /**
  * An Outline older than editMode ignores it and treats the call as a plain
- * update — replacing the WHOLE body with the replacement passage. That is
- * detected from the answer (the body is now exactly the replacement, when the
- * passage was only part of it) and undone by writing the original markdown
- * back. Formatting markdown cannot carry may need restoring from history, so
- * the caller is told, loudly, rather than handed a success.
+ * update — replacing the WHOLE body with the replacement passage. Detected by
+ * what should have survived: the words just before and after the passage. Not
+ * by comparing with the replacement, which Outline echoes re-serialised. When
+ * they are gone the original markdown is written back and the call fails
+ * loudly; formatting markdown cannot carry may need restoring from history.
+ * Returns true when verified, null when the body could not be read back.
  */
-async function guardPatch(client: OutlineClient, documentId: string, original: string, findText: string, replacement: string, after: string | undefined) {
-  if (after === undefined) return;
-  const wholeBodyReplaced = after.trim() === replacement.trim() && original.trim() !== findText.trim();
-  if (!wholeBodyReplaced) return;
+async function guardPatch(client: OutlineClient, documentId: string, original: string, findText: string, after: string | undefined): Promise<true | null> {
+  let body = after;
+  if (body === undefined) body = (await client.getDocument(documentId).catch(() => undefined))?.text;
+  if (body === undefined) return null;
+  if (surroundingsSurvived(original, findText, body)) return true;
   let restored = false;
   try {
-    restored = Boolean(await client.updateDocument({ id: documentId, text: original }));
+    const back = await client.updateDocument({ id: documentId, text: original });
+    restored = back?.text !== undefined ? surroundingsSurvived(original, findText, back.text) : false;
   } catch { /* reported below */ }
   const err = new Error(restored
     ? 'This Outline server does not support passage edits (findText): it replaced the whole document. The original text was written back; '
-      + 'formatting markdown cannot carry may need restoring from the document history. Edit without findText instead.'
-    : 'This Outline server does not support passage edits (findText): it replaced the whole document, and writing the original back FAILED. '
+      + 'formatting markdown cannot carry may need restoring from the document history, and any other field sent in the same call (title, icon, publish…) stays applied. '
+      + 'Edit without findText instead.'
+    : 'This Outline server does not support passage edits (findText): it replaced the whole document, and writing the original back could not be confirmed. '
       + 'Restore the previous version from the document history in Outline now.');
   (err as any).status = 502;
   throw err;

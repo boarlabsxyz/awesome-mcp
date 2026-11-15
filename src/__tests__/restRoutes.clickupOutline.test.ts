@@ -1048,6 +1048,17 @@ describe('REST data plane: ClickUp and Outline handler bodies', () => {
       assert.equal(callsTo('documents.update').length, 0);
     });
 
+    it('answers 502 when an old Outline wiped the body on a passage edit, after writing the original back', async () => {
+      reset();
+      when('/api/documents.info', { json: { data: { id: 'd1', text: 'Before.\n\nOld bit.\n\nAfter.' } } });
+      when('/api/documents.update', { json: { data: { id: 'd1', text: 'New bit.' } } });
+      const res = await request(app).post('/api/v1/outline/documents/d1').set(auth())
+        .send({ findText: 'Old bit.', text: 'New bit.' });
+      assert.equal(res.status, 502);
+      assert.match(res.body.error, /does not support passage edits/);
+      assert.equal(callsTo('documents.update').length, 2, 'the original is written back');
+    });
+
     it('requires from on a revision compare', async () => {
       reset();
       const res = await request(app).get('/api/v1/outline/documents/d1/compare').set(auth());

@@ -4,6 +4,7 @@
 
 import { UserError } from 'fastmcp';
 import { UserSession } from '../userSession.js';
+import { lookup } from 'node:dns/promises';
 import { isPrivateHost } from '../util/baseUrlGuard.js';
 import { refreshOutlineToken } from './oauthCallback.js';
 
@@ -132,6 +133,10 @@ export type DateFilter = 'day' | 'week' | 'month' | 'year';
 export type ExportFormat = 'outline-markdown' | 'json' | 'html';
 
 export class OutlineClient {
+  /** Resolves a storage hostname to its addresses. Replaceable in tests, which must not hit DNS. */
+  static resolveHost = async (hostname: string): Promise<string[]> =>
+    (await lookup(hostname, { all: true })).map((a) => a.address);
+
   /** Base URL of the Outline instance this client talks to (no trailing slash). */
   public readonly baseUrl: string;
 
@@ -531,9 +536,17 @@ export class OutlineClient {
     const local = target.startsWith('/');
     const url = local ? `${this.baseUrl}${target}` : target;
     if (!local) {
-      const parsed = new URL(url);
-      if (parsed.protocol !== 'https:' || isPrivateHost(parsed.hostname)) {
-        throw new Error(`Refusing to upload to ${parsed.origin}: storage URLs must be public https.`);
+      let parsed: URL;
+      try { parsed = new URL(url); } catch { throw new Error(`Outline returned an upload URL that is not a URL: ${target.slice(0, 100)}`); }
+      // The name is resolved too: a public-looking hostname can point at an
+      // internal address. (Rebinding between this check and the fetch is not
+      // covered; see util/baseUrlGuard.ts.)
+      const addresses = parsed.protocol === 'https:' && !isPrivateHost(parsed.hostname)
+        ? await OutlineClient.resolveHost(parsed.hostname).catch(() => [] as string[])
+        : [];
+      if (addresses.length === 0 || addresses.some((ip) => isPrivateHost(ip))) {
+        throw new Error(`Outline's file storage (${parsed.origin}) is not reachable from here: uploads need storage on a public https address. `
+          + 'A self-hosted Outline with private storage (e.g. MinIO on an internal network) cannot take uploads through this connector.');
       }
     }
     const auth: Record<string, string> = local ? { Authorization: `Bearer ${this.token}` } : {};
@@ -924,14 +937,23 @@ const DIFF_OUTPUT_LIMIT = 400;
  * get counts only. Outline has no diff endpoint; this is computed here.
  */
 export function diffLines(before: string, after: string): { text: string; added: number; removed: number; summarized: boolean } {
-  const a = before.split('\n');
-  const b = after.split('\n');
+  if (before === after) return { text: 'No differences.', added: 0, removed: 0, summarized: false };
+  const allA = before.split('\n');
+  const allB = after.split('\n');
+  // Common head and tail are unchanged by definition, so only the middle needs
+  // the quadratic table — a small edit to a long document stays exact.
+  let pre = 0;
+  while (pre < allA.length && pre < allB.length && allA[pre] === allB[pre]) pre++;
+  let post = 0;
+  while (post < allA.length - pre && post < allB.length - pre && allA[allA.length - 1 - post] === allB[allB.length - 1 - post]) post++;
+  const a = allA.slice(pre, allA.length - post);
+  const b = allB.slice(pre, allB.length - post);
   if (a.length * b.length > DIFF_CELL_LIMIT) {
     const inA = new Set(a);
     const inB = new Set(b);
     const added = b.filter((l) => !inA.has(l)).length;
     const removed = a.filter((l) => !inB.has(l)).length;
-    return { text: `Too long to diff line by line (${a.length} vs ${a.length === b.length ? 'the same number of' : b.length} lines). About ${added} line(s) added and ${removed} removed.`, added, removed, summarized: true };
+    return { text: `Too many changed lines to diff line by line (${a.length} old vs ${b.length} new). About ${added} line(s) added and ${removed} removed.`, added, removed, summarized: true };
   }
   // lcs[i][j] = LCS length of a[i..] and b[j..], as one flat array.
   const w = b.length + 1;
@@ -941,7 +963,7 @@ export function diffLines(before: string, after: string): { text: string; added:
       lcs[i * w + j] = a[i] === b[j] ? lcs[(i + 1) * w + j + 1] + 1 : Math.max(lcs[(i + 1) * w + j], lcs[i * w + j + 1]);
     }
   }
-  const ops: Array<[' ' | '-' | '+', string]> = [];
+  const ops: Array<[' ' | '-' | '+', string]> = allA.slice(0, pre).map((l) => [' ', l] as [' ', string]);
   let i = 0;
   let j = 0;
   while (i < a.length && j < b.length) {
@@ -951,6 +973,7 @@ export function diffLines(before: string, after: string): { text: string; added:
   }
   while (i < a.length) ops.push(['-', a[i++]]);
   while (j < b.length) ops.push(['+', b[j++]]);
+  for (const l of allA.slice(allA.length - post)) ops.push([' ', l]);
 
   const added = ops.filter(([k]) => k === '+').length;
   const removed = ops.filter(([k]) => k === '-').length;

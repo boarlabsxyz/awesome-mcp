@@ -32,7 +32,11 @@ beforeEach(() => {
     return respond(call);
   }) as typeof globalThis.fetch;
 });
-afterEach(() => { globalThis.fetch = originalFetch; });
+afterEach(() => { globalThis.fetch = originalFetch; OutlineClient.resolveHost = originalResolve; });
+
+const originalResolve = OutlineClient.resolveHost;
+// No real DNS in tests: every storage host resolves to a public address unless a test says otherwise.
+beforeEach(() => { OutlineClient.resolveHost = async () => ['52.216.0.1']; });
 
 const client = () => new OutlineClient('tok', 'https://wiki.example.com');
 const path = (c: Call) => new URL(c.url).pathname;
@@ -50,6 +54,29 @@ describe('passage edit (findText)', () => {
       { editMode: update.body.editMode, findText: update.body.findText, text: update.body.text, append: update.body.append },
       { editMode: 'patch', findText: 'The **old** passage.', text: 'The new passage.', append: undefined },
     );
+  });
+
+  test('a successful patch echoed re-serialised (escapes, list markers) is verified, not mistaken for a wipe', async () => {
+    respond = (c) => path(c) === '/api/documents.info'
+      ? json({ data: { id: 'd1', text: original } })
+      : json({ data: { id: 'd1', text: '# Plan\n\nIntro line\\.\n\n* The new\\_passage.\n\nOutro.' } });
+    const doc = await performUpdateDocument(client(), 'd1', { findText: 'The **old** passage.', text: '- The new_passage.', append: false });
+    assert.equal(doc.passageEditVerified, true);
+    assert.equal(calls.filter((c) => path(c) === '/api/documents.update').length, 1);
+  });
+
+  test('re-reads when the answer carries no text, and reports null when that fails too', async () => {
+    let infos = 0;
+    respond = (c) => {
+      if (path(c) === '/api/documents.info') {
+        infos += 1;
+        return infos === 1 ? json({ data: { id: 'd1', text: original } }) : json({ error: 'boom' }, 500);
+      }
+      return json({ data: { id: 'd1' } });
+    };
+    const doc = await performUpdateDocument(client(), 'd1', { findText: 'The **old** passage.', text: 'x', append: false });
+    assert.equal(doc.passageEditVerified, null);
+    assert.equal(infos, 2);
   });
 
   test('refuses a passage that does not occur, writing nothing', async () => {
@@ -120,11 +147,21 @@ describe('uploadAttachment', () => {
     assert.equal((calls[1].init.headers as any)['x-amz-acl'], 'private');
   });
 
+  test('refuses a public-looking storage host that resolves to a private address', async () => {
+    OutlineClient.resolveHost = async () => ['169.254.169.254'];
+    respond = () => created({ mode: 'put', url: 'https://metadata.example.com/obj' });
+    await assert.rejects(
+      () => performUploadAttachment(client(), { fileName: 'n.txt', contentType: 'text/plain', textContent: 'hi' }),
+      /not reachable from here/,
+    );
+    assert.equal(calls.length, 1);
+  });
+
   test('refuses a storage URL on a private address', async () => {
     respond = () => created({ mode: 'put', url: 'https://10.0.0.5/obj' });
     await assert.rejects(
       () => performUploadAttachment(client(), { fileName: 'n.txt', contentType: 'text/plain', textContent: 'hi' }),
-      /must be public https/,
+      /not reachable from here/,
     );
     assert.equal(calls.length, 1);
   });
@@ -187,6 +224,15 @@ describe('revisions', () => {
     assert.match(d.text, /- h\n\+ H/);
     assert.match(d.text, /… \d unchanged line/);
     assert.equal(diffLines('same', 'same').text, 'No differences.');
+  });
+
+  test('a small edit in a very long document is diffed exactly, not summarised', () => {
+    const lines = Array.from({ length: 5000 }, (_, i) => `line ${i}`);
+    const changed = [...lines];
+    changed[2500] = 'edited';
+    const d = diffLines(lines.join('\n'), changed.join('\n'));
+    assert.equal(d.summarized, false);
+    assert.deepEqual([d.added, d.removed], [1, 1]);
   });
 
   test('compare refuses a revision from another document', async () => {
