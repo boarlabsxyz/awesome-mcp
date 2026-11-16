@@ -250,7 +250,7 @@ outlineServer.addTool({
 outlineServer.addTool({
   name: 'createDocument',
   annotations: { readOnlyHint: false },
-  description: 'Creates a new Outline document in a collection. Optionally publishes immediately, sets an icon and its colour, full width, nests under a parent, or starts from a template (templateId).',
+  description: 'Creates an Outline document in a collection: published or draft, nested, styled, or from a template (templateId).',
   parameters: z.object(createDocumentFields),
   execute: (args, { log, session }) =>
     withOutlineClient('Failed to create document', session, log, async (client) => {
@@ -264,8 +264,7 @@ outlineServer.addTool({
 outlineServer.addTool({
   name: 'updateDocument',
   annotations: { readOnlyHint: false },
-  description: 'Updates an Outline document. Replaces title/content unless append=true. To change one passage and keep the rest (and its formatting), '
-    + 'pass findText (the exact markdown to replace) with text (the replacement). Also sets icon colour, full width, or publishes a draft (publish: true).',
+  description: 'Updates an Outline document: replace or append content, edit one passage (findText + text), restyle, or publish a draft.',
   parameters: z.object({
     documentId: z.string().describe('The document ID to update.'),
     ...updateDocumentFields,
@@ -354,7 +353,7 @@ outlineServer.addTool({
 outlineServer.addTool({
   name: 'unpublishDocument',
   annotations: { readOnlyHint: false },
-  description: 'Returns a published Outline document to draft: it disappears from its collection for everyone else until published again (updateDocument with publish: true).',
+  description: 'Returns a published Outline document to draft, hiding it from its collection until it is published again.',
   parameters: z.object({
     documentId: z.string().describe('The document ID to unpublish.'),
     ...unpublishDocumentFields,
@@ -371,8 +370,7 @@ outlineServer.addTool({
 outlineServer.addTool({
   name: 'importHtmlDocument',
   annotations: { readOnlyHint: false },
-  description: 'Creates an Outline document from HTML using Outline\'s importer, which also copies remote and base64 images into the workspace. '
-    + 'Give collectionId or parentDocumentId. Up to 20 MB.',
+  description: 'Creates an Outline document from HTML with Outline\'s importer, which also copies its images into the workspace.',
   parameters: z.object(importHtmlDocumentFields),
   execute: (args, { log, session }) =>
     withOutlineClient('Failed to import document', session, log, async (client) => {
@@ -475,10 +473,9 @@ outlineServer.addTool({
 outlineServer.addTool({
   name: 'archiveCollection',
   annotations: { readOnlyHint: false },
-  description: 'Archives an Outline collection: it and every document in it disappear from the sidebar and search until restored with restoreCollection. '
-    + 'Nothing is deleted. Personal collections cannot be archived.',
+  description: 'Archives an Outline collection with its documents: hidden from sidebar and search, not deleted (undo: restoreCollection).',
   parameters: z.object({
-    collectionId: z.string().describe('The collection ID.'),
+    collectionId: z.string().describe('The collection ID. Personal collections cannot be archived.'),
     ...archiveCollectionFields,
   }),
   execute: (args, { log, session }) =>
@@ -599,7 +596,7 @@ outlineServer.addTool({
 outlineServer.addTool({
   name: 'addComment',
   annotations: { readOnlyHint: false },
-  description: 'Adds a comment on an Outline document, or replies to an existing comment. With anchorText it becomes an inline comment on that text.',
+  description: 'Comments on an Outline document or replies to a comment; with anchorText, comments inline on that text.',
   parameters: z.object({
     documentId: z.string().describe('The document to comment on.'),
     ...addCommentFields,
@@ -677,7 +674,7 @@ outlineServer.addTool({
 outlineServer.addTool({
   name: 'listUsers',
   annotations: { readOnlyHint: true },
-  description: 'Lists or searches people in the Outline workspace (name, role, last active; email only where this connection may see it). Paginated.',
+  description: 'Lists or searches people in the Outline workspace: name, role, last active, and email where this connection may see it.',
   parameters: z.object({
     query: z.string().optional().describe('Search by name or email.'),
     filter: z.enum(['all', 'active', 'invited', 'suspended']).optional().describe('Status filter (default: active members).'),
@@ -711,7 +708,7 @@ outlineServer.addTool({
 outlineServer.addTool({
   name: 'listTemplates',
   annotations: { readOnlyHint: true },
-  description: 'Lists the Outline templates this connection can use (workspace-wide and per collection). Create a document from one with createDocument templateId. Needs a recent Outline.',
+  description: 'Lists the Outline templates this connection can use, for createDocument templateId. Needs a recent Outline.',
   parameters: z.object({
     query: z.string().optional().describe('Filter by title.'),
     collectionId: z.string().optional().describe('Only templates of this collection.'),
@@ -776,8 +773,7 @@ outlineServer.addTool({
 outlineServer.addTool({
   name: 'compareDocumentRevisions',
   annotations: { readOnlyHint: true },
-  description: 'Shows what changed in an Outline document between a saved version and a later one (default: the current document), with who saved each. '
-    + 'Line diff: "-" removed, "+" added.',
+  description: 'Line diff of an Outline document between a saved version and a later one or the current text, with who saved each.',
   parameters: z.object({
     documentId: z.string().describe('The document ID.'),
     fromRevisionId: z.string().describe('The older version (from listDocumentRevisions).'),
@@ -829,8 +825,7 @@ outlineServer.addTool({
 outlineServer.addTool({
   name: 'uploadAttachment',
   annotations: { readOnlyHint: false },
-  description: 'Uploads a file (base64 bytes or text) to Outline and returns its URL plus a markdown snippet to put into a document with updateDocument. '
-    + 'It is not inserted automatically. Up to 20 MB, or less if the workspace limit is lower.',
+  description: 'Uploads a file to Outline and returns its URL and the markdown to insert with updateDocument (not inserted automatically).',
   parameters: z.object(uploadAttachmentFields),
   execute: (args, { log, session }) =>
     withOutlineClient('Failed to upload attachment', session, log, async (client) => {

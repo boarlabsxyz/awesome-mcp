@@ -298,41 +298,41 @@ Source: `src/outline/server.ts` — 43 tools.
 | `getDocumentBacklinks` | Lists all Outline documents that link to a given document. | `GET /api/v1/outline/documents/{documentId}/backlinks` |
 | `listArchivedDocuments` | Lists all archived Outline documents. | `GET /api/v1/outline/documents/archived` |
 | `listTrash` | Lists all Outline documents currently in the trash. | `GET /api/v1/outline/documents/trash` |
-| `createDocument` | Creates a new Outline document in a collection. Optionally publishes immediately, sets an icon and its colour, full width, nests under a parent, or starts from a template (templateId). | `POST /api/v1/outline/documents` |
-| `updateDocument` | Updates an Outline document. Replaces title/content unless append=true. To change one passage and keep the rest (and its formatting), pass findText (the exact markdown to replace) with text (the replacement). Also sets icon colour, full width, or publishes a draft (publish: true). | `POST /api/v1/outline/documents/{documentId}` |
+| `createDocument` | Creates an Outline document in a collection: published or draft, nested, styled, or from a template (templateId). | `POST /api/v1/outline/documents` |
+| `updateDocument` | Updates an Outline document: replace or append content, edit one passage (findText + text), restyle, or publish a draft. | `POST /api/v1/outline/documents/{documentId}` |
 | `moveDocument` | Moves an Outline document to a different collection and/or under a different parent. Must specify at least one destination. | `POST /api/v1/outline/documents/{documentId}/move` |
 | `archiveDocument` | Archives an Outline document (removes from collections but keeps searchable). Reversible via unarchiveDocument. | `POST /api/v1/outline/documents/{documentId}/archive` |
 | `unarchiveDocument` | Unarchives a previously archived Outline document. | `POST /api/v1/outline/documents/{documentId}/unarchive` |
 | `restoreDocument` | Restores an Outline document from the trash back to active status. | `POST /api/v1/outline/documents/{documentId}/restore` |
-| `unpublishDocument` | Returns a published Outline document to draft: it disappears from its collection for everyone else until published again (updateDocument with publish: true). | `POST /api/v1/outline/documents/{documentId}/unpublish` |
-| `importHtmlDocument` | Creates an Outline document from HTML using Outline's importer, which also copies remote and base64 images into the workspace. Give collectionId or parentDocumentId. Up to 20 MB. | `POST /api/v1/outline/documents/import` |
+| `unpublishDocument` | Returns a published Outline document to draft, hiding it from its collection until it is published again. | `POST /api/v1/outline/documents/{documentId}/unpublish` |
+| `importHtmlDocument` | Creates an Outline document from HTML with Outline's importer, which also copies its images into the workspace. | `POST /api/v1/outline/documents/import` |
 | `deleteDocument` | Moves an Outline document to trash. Set permanent=true to skip trash and delete immediately (irreversible). | — |
 | `listCollections` | Lists all Outline collections in the workspace. | `GET /api/v1/outline/collections` |
 | `getCollectionStructure` | Returns the hierarchical document tree for an Outline collection. | `GET /api/v1/outline/collections/{collectionId}/structure` |
 | `createCollection` | Creates a new Outline collection. | `POST /api/v1/outline/collections` |
 | `updateCollection` | Updates an Outline collection's name, description, color, or icon. Provide at least one field. | `POST /api/v1/outline/collections/{collectionId}` |
-| `archiveCollection` | Archives an Outline collection: it and every document in it disappear from the sidebar and search until restored with restoreCollection. Nothing is deleted. Personal collections cannot be archived. | `POST /api/v1/outline/collections/{collectionId}/archive` |
+| `archiveCollection` | Archives an Outline collection with its documents: hidden from sidebar and search, not deleted (undo: restoreCollection). | `POST /api/v1/outline/collections/{collectionId}/archive` |
 | `restoreCollection` | Restores an archived Outline collection and its documents to the sidebar and search. | `POST /api/v1/outline/collections/{collectionId}/restore` |
 | `deleteCollection` | Permanently deletes an Outline collection AND all documents in it. This cannot be undone. | — |
 | `exportCollection` | Starts an async export of an Outline collection. Returns a file operation ID and status. | `POST /api/v1/outline/collections/{collectionId}/export` |
 | `exportAllCollections` | Starts an async export of the entire Outline workspace. Returns a file operation ID and status. | `POST /api/v1/outline/exports` |
 | `listDocumentComments` | Lists comments on an Outline document (paginated). | `GET /api/v1/outline/documents/{documentId}/comments` |
 | `getComment` | Retrieves a single Outline comment by ID. | `GET /api/v1/outline/comments/{commentId}` |
-| `addComment` | Adds a comment on an Outline document, or replies to an existing comment. With anchorText it becomes an inline comment on that text. | `POST /api/v1/outline/documents/{documentId}/comments` |
+| `addComment` | Comments on an Outline document or replies to a comment; with anchorText, comments inline on that text. | `POST /api/v1/outline/documents/{documentId}/comments` |
 | `updateComment` | Replaces the text of an Outline comment. Only its author (or an admin) can edit it. | `POST /api/v1/outline/comments/{commentId}/update` |
 | `resolveComment` | Marks an Outline comment thread resolved (top-level comments only). Reopen it with reopenComment. | `POST /api/v1/outline/comments/{commentId}/resolve` |
 | `reopenComment` | Reopens a resolved Outline comment thread. | `POST /api/v1/outline/comments/{commentId}/reopen` |
 | `deleteComment` | Permanently deletes an Outline comment, and with a top-level comment its replies. Cannot be undone. Only the author (or an admin) can delete. | — |
-| `listUsers` | Lists or searches people in the Outline workspace (name, role, last active; email only where this connection may see it). Paginated. | `GET /api/v1/outline/users` |
+| `listUsers` | Lists or searches people in the Outline workspace: name, role, last active, and email where this connection may see it. | `GET /api/v1/outline/users` |
 | `getUser` | Reads one Outline user's profile by ID. | `GET /api/v1/outline/users/{userId}` |
-| `listTemplates` | Lists the Outline templates this connection can use (workspace-wide and per collection). Create a document from one with createDocument templateId. Needs a recent Outline. | `GET /api/v1/outline/templates` |
+| `listTemplates` | Lists the Outline templates this connection can use, for createDocument templateId. Needs a recent Outline. | `GET /api/v1/outline/templates` |
 | `getTemplate` | Reads one Outline template with its content. | `GET /api/v1/outline/templates/{templateId}` |
 | `listDocumentRevisions` | Lists an Outline document's history, newest first: when each version was saved and by whom. Paginated. | `GET /api/v1/outline/documents/{documentId}/revisions` |
 | `getDocumentRevision` | Reads one saved version of an Outline document: its content, time and author. | `GET /api/v1/outline/revisions/{revisionId}` |
-| `compareDocumentRevisions` | Shows what changed in an Outline document between a saved version and a later one (default: the current document), with who saved each. Line diff: "-" removed, "+" added. | `GET /api/v1/outline/documents/{documentId}/compare?from={revisionId}` |
+| `compareDocumentRevisions` | Line diff of an Outline document between a saved version and a later one or the current text, with who saved each. | `GET /api/v1/outline/documents/{documentId}/compare?from={revisionId}` |
 | `listDocumentAttachments` | Lists attachment IDs referenced in an Outline document by parsing its markdown for /api/attachments.redirect links. | `GET /api/v1/outline/documents/{documentId}/attachments` |
 | `getAttachmentUrl` | Resolves an Outline attachment ID to a signed download URL by following the /api/attachments.redirect redirect. | `GET /api/v1/outline/attachments/{attachmentId}/url` |
-| `uploadAttachment` | Uploads a file (base64 bytes or text) to Outline and returns its URL plus a markdown snippet to put into a document with updateDocument. It is not inserted automatically. Up to 20 MB, or less if the workspace limit is lower. | `POST /api/v1/outline/attachments` |
+| `uploadAttachment` | Uploads a file to Outline and returns its URL and the markdown to insert with updateDocument (not inserted automatically). | `POST /api/v1/outline/attachments` |
 
 ## PeopleForce
 

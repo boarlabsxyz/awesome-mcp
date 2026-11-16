@@ -167,11 +167,23 @@ function words(s: string): string[] {
   return s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 }
 
-/** Whether the text before and after the passage (a few words each side) is still in `body`. */
+const isWordChar = (c: string | undefined): boolean => c !== undefined && /[\p{L}\p{N}]/u.test(c);
+
+/**
+ * Whether the text before and after the passage (a few words each side) is
+ * still in `body`. A word the passage boundary cuts through is left out: it
+ * fuses with the replacement (`FY2025` with findText `2025` becomes `FY2026`),
+ * so it cannot survive as a word of its own even when the edit succeeded.
+ */
 function surroundingsSurvived(original: string, findText: string, body: string): boolean {
   const idx = original.indexOf(findText);
-  const head = words(original.slice(0, idx)).slice(-6).join(' ');
-  const tail = words(original.slice(idx + findText.length)).slice(0, 6).join(' ');
+  const end = idx + findText.length;
+  const headWords = words(original.slice(0, idx));
+  const tailWords = words(original.slice(end));
+  if (isWordChar(original[idx - 1])) headWords.pop();
+  if (isWordChar(original[end])) tailWords.shift();
+  const head = headWords.slice(-6).join(' ');
+  const tail = tailWords.slice(0, 6).join(' ');
   const now = ` ${words(body).join(' ')} `;
   return (!head || now.includes(` ${head} `)) && (!tail || now.includes(` ${tail} `));
 }
@@ -230,10 +242,13 @@ function decodeContent(args: { contentBase64?: string; textContent?: string }): 
   if ((args.contentBase64 === undefined) === (args.textContent === undefined)) {
     throw callerError('Give exactly one of contentBase64 or textContent.');
   }
-  if (args.contentBase64 !== undefined && !/^[A-Za-z0-9+/\s]*={0,2}\s*$/.test(args.contentBase64)) {
+  // Whitespace goes first, in one linear pass: a pattern allowing it both inside
+  // the class and after the padding backtracks quadratically on a long run of it.
+  const base64 = args.contentBase64?.replaceAll(/\s+/g, '');
+  if (base64 !== undefined && !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
     throw callerError('contentBase64 is not valid base64.');
   }
-  const bytes = args.contentBase64 !== undefined ? Buffer.from(args.contentBase64, 'base64') : Buffer.from(args.textContent!, 'utf8');
+  const bytes = base64 !== undefined ? Buffer.from(base64, 'base64') : Buffer.from(args.textContent!, 'utf8');
   if (bytes.length === 0) throw callerError('The content is empty.');
   if (bytes.length > MAX_UPLOAD_BYTES) throw callerError(`The content is ${bytes.length} bytes; the limit here is ${MAX_UPLOAD_BYTES} (20 MB).`);
   return bytes;
@@ -241,7 +256,7 @@ function decodeContent(args: { contentBase64?: string; textContent?: string }): 
 
 /** Fields of an HTML import. See createDocumentFields. */
 export const importHtmlDocumentFields = {
-  html: z.string().min(1).describe('The HTML to import. Remote and base64 images in it are copied into Outline as attachments.'),
+  html: z.string().min(1).describe('The HTML to import, up to 20 MB. Remote and base64 images in it are copied into Outline as attachments.'),
   title: z.string().min(1).optional().describe('File name used for the import; Outline takes the title from the HTML <title> or first heading, else this.'),
   collectionId: z.string().optional().describe('Collection to import into. Give this or parentDocumentId.'),
   parentDocumentId: z.string().optional().describe('Import as a child of this document. Give this or collectionId.'),
@@ -272,7 +287,7 @@ export async function performImportHtmlDocument(
 export const uploadAttachmentFields = {
   fileName: z.string().min(1).describe('File name, e.g. "diagram.png".'),
   contentType: z.string().min(1).describe('MIME type, e.g. "image/png", "application/pdf".'),
-  contentBase64: z.string().min(1).optional().describe('The file bytes, base64-encoded. Give this or textContent.'),
+  contentBase64: z.string().min(1).optional().describe('The file bytes, base64-encoded. Give this or textContent. Up to 20 MB decoded, less if the workspace limit is lower.'),
   textContent: z.string().optional().describe('The file as UTF-8 text. Give this or contentBase64.'),
   documentId: z.string().optional().describe('Document the attachment belongs to (needs edit access to it). It is not inserted: put the returned markdown into the document with updateDocument.'),
 } as const;

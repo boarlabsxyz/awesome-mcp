@@ -1,6 +1,7 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { OutlineClient, diffLines } from '../../outline/apiHelpers.js';
+import { PRIVATE_ADDRESS } from '../../util/pinnedHttps.js';
 import {
   performAddComment,
   performCommentResolution,
@@ -32,11 +33,12 @@ beforeEach(() => {
     return respond(call);
   }) as typeof globalThis.fetch;
 });
-afterEach(() => { globalThis.fetch = originalFetch; OutlineClient.resolveHost = originalResolve; });
+afterEach(() => { globalThis.fetch = originalFetch; OutlineClient.storageRequest = originalStorageRequest; });
 
-const originalResolve = OutlineClient.resolveHost;
-// No real DNS in tests: every storage host resolves to a public address unless a test says otherwise.
-beforeEach(() => { OutlineClient.resolveHost = async () => ['52.216.0.1']; });
+const originalStorageRequest = OutlineClient.storageRequest;
+// No real network in tests: external storage goes through the same fetch stub. The
+// pinned connection itself is tested in util/pinnedHttps.test.ts.
+beforeEach(() => { OutlineClient.storageRequest = (url, init) => globalThis.fetch(url.toString(), init); });
 
 const client = () => new OutlineClient('tok', 'https://wiki.example.com');
 const path = (c: Call) => new URL(c.url).pathname;
@@ -77,6 +79,34 @@ describe('passage edit (findText)', () => {
     const doc = await performUpdateDocument(client(), 'd1', { findText: 'The **old** passage.', text: 'x', append: false });
     assert.equal(doc.passageEditVerified, null);
     assert.equal(infos, 2);
+  });
+
+  test('a passage that starts or ends inside a word is verified, not mistaken for a wipe', async () => {
+    const doc0 = 'Budget for FY2025 planning cycle.';
+    for (const [findText, text, after] of [
+      ['2025', '2026', 'Budget for FY2026 planning cycle.'],
+      ['FY20', 'FY30', 'Budget for FY3025 planning cycle.'],
+      ['plan', 'replan', 'Budget for FY2025 replanning cycle.'],
+    ]) {
+      calls = [];
+      respond = (c) => path(c) === '/api/documents.info'
+        ? json({ data: { id: 'd1', text: doc0 } })
+        : json({ data: { id: 'd1', text: after } });
+      const doc = await performUpdateDocument(client(), 'd1', { findText, text, append: false });
+      assert.equal(doc.passageEditVerified, true, findText);
+      assert.equal(calls.filter((c) => path(c) === '/api/documents.update').length, 1, findText);
+    }
+  });
+
+  test('a mid-word passage still catches an Outline that replaced the whole body', async () => {
+    const doc0 = 'Budget for FY2025 planning cycle.';
+    respond = (c) => path(c) === '/api/documents.info'
+      ? json({ data: { id: 'd1', text: doc0 } })
+      : json({ data: { id: 'd1', text: c.body.text === doc0 ? doc0 : '2026' } });
+    await assert.rejects(
+      () => performUpdateDocument(client(), 'd1', { findText: '2025', text: '2026', append: false }),
+      (e: any) => e.status === 502 && /original text was written back/.test(e.message),
+    );
   });
 
   test('refuses a passage that does not occur, writing nothing', async () => {
@@ -121,7 +151,7 @@ describe('uploadAttachment', () => {
       : new Response(null, { status: 204 });
     const r = await performUploadAttachment(client(), { fileName: 'a.png', contentType: 'image/png', contentBase64: 'iVBORw0KGgo=' });
     const upload = calls[1];
-    assert.equal(upload.url, 'https://bucket.s3.amazonaws.com');
+    assert.equal(upload.url, 'https://bucket.s3.amazonaws.com/');
     assert.equal((upload.init.headers as any).Authorization, undefined);
     assert.ok(upload.body instanceof FormData);
     assert.equal((upload.body as FormData).get('key'), 'k1');
@@ -147,14 +177,33 @@ describe('uploadAttachment', () => {
     assert.equal((calls[1].init.headers as any)['x-amz-acl'], 'private');
   });
 
-  test('refuses a public-looking storage host that resolves to a private address', async () => {
-    OutlineClient.resolveHost = async () => ['169.254.169.254'];
+  test('refuses a public-looking storage host that resolves to a private address, as 502', async () => {
+    OutlineClient.storageRequest = async () => { throw Object.assign(new Error('private'), { code: PRIVATE_ADDRESS }); };
     respond = () => created({ mode: 'put', url: 'https://metadata.example.com/obj' });
     await assert.rejects(
       () => performUploadAttachment(client(), { fileName: 'n.txt', contentType: 'text/plain', textContent: 'hi' }),
-      /not reachable from here/,
+      (e: any) => e.status === 502 && /not reachable from here/.test(e.message),
     );
     assert.equal(calls.length, 1);
+  });
+
+  test('a transport failure is a 502 naming the storage, not a bare "fetch failed"', async () => {
+    OutlineClient.storageRequest = async () => { throw new TypeError('fetch failed'); };
+    respond = () => created({ mode: 'put', url: 'https://storage.example.net/obj' });
+    await assert.rejects(
+      () => performUploadAttachment(client(), { fileName: 'n.txt', contentType: 'text/plain', textContent: 'hi' }),
+      (e: any) => e.status === 502 && /Could not reach Outline's file storage \(https:\/\/storage\.example\.net\)/.test(e.message),
+    );
+  });
+
+  test('a local-storage redirect (refused by fetch) is a 502 too', async () => {
+    respond = (c) => path(c) === '/api/attachments.create'
+      ? created({ uploadUrl: '/api/files.create' })
+      : Promise.reject(new TypeError('fetch failed: redirect mode is set to error'));
+    await assert.rejects(
+      () => performUploadAttachment(client(), { fileName: 'n.txt', contentType: 'text/plain', textContent: 'hi' }),
+      (e: any) => e.status === 502 && /Could not reach Outline \(https:\/\/wiki\.example\.com\)/.test(e.message),
+    );
   });
 
   test('refuses a storage URL on a private address', async () => {
@@ -171,6 +220,20 @@ describe('uploadAttachment', () => {
     await assert.rejects(() => performUploadAttachment(client(), { fileName: 'a', contentType: 'x/y' }), /exactly one/);
     await assert.rejects(() => performUploadAttachment(client(), { fileName: 'a', contentType: 'x/y', contentBase64: 'no*pe' }), /not valid base64/);
     assert.equal(calls.length, 0);
+  });
+
+  test('base64 with line breaks is accepted, and a long whitespace run before a bad character is refused in linear time', async () => {
+    respond = (c) => path(c) === '/api/attachments.create'
+      ? created({ mode: 'put', url: 'https://storage.example.net/obj' })
+      : new Response('', { status: 200 });
+    await performUploadAttachment(client(), { fileName: 'a.png', contentType: 'image/png', contentBase64: 'iVBO\r\nRw0K\nGgo=\n' });
+    assert.equal(calls[0].body.size, 8);
+    const started = Date.now();
+    await assert.rejects(
+      () => performUploadAttachment(client(), { fileName: 'a', contentType: 'x/y', contentBase64: `A${' '.repeat(200_000)}!` }),
+      /not valid base64/,
+    );
+    assert.ok(Date.now() - started < 1000, `took ${Date.now() - started} ms`);
   });
 });
 

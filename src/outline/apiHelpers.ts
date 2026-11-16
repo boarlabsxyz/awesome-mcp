@@ -4,8 +4,8 @@
 
 import { UserError } from 'fastmcp';
 import { UserSession } from '../userSession.js';
-import { lookup } from 'node:dns/promises';
 import { isPrivateHost } from '../util/baseUrlGuard.js';
+import { PRIVATE_ADDRESS, pinnedHttpsRequest } from '../util/pinnedHttps.js';
 import { refreshOutlineToken } from './oauthCallback.js';
 
 /**
@@ -132,10 +132,14 @@ export type StatusFilter = 'draft' | 'archived' | 'published';
 export type DateFilter = 'day' | 'week' | 'month' | 'year';
 export type ExportFormat = 'outline-markdown' | 'json' | 'html';
 
+/** An upload that did not reach storage: Outline's side, not the caller's, so 502 rather than the REST plane's default 500. */
+function storageError(message: string): Error {
+  return Object.assign(new Error(message), { status: 502 });
+}
+
 export class OutlineClient {
-  /** Resolves a storage hostname to its addresses. Replaceable in tests, which must not hit DNS. */
-  static resolveHost = async (hostname: string): Promise<string[]> =>
-    (await lookup(hostname, { all: true })).map((a) => a.address);
+  /** Sends attachment bytes to external storage, connecting only to public addresses. Replaceable in tests, which must not hit the network. */
+  static storageRequest = pinnedHttpsRequest;
 
   /** Base URL of the Outline instance this client talks to (no trailing slash). */
   public readonly baseUrl: string;
@@ -527,28 +531,22 @@ export class OutlineClient {
    * absolute one is a presigned cloud URL and must NOT get it. An absolute URL
    * pointing at a private address is refused: the address comes from the
    * (self-hosted) server's answer, and following it blindly would let it aim our
-   * egress at internal hosts.
+   * egress at internal hosts. The check runs in the connection's own DNS lookup
+   * (pinnedHttpsRequest), so a name cannot answer public for the check and
+   * private for the connection. Every failure carries status 502 (413 for a
+   * size refusal), so the REST plane does not answer 500.
    */
   async uploadAttachmentBytes(upload: OutlineAttachmentUpload, bytes: Uint8Array, contentType: string, fileName: string): Promise<void> {
     const mode = upload.mode ?? (upload.url && !upload.uploadUrl ? 'put' : 'post');
     const target = mode === 'put' ? upload.url : upload.uploadUrl;
-    if (!target) throw new Error('Outline returned no upload URL for the attachment.');
+    if (!target) throw storageError('Outline returned no upload URL for the attachment.');
     const local = target.startsWith('/');
     const url = local ? `${this.baseUrl}${target}` : target;
-    if (!local) {
-      let parsed: URL;
-      try { parsed = new URL(url); } catch { throw new Error(`Outline returned an upload URL that is not a URL: ${target.slice(0, 100)}`); }
-      // The name is resolved too: a public-looking hostname can point at an
-      // internal address. (Rebinding between this check and the fetch is not
-      // covered; see util/baseUrlGuard.ts.)
-      const addresses = parsed.protocol === 'https:' && !isPrivateHost(parsed.hostname)
-        ? await OutlineClient.resolveHost(parsed.hostname).catch(() => [] as string[])
-        : [];
-      if (addresses.length === 0 || addresses.some((ip) => isPrivateHost(ip))) {
-        throw new Error(`Outline's file storage (${parsed.origin}) is not reachable from here: uploads need storage on a public https address. `
-          + 'A self-hosted Outline with private storage (e.g. MinIO on an internal network) cannot take uploads through this connector.');
-      }
-    }
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { throw storageError(`Outline returned an upload URL that is not a URL: ${target.slice(0, 100)}`); }
+    const unreachable = () => storageError(`Outline's file storage (${parsed.origin}) is not reachable from here: uploads need storage on a public https address. `
+      + 'A self-hosted Outline with private storage (e.g. MinIO on an internal network) cannot take uploads through this connector.');
+    if (!local && (parsed.protocol !== 'https:' || isPrivateHost(parsed.hostname))) throw unreachable();
     const auth: Record<string, string> = local ? { Authorization: `Bearer ${this.token}` } : {};
     let body: BodyInit;
     let headers: Record<string, string>;
@@ -562,10 +560,20 @@ export class OutlineClient {
       body = form;
       headers = { ...auth };
     }
+    const method = mode === 'put' ? 'PUT' : 'POST';
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120_000);
     try {
-      const res = await fetch(url, { method: mode === 'put' ? 'PUT' : 'POST', headers, body, redirect: 'error', signal: controller.signal });
+      let res: Response;
+      try {
+        res = local
+          ? await fetch(url, { method, headers, body, redirect: 'error', signal: controller.signal })
+          : await OutlineClient.storageRequest(parsed, { method, headers, body, signal: controller.signal });
+      } catch (err: any) {
+        if (err?.code === PRIVATE_ADDRESS) throw unreachable();
+        if (controller.signal.aborted) throw storageError(`The attachment upload to ${parsed.origin} did not finish within 120 s.`);
+        throw storageError(`Could not reach ${local ? 'Outline' : "Outline's file storage"} (${parsed.origin}) to upload the attachment: ${err?.message || err}`);
+      }
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         const err: any = new Error(`Attachment upload failed: ${res.status} ${text.slice(0, 300)}`);
