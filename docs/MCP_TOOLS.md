@@ -10,10 +10,10 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Docs](#google-docs) (45)
 - [Google Sheets](#google-sheets) (14)
 - [Google Calendar](#google-calendar) (6)
-- [Google Drive](#google-drive) (18)
+- [Google Drive](#google-drive) (19)
 - [Gmail](#gmail) (18)
 - [Google Slides](#google-slides) (6)
-- [ClickUp](#clickup) (48)
+- [ClickUp](#clickup) (49)
 - [Slack (bot)](#slack-bot-) (9)
 - [Slack (user)](#slack-user-) (17)
 - [Outline](#outline) (43)
@@ -109,7 +109,7 @@ Source: `src/google-sheets/server.ts` — 14 tools.
 | `updateCellByFieldName` | Find a row by searching a column for a value, then update a specific field (identified by header name) in that row. Assumes row 1 contains the header names. | — |
 | `batchUpdateSpreadsheet` | Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, alignment and text wrapping, data validation (dropdowns, checkboxes, number and formula rules), native charts (addChart returns the chart ID), column/row sizing, tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet), and grid growth (appendDimension adds rows/columns at the end, insertDimension makes room in the middle). Use appendDimension before a writeSpreadsheet that exceeds the tab's current row count — writeSpreadsheet does not grow the grid. A tab added by addSheet in THIS batch cannot be targeted by a later operation in the same batch (it has no sheetId yet), so size it with addSheet rowCount/columnCount instead. | `POST /api/v1/sheets/{spreadsheetId}/batchUpdate` |
 | `deleteSpreadsheetRowsOrColumns` | Deletes whole rows or columns from a tab, with their content; the rest shift up or left. Not reversible through the API. | — |
-| `inspectSpreadsheetCells` | Reads cells without changing them: formula text, raw and displayed values, formatting, hyperlinks, notes and validation rules. | `GET /api/v1/sheets/{spreadsheetId}/cells?range={range}` |
+| `inspectSpreadsheetCells` | Reads cells without changing them: formula text, raw and displayed values, formatting (format = as set on the cell; effectiveFormat = as displayed, including conditional formatting and defaults), hyperlinks, notes and validation rules. | `GET /api/v1/sheets/{spreadsheetId}/cells?range={range}` |
 
 ## Google Calendar
 
@@ -126,7 +126,7 @@ Source: `src/google-calendar/server.ts` — 6 tools.
 
 ## Google Drive
 
-Source: `src/google-drive/server.ts` — 18 tools.
+Source: `src/google-drive/server.ts` — 19 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -148,6 +148,7 @@ Source: `src/google-drive/server.ts` — 18 tools.
 | `searchDriveFiles` | Searches all of Drive (any file type, any folder) by name or content, or lists recently modified files when no query is given. Paginated. | `GET /api/v1/drive/files?q={query}` |
 | `listDriveChanges` | Follows the Drive change feed: what was created, edited, trashed or removed since a token. First call (no pageToken) returns the token to poll with. | `GET /api/v1/drive/changes` |
 | `uploadDriveFile` | Uploads a file (base64 bytes or text) to Drive, optionally converting it into a Google Doc, Sheet or Slides. Up to 20 MB. | `POST /api/v1/drive/files` |
+| `createDriveUploadSession` | For files too big for uploadDriveFile (over 20 MB): opens a Drive resumable upload and returns its upload URL. A client with a shell then PUTs the file to that URL (curl command included), straight to Google; the response to the PUT is the new file. Treat the URL as a secret: anyone holding it can upload that one file into this Drive for about a week. Nothing is created until the bytes arrive. convertTo is checked against what Drive can import. | `POST /api/v1/drive/upload-sessions` |
 
 ## Gmail
 
@@ -189,7 +190,7 @@ Source: `src/google-slides/server.ts` — 6 tools.
 
 ## ClickUp
 
-Source: `src/clickup/server.ts` — 48 tools.
+Source: `src/clickup/server.ts` — 49 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -233,6 +234,7 @@ Source: `src/clickup/server.ts` — 48 tools.
 | `searchDocs` | Find ClickUp Docs by name, newest first. Pages through the entire workspace, so a recently-created doc is found regardless of how many docs exist. Matching is case-insensitive and token-based: every word in the query must appear in the title, in any order, so "AWESOME Sync" matches "[AWESOME] Sync - 08/15/2026". Omit query to list every doc newest-first. Always reports how many docs were scanned, so an empty result means "not there" rather than "did not look". | `GET /api/v1/clickup/workspaces/{workspaceId}/docs/search` |
 | `createDoc` | Create a new ClickUp Doc in a workspace. Optionally place it inside a Space, Folder, or List by providing parent ID and type. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs` |
 | `getPage` | Get a specific page from a ClickUp Doc, including its full content in markdown. | `GET /api/v1/clickup/docs/{docId}/pages/{pageId}?workspaceId={workspaceId}` |
+| `getAttachmentInfo` | Report the name, type and size of a non-public ClickUp attachment URL (https://t<workspaceId>.p.clickup-attachments.com/…) and a curl to download it. | `GET /api/v1/clickup/workspaces/{workspaceId}/attachments?url={attachmentUrl}` |
 | `createPage` | Create a new page in a ClickUp Doc. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages` |
 | `editPage` | Edit a page in a ClickUp Doc. Can replace, append, or prepend content. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages/{pageId}` |
 | `insertImageIntoPage` | Add an image to a ClickUp Doc page. Provide the image as EXACTLY ONE of imageUrl (a public http(s) URL — strongly preferred) or imageBase64 (base64 bytes, for SMALL images only — the payload consumes the calling model context, so use imageUrl whenever a public URL exists). The image is re-hosted (recompressed to WebP) and embedded as markdown (append by default). ClickUp has no image-upload API for docs, so the image is stored and served by this server — requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL. If imageUrl is already on this server, re-hosting is skipped automatically; pass skipRehost:true to force embedding the given URL as-is. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages/{pageId}/images` |
@@ -666,4 +668,4 @@ Source: `src/sandbox/server.ts` — 6 tools.
 
 ---
 
-**Grand total: 481 tools across 22 sections.**
+**Grand total: 483 tools across 22 sections.**

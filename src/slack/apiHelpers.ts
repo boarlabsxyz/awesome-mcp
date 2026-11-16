@@ -749,6 +749,16 @@ export class SlackClient {
     });
   }
 
+  /** Renames a list, replaces its description, or switches todo mode. Answers only {ok}. */
+  async slackListsUpdate(listId: string, args: { name?: string; description?: string; todoMode?: boolean }): Promise<{ ok: boolean }> {
+    return this.request('slackLists.update', {
+      list_id: listId,
+      ...(args.name !== undefined ? { name: args.name } : {}),
+      ...(args.description !== undefined ? { description_blocks: JSON.stringify(plainRichText(args.description)) } : {}),
+      ...(args.todoMode !== undefined ? { todo_mode: args.todoMode } : {}),
+    });
+  }
+
   async slackListsItemsList(listId: string, options: { cursor?: string; limit?: number; includeList?: boolean; archived?: boolean }): Promise<{
     items: Array<Record<string, any>>; list?: Record<string, any>; response_metadata?: { next_cursor?: string };
   }> {

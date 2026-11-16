@@ -56,6 +56,7 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/clickup/docs/doc-123/pages/page-123?workspaceId=w-1',
   '/api/v1/clickup/workspaces/w-1/docs',
   '/api/v1/clickup/workspaces/w-1/docs/search?query=sync',
+  '/api/v1/clickup/workspaces/90151491867/attachments?url=https%3A%2F%2Ft90151491867.p.clickup-attachments.com%2Ft90151491867%2Fa%2Fb.mp4',
   '/api/v1/slack/channels',
   '/api/v1/slack/channels/C123/messages',
   '/api/v1/slack/channels/C123/threads/1234.5678',
@@ -207,6 +208,7 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
 const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   // Drive upload. '/api/v1/drive/files' is in both arrays: GET searches, POST uploads.
   '/api/v1/drive/files',
+  '/api/v1/drive/upload-sessions',
   // Storage. /find is a READ served over POST (the where conditions).
   '/api/v1/storage/collections/people/find',
   '/api/v1/storage/collections/people/records',
@@ -251,6 +253,7 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/slack/canvases',
   '/api/v1/slack/canvases/F123/edit',
   '/api/v1/slack/lists',
+  '/api/v1/slack/lists/F123/update',
   '/api/v1/slack/lists/F123/items',
   '/api/v1/slack/lists/F123/items/Rec123/update',
   // Redmine

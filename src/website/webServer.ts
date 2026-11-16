@@ -5925,6 +5925,23 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // POST /api/v1/drive/upload-sessions - Open a resumable upload for a large file
+  app.post('/api/v1/drive/upload-sessions', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { createDriveUploadSessionSchema, performCreateDriveUploadSession } = await import('../google-drive/filesOps.js');
+      const parsed = createDriveUploadSessionSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      res.status(201).json(await performCreateDriveUploadSession(req.userSession!.googleDrive, parsed.data));
+    } catch (err: any) {
+      const mapped = (await import('../google-drive/filesOps.js')).driveRestErrorResponse(err);
+      if (mapped) { res.status(mapped.status).json(mapped.body); return; }
+      sendUpstreamError(res, err, { notFound: 'Parent folder not found', fallback: 'Failed to open upload session' });
+    }
+  });
+
   // GET /api/v1/drive/files/:fileId - Get file info
   app.get('/api/v1/drive/files/:fileId', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
@@ -6866,6 +6883,80 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // GET /api/v1/clickup/workspaces/:workspaceId/attachments?url= - Download a
+  // file ClickUp hosts on its attachments CDN (a recording linked from a Doc).
+  // Streams the bytes and honours Range. The URL is fetched BY THIS SERVER with
+  // the connection's token, so only this workspace's attachments host is
+  // accepted (src/clickup/attachments.ts).
+  app.get('/api/v1/clickup/workspaces/:workspaceId/attachments', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    const controller = new AbortController();
+    // A client that hangs up mid-recording must stop the upstream download too.
+    res.on('close', () => { if (!res.writableFinished) controller.abort(); });
+    try {
+      const workspaceId = req.params.workspaceId as string;
+      const rawUrl = qstr(req.query.url);
+      if (!rawUrl) {
+        res.status(400).json({ error: 'Query param `url` is required: the attachment URL as it appears in a doc or task.' });
+        return;
+      }
+      const range = typeof req.headers.range === 'string' ? req.headers.range : undefined;
+      const {
+        AttachmentUrlError, attachmentFileName, contentDisposition, isForwardableRange,
+        openAttachment, parseAttachmentUrl, workspaceIsVisible,
+      } = await import('../clickup/attachments.js');
+      let url: URL;
+      try {
+        url = parseAttachmentUrl(rawUrl, workspaceId);
+      } catch (err) {
+        if (err instanceof AttachmentUrlError) { res.status(400).json({ error: err.message }); return; }
+        throw err;
+      }
+      if (range !== undefined && !isForwardableRange(range)) {
+        res.status(400).json({ error: `Unsupported Range header "${range}"; only bytes=start-end ranges are forwarded.` });
+        return;
+      }
+
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const token = req.userSession!.clickUpAccessToken!;
+      if (!workspaceIsVisible(await new ClickUpClient(token).getWorkspaces(), workspaceId)) {
+        res.status(404).json({ error: `Workspace ${workspaceId} is not visible to this ClickUp connection.` });
+        return;
+      }
+
+      const opened = await openAttachment(token, url, { range, signal: controller.signal });
+      if (!opened.ok) {
+        if (opened.contentRange) res.setHeader('Content-Range', opened.contentRange);
+        res.status(opened.status).json({ error: opened.error });
+        return;
+      }
+      const upstream = opened.response;
+      res.status(upstream.status);
+      for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+        const value = upstream.headers.get(header);
+        if (value) res.setHeader(header, value);
+      }
+      if (!upstream.headers.get('content-type')) res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', contentDisposition(attachmentFileName(url)));
+      if (!upstream.body) { res.end(); return; }
+      const { Readable } = await import('node:stream');
+      const { pipeline } = await import('node:stream/promises');
+      await pipeline(Readable.fromWeb(upstream.body as any), res);
+    } catch (err: any) {
+      if (res.headersSent) {
+        // Mid-stream failure: the status is already committed, so cut the
+        // connection — a short Content-Length then shows as a truncated file.
+        res.destroy(err);
+        return;
+      }
+      // Only the workspace lookup throws a ClickUp error; its status is
+      // Symbol-tagged, so copy it onto .code or sendUpstreamError answers 500.
+      const { clickUpErrorStatus } = await import('../clickup/apiHelpers.js');
+      const upstream = clickUpErrorStatus(err);
+      if (typeof upstream === 'number') (err as any).code = upstream;
+      sendUpstreamError(res, err, { fallback: 'Failed to download attachment' });
+    }
+  });
+
   // GET /api/v1/clickup/workspaces/:workspaceId/time - Get time entries
   app.get('/api/v1/clickup/workspaces/:workspaceId/time', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
@@ -7566,6 +7657,13 @@ function registerRestApiRoutes(app: express.Express): void {
       fallback: 'Failed to create list',
       schema: (m) => m.createListRestSchema,
       run: async (m, c, a) => m.performCreateList(c, a),
+    },
+    {
+      path: '/api/v1/slack/lists/:listId/update',
+      status: 200,
+      fallback: 'Failed to update list',
+      schema: (m) => m.updateListRestSchema,
+      run: async (m, c, a, p) => m.performUpdateList(c, p.listId, a),
     },
     {
       path: '/api/v1/slack/lists/:listId/items',
