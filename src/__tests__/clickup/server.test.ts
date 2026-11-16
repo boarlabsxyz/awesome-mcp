@@ -127,6 +127,15 @@ describe('ClickUp server tools', () => {
       assert.equal(probe.headers.Authorization, 'Bearer tok');
     });
 
+    it('prints a curl whose arguments stay single shell words and write only into the current folder', async () => {
+      stub({ teams: [{ id: WS }] }, () => new Response('x', { status: 206, headers: { 'content-range': 'bytes 0-0/1' } }));
+      const evil = `https://t${WS}.p.clickup-attachments.com/t${WS}/abc/abc.mp4?filename=../../O'Brien.mp4`;
+      const out = await callTool('getAttachmentInfo', { workspaceId: WS, url: evil });
+      const curl = out.split('\n').find((l: string) => l.trim().startsWith('curl'))!;
+      assert.match(curl, / -o 'O_Brien\.mp4' /);
+      assert.match(curl, /\?url=https%3A%2F%2F.*O'\\''Brien\.mp4'$/);
+    });
+
     it('says so when ClickUp sends the sign-in flow instead of the file', async () => {
       stub({ teams: [{ id: WS }] }, () => new Response(null, {
         status: 302, headers: { location: 'https://app.clickup.com/login' },

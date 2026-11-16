@@ -99,6 +99,9 @@ export async function openAttachment(
   const controller = new AbortController();
   const onCallerAbort = () => controller.abort();
   opts.signal?.addEventListener('abort', onCallerAbort, { once: true });
+  // Abort events are not replayed: a caller that hung up before this point
+  // (during the workspace lookup) would otherwise still start the CDN request.
+  if (opts.signal?.aborted) controller.abort();
   const timeout = setTimeout(() => controller.abort(), HEADERS_TIMEOUT_MS);
 
   try {
@@ -181,6 +184,17 @@ export function attachmentFileName(url: URL): string {
   } catch {
     return last || 'attachment';
   }
+}
+
+/**
+ * A name `curl -o` can safely write to: the file name without any directory
+ * part, letters, digits and `_.-` only, never starting with a dot or dash.
+ * The `filename` query parameter is whatever the link says, so
+ * `filename=../../.bashrc` must not become a path outside the download folder.
+ */
+export function safeLocalFileName(fileName: string): string {
+  const base = fileName.split(/[/\\]/).pop() ?? '';
+  return base.replaceAll(/[^\p{L}\p{N}_.-]+/gu, '_').replace(/^[.-]+/, '') || 'attachment';
 }
 
 /** `Content-Disposition` with an ASCII fallback and the RFC 5987 UTF-8 name. */

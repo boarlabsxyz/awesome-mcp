@@ -8,6 +8,7 @@ import {
   isForwardableRange,
   openAttachment,
   parseAttachmentUrl,
+  safeLocalFileName,
   workspaceIsVisible,
 } from '../../clickup/attachments.js';
 
@@ -59,6 +60,16 @@ describe('small helpers', () => {
     assert.equal(attachmentFileName(new URL(MP4)), 'Dark-Factory demo.mp4');
     assert.equal(attachmentFileName(new URL(`${HOST}/t${WS}/x/report%20v2.pdf`)), 'report v2.pdf');
     assert.equal(attachmentFileName(new URL(`${HOST}/t${WS}/x/bad%E0.pdf`)), 'bad%E0.pdf');
+  });
+
+  it('safeLocalFileName drops any directory part, leading dots and shell metacharacters', () => {
+    assert.equal(safeLocalFileName('Dark-Factory demo.mp4'), 'Dark-Factory_demo.mp4');
+    assert.equal(safeLocalFileName('Демо 1.mp4'), 'Демо_1.mp4');
+    assert.equal(safeLocalFileName('../../.bashrc'), 'bashrc');
+    assert.equal(safeLocalFileName('..\\..\\x.exe'), 'x.exe');
+    assert.equal(safeLocalFileName("O'Brien $(rm -rf ~).mp4"), 'O_Brien_rm_-rf_.mp4');
+    assert.equal(safeLocalFileName('-o.mp4'), 'o.mp4');
+    for (const empty of ['..', '/', '', '...']) assert.equal(safeLocalFileName(empty), 'attachment', empty);
   });
 
   it('contentDisposition keeps an ASCII fallback and the UTF-8 name', () => {
@@ -184,5 +195,21 @@ describe('openAttachment', () => {
     controller.abort();
     const aborted = await pending;
     assert.equal(!aborted.ok && aborted.status, 504);
+  });
+
+  it('aborts at once when the caller hung up before the CDN request', async () => {
+    let signalAborted: boolean | undefined;
+    globalThis.fetch = ((_: any, init: any) => {
+      // A real fetch given an aborted signal rejects without touching the network.
+      signalAborted = init.signal.aborted;
+      return signalAborted
+        ? Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+        : new Promise(() => { /* would hang until the 30 s timeout */ });
+    }) as typeof fetch;
+    const controller = new AbortController();
+    controller.abort();
+    const r = await openAttachment('tok', url(), { signal: controller.signal });
+    assert.equal(signalAborted, true);
+    assert.equal(!r.ok && r.status, 504);
   });
 });

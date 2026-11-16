@@ -62,6 +62,7 @@ import {
   attachmentTotalSize,
   openAttachment,
   parseAttachmentUrl,
+  safeLocalFileName,
   workspaceIsVisible,
 } from './attachments.js';
 
@@ -2089,14 +2090,16 @@ clickUpServer.addTool({
   },
 });
 
+/** One POSIX shell word: `encodeURIComponent` leaves `'` alone, so a URL can carry one. */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 clickUpServer.addTool({
   name: 'getAttachmentInfo',
   annotations: { readOnlyHint: true },
   description:
-    'Check a ClickUp attachment URL as it appears in a Doc or task (https://t<workspaceId>.p.clickup-attachments.com/…: a meeting recording, image or PDF) ' +
-    'and report its file name, type and size, and whether this connection can fetch it. These URLs are not public — a plain curl gets the ClickUp sign-in page. ' +
-    'Reads one byte; it does not return the file. To save the file, a client that can run shell commands calls the REST route this tool prints, ' +
-    'with a bearer from mintRestBearerForCurl. ClickUp offers no signed link, so there is no way to download it without a shell.',
+    'Report the name, type and size of a non-public ClickUp attachment URL (https://t<workspaceId>.p.clickup-attachments.com/…) and a curl to download it.',
   parameters: z.object({
     workspaceId: z.string().describe('The workspace (team) ID — the digits after "t" in the attachment host.'),
     url: z.string().describe('The attachment URL exactly as it appears in the doc or task.'),
@@ -2120,8 +2123,10 @@ clickUpServer.addTool({
       `  Range requests: ${res.status === 206 ? 'supported (downloads can be resumed)' : 'not supported (the whole file is sent each time)'}`,
       '  Access: this connection can fetch it',
       '',
-      'Download (shell clients only — mint the bearer with mintRestBearerForCurl):',
-      `  curl -fL -H "Authorization: Bearer $TOKEN" -o '${attachmentFileName(url).replaceAll("'", '')}' '${restUrl}'`,
+      'The URL itself is not public: a plain curl of it gets the ClickUp sign-in page. ClickUp offers no signed link,',
+      'so the file can only be saved by a client that runs shell commands, through this REST route.',
+      'Download (mint the bearer with mintRestBearerForCurl):',
+      `  curl -fL -H "Authorization: Bearer $TOKEN" -o ${shellQuote(safeLocalFileName(attachmentFileName(url)))} ${shellQuote(restUrl)}`,
     ].join('\n');
   },
 });
