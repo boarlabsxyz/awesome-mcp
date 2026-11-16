@@ -13,7 +13,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Drive](#google-drive) (19)
 - [Gmail](#gmail) (18)
 - [Google Slides](#google-slides) (6)
-- [ClickUp](#clickup) (48)
+- [ClickUp](#clickup) (49)
 - [Slack (bot)](#slack-bot-) (9)
 - [Slack (user)](#slack-user-) (17)
 - [Outline](#outline) (27)
@@ -190,7 +190,7 @@ Source: `src/google-slides/server.ts` — 6 tools.
 
 ## ClickUp
 
-Source: `src/clickup/server.ts` — 48 tools.
+Source: `src/clickup/server.ts` — 49 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -234,6 +234,7 @@ Source: `src/clickup/server.ts` — 48 tools.
 | `searchDocs` | Find ClickUp Docs by name, newest first. Pages through the entire workspace, so a recently-created doc is found regardless of how many docs exist. Matching is case-insensitive and token-based: every word in the query must appear in the title, in any order, so "AWESOME Sync" matches "[AWESOME] Sync - 08/15/2026". Omit query to list every doc newest-first. Always reports how many docs were scanned, so an empty result means "not there" rather than "did not look". | `GET /api/v1/clickup/workspaces/{workspaceId}/docs/search` |
 | `createDoc` | Create a new ClickUp Doc in a workspace. Optionally place it inside a Space, Folder, or List by providing parent ID and type. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs` |
 | `getPage` | Get a specific page from a ClickUp Doc, including its full content in markdown. | `GET /api/v1/clickup/docs/{docId}/pages/{pageId}?workspaceId={workspaceId}` |
+| `getAttachmentInfo` | Report the name, type and size of a non-public ClickUp attachment URL (https://t<workspaceId>.p.clickup-attachments.com/…) and a curl to download it. | `GET /api/v1/clickup/workspaces/{workspaceId}/attachments?url={attachmentUrl}` |
 | `createPage` | Create a new page in a ClickUp Doc. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages` |
 | `editPage` | Edit a page in a ClickUp Doc. Can replace, append, or prepend content. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages/{pageId}` |
 | `insertImageIntoPage` | Add an image to a ClickUp Doc page. Provide the image as EXACTLY ONE of imageUrl (a public http(s) URL — strongly preferred) or imageBase64 (base64 bytes, for SMALL images only — the payload consumes the calling model context, so use imageUrl whenever a public URL exists). The image is re-hosted (recompressed to WebP) and embedded as markdown (append by default). ClickUp has no image-upload API for docs, so the image is stored and served by this server — requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL. If imageUrl is already on this server, re-hosting is skipped automatically; pass skipRehost:true to force embedding the given URL as-is. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages/{pageId}/images` |
@@ -651,4 +652,4 @@ Source: `src/sandbox/server.ts` — 6 tools.
 
 ---
 
-**Grand total: 466 tools across 22 sections.**
+**Grand total: 467 tools across 22 sections.**

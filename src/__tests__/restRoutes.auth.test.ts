@@ -56,6 +56,7 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/clickup/docs/doc-123/pages/page-123?workspaceId=w-1',
   '/api/v1/clickup/workspaces/w-1/docs',
   '/api/v1/clickup/workspaces/w-1/docs/search?query=sync',
+  '/api/v1/clickup/workspaces/90151491867/attachments?url=https%3A%2F%2Ft90151491867.p.clickup-attachments.com%2Ft90151491867%2Fa%2Fb.mp4',
   '/api/v1/slack/channels',
   '/api/v1/slack/channels/C123/messages',
   '/api/v1/slack/channels/C123/threads/1234.5678',

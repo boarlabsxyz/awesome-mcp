@@ -3985,6 +3985,197 @@
         }
       }
     },
+    "/api/v1/clickup/workspaces/{workspaceId}/attachments": {
+      "get": {
+        "operationId": "downloadClickUpAttachment",
+        "summary": "Download a file ClickUp hosts as an attachment (a recording or image linked from a doc or task)",
+        "description": "Streams the bytes of a file on ClickUp's attachments CDN, fetched with the connection's token, and forwards a bytes Range header (206, or 416 with Content-Range). These URLs are not public, so a plain request gets the ClickUp sign-in page; this route refuses that page and the sign-in redirect with 403 instead of saving them as the file. Mirrors the MCP tool getAttachmentInfo, which reports the name, type and size without downloading. Whether ClickUp accepts the OAuth token on its attachments host is UNVERIFIED live.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace (team) ID: the digits after \"t\" in the attachment host."
+          },
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "The attachment URL exactly as it appears in the doc or task: https://t{workspaceId}.p.clickup-attachments.com/t{workspaceId}/... Any other host is refused, because this server fetches it with the connection's token."
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A bytes range to fetch (bytes=start-end, several comma-separated), e.g. to resume a download. Any other unit is 400."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The whole file, with the Content-Type ClickUp serves it with (application/octet-stream when it sends none).",
+            "headers": {
+              "Content-Length": {
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "Content-Disposition": {
+                "description": "attachment, with the file name from the URL's filename parameter or its last path segment.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "The requested range of the file, with the Content-Type ClickUp serves it with.",
+            "headers": {
+              "Content-Length": {
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "Content-Disposition": {
+                "description": "attachment, with the file name from the URL's filename parameter or its last path segment.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "description": "bytes start-end/total",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "url missing, not this workspace's attachments host, or the Range header is not a bytes range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ClickUp did not accept the connection's token for this file, or denied access to it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Workspace not visible to this ClickUp connection, or the attachment does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "Requested range not satisfiable",
+            "headers": {
+              "Content-Range": {
+                "description": "bytes */total, when ClickUp sends it",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "ClickUp rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "ClickUp's attachments host failed, or redirected outside it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "ClickUp's attachments host did not answer within 30s",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/clickup/spaces/{spaceId}/tags": {
       "get": {
         "operationId": "listClickUpSpaceTags",

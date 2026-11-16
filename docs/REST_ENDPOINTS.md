@@ -172,6 +172,7 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `debugTaskEventSubscription` | `GET /api/v1/clickup/workspaces/{workspaceId}/subscription/debug` | live | Diagnostic report cross-referencing local subscription vs the ClickUp-side webhook vs the event store |
 | `listDocs` | `GET /api/v1/clickup/workspaces/{workspaceId}/docs` | live | List docs in a workspace — _One page in ClickUp order. Optional limit (10-100, default 100) and cursor; response carries nextCursor._ |
 | `searchDocs` | `GET /api/v1/clickup/workspaces/{workspaceId}/docs/search` | live | Search docs in a workspace — _Pages the whole workspace, token-matches the title, returns newest-first. Response includes totalScanned/pagesScanned/hitCap/rateLimited._ |
+| `getAttachmentInfo` | `GET /api/v1/clickup/workspaces/{workspaceId}/attachments?url={attachmentUrl}` | live | Download a file ClickUp hosts as an attachment (a recording or image linked from a doc or task) — _Streams binary with Content-Type, Content-Length and Content-Disposition, and honours Range (206, or 416 with Content-Range). url must be https://t{workspaceId}.p.clickup-attachments.com/t{workspaceId}/... exactly as linked; any other host is 400 because this server fetches it with the connection token. 404 when the workspace is not visible to the connection. 403 when ClickUp does not accept the token for the file: the sign-in redirect and the login page are refused, never saved as the file. Whether ClickUp accepts the OAuth token on its attachments host is UNVERIFIED live._ |
 | `getDoc` | `GET /api/v1/clickup/docs/{docId}?workspaceId={workspaceId}` | live | Get a ClickUp doc with its pages — _Required query param: workspaceId._ |
 | `getPage` | `GET /api/v1/clickup/docs/{docId}/pages/{pageId}?workspaceId={workspaceId}` | live | Get a page within a ClickUp doc — _Required query param: workspaceId._ |
 | `listWorkspaceMembers` | `GET /api/v1/clickup/workspaces/{workspaceId}/members` | live | List members of a workspace — _No dedicated ClickUp endpoint; derived from getWorkspaces team.members[]._ |
@@ -489,4 +490,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 365 endpoints.
+Catalog size: 366 endpoints.
