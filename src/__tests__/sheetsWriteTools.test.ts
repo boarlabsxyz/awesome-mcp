@@ -701,7 +701,7 @@ describe('inspectSpreadsheetCells', () => {
         startRow: 1, startColumn: 1,
         rowData: [
           { values: [
-            { userEnteredValue: { formulaValue: '=SUM(C3:C9)' }, effectiveValue: { numberValue: 42 }, formattedValue: '42' },
+            { userEnteredValue: { formulaValue: '=SUM(C3:C9)' }, effectiveValue: { numberValue: 42 }, formattedValue: '42', effectiveFormat: { backgroundColor: { green: 1 } } },
             {},
             { userEnteredValue: { stringValue: 'see' }, textFormatRuns: [{ format: { link: { uri: 'https://a' } } }, { format: { link: { uri: 'https://b' } } }] },
           ] },
@@ -722,6 +722,9 @@ describe('inspectSpreadsheetCells', () => {
     const req = sheets.spreadsheets.get.mock.calls[0].arguments[0];
     assert.equal(req.includeGridData, true);
     assert.deepEqual(req.ranges, ['Data!B2:D2']);
+    assert.match(req.fields, /effectiveFormat/);
+    assert.deepEqual(out.cells[0].effectiveFormat, { backgroundColor: { green: 1 } });
+    assert.equal(out.cells[1].effectiveFormat, undefined);
   });
 
   it('says when maxCells cut the list short', async () => {
