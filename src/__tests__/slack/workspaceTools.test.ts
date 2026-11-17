@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import {
   assertSlackUploadUrl, normalizeChannelName, performAddReaction, performEditCanvas, performScheduleMessage,
-  performUpdateListItem, performUploadFile, resolvePostAt, toListCell, uploadBytes,
+  performUpdateList, performUpdateListItem, performUploadFile, resolvePostAt, toListCell, uploadBytes,
   editCanvasRestSchema, uploadFileRestSchema,
 } from '../../slack/workspaceTools.js';
 import { resolveDmUsers } from '../../slack/helpers.js';
@@ -114,6 +114,35 @@ describe('ops', () => {
     ]);
     assert.equal(r.confirmed, false);
     assert.deepEqual(r.notReadBack, ['Col2']);
+  });
+
+  it('refuses a list update with nothing to change', async () => {
+    const client = { slackListsUpdate: mock.fn(async () => ({ ok: true })) };
+    await assert.rejects(() => performUpdateList(client as any, 'F1', {}), /Nothing to change/);
+    assert.equal(client.slackListsUpdate.mock.callCount(), 0);
+  });
+
+  it('confirms a rename from the re-read title, and leaves description changes unconfirmed', async () => {
+    const mk = (title: string) => ({
+      slackListsUpdate: mock.fn(async (_id: string, _args: unknown) => ({ ok: true })),
+      slackListsItemsList: mock.fn(async () => ({ items: [], list: { title } })),
+    });
+    const renamed = mk('Roadmap');
+    assert.equal((await performUpdateList(renamed as any, 'F1', { name: 'Roadmap' })).confirmed, true);
+    assert.deepEqual(renamed.slackListsUpdate.mock.calls[0].arguments, ['F1', { name: 'Roadmap' }]);
+    assert.equal((await performUpdateList(mk('Old') as any, 'F1', { name: 'Roadmap' })).confirmed, false);
+    assert.equal((await performUpdateList(mk('Roadmap') as any, 'F1', { name: 'Roadmap', description: 'Q1' })).confirmed, null);
+    assert.equal((await performUpdateList(mk('x') as any, 'F1', { todoMode: true })).confirmed, null);
+  });
+
+  it('reports a list update as unconfirmed, not failed, when the re-read fails', async () => {
+    const client = {
+      slackListsUpdate: mock.fn(async () => ({ ok: true })),
+      slackListsItemsList: mock.fn(async () => { throw new Error('ratelimited'); }),
+    };
+    const r = await performUpdateList(client as any, 'F1', { name: 'Roadmap' });
+    assert.equal(r.confirmed, null);
+    assert.equal(r.list, null);
   });
 
   it('uploads through the external flow and reports sharing only as confirmed when Slack says so', async () => {

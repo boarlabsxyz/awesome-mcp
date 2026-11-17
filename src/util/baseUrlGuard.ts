@@ -92,11 +92,12 @@ function isPrivateIPv6(host: string): boolean {
  *
  * Exported for direct unit testing — the range table is easy to get wrong.
  *
- * NOTE: This does not defend against DNS rebinding — a hostname that resolves
- * to a public IP at check time but a private one at fetch time still slips
- * through. If that becomes a concern, the next step is to resolve the hostname
- * here and pin the request to the resolved public IP (Node fetch doesn't
- * support that natively; would need a custom Undici Agent).
+ * NOTE: This checks the literal only, so it does not defend against DNS
+ * rebinding — a hostname that resolves to a public IP at check time but a
+ * private one at fetch time still slips through. Where the URL comes from an
+ * upstream answer rather than the user, connect with `pinnedHttpsRequest`
+ * (src/util/pinnedHttps.ts), which runs this check inside the socket's own
+ * DNS lookup.
  */
 export function isPrivateHost(hostname: string): boolean {
   if (!hostname) return false;

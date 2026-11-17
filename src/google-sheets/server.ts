@@ -274,7 +274,7 @@ export const inspectSpreadsheetCellsSchema = z.object({
 export type InspectSpreadsheetCellsArgs = z.infer<typeof inspectSpreadsheetCellsSchema>;
 
 const CELL_FIELDS = 'sheets(properties(title),data(startRow,startColumn,rowData(values('
-  + 'userEnteredValue,effectiveValue,formattedValue,userEnteredFormat,hyperlink,textFormatRuns,note,dataValidation))))';
+  + 'userEnteredValue,effectiveValue,formattedValue,userEnteredFormat,effectiveFormat,hyperlink,textFormatRuns,note,dataValidation))))';
 
 /** Whether a cell holds anything beyond formatting: a value, note, link or rule. */
 export function hasCellContent(cell: sheets_v4.Schema$CellData | undefined): boolean {
@@ -290,7 +290,9 @@ function columnLetter(index: number): string {
 
 /**
  * Formula text, raw and displayed values, formatting, links, notes and
- * validation per cell, without writing anything. Only non-empty cells are
+ * validation per cell, without writing anything. `format` is what was set on
+ * the cell; `effectiveFormat` is what it renders with, after theme defaults
+ * and conditional formatting. Only non-empty cells are
  * listed. A cell with several links has no `hyperlink`; its links are on
  * `textFormatRuns[].format.link`, so both are returned.
  */
@@ -321,6 +323,7 @@ export async function performInspectSpreadsheetCells(sheets: sheets_v4.Sheets, a
           effectiveValue: cell.effectiveValue ?? null,
           formattedValue: cell.formattedValue ?? null,
           ...(cell.userEnteredFormat ? { format: cell.userEnteredFormat } : {}),
+          ...(cell.effectiveFormat ? { effectiveFormat: cell.effectiveFormat } : {}),
           ...(cell.hyperlink ? { hyperlink: cell.hyperlink } : {}),
           ...(links.length ? { links } : {}),
           ...(cell.note ? { note: cell.note } : {}),
@@ -785,7 +788,7 @@ sheetsServer.addTool({
 sheetsServer.addTool({
   name: 'inspectSpreadsheetCells',
   annotations: { readOnlyHint: true },
-  description: 'Reads cells without changing them: formula text, raw and displayed values, formatting, hyperlinks, notes and validation rules.',
+  description: 'Reads cells without changing them: formula text, raw and displayed values, formatting (format = as set on the cell; effectiveFormat = as displayed, including conditional formatting and defaults), hyperlinks, notes and validation rules.',
   parameters: inspectSpreadsheetCellsSchema,
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);

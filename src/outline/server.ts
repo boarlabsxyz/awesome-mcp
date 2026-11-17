@@ -17,6 +17,13 @@ import {
   formatFileOperation,
   formatSearchResults,
   formatAttachmentList,
+  formatRevisions,
+  formatTemplate,
+  formatTemplates,
+  formatUser,
+  formatUsers,
+  bodyMarkdown,
+  describeRevision,
   parseAttachmentIds,
   withOutlineClient,
 } from './apiHelpers.js';
@@ -27,12 +34,43 @@ import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 // from the path. Copying them would let the two drift on what is valid.
 import {
   addCommentFields,
+  archiveCollectionFields,
   createCollectionFields,
   createDocumentFields,
+  importHtmlDocumentFields,
   moveDocumentFields,
+  unpublishDocumentFields,
   updateCollectionFields,
+  updateCommentFields,
   updateDocumentFields,
+  uploadAttachmentFields,
+  performAddComment,
+  performCollectionLifecycle,
+  performCommentResolution,
+  performCompareRevisions,
+  performCreateCollection,
+  performCreateDocument,
+  performDocumentLifecycle,
+  performImportHtmlDocument,
+  performMoveDocument,
+  performUnpublishDocument,
+  performUpdateCollection,
+  performUpdateComment,
+  performUpdateDocument,
+  performUploadAttachment,
 } from './restOps.js';
+
+// Outline may normalise a colour's case.
+const sameValue = (a: unknown, b: unknown) =>
+  typeof a === 'string' && typeof b === 'string' ? a.toLowerCase() === b.toLowerCase() : a === b;
+
+/** What a write asked for that the returned record does not show — likely an Outline too old for the field. */
+function notReflected(asked: Record<string, unknown>, got: Record<string, unknown> | undefined): string {
+  const missing = Object.entries(asked)
+    .filter(([k, v]) => v !== undefined && got !== undefined && !sameValue(got[k], v))
+    .map(([k]) => k);
+  return missing.length ? ` Not shown on the returned record (your Outline may not support it): ${missing.join(', ')}.` : '';
+}
 
 export const outlineServer = instrumentServer(new FastMCP<UserSession>({
   name: 'Outline Wiki MCP',
@@ -212,47 +250,39 @@ outlineServer.addTool({
 outlineServer.addTool({
   name: 'createDocument',
   annotations: { readOnlyHint: false },
-  description: 'Creates a new Outline document in a collection. Optionally publishes immediately, sets an icon, or nests under a parent.',
+  description: 'Creates an Outline document in a collection: published or draft, nested, styled, or from a template (templateId).',
   parameters: z.object(createDocumentFields),
   execute: (args, { log, session }) =>
     withOutlineClient('Failed to create document', session, log, async (client) => {
       log.info(`Creating Outline document "${args.title}" in collection ${args.collectionId}`);
-      const doc = await client.createDocument({
-        title: args.title,
-        collectionId: args.collectionId,
-        text: args.text,
-        parentDocumentId: args.parentDocumentId,
-        publish: args.publish,
-        template: args.template,
-        icon: args.icon,
-      });
-      if (!doc) throw new UserError('Failed to create document.');
-      return `Document created successfully: ${doc.title ?? 'Untitled'} (ID: ${doc.id ?? 'unknown'})`;
+      const doc = await performCreateDocument(client, args);
+      return `Document created successfully: ${doc.title ?? 'Untitled'} (ID: ${doc.id ?? 'unknown'})`
+        + notReflected({ color: args.color, fullWidth: args.fullWidth, templateId: args.templateId }, doc);
     }),
 });
 
 outlineServer.addTool({
   name: 'updateDocument',
   annotations: { readOnlyHint: false },
-  description: 'Updates an Outline document. Replaces title/content unless append=true.',
+  description: 'Updates an Outline document: replace or append content, edit one passage (findText + text), restyle, or publish a draft.',
   parameters: z.object({
     documentId: z.string().describe('The document ID to update.'),
     ...updateDocumentFields,
   }),
-  execute: (args, { log, session }) =>
-    withOutlineClient('Failed to update document', session, log, async (client) => {
-      log.info(`Updating Outline document ${args.documentId}`);
-      const doc = await client.updateDocument({
-        id: args.documentId,
-        title: args.title,
-        text: args.text,
-        append: args.text !== undefined ? args.append : undefined,
-        template: args.template,
-        icon: args.icon === '' ? null : args.icon,
-      });
-      if (!doc) throw new UserError('Failed to update document.');
-      return `Document updated successfully: ${doc.title ?? 'Untitled'}`;
-    }),
+  execute: (args, { log, session }) => {
+    const { documentId, ...fields } = args;
+    if (Object.values({ ...fields, append: undefined }).every((v) => v === undefined)) {
+      throw new UserError('Provide at least one of title, text, template, icon, color, fullWidth, or publish.');
+    }
+    return withOutlineClient('Failed to update document', session, log, async (client) => {
+      log.info(`Updating Outline document ${documentId}${fields.findText !== undefined ? ' (passage edit)' : ''}`);
+      const doc = await performUpdateDocument(client, documentId, fields);
+      const published = fields.publish ? (doc.publishedAt ? ' Published.' : ' publish was sent, but the document shows no publish date.') : '';
+      const passage = doc.passageEditVerified === null ? ' The passage edit could not be checked on re-read; look at the document.' : '';
+      return `Document updated successfully: ${doc.title ?? 'Untitled'}.${published}${passage}`
+        + notReflected({ color: fields.color, fullWidth: fields.fullWidth }, doc);
+    });
+  },
 });
 
 outlineServer.addTool({
@@ -269,13 +299,8 @@ outlineServer.addTool({
     }
     return withOutlineClient('Failed to move document', session, log, async (client) => {
       log.info(`Moving Outline document ${args.documentId}`);
-      const res = await client.moveDocument({
-        id: args.documentId,
-        collectionId: args.collectionId,
-        parentDocumentId: args.parentDocumentId,
-      });
-      if (res?.data) return 'Document moved successfully.';
-      throw new UserError('Failed to move document.');
+      await performMoveDocument(client, args.documentId, args);
+      return 'Document moved successfully.';
     });
   },
 });
@@ -290,8 +315,7 @@ outlineServer.addTool({
   execute: (args, { log, session }) =>
     withOutlineClient('Failed to archive document', session, log, async (client) => {
       log.info(`Archiving Outline document ${args.documentId}`);
-      const doc = await client.archiveDocument(args.documentId);
-      if (!doc) throw new UserError('Failed to archive document.');
+      const doc = await performDocumentLifecycle(client, 'archive', args.documentId);
       return `Document archived successfully: ${doc.title ?? 'Untitled'}`;
     }),
 });
@@ -306,8 +330,7 @@ outlineServer.addTool({
   execute: (args, { log, session }) =>
     withOutlineClient('Failed to unarchive document', session, log, async (client) => {
       log.info(`Unarchiving Outline document ${args.documentId}`);
-      const doc = await client.unarchiveDocument(args.documentId);
-      if (!doc) throw new UserError('Failed to unarchive document.');
+      const doc = await performDocumentLifecycle(client, 'unarchive', args.documentId);
       return `Document unarchived successfully: ${doc.title ?? 'Untitled'}`;
     }),
 });
@@ -322,9 +345,38 @@ outlineServer.addTool({
   execute: (args, { log, session }) =>
     withOutlineClient('Failed to restore document', session, log, async (client) => {
       log.info(`Restoring Outline document ${args.documentId} from trash`);
-      const doc = await client.restoreDocument(args.documentId);
-      if (!doc) throw new UserError('Failed to restore document.');
+      const doc = await performDocumentLifecycle(client, 'restore', args.documentId);
       return `Document restored successfully: ${doc.title ?? 'Untitled'}`;
+    }),
+});
+
+outlineServer.addTool({
+  name: 'unpublishDocument',
+  annotations: { readOnlyHint: false },
+  description: 'Returns a published Outline document to draft, hiding it from its collection until it is published again.',
+  parameters: z.object({
+    documentId: z.string().describe('The document ID to unpublish.'),
+    ...unpublishDocumentFields,
+  }),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to unpublish document', session, log, async (client) => {
+      log.info(`Unpublishing Outline document ${args.documentId}`);
+      const doc = await performUnpublishDocument(client, args.documentId, args);
+      const state = doc.publishedAt ? ' Outline still shows a publish date, so it may not have changed.' : ' It is a draft now.';
+      return `Document unpublished: ${doc.title ?? 'Untitled'}.${state}`;
+    }),
+});
+
+outlineServer.addTool({
+  name: 'importHtmlDocument',
+  annotations: { readOnlyHint: false },
+  description: 'Creates an Outline document from HTML with Outline\'s importer, which also copies its images into the workspace.',
+  parameters: z.object(importHtmlDocumentFields),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to import document', session, log, async (client) => {
+      log.info(`Importing HTML into Outline (${args.html.length} chars)`);
+      const doc = await performImportHtmlDocument(client, args);
+      return `Document imported: ${doc.title ?? 'Untitled'} (ID: ${doc.id ?? 'unknown'})${doc.url ? `\nURL: ${doc.url}` : ''}`;
     }),
 });
 
@@ -393,12 +445,7 @@ outlineServer.addTool({
   execute: (args, { log, session }) =>
     withOutlineClient('Failed to create collection', session, log, async (client) => {
       log.info(`Creating Outline collection "${args.name}"`);
-      const c = await client.createCollection({
-        name: args.name,
-        description: args.description,
-        color: args.color,
-      });
-      if (!c) throw new UserError('Failed to create collection.');
+      const c = await performCreateCollection(client, args);
       return `Collection created successfully: ${c.name ?? 'Untitled'} (ID: ${c.id ?? 'unknown'})`;
     }),
 });
@@ -406,27 +453,53 @@ outlineServer.addTool({
 outlineServer.addTool({
   name: 'updateCollection',
   annotations: { readOnlyHint: false },
-  description: 'Updates an Outline collection\'s name, description, or color. Provide at least one field.',
+  description: 'Updates an Outline collection\'s name, description, color, or icon. Provide at least one field.',
   parameters: z.object({
     collectionId: z.string().describe('The collection ID.'),
     ...updateCollectionFields,
   }),
   execute: (args, { log, session }) => {
-    if (args.name === undefined && args.description === undefined && args.color === undefined) {
-      throw new UserError('Specify at least one field to update (name, description, or color).');
+    if (args.name === undefined && args.description === undefined && args.color === undefined && args.icon === undefined) {
+      throw new UserError('Specify at least one field to update (name, description, color, or icon).');
     }
     return withOutlineClient('Failed to update collection', session, log, async (client) => {
       log.info(`Updating Outline collection ${args.collectionId}`);
-      const c = await client.updateCollection({
-        id: args.collectionId,
-        name: args.name,
-        description: args.description,
-        color: args.color,
-      });
-      if (!c) throw new UserError('Failed to update collection.');
+      const c = await performUpdateCollection(client, args.collectionId, args);
       return `Collection updated successfully: ${c.name ?? 'Untitled'}`;
     });
   },
+});
+
+outlineServer.addTool({
+  name: 'archiveCollection',
+  annotations: { readOnlyHint: false },
+  description: 'Archives an Outline collection with its documents: hidden from sidebar and search, not deleted (undo: restoreCollection).',
+  parameters: z.object({
+    collectionId: z.string().describe('The collection ID. Personal collections cannot be archived.'),
+    ...archiveCollectionFields,
+  }),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to archive collection', session, log, async (client) => {
+      log.info(`Archiving Outline collection ${args.collectionId}`);
+      const c = await performCollectionLifecycle(client, 'archive', args.collectionId, args);
+      const state = 'archivedAt' in c ? (c.archivedAt ? '' : ' Outline does not show it as archived.') : '';
+      return `Collection archived: ${c.name ?? 'Untitled'}.${state} Restore it with restoreCollection.`;
+    }),
+});
+
+outlineServer.addTool({
+  name: 'restoreCollection',
+  annotations: { readOnlyHint: false },
+  description: 'Restores an archived Outline collection and its documents to the sidebar and search.',
+  parameters: z.object({
+    collectionId: z.string().describe('The collection ID.'),
+  }),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to restore collection', session, log, async (client) => {
+      log.info(`Restoring Outline collection ${args.collectionId}`);
+      const c = await performCollectionLifecycle(client, 'restore', args.collectionId);
+      return `Collection restored: ${c.name ?? 'Untitled'}.`;
+    }),
 });
 
 outlineServer.addTool({
@@ -523,7 +596,7 @@ outlineServer.addTool({
 outlineServer.addTool({
   name: 'addComment',
   annotations: { readOnlyHint: false },
-  description: 'Adds a comment on an Outline document, or replies to an existing comment.',
+  description: 'Comments on an Outline document or replies to a comment; with anchorText, comments inline on that text.',
   parameters: z.object({
     documentId: z.string().describe('The document to comment on.'),
     ...addCommentFields,
@@ -531,14 +604,186 @@ outlineServer.addTool({
   execute: (args, { log, session }) =>
     withOutlineClient('Failed to add comment', session, log, async (client) => {
       log.info(`Adding Outline comment on ${args.documentId}${args.parentCommentId ? ` (reply to ${args.parentCommentId})` : ''}`);
-      const c = await client.createComment({
-        documentId: args.documentId,
-        text: args.text,
-        parentCommentId: args.parentCommentId,
-      });
-      if (!c) throw new UserError('Failed to create comment.');
+      const c = await performAddComment(client, args.documentId, args);
       const kind = args.parentCommentId ? 'Reply' : 'Comment';
-      return `${kind} added successfully (ID: ${c.id ?? 'unknown'})`;
+      // Outline echoes anchorText on an anchored comment; one that comes back
+      // without it may have been placed as a page comment by an older server.
+      const anchor = args.anchorText ? (c.anchorText ? ` Anchored to "${c.anchorText}".` : ' Outline did not confirm the anchor; it may be a page comment.') : '';
+      return `${kind} added successfully (ID: ${c.id ?? 'unknown'}).${anchor}`;
+    }),
+});
+
+outlineServer.addTool({
+  name: 'updateComment',
+  annotations: { readOnlyHint: false },
+  description: 'Replaces the text of an Outline comment. Only its author (or an admin) can edit it.',
+  parameters: z.object({
+    commentId: z.string().describe('The comment ID.'),
+    ...updateCommentFields,
+  }),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to update comment', session, log, async (client) => {
+      log.info(`Updating Outline comment ${args.commentId}`);
+      const c = await performUpdateComment(client, args.commentId, args);
+      return `Comment updated (ID: ${c.id ?? args.commentId}).`;
+    }),
+});
+
+outlineServer.addTool({
+  name: 'resolveComment',
+  annotations: { readOnlyHint: false },
+  description: 'Marks an Outline comment thread resolved (top-level comments only). Reopen it with reopenComment.',
+  parameters: z.object({ commentId: z.string().describe('The top-level comment ID.') }),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to resolve comment', session, log, async (client) => {
+      log.info(`Resolving Outline comment ${args.commentId}`);
+      const r = await performCommentResolution(client, 'resolve', args.commentId);
+      return r.confirmed === false ? 'Outline accepted the request, but the comment does not show as resolved.' : 'Comment resolved.';
+    }),
+});
+
+outlineServer.addTool({
+  name: 'reopenComment',
+  annotations: { readOnlyHint: false },
+  description: 'Reopens a resolved Outline comment thread.',
+  parameters: z.object({ commentId: z.string().describe('The top-level comment ID.') }),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to reopen comment', session, log, async (client) => {
+      log.info(`Reopening Outline comment ${args.commentId}`);
+      const r = await performCommentResolution(client, 'unresolve', args.commentId);
+      return r.confirmed === false ? 'Outline accepted the request, but the comment still shows as resolved.' : 'Comment reopened.';
+    }),
+});
+
+outlineServer.addTool({
+  name: 'deleteComment',
+  annotations: { readOnlyHint: false, destructiveHint: true },
+  description: 'Permanently deletes an Outline comment, and with a top-level comment its replies. Cannot be undone. Only the author (or an admin) can delete.',
+  parameters: z.object({ commentId: z.string().describe('The comment ID.') }),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to delete comment', session, log, async (client) => {
+      log.info(`Deleting Outline comment ${args.commentId}`);
+      const res = await client.deleteComment(args.commentId);
+      if (res?.success) return 'Comment deleted.';
+      throw new UserError('Outline did not confirm the delete.');
+    }),
+});
+
+// === Users ===
+
+outlineServer.addTool({
+  name: 'listUsers',
+  annotations: { readOnlyHint: true },
+  description: 'Lists or searches people in the Outline workspace: name, role, last active, and email where this connection may see it.',
+  parameters: z.object({
+    query: z.string().optional().describe('Search by name or email.'),
+    filter: z.enum(['all', 'active', 'invited', 'suspended']).optional().describe('Status filter (default: active members).'),
+    limit: z.number().int().min(1).max(100).optional().default(25).describe('Max users (default 25).'),
+    offset: z.number().int().min(0).optional().default(0).describe('Skip N results.'),
+  }),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to list users', session, log, async (client) => {
+      log.info('Listing Outline users');
+      const { data, pagination } = await client.listUsers(args);
+      return formatUsers(data, pagination, args.limit, args.offset);
+    }),
+});
+
+outlineServer.addTool({
+  name: 'getUser',
+  annotations: { readOnlyHint: true },
+  description: 'Reads one Outline user\'s profile by ID.',
+  parameters: z.object({ userId: z.string().describe('The user ID (from listUsers).') }),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to read user', session, log, async (client) => {
+      log.info(`Reading Outline user ${args.userId}`);
+      const u = await client.getUser(args.userId);
+      if (!u) throw new UserError('User not found.');
+      return formatUser(u);
+    }),
+});
+
+// === Templates ===
+
+outlineServer.addTool({
+  name: 'listTemplates',
+  annotations: { readOnlyHint: true },
+  description: 'Lists the Outline templates this connection can use, for createDocument templateId. Needs a recent Outline.',
+  parameters: z.object({
+    query: z.string().optional().describe('Filter by title.'),
+    collectionId: z.string().optional().describe('Only templates of this collection.'),
+    limit: z.number().int().min(1).max(100).optional().default(25).describe('Max templates (default 25).'),
+    offset: z.number().int().min(0).optional().default(0).describe('Skip N results.'),
+  }),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to list templates', session, log, async (client) => {
+      log.info('Listing Outline templates');
+      const { data, pagination } = await client.listTemplates(args);
+      return formatTemplates(data, pagination, args.limit, args.offset);
+    }),
+});
+
+outlineServer.addTool({
+  name: 'getTemplate',
+  annotations: { readOnlyHint: true },
+  description: 'Reads one Outline template with its content.',
+  parameters: z.object({ templateId: z.string().describe('The template ID (from listTemplates).') }),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to read template', session, log, async (client) => {
+      log.info(`Reading Outline template ${args.templateId}`);
+      const t = await client.getTemplate(args.templateId);
+      if (!t) throw new UserError('Template not found.');
+      return formatTemplate(t);
+    }),
+});
+
+// === Revisions ===
+
+outlineServer.addTool({
+  name: 'listDocumentRevisions',
+  annotations: { readOnlyHint: true },
+  description: 'Lists an Outline document\'s history, newest first: when each version was saved and by whom. Paginated.',
+  parameters: z.object({
+    documentId: z.string().describe('The document ID.'),
+    limit: z.number().int().min(1).max(100).optional().default(25).describe('Max revisions (default 25).'),
+    offset: z.number().int().min(0).optional().default(0).describe('Skip N results.'),
+  }),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to list revisions', session, log, async (client) => {
+      log.info(`Listing revisions of Outline document ${args.documentId}`);
+      const { data, pagination } = await client.listRevisions(args);
+      return formatRevisions(data, pagination, args.limit, args.offset);
+    }),
+});
+
+outlineServer.addTool({
+  name: 'getDocumentRevision',
+  annotations: { readOnlyHint: true },
+  description: 'Reads one saved version of an Outline document: its content, time and author.',
+  parameters: z.object({ revisionId: z.string().describe('The revision ID (from listDocumentRevisions).') }),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to read revision', session, log, async (client) => {
+      log.info(`Reading Outline revision ${args.revisionId}`);
+      const r = await client.getRevision(args.revisionId);
+      if (!r) throw new UserError('Revision not found.');
+      return [`# ${r.title ?? 'Untitled'}`, `${describeRevision(r)}`, '', bodyMarkdown(r) || '(empty)'].join('\n');
+    }),
+});
+
+outlineServer.addTool({
+  name: 'compareDocumentRevisions',
+  annotations: { readOnlyHint: true },
+  description: 'Line diff of an Outline document between a saved version and a later one or the current text, with who saved each.',
+  parameters: z.object({
+    documentId: z.string().describe('The document ID.'),
+    fromRevisionId: z.string().describe('The older version (from listDocumentRevisions).'),
+    toRevisionId: z.string().optional().describe('The newer version. Omit to compare with the current document.'),
+  }),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to compare revisions', session, log, async (client) => {
+      log.info(`Comparing revisions of Outline document ${args.documentId}`);
+      const r = await performCompareRevisions(client, args.documentId, args.fromRevisionId, args.toRevisionId);
+      return `${r.header}\n\n${r.diff.text}`;
     }),
 });
 
@@ -574,5 +819,18 @@ outlineServer.addTool({
       const url = await client.getAttachmentRedirectUrl(args.attachmentId);
       if (!url) throw new UserError('Failed to resolve attachment URL.');
       return url;
+    }),
+});
+
+outlineServer.addTool({
+  name: 'uploadAttachment',
+  annotations: { readOnlyHint: false },
+  description: 'Uploads a file to Outline and returns its URL and the markdown to insert with updateDocument (not inserted automatically).',
+  parameters: z.object(uploadAttachmentFields),
+  execute: (args, { log, session }) =>
+    withOutlineClient('Failed to upload attachment', session, log, async (client) => {
+      log.info(`Uploading attachment "${args.fileName}" (${args.contentType}) to Outline`);
+      const r = await performUploadAttachment(client, args);
+      return `Uploaded ${args.fileName} (${r.bytes} bytes) — attachment ID ${r.attachmentId}.\nInsert into a document with this markdown:\n${r.markdown}`;
     }),
 });
