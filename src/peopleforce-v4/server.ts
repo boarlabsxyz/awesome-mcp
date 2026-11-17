@@ -6,8 +6,9 @@
 // v1–v3 and a Company key cannot call v4, so the two connectors hold different
 // credentials; and v4's surface is a *different* set, not a superset. What v4
 // does NOT have (all of it still lives on the `peopleforce` connector):
-// recruitment, leave requests/balances/types, knowledge base, skills,
-// competencies, KPIs and employee custom tables. What it adds, and v3 never
+// recruitment, leave types, holidays, knowledge base, skills, competencies,
+// KPIs and employee custom tables. Leave requests and balances it has, behind
+// the role's Time off permission. What it adds, and v3 never
 // had: termination dates + reasons, terminated-people and birthday/anniversary
 // feeds, salaries, lifecycle records, review cycles/responses, Pulse surveys
 // and compliance cases.
@@ -17,7 +18,7 @@
 // fields are absent rather than null — the formatters call both out instead of
 // rendering a silent gap.
 
-import { FastMCP } from 'fastmcp';
+import { FastMCP, UserError } from 'fastmcp';
 import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 
@@ -36,6 +37,9 @@ import {
   formatLocationList,
   formatSalaryList,
   formatSalary,
+  formatLeaveRequestList,
+  formatLeaveBalanceList,
+  LEAVE_REQUEST_STATE_VALUES,
   formatLifecycleList,
   formatObjectiveList,
   formatObjective,
@@ -102,6 +106,8 @@ function addListTool<T, A extends Record<string, unknown>>(config: {
   parameters?: z.ZodRawShape;
   fetch: (client: PeopleForceV4Client, args: A & PagingArgs) => Promise<V4ListResponse<T>>;
   format: (rows: T[], pagination?: V4Pagination) => string;
+  /** Overrides `format` when the fetch result carries more than rows + metadata. */
+  formatResult?: (res: V4ListResponse<T>) => string;
 }) {
   peopleForceV4Server.addTool({
     name: config.name,
@@ -112,7 +118,7 @@ function addListTool<T, A extends Record<string, unknown>>(config: {
       withPeopleForceV4Client(config.errorPrefix, session, log, async (client) => {
         log.info(`${config.name} (page=${args.page ?? 1})`);
         const res = await config.fetch(client, args);
-        return config.format(res.data ?? [], res.metadata);
+        return config.formatResult ? config.formatResult(res) : config.format(res.data ?? [], res.metadata);
       }),
   });
 }
@@ -298,6 +304,69 @@ addPersonScopedListTool({
   errorPrefix: 'Error listing person assets',
   fetch: (client, personId) => client.listPersonAssets(personId),
   format: (rows, pagination) => formatNamedList('assets', rows, pagination),
+});
+
+/** Time off reads 403 without the role's Time off permission; say that, not the generic role hint. */
+async function timeOff<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (err: any) {
+    if (err?.status === 403) {
+      throw new UserError('The service account\'s role lacks the Time off permission (403). Add Time off to a role attached to this key, '
+        + 'covering the people you need; a role that grants it but covers nobody returns an empty list instead.');
+    }
+    throw err;
+  }
+}
+
+addListTool({
+  name: 'listLeaveRequests',
+  description:
+    'List leave requests across everyone the service account can see, optionally for some people, states, and a date range ' +
+    '(from/to keep requests overlapping it). PeopleForce can only narrow "ending on or after from"; the "to" bound is applied to ' +
+    'each returned page here, so a page may show fewer rows than it holds — keep paging to the last page. ' +
+    'Needs the Time off permission on the key\'s role (403 without).',
+  errorPrefix: 'Error listing leave requests',
+  parameters: {
+    employeeIds: z.array(z.number().int()).optional().describe('Only these people (person IDs).'),
+    states: z.array(z.enum(LEAVE_REQUEST_STATE_VALUES)).optional().describe('Only these states.'),
+    from: isoDate.optional().describe('Keep requests ending on or after this date (YYYY-MM-DD).'),
+    to: isoDate.optional().describe('Keep requests starting on or before this date (YYYY-MM-DD). Applied to the returned page.'),
+  },
+  fetch: async (client, args: any) => {
+    const res = await timeOff(() => client.listLeaveRequests({
+      page: args.page, perPage: args.perPage, offset: args.offset,
+      employeeIds: args.employeeIds, states: args.states, endsOnOrAfter: args.from,
+    }));
+    // v4 has no "starts on or before" filter, so the upper bound is applied
+    // here, per page. The footer still counts the unfiltered page, so the
+    // hidden rows are named — an empty page is not "none exist".
+    if (!args.to) return res;
+    const all = res.data ?? [];
+    const kept = all.filter((l) => !l.starts_on || l.starts_on <= args.to);
+    const hidden = all.length - kept.length;
+    const more = (res.metadata?.total_pages ?? 1) > (res.metadata?.page ?? 1);
+    const note = hidden
+      ? `${hidden} of ${all.length} request(s) on this page start after ${args.to} and are hidden.${more ? ' Later pages may still hold matches; keep paging.' : ''}`
+      : undefined;
+    return { ...res, data: kept, note };
+  },
+  format: (rows, pagination) => formatLeaveRequestList(rows, pagination),
+  formatResult: (res: any) => formatLeaveRequestList(res.data ?? [], res.metadata, res.note),
+});
+
+addListTool({
+  name: 'listLeaveBalances',
+  description:
+    'List current leave balances across everyone the service account can see, optionally for some people or leave types. ' +
+    'Needs the Time off permission on the key\'s role (403 without).',
+  errorPrefix: 'Error listing leave balances',
+  parameters: {
+    employeeIds: z.array(z.number().int()).optional().describe('Only these people (person IDs).'),
+    leaveTypeIds: z.array(z.number().int()).optional().describe('Only these leave types.'),
+  },
+  fetch: (client, args: any) => timeOff(() => client.listLeaveBalances(args)),
+  format: formatLeaveBalanceList,
 });
 
 addPersonScopedListTool({

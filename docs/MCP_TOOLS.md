@@ -17,8 +17,8 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Slack (bot)](#slack-bot-) (9)
 - [Slack (user)](#slack-user-) (17)
 - [Outline](#outline) (43)
-- [PeopleForce](#peopleforce) (45)
-- [PeopleForce v4](#peopleforce-v4) (44)
+- [PeopleForce](#peopleforce) (50)
+- [PeopleForce v4](#peopleforce-v4) (46)
 - [HubSpot](#hubspot) (23)
 - [Redmine](#redmine) (46)
 - [Browserbase](#browserbase) (9)
@@ -336,14 +336,14 @@ Source: `src/outline/server.ts` — 43 tools.
 
 ## PeopleForce
 
-Source: `src/peopleforce/server.ts` — 45 tools.
+Source: `src/peopleforce/server.ts` — 50 tools.
 
 | Tool | Description | REST |
 |---|---|---|
 | `listEmployees` | Lists PeopleForce employees, 50 per page (server-fixed). Use `page` to paginate. IMPORTANT: omitting `status` returns ACTIVE employees only, not everyone — there is no "all" option, so a full headcount means one pass with status=active plus one with status=inactive. Use status=probation to get just the employees currently on probation — a real server-side segment, so you get that cohort directly instead of filtering the whole directory. It is paginated like every other list: follow `metadata.pagination` and request further pages whenever more are reported. Each employee shows their probation end date and a derived probation state. Any tenant-defined custom fields are included per employee when the list payload carries them (field names and availability vary by tenant). | `GET /api/v1/peopleforce/employees` |
 | `getEmployee` | Retrieves a single PeopleForce employee by ID. Returns full profile: contact, position, department, division, employment type, location, reporting line, and hiring dates. Any tenant-defined custom fields the profile carries are shown under a Custom Fields section (field names and availability vary by tenant; the section is omitted when the record has none). | `GET /api/v1/peopleforce/employees/{employeeId}` |
 | `listDepartments` | Lists all PeopleForce departments, 50 per page (server-fixed). Use `page` to paginate. | `GET /api/v1/peopleforce/departments` |
-| `listLeaveRequests` | Lists PeopleForce leave requests, 100 per page (server-fixed). Use `page` to paginate; `state` filters by lifecycle state (e.g. "pending", "approved", "declined"). PeopleForce's public API does NOT support server-side filtering by employee or date range — fetch pages and filter client-side if needed. | `GET /api/v1/peopleforce/leave-requests` |
+| `listLeaveRequests` | Lists PeopleForce leave requests, 100 per page (server-fixed). Use `page` to paginate; `state` filters by lifecycle state (e.g. "pending", "approved", "declined"). This list cannot filter by employee or dates; for one person's time off in a date range (with public holidays), use getEmployeeAbsences. | `GET /api/v1/peopleforce/leave-requests` |
 | `createLeaveRequest` | Creates a new PeopleForce leave request (time off) for an employee against a specific leave-type ID. Call `listLeaveTypes` first if you need the ID. | `POST /api/v1/peopleforce/leave-requests` |
 | `getLeaveRequest` | Retrieves a single PeopleForce leave request by ID (state, dates, amount, employee, comment). | `GET /api/v1/peopleforce/leave-requests/{leaveRequestId}` |
 | `listLeaveTypes` | Lists PeopleForce leave types (Vacation, Sick, Sabbatical, etc.) with their IDs and time-tracking unit (days/hours). Call this to find the `leaveTypeId` needed for `createLeaveRequest`. | `GET /api/v1/peopleforce/leave-types` |
@@ -355,7 +355,12 @@ Source: `src/peopleforce/server.ts` — 45 tools.
 | `listSkills` | Lists the PeopleForce skills catalog (workspace-wide) with IDs. Server-fixed 50 per page. | `GET /api/v1/peopleforce/skills` |
 | `listCompetencies` | Lists PeopleForce competencies (behavioral/performance dimensions used in reviews) with their IDs. | `GET /api/v1/peopleforce/competencies` |
 | `listTasks` | Lists PeopleForce tasks (onboarding, applicant follow-ups, etc.) with assignee, dates, and completion state. Server-fixed 50 per page. | `GET /api/v1/peopleforce/tasks` |
+| `listHolidays` | Lists the company's public holidays across all holiday policies, with the policy each belongs to. Working-day exceptions are marked. For one employee use listEmployeeHolidays. | `GET /api/v1/peopleforce/holidays` |
+| `listHolidayPolicies` | Lists the holiday policies (usually one per country); each location uses one. | `GET /api/v1/peopleforce/holiday-policies` |
+| `listEmployeeHolidays` | Lists the public holidays that apply to one employee (from their location's holiday policy). Paginated. | `GET /api/v1/peopleforce/employees/{employeeId}/holidays` |
+| `getEmployeeAbsences` | Answers "is this person off on these dates?": their approved leave (and pending, if asked) plus the public holidays of their holiday policy between two dates, in date order. Working-day exceptions and moved holidays are labelled. Says so if it stopped before reading everything. | `GET /api/v1/peopleforce/employees/{employeeId}/absences?from={date}&to={date}` |
 | `listEmployeeLeaveBalances` | Lists a specific employee's current leave balances per leave type (e.g. "how many vacation days does this person have?"). | `GET /api/v1/peopleforce/employees/{employeeId}/leave-balances` |
+| `listEmployeeSalaries` | Lists an employee's salary history (amount, currency, pay period, effective date, compensation component). Only works when the connected Company API key is allowed to view compensation; the answer follows the key's restriction, not the asking person's. | `GET /api/v1/peopleforce/employees/{employeeId}/salaries` |
 | `listEmployeeSkills` | Lists the skills recorded on a specific employee's profile with proficiency level. | `GET /api/v1/peopleforce/employees/{employeeId}/skills` |
 | `listEmployeeDocuments` | Lists documents attached to a specific employee's profile. Payload shape is dumped as JSON since the public API doesn't document a fixed schema for this endpoint. | `GET /api/v1/peopleforce/employees/{employeeId}/documents` |
 | `listEmployeeNotes` | Lists HR notes on a specific employee's profile. Payload dumped as JSON (undocumented shape). | `GET /api/v1/peopleforce/employees/{employeeId}/notes` |
@@ -388,7 +393,7 @@ Source: `src/peopleforce/server.ts` — 45 tools.
 
 ## PeopleForce v4
 
-Source: `src/peopleforce-v4/server.ts` — 44 tools.
+Source: `src/peopleforce-v4/server.ts` — 46 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -398,6 +403,8 @@ Source: `src/peopleforce-v4/server.ts` — 44 tools.
 | `listBirthdays` | List upcoming birthdays. Defaults upstream to today through 30 days out when no date range is given. | — |
 | `listWorkAnniversaries` | List upcoming work anniversaries. Defaults upstream to today through 30 days out when no date range is given. | — |
 | `listPersonAssets` | List the company assets assigned to a person (laptops, phones, access cards). | — |
+| `listLeaveRequests` | List leave requests across everyone the service account can see, optionally for some people, states, and a date range (from/to keep requests overlapping it). PeopleForce can only narrow "ending on or after from"; the "to" bound is applied to each returned page here, so a page may show fewer rows than it holds — keep paging to the last page. Needs the Time off permission on the key's role (403 without). | — |
+| `listLeaveBalances` | List current leave balances across everyone the service account can see, optionally for some people or leave types. Needs the Time off permission on the key's role (403 without). | — |
 | `listPersonSalaries` | List a person's salary history (amount, currency, pay period, effective date). Needs Compensation granted on the service account's role — without it the call 403s rather than returning an empty list. | — |
 | `getPersonSalary` | Get a single salary record for a person. Needs Compensation granted on the service account's role. | — |
 | `listPersonLifecycles` | List a person's lifecycle records — hire date, prior experience, last working day, last day in office, and termination type/reason/comment plus rehire eligibility. This is where a departure is dated in detail. | — |
@@ -668,4 +675,4 @@ Source: `src/sandbox/server.ts` — 6 tools.
 
 ---
 
-**Grand total: 483 tools across 22 sections.**
+**Grand total: 490 tools across 22 sections.**
