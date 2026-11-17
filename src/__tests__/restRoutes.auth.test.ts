@@ -128,6 +128,9 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/hubspot/conversations',
   '/api/v1/hubspot/tickets',
   '/api/v1/hubspot/tickets/tick-123/conversation-threads',
+  '/api/v1/hubspot/tickets/search',
+  '/api/v1/hubspot/users',
+  '/api/v1/hubspot/teams',
   '/api/v1/hubspot/properties/companies/domain',
   // Redmine. /users/current is listed alongside /users/:userId on purpose: both
   // are one segment under /users, so the only thing keeping "current" from being
@@ -301,6 +304,14 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/hubspot/properties/companies',
   '/api/v1/hubspot/properties/companies/plan',
   '/api/v1/hubspot/engagements/notes/n-1/delete',
+  '/api/v1/hubspot/emails',
+  '/api/v1/hubspot/engagements/notes/n-1/update',
+  '/api/v1/hubspot/tickets',
+  '/api/v1/hubspot/tickets/t-1/update',
+  '/api/v1/hubspot/pipelines/deals',
+  '/api/v1/hubspot/pipelines/deals/p-1/update',
+  '/api/v1/hubspot/pipelines/deals/p-1/stages',
+  '/api/v1/hubspot/pipelines/deals/p-1/stages/s-1/update',
   // Gmail. /labels is in both arrays: GET lists, POST creates.
   '/api/v1/gmail/messages/send',
   // '/api/v1/gmail/filters' is in both arrays: GET lists, POST creates.

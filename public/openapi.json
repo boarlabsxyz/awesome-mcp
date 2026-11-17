@@ -16724,7 +16724,20 @@
         ],
         "responses": {
           "200": {
-            "description": "A HubSpot CRM search response (total, results, paging), or the rendered list when text was requested."
+            "description": "A HubSpot CRM search response (total, results, paging), or the rendered list when text was requested.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmSearchPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -16893,7 +16906,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw HubSpot company object, or its rendering when text was requested."
+            "description": "The raw HubSpot company object, or its rendering when text was requested.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmObject"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -17250,7 +17276,20 @@
         ],
         "responses": {
           "200": {
-            "description": "A HubSpot CRM search response, or the rendered list."
+            "description": "A HubSpot CRM search response, or the rendered list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmSearchPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -17419,7 +17458,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw HubSpot contact object, or its rendering."
+            "description": "The raw HubSpot contact object, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmObject"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -17583,7 +17635,20 @@
         ],
         "responses": {
           "200": {
-            "description": "A HubSpot CRM search response, or the rendered list."
+            "description": "A HubSpot CRM search response, or the rendered list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmSearchPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -17742,7 +17807,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw HubSpot deal object, or its rendering."
+            "description": "The raw HubSpot deal object, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmObject"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -17872,12 +17950,25 @@
     "/api/v1/hubspot/pipelines": {
       "get": {
         "operationId": "listHubSpotPipelines",
-        "summary": "List HubSpot deal pipelines with their ordered stages",
+        "summary": "List HubSpot deal or ticket pipelines with their ordered stages",
         "description": "One call returns every pipeline with its stages, which is how a dealstage ID on a deal record becomes a stage name. Mirrors the MCP tool `listPipelines`.",
         "tags": [
           "hubspot"
         ],
         "parameters": [
+          {
+            "name": "objectType",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "deals",
+                "tickets"
+              ],
+              "default": "deals"
+            },
+            "description": "deals (default) or tickets. Ticket stages carry their open/closed state."
+          },
           {
             "name": "format",
             "in": "query",
@@ -17895,7 +17986,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw pipelines page, or its rendering."
+            "description": "The raw pipelines page, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelinesPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -17929,6 +18033,681 @@
           },
           "404": {
             "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/pipelines/{objectType}": {
+      "post": {
+        "operationId": "createHubSpotPipeline",
+        "summary": "Create a HubSpot deal or ticket pipeline with its stages",
+        "description": "Changes the portal for everyone in it. Deal stages need probability, ticket stages ticketState (400 otherwise). Free accounts cannot add pipelines. Archiving or replacing a pipeline is not exposed. Mirrors the MCP tool `createPipeline`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "deals",
+                "tickets"
+              ]
+            },
+            "description": "deals or tickets."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with createPipelineSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePipelineRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created pipeline with its stages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pipeline"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object type not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HubSpot refused the write as a conflict (for example a duplicate label).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/pipelines/{objectType}/{pipelineId}/update": {
+      "post": {
+        "operationId": "updateHubSpotPipeline",
+        "summary": "Rename or reorder a HubSpot pipeline",
+        "description": "Changes the portal for everyone in it, with no confirmation step (the permanent dashboard key can call it), like the property-schema writes. Partial update (PATCH): stages are untouched. Mirrors the MCP tool `updatePipeline`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "deals",
+                "tickets"
+              ]
+            },
+            "description": "deals or tickets."
+          },
+          {
+            "name": "pipelineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pipeline ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with updatePipelineSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePipelineRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated pipeline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pipeline"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pipeline not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HubSpot refused the write as a conflict (for example a duplicate label).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/pipelines/{objectType}/{pipelineId}/stages": {
+      "post": {
+        "operationId": "createHubSpotPipelineStage",
+        "summary": "Add a stage to a HubSpot pipeline",
+        "description": "Changes the portal for everyone in it, with no confirmation step, like the property-schema writes. Answers 201. Deal stages need probability, ticket stages ticketState; displayOrder omitted appends the stage after the last one (HubSpot requires a position). Mirrors the MCP tool `createPipelineStage`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "deals",
+                "tickets"
+              ]
+            },
+            "description": "deals or tickets."
+          },
+          {
+            "name": "pipelineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pipeline ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with createPipelineStageSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePipelineStageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created stage.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineStage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pipeline not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HubSpot refused the write as a conflict (for example a duplicate label).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/pipelines/{objectType}/{pipelineId}/stages/{stageId}/update": {
+      "post": {
+        "operationId": "updateHubSpotPipelineStage",
+        "summary": "Edit a HubSpot pipeline stage",
+        "description": "Changes the portal for everyone in it, with no confirmation step: a new probability changes deal forecasts, a ticketState flip changes which tickets count as open. Label, order, probability (deals) or ticketState (tickets). Deleting a stage is not exposed. Mirrors the MCP tool `updatePipelineStage`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "deals",
+                "tickets"
+              ]
+            },
+            "description": "deals or tickets."
+          },
+          {
+            "name": "pipelineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pipeline ID."
+          },
+          {
+            "name": "stageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stage ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with updatePipelineStageSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePipelineStageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated stage.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineStage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stage not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HubSpot refused the write as a conflict (for example a duplicate label).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/users": {
+      "get": {
+        "operationId": "listHubSpotUsers",
+        "summary": "List HubSpot account users",
+        "description": "Needs settings.users.read: existing connections reconnect. limit, after. Mirrors the MCP tool `listUsers`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100
+            },
+            "description": "Max users per page (default 100, max 100)."
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Paging token from a previous call (paging.next.after)."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The raw users page, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsersPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Users not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/teams": {
+      "get": {
+        "operationId": "listHubSpotTeams",
+        "summary": "List HubSpot teams",
+        "description": "Needs settings.users.teams.read: existing connections reconnect. Mirrors the MCP tool `listTeams`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The raw teams page, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamsPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Teams not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
             "content": {
               "application/json": {
                 "schema": {
@@ -18109,7 +18888,20 @@
         ],
         "responses": {
           "200": {
-            "description": "A HubSpot CRM search response, or the rendered list."
+            "description": "A HubSpot CRM search response, or the rendered list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmSearchPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -18143,6 +18935,361 @@
           },
           "404": {
             "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createHubSpotTicket",
+        "summary": "Create a HubSpot ticket",
+        "description": "Answers 201. pipelineStage is required by HubSpot; pipeline defaults to 0. Not idempotent. Mirrors the MCP tool `createTicket`.",
+        "tags": [
+          "hubspot"
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with createTicketSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTicketRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created ticket.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pipeline or stage not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HubSpot refused the write as a conflict (for example a duplicate label).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/tickets/search": {
+      "get": {
+        "operationId": "searchHubSpotTickets",
+        "summary": "Search HubSpot tickets by state, pipeline, stage, text and last change",
+        "description": "state=open (default), closed or any - read from each stage open/closed state in its pipeline. pipelineId, stageId, q, modifiedAfter (ISO), limit (max 100), after. Each filter must be given once: a repeated one is refused with 400 rather than dropped. Mirrors the MCP tool `searchTickets`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "closed",
+                "any"
+              ],
+              "default": "open"
+            },
+            "description": "open/closed by the stage's ticket state in its pipeline; any = no state filter."
+          },
+          {
+            "name": "pipelineId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only this ticket pipeline."
+          },
+          {
+            "name": "stageId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only this stage (overrides state)."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Free-text search."
+          },
+          {
+            "name": "modifiedAfter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Only tickets changed after this time (ISO-8601)."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "description": "Max tickets per page (default 25, max 100)."
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Paging token from a previous call (paging.next.after)."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The raw search page, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmSearchPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tickets not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/tickets/{ticketId}/update": {
+      "post": {
+        "operationId": "updateHubSpotTicket",
+        "summary": "Update a HubSpot ticket",
+        "description": "Only the named properties change (hs_pipeline_stage moves it). 200 with the ticket re-read. Mirrors the MCP tool `updateTicket`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "ticketId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot ticket ID to update."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with updateTicketSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTicketRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The ticket re-read after the update, and what each sent property read back as.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateTicketResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Ticket not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HubSpot refused the write as a conflict (for example a duplicate label).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
             "content": {
               "application/json": {
                 "schema": {
@@ -18290,7 +19437,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw HubSpot property definition, or its rendering."
+            "description": "The raw HubSpot property definition, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyDefinition"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -18645,6 +19805,89 @@
         }
       }
     },
+    "/api/v1/hubspot/emails": {
+      "post": {
+        "operationId": "logHubSpotEmail",
+        "summary": "Log an email on the HubSpot timeline and optionally attach it to a record",
+        "description": "Records an email; sends nothing. Body limit 5mb. direction defaults to EMAIL. Same association reporting as notes; tickets are a valid target. Mirrors the MCP tool `logEmail`.",
+        "tags": [
+          "hubspot"
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with logEmailSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogEmailRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The email was recorded. This is 201 even when the association failed, because the record does exist — check association.attached before reporting it as on the timeline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngagementResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/hubspot/tasks": {
       "post": {
         "operationId": "createHubSpotTask",
@@ -18802,6 +20045,126 @@
         }
       }
     },
+    "/api/v1/hubspot/engagements/{engagementType}/{engagementId}/update": {
+      "post": {
+        "operationId": "updateHubSpotEngagement",
+        "summary": "Edit a HubSpot note, task, call, meeting or logged email",
+        "description": "Only the named properties change. Body limit 5mb. Each is re-read: confirmed maps every property to true, false (reads back differently) or null (not returned). Mirrors the MCP tool `updateEngagement`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "engagementType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "notes",
+                "tasks",
+                "calls",
+                "meetings",
+                "emails"
+              ]
+            },
+            "description": "Type of the activity."
+          },
+          {
+            "name": "engagementId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot ID of the activity."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with updateEngagementSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEngagementRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The engagement as re-read, and what each sent property read back as.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateEngagementResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Engagement not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HubSpot refused the write as a conflict (for example a duplicate label).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/hubspot/engagements/{engagementType}/{engagementId}/delete": {
       "post": {
         "operationId": "deleteHubSpotEngagement",
@@ -18816,9 +20179,15 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "notes",
+                "tasks",
+                "calls",
+                "meetings"
+              ]
             },
-            "description": "Type of engagement to delete (plural, matching the tool that created it)."
+            "description": "Type of engagement to delete (plural, matching the tool that created it). Logged emails are deletable over MCP only."
           },
           {
             "name": "engagementId",
@@ -38070,7 +39439,8 @@
             "enum": [
               "companies",
               "contacts",
-              "deals"
+              "deals",
+              "tickets"
             ],
             "description": "Record type to attach the activity to. Must be given together with associateToObjectId."
           },
@@ -38119,7 +39489,8 @@
             "enum": [
               "companies",
               "contacts",
-              "deals"
+              "deals",
+              "tickets"
             ],
             "description": "Record type to attach the activity to. Must be given together with associateToObjectId."
           },
@@ -38178,7 +39549,8 @@
             "enum": [
               "companies",
               "contacts",
-              "deals"
+              "deals",
+              "tickets"
             ],
             "description": "Record type to attach the activity to. Must be given together with associateToObjectId."
           },
@@ -38409,7 +39781,8 @@
             "enum": [
               "companies",
               "contacts",
-              "deals"
+              "deals",
+              "tickets"
             ],
             "description": "Record type to attach this activity to (companies, contacts, or deals), so it shows on that timeline."
           },
@@ -38567,6 +39940,524 @@
           "description": {
             "type": "string",
             "description": "Optional new description."
+          }
+        }
+      },
+      "LogEmailRequest": {
+        "type": "object",
+        "description": "Records an email on the timeline; nothing is sent. associateToObjectType and associateToObjectId go together or not at all.",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "Email subject (hs_email_subject)."
+          },
+          "text": {
+            "type": "string",
+            "description": "Email body as plain text (hs_email_text)."
+          },
+          "html": {
+            "type": "string",
+            "description": "Email body as HTML (hs_email_html)."
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "EMAIL",
+              "INCOMING_EMAIL",
+              "FORWARDED_EMAIL"
+            ],
+            "default": "EMAIL",
+            "description": "EMAIL = sent by your team, INCOMING_EMAIL = a reply received, FORWARDED_EMAIL (hs_email_direction)."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "BOUNCED",
+              "FAILED",
+              "SCHEDULED",
+              "SENDING",
+              "SENT"
+            ],
+            "description": "Send status to record (hs_email_status)."
+          },
+          "hs_timestamp": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "description": "Activity time as ISO-8601 or epoch milliseconds. Defaults to now."
+          },
+          "associateToObjectType": {
+            "type": "string",
+            "enum": [
+              "companies",
+              "contacts",
+              "deals",
+              "tickets"
+            ],
+            "description": "Record type to attach the email to. Must be given together with associateToObjectId."
+          },
+          "associateToObjectId": {
+            "type": "string",
+            "description": "ID of the record to attach the email to. Must be given together with associateToObjectType."
+          }
+        }
+      },
+      "UpdateEngagementRequest": {
+        "type": "object",
+        "required": [
+          "properties"
+        ],
+        "properties": {
+          "properties": {
+            "type": "object",
+            "additionalProperties": {},
+            "minProperties": 1,
+            "description": "Properties to set (at least one), e.g. hs_note_body, hs_task_status, hs_call_body."
+          }
+        }
+      },
+      "UpdateEngagementResult": {
+        "type": "object",
+        "required": [
+          "engagement",
+          "confirmed"
+        ],
+        "properties": {
+          "engagement": {
+            "$ref": "#/components/schemas/CrmObject"
+          },
+          "confirmed": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean",
+              "nullable": true
+            },
+            "description": "Each sent property: true = reads back as sent, false = reads back differently, null = could not confirm (not returned, or the re-read failed)."
+          }
+        }
+      },
+      "CreateTicketRequest": {
+        "type": "object",
+        "required": [
+          "subject",
+          "pipelineStage"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Ticket name (subject)."
+          },
+          "content": {
+            "type": "string",
+            "description": "Ticket description (content)."
+          },
+          "pipeline": {
+            "type": "string",
+            "default": "0",
+            "description": "Ticket pipeline ID (from listPipelines objectType tickets). Default \"0\", the default support pipeline."
+          },
+          "pipelineStage": {
+            "type": "string",
+            "description": "Stage ID within that pipeline (hs_pipeline_stage) — HubSpot requires one."
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "LOW",
+              "MEDIUM",
+              "HIGH",
+              "URGENT"
+            ],
+            "description": "hs_ticket_priority."
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Any other ticket properties."
+          }
+        }
+      },
+      "UpdateTicketRequest": {
+        "type": "object",
+        "required": [
+          "properties"
+        ],
+        "properties": {
+          "properties": {
+            "type": "object",
+            "additionalProperties": {},
+            "minProperties": 1,
+            "description": "Properties to set (at least one), e.g. subject, content, hs_pipeline_stage to move it, hs_ticket_priority."
+          }
+        }
+      },
+      "PipelineStageInput": {
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stage name."
+          },
+          "displayOrder": {
+            "type": "integer",
+            "description": "Position in the pipeline (0 first)."
+          },
+          "probability": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Deal stages: win probability 0.0–1.0 (1 = closed won, 0 = closed lost). Required for deals; refused for tickets."
+          },
+          "ticketState": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "CLOSED"
+            ],
+            "description": "Ticket stages: OPEN or CLOSED. Required for tickets; refused for deals."
+          }
+        }
+      },
+      "CreatePipelineRequest": {
+        "type": "object",
+        "required": [
+          "label",
+          "stages"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Pipeline name."
+          },
+          "displayOrder": {
+            "type": "integer",
+            "description": "Position among pipelines. Defaults to 0."
+          },
+          "stages": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/PipelineStageInput"
+            },
+            "description": "The stages, in order (displayOrder defaults to the array index). HubSpot requires at least one."
+          }
+        }
+      },
+      "UpdatePipelineRequest": {
+        "type": "object",
+        "minProperties": 1,
+        "description": "At least one of label or displayOrder.",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "New name."
+          },
+          "displayOrder": {
+            "type": "integer",
+            "description": "New position among pipelines."
+          }
+        }
+      },
+      "CreatePipelineStageRequest": {
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stage name."
+          },
+          "displayOrder": {
+            "type": "integer",
+            "description": "Position in the pipeline (0 first). Omitted: after the last stage."
+          },
+          "probability": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Deal stages: win probability 0.0–1.0 (1 = closed won, 0 = closed lost). Required for deals; refused for tickets."
+          },
+          "ticketState": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "CLOSED"
+            ],
+            "description": "Ticket stages: OPEN or CLOSED. Required for tickets; refused for deals."
+          }
+        }
+      },
+      "UpdatePipelineStageRequest": {
+        "type": "object",
+        "minProperties": 1,
+        "description": "At least one of label, displayOrder, probability, ticketState.",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stage name."
+          },
+          "displayOrder": {
+            "type": "integer",
+            "description": "Position in the pipeline (0 first)."
+          },
+          "probability": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Deal stages: win probability 0.0–1.0 (1 = closed won, 0 = closed lost). Required for deals; refused for tickets."
+          },
+          "ticketState": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "CLOSED"
+            ],
+            "description": "Ticket stages: OPEN or CLOSED. Required for tickets; refused for deals."
+          }
+        }
+      },
+      "PipelineStage": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A raw HubSpot pipeline stage. metadata carries probability (deals) or ticketState (tickets).",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "displayOrder": {
+            "type": "integer"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Pipeline": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A raw HubSpot pipeline with its stages.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "displayOrder": {
+            "type": "integer"
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PipelineStage"
+            }
+          }
+        }
+      },
+      "CrmSearchPage": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A raw HubSpot CRM search response.",
+        "properties": {
+          "total": {
+            "type": "integer"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CrmObject"
+            }
+          },
+          "paging": {
+            "type": "object",
+            "description": "Present when there is a next page; pass paging.next.after as ?after.",
+            "properties": {
+              "next": {
+                "type": "object",
+                "properties": {
+                  "after": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "PipelinesPage": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Pipeline"
+            }
+          }
+        }
+      },
+      "HubSpotUser": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "firstName": {
+            "type": "string"
+          },
+          "lastName": {
+            "type": "string"
+          },
+          "roleIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "primaryTeamId": {
+            "type": "string"
+          },
+          "secondaryTeamIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "superAdmin": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UsersPage": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HubSpotUser"
+            }
+          },
+          "paging": {
+            "type": "object",
+            "description": "Present when there is a next page; pass paging.next.after as ?after.",
+            "properties": {
+              "next": {
+                "type": "object",
+                "properties": {
+                  "after": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "HubSpotTeam": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "userIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "secondaryUserIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "TeamsPage": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HubSpotTeam"
+            }
+          }
+        }
+      },
+      "PropertyDefinition": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A raw HubSpot property definition.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "fieldType": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "UpdateTicketResult": {
+        "type": "object",
+        "required": [
+          "ticket",
+          "confirmed"
+        ],
+        "properties": {
+          "ticket": {
+            "$ref": "#/components/schemas/CrmObject"
+          },
+          "confirmed": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean",
+              "nullable": true
+            },
+            "description": "Each sent property: true = reads back as sent, false = reads back differently, null = could not confirm (not returned, or the re-read failed after the update succeeded; ticket then carries only id)."
           }
         }
       },

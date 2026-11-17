@@ -814,6 +814,11 @@ export async function seedDefaultCatalogs(): Promise<void> {
       // Without sales-email-read, getCompanyActivity gets EMAIL engagement
       // bodies redacted (meetings/calls come through fine).
       'sales-email-read',
+      // listUsers / listTeams. HubSpot's scope reference lists both as
+      // "Available to all accounts", so they cannot fail consent on a Free or
+      // Starter portal. The HubSpot app must list them too (app settings →
+      // Auth → scopes), and existing connections reconnect to get them.
+      'settings.users.read', 'settings.users.teams.read',
       // Engagement writes/deletes (createNote / createTask / logCall /
       // logMeeting / deleteEngagement) need NO extra scope: HubSpot's notes,
       // tasks, calls, and meetings APIs all document their requirement as
