@@ -56,6 +56,7 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/clickup/docs/doc-123/pages/page-123?workspaceId=w-1',
   '/api/v1/clickup/workspaces/w-1/docs',
   '/api/v1/clickup/workspaces/w-1/docs/search?query=sync',
+  '/api/v1/clickup/workspaces/90151491867/attachments?url=https%3A%2F%2Ft90151491867.p.clickup-attachments.com%2Ft90151491867%2Fa%2Fb.mp4',
   '/api/v1/slack/channels',
   '/api/v1/slack/channels/C123/messages',
   '/api/v1/slack/channels/C123/threads/1234.5678',
@@ -71,6 +72,11 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/peopleforce/employees',
   '/api/v1/peopleforce/employees/emp-123',
   '/api/v1/peopleforce/departments',
+  '/api/v1/peopleforce/holidays',
+  '/api/v1/peopleforce/holiday-policies',
+  '/api/v1/peopleforce/employees/emp-123/salaries',
+  '/api/v1/peopleforce/employees/emp-123/holidays',
+  '/api/v1/peopleforce/employees/emp-123/absences?from=2026-01-01&to=2026-01-31',
   '/api/v1/peopleforce/leave-requests',
   '/api/v1/peopleforce/leave-requests/lr-123',
   '/api/v1/peopleforce/leave-types',
@@ -174,6 +180,13 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/outline/collections/col-123/structure',
   '/api/v1/outline/comments/cmt-123',
   '/api/v1/outline/attachments/att-123/url',
+  '/api/v1/outline/documents/doc-123/revisions',
+  '/api/v1/outline/documents/doc-123/compare?from=rev-1',
+  '/api/v1/outline/revisions/rev-123',
+  '/api/v1/outline/users',
+  '/api/v1/outline/users/usr-123',
+  '/api/v1/outline/templates',
+  '/api/v1/outline/templates/tpl-123',
   '/api/v1/browserbase/sessions',
   '/api/v1/browserbase/sessions/sess-123',
   // GitHub (registered from GITHUB_READ_ROUTES). The contents route is listed
@@ -203,6 +216,7 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
 const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   // Drive upload. '/api/v1/drive/files' is in both arrays: GET searches, POST uploads.
   '/api/v1/drive/files',
+  '/api/v1/drive/upload-sessions',
   // Storage. /find is a READ served over POST (the where conditions).
   '/api/v1/storage/collections/people/find',
   '/api/v1/storage/collections/people/records',
@@ -247,6 +261,7 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/slack/canvases',
   '/api/v1/slack/canvases/F123/edit',
   '/api/v1/slack/lists',
+  '/api/v1/slack/lists/F123/update',
   '/api/v1/slack/lists/F123/items',
   '/api/v1/slack/lists/F123/items/Rec123/update',
   // Redmine
@@ -390,8 +405,16 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/outline/documents/doc-123/unarchive',
   '/api/v1/outline/documents/doc-123/restore',
   '/api/v1/outline/documents/doc-123/comments',
+  '/api/v1/outline/documents/doc-123/unpublish',
+  '/api/v1/outline/documents/import',
+  '/api/v1/outline/attachments',
+  '/api/v1/outline/comments/cmt-123/update',
+  '/api/v1/outline/comments/cmt-123/resolve',
+  '/api/v1/outline/comments/cmt-123/reopen',
   '/api/v1/outline/collections',
   '/api/v1/outline/collections/col-123',
+  '/api/v1/outline/collections/col-123/archive',
+  '/api/v1/outline/collections/col-123/restore',
   // The two export starters are POSTs, not GETs: each call queues another
   // server-side export job, and a GET invites a proxy to repeat it.
   '/api/v1/outline/collections/col-123/export',

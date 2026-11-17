@@ -10,8 +10,10 @@
 //   - Filter params that work: `status` (employees), `state` (leave requests).
 //   - Filter params that DO NOT work despite looking obvious: `department_id`
 //     on /employees, `employee_id` on /leave_requests, and any date-range
-//     filter on /leave_requests. Nested endpoints like
-//     /employees/{id}/leave_requests are 404. The response body wraps the
+//     filter on /leave_requests (v2). v3 documents `employee_id` and
+//     `states[]` on its /leave_requests (UNVERIFIED live), so code using them
+//     still drops rows for anyone else rather than trusting the filter.
+//     Nested endpoints like /employees/{id}/leave_requests are 404. The response body wraps the
 //     collection in { data, metadata: { pagination: { page, pages, count,
 //     items } } }.
 
@@ -601,6 +603,39 @@ export type PeopleForceEmployeeTableData = {
 };
 
 /** Pagination shape the API actually returns. Server-forced page size. */
+/** One salary record (v3). `amount` is a decimal string; `per` is the pay period. */
+export type PeopleForceSalary = {
+  id?: number;
+  effective_on?: string;
+  amount?: string;
+  currency_code?: string;
+  per?: string;
+  comment?: string | null;
+  overtime?: boolean;
+  pay_schedule?: { id?: number; name?: string } | null;
+  compensation_component?: { id?: number; name?: string; code?: string; payout_type?: string; frequency?: string } | null;
+};
+
+/**
+ * A public holiday (v3). A one-day holiday has `occurs_on`; a span has
+ * `starts_on`/`ends_on`. `working: true` marks a working-day exception (a
+ * weekend made a working day), not a day off. `observed_on` is the day off
+ * when the holiday falls on a weekend; `compensated_on` the day given instead.
+ */
+export type PeopleForceHoliday = {
+  id?: number;
+  name?: string;
+  occurs_on?: string;
+  starts_on?: string;
+  ends_on?: string;
+  working?: boolean;
+  compensated_on?: string | null;
+  observed_on?: string | null;
+  holiday_policy_id?: number;
+};
+
+export type PeopleForceHolidayPolicy = { id?: number; name?: string; country_code?: string };
+
 export type PeopleForcePagination = {
   page?: number;
   pages?: number;
@@ -791,6 +826,35 @@ export class PeopleForceClient {
   }
 
   // === Employee-nested ===
+
+  // === Compensation and holidays (v3) ===
+
+  /** Needs a key whose restriction allows viewing compensation; otherwise 403. Not paginated upstream. */
+  listEmployeeSalaries(employeeId: string | number): Promise<PeopleForceListResponse<PeopleForceSalary>> {
+    return this.requestAt(this.apiV3BaseUrl, 'GET', `/employees/${encodeURIComponent(String(employeeId))}/salaries`);
+  }
+
+  listHolidays(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceHoliday>> {
+    return this.requestAt(this.apiV3BaseUrl, 'GET', '/holidays', undefined, { page: input.page });
+  }
+
+  listHolidayPolicies(input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceHolidayPolicy>> {
+    return this.requestAt(this.apiV3BaseUrl, 'GET', '/holiday_policies', undefined, { page: input.page });
+  }
+
+  /** The holidays that apply to this employee (their location's holiday policy). */
+  listEmployeeHolidays(employeeId: string | number, input: { page?: number } = {}): Promise<PeopleForceListResponse<PeopleForceHoliday>> {
+    return this.requestAt(this.apiV3BaseUrl, 'GET', `/employees/${encodeURIComponent(String(employeeId))}/holidays`, undefined, { page: input.page });
+  }
+
+  /** v3 leave requests for one employee; v3 filters by employee and state, which v2 cannot. */
+  listEmployeeLeaveRequestsV3(employeeId: string | number, input: { page?: number; states?: string[] } = {}): Promise<PeopleForceListResponse<PeopleForceLeaveRequest>> {
+    return this.requestAt(this.apiV3BaseUrl, 'GET', '/leave_requests', undefined, {
+      page: input.page,
+      employee_id: String(employeeId),
+      ...(input.states?.length ? { 'states[]': input.states } : {}),
+    });
+  }
 
   listEmployeeLeaveBalances(employeeId: string | number): Promise<PeopleForceListResponse<PeopleForceLeaveBalance>> {
     return this.request('GET', `/employees/${encodeURIComponent(String(employeeId))}/leave_balances`);
@@ -1412,6 +1476,135 @@ export function formatLocationList(
     if (loc.address) lines.push(`Address: ${loc.address}`);
     return lines;
   });
+}
+
+export function formatSalaries(salaries: PeopleForceSalary[]): string {
+  if (salaries.length === 0) return 'No salary records found for this employee.';
+  const sorted = [...salaries].sort((x, y) => String(y.effective_on ?? '').localeCompare(String(x.effective_on ?? '')));
+  const parts = ['# Salary History (newest first)', ''];
+  sorted.forEach((s, i) => {
+    const per = s.per ? ` per ${s.per}` : '';
+    parts.push(`## ${i + 1}. ${s.amount ?? '?'} ${s.currency_code ?? ''}${per}`.trimEnd());
+    if (s.effective_on) parts.push(`Effective on: ${s.effective_on}`);
+    if (s.compensation_component?.name) parts.push(`Component: ${s.compensation_component.name}${s.compensation_component.frequency ? ` (${s.compensation_component.frequency})` : ''}`);
+    if (s.pay_schedule?.name) parts.push(`Pay schedule: ${s.pay_schedule.name}`);
+    if (s.overtime) parts.push('Overtime: yes');
+    if (s.comment) parts.push(`Comment: ${s.comment}`);
+    parts.push('');
+  });
+  return parts.join('\n').trimEnd();
+}
+
+/** First and last day a holiday covers. */
+export function holidaySpan(h: PeopleForceHoliday): { start?: string; end?: string } {
+  const start = h.starts_on ?? h.occurs_on;
+  return { start, end: h.ends_on ?? start };
+}
+
+function holidayLine(h: PeopleForceHoliday): string {
+  const { start, end } = holidaySpan(h);
+  const when = start && end && start !== end ? `${start} → ${end}` : (start ?? '?');
+  const notes: string[] = [];
+  if (h.working) notes.push('working day — not a day off');
+  if (h.observed_on && h.observed_on !== start) notes.push(`observed ${h.observed_on}`);
+  if (h.compensated_on) notes.push(`day off moved to ${h.compensated_on}`);
+  return `${when} — ${h.name ?? 'Holiday'}${notes.length ? ` (${notes.join('; ')})` : ''}`;
+}
+
+export function formatHolidayList(holidays: PeopleForceHoliday[], pagination?: PeopleForcePagination): string {
+  if (holidays.length === 0) return renderEmptyList('Holidays', 'holidays', pagination);
+  const parts = ['# Holidays', ''];
+  const pag = renderPaginationLine(pagination);
+  if (pag) parts.push(pag, '');
+  for (const h of holidays) parts.push(`- ${holidayLine(h)}${h.holiday_policy_id !== undefined ? ` [policy ${h.holiday_policy_id}]` : ''}`);
+  return parts.join('\n');
+}
+
+export function formatHolidayPolicyList(policies: PeopleForceHolidayPolicy[], pagination?: PeopleForcePagination): string {
+  return formatNamedList('Holiday Policies', policies, pagination, (p) => {
+    const cc = (p as PeopleForceHolidayPolicy).country_code;
+    return cc ? [`Country: ${cc}`] : [];
+  });
+}
+
+/** Pages read per source by collectEmployeeAbsences before it stops and says so. */
+export const ABSENCE_PAGE_LIMIT = 10;
+
+export type EmployeeAbsences = {
+  employeeId: string;
+  from: string;
+  to: string;
+  leave: PeopleForceLeaveRequest[];
+  holidays: PeopleForceHoliday[];
+  /** Sources whose pages ran past ABSENCE_PAGE_LIMIT: the answer may be missing entries. */
+  truncated: string[];
+};
+
+const overlaps = (start: string | undefined, end: string | undefined, from: string, to: string) =>
+  Boolean(start) && (start as string) <= to && (end ?? start as string) >= from;
+
+/**
+ * Everything that keeps an employee off work between two dates: their leave
+ * requests (approved, plus pending if asked) and the public holidays of their
+ * holiday policy. Both are paged in full (up to ABSENCE_PAGE_LIMIT pages each)
+ * and filtered for overlap here, because v3 documents no date semantics for
+ * its leave filters. Working-day holiday exceptions are kept and labelled.
+ */
+export async function collectEmployeeAbsences(
+  client: PeopleForceClient,
+  input: { employeeId: string | number; from: string; to: string; includePending?: boolean },
+): Promise<EmployeeAbsences> {
+  const truncated: string[] = [];
+  const states = input.includePending ? ['approved', 'pending'] : ['approved'];
+  const leave: PeopleForceLeaveRequest[] = [];
+  // v2 ignored employee_id on this endpoint; if v3 did too, every colleague's
+  // leave would come back. Rows for anyone else are dropped, not trusted.
+  const mine = (l: PeopleForceLeaveRequest) => {
+    const id = l.employee_id ?? (l.employee as { id?: unknown } | null | undefined)?.id;
+    return id === undefined || String(id) === String(input.employeeId);
+  };
+  for (let page = 1; ; page++) {
+    const r = await client.listEmployeeLeaveRequestsV3(input.employeeId, { page, states });
+    leave.push(...(r.data ?? []).filter((l) => mine(l) && overlaps(l.starts_on, l.ends_on, input.from, input.to)));
+    const pages = r.metadata?.pagination?.pages ?? 1;
+    if (!(r.data?.length) || page >= pages) break;
+    if (page >= ABSENCE_PAGE_LIMIT) { truncated.push(`leave requests (stopped after ${page} of ${pages} pages)`); break; }
+  }
+  const holidays: PeopleForceHoliday[] = [];
+  for (let page = 1; ; page++) {
+    const r = await client.listEmployeeHolidays(input.employeeId, { page });
+    holidays.push(...(r.data ?? []).filter((h) => {
+      const { start, end } = holidaySpan(h);
+      // The day off may be the observed or compensating day, not the holiday itself.
+      return overlaps(start, end, input.from, input.to)
+        || [h.observed_on, h.compensated_on].some((d) => d ? overlaps(d, d, input.from, input.to) : false);
+    }));
+    const pages = r.metadata?.pagination?.pages ?? 1;
+    if (!(r.data?.length) || page >= pages) break;
+    if (page >= ABSENCE_PAGE_LIMIT) { truncated.push(`holidays (stopped after ${page} of ${pages} pages)`); break; }
+  }
+  return { employeeId: String(input.employeeId), from: input.from, to: input.to, leave, holidays, truncated };
+}
+
+export function formatEmployeeAbsences(a: EmployeeAbsences): string {
+  const rows: Array<{ start: string; line: string }> = [];
+  for (const l of a.leave) {
+    const span = l.starts_on === l.ends_on || !l.ends_on ? l.starts_on : `${l.starts_on} → ${l.ends_on}`;
+    const amount = l.amount ? `, ${l.amount}${l.tracking_time_in ? ` ${l.tracking_time_in}` : ''}` : '';
+    rows.push({ start: l.starts_on ?? '', line: `${span} — ${l.leave_type ?? 'Leave'} (${l.state ?? 'unknown state'}${amount}) [leave request ${l.id ?? '?'}]` });
+  }
+  const workingDays: string[] = [];
+  for (const h of a.holidays) {
+    if (h.working) workingDays.push(holidayLine(h));
+    else rows.push({ start: holidaySpan(h).start ?? '', line: `${holidayLine(h)} [public holiday]` });
+  }
+  rows.sort((x, y) => x.start.localeCompare(y.start));
+  const parts = [`# Absences for employee ${a.employeeId}, ${a.from} → ${a.to}`, ''];
+  if (rows.length === 0) parts.push('No leave or public holidays in this period.');
+  else for (const r of rows) parts.push(`- ${r.line}`);
+  if (workingDays.length) parts.push('', 'Working-day exceptions (days that are worked, not off):', ...workingDays.map((l) => `- ${l}`));
+  if (a.truncated.length) parts.push('', `⚠ Partial: ${a.truncated.join('; ')}. Entries beyond that are not shown.`);
+  return parts.join('\n');
 }
 
 export function formatLeaveBalances(balances: PeopleForceLeaveBalance[]): string {

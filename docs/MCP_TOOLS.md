@@ -10,15 +10,15 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Docs](#google-docs) (45)
 - [Google Sheets](#google-sheets) (14)
 - [Google Calendar](#google-calendar) (6)
-- [Google Drive](#google-drive) (18)
+- [Google Drive](#google-drive) (19)
 - [Gmail](#gmail) (18)
 - [Google Slides](#google-slides) (6)
-- [ClickUp](#clickup) (48)
+- [ClickUp](#clickup) (49)
 - [Slack (bot)](#slack-bot-) (9)
 - [Slack (user)](#slack-user-) (17)
-- [Outline](#outline) (27)
-- [PeopleForce](#peopleforce) (45)
-- [PeopleForce v4](#peopleforce-v4) (44)
+- [Outline](#outline) (43)
+- [PeopleForce](#peopleforce) (50)
+- [PeopleForce v4](#peopleforce-v4) (46)
 - [HubSpot](#hubspot) (34)
 - [Redmine](#redmine) (46)
 - [Browserbase](#browserbase) (9)
@@ -109,7 +109,7 @@ Source: `src/google-sheets/server.ts` — 14 tools.
 | `updateCellByFieldName` | Find a row by searching a column for a value, then update a specific field (identified by header name) in that row. Assumes row 1 contains the header names. | — |
 | `batchUpdateSpreadsheet` | Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, alignment and text wrapping, data validation (dropdowns, checkboxes, number and formula rules), native charts (addChart returns the chart ID), column/row sizing, tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet), and grid growth (appendDimension adds rows/columns at the end, insertDimension makes room in the middle). Use appendDimension before a writeSpreadsheet that exceeds the tab's current row count — writeSpreadsheet does not grow the grid. A tab added by addSheet in THIS batch cannot be targeted by a later operation in the same batch (it has no sheetId yet), so size it with addSheet rowCount/columnCount instead. | `POST /api/v1/sheets/{spreadsheetId}/batchUpdate` |
 | `deleteSpreadsheetRowsOrColumns` | Deletes whole rows or columns from a tab, with their content; the rest shift up or left. Not reversible through the API. | — |
-| `inspectSpreadsheetCells` | Reads cells without changing them: formula text, raw and displayed values, formatting, hyperlinks, notes and validation rules. | `GET /api/v1/sheets/{spreadsheetId}/cells?range={range}` |
+| `inspectSpreadsheetCells` | Reads cells without changing them: formula text, raw and displayed values, formatting (format = as set on the cell; effectiveFormat = as displayed, including conditional formatting and defaults), hyperlinks, notes and validation rules. | `GET /api/v1/sheets/{spreadsheetId}/cells?range={range}` |
 
 ## Google Calendar
 
@@ -126,7 +126,7 @@ Source: `src/google-calendar/server.ts` — 6 tools.
 
 ## Google Drive
 
-Source: `src/google-drive/server.ts` — 18 tools.
+Source: `src/google-drive/server.ts` — 19 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -148,6 +148,7 @@ Source: `src/google-drive/server.ts` — 18 tools.
 | `searchDriveFiles` | Searches all of Drive (any file type, any folder) by name or content, or lists recently modified files when no query is given. Paginated. | `GET /api/v1/drive/files?q={query}` |
 | `listDriveChanges` | Follows the Drive change feed: what was created, edited, trashed or removed since a token. First call (no pageToken) returns the token to poll with. | `GET /api/v1/drive/changes` |
 | `uploadDriveFile` | Uploads a file (base64 bytes or text) to Drive, optionally converting it into a Google Doc, Sheet or Slides. Up to 20 MB. | `POST /api/v1/drive/files` |
+| `createDriveUploadSession` | For files too big for uploadDriveFile (over 20 MB): opens a Drive resumable upload and returns its upload URL. A client with a shell then PUTs the file to that URL (curl command included), straight to Google; the response to the PUT is the new file. Treat the URL as a secret: anyone holding it can upload that one file into this Drive for about a week. Nothing is created until the bytes arrive. convertTo is checked against what Drive can import. | `POST /api/v1/drive/upload-sessions` |
 
 ## Gmail
 
@@ -189,7 +190,7 @@ Source: `src/google-slides/server.ts` — 6 tools.
 
 ## ClickUp
 
-Source: `src/clickup/server.ts` — 48 tools.
+Source: `src/clickup/server.ts` — 49 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -233,6 +234,7 @@ Source: `src/clickup/server.ts` — 48 tools.
 | `searchDocs` | Find ClickUp Docs by name, newest first. Pages through the entire workspace, so a recently-created doc is found regardless of how many docs exist. Matching is case-insensitive and token-based: every word in the query must appear in the title, in any order, so "AWESOME Sync" matches "[AWESOME] Sync - 08/15/2026". Omit query to list every doc newest-first. Always reports how many docs were scanned, so an empty result means "not there" rather than "did not look". | `GET /api/v1/clickup/workspaces/{workspaceId}/docs/search` |
 | `createDoc` | Create a new ClickUp Doc in a workspace. Optionally place it inside a Space, Folder, or List by providing parent ID and type. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs` |
 | `getPage` | Get a specific page from a ClickUp Doc, including its full content in markdown. | `GET /api/v1/clickup/docs/{docId}/pages/{pageId}?workspaceId={workspaceId}` |
+| `getAttachmentInfo` | Report the name, type and size of a non-public ClickUp attachment URL (https://t<workspaceId>.p.clickup-attachments.com/…) and a curl to download it. | `GET /api/v1/clickup/workspaces/{workspaceId}/attachments?url={attachmentUrl}` |
 | `createPage` | Create a new page in a ClickUp Doc. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages` |
 | `editPage` | Edit a page in a ClickUp Doc. Can replace, append, or prepend content. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages/{pageId}` |
 | `insertImageIntoPage` | Add an image to a ClickUp Doc page. Provide the image as EXACTLY ONE of imageUrl (a public http(s) URL — strongly preferred) or imageBase64 (base64 bytes, for SMALL images only — the payload consumes the calling model context, so use imageUrl whenever a public URL exists). The image is re-hosted (recompressed to WebP) and embedded as markdown (append by default). ClickUp has no image-upload API for docs, so the image is stored and served by this server — requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL. If imageUrl is already on this server, re-hosting is skipped automatically; pass skipRehost:true to force embedding the given URL as-is. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages/{pageId}/images` |
@@ -284,7 +286,7 @@ Source: `src/slack-user/server.ts` — 17 tools.
 
 ## Outline
 
-Source: `src/outline/server.ts` — 27 tools.
+Source: `src/outline/server.ts` — 43 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -296,36 +298,52 @@ Source: `src/outline/server.ts` — 27 tools.
 | `getDocumentBacklinks` | Lists all Outline documents that link to a given document. | `GET /api/v1/outline/documents/{documentId}/backlinks` |
 | `listArchivedDocuments` | Lists all archived Outline documents. | `GET /api/v1/outline/documents/archived` |
 | `listTrash` | Lists all Outline documents currently in the trash. | `GET /api/v1/outline/documents/trash` |
-| `createDocument` | Creates a new Outline document in a collection. Optionally publishes immediately, sets an icon, or nests under a parent. | `POST /api/v1/outline/documents` |
-| `updateDocument` | Updates an Outline document. Replaces title/content unless append=true. | `POST /api/v1/outline/documents/{documentId}` |
+| `createDocument` | Creates an Outline document in a collection: published or draft, nested, styled, or from a template (templateId). | `POST /api/v1/outline/documents` |
+| `updateDocument` | Updates an Outline document: replace or append content, edit one passage (findText + text), restyle, or publish a draft. | `POST /api/v1/outline/documents/{documentId}` |
 | `moveDocument` | Moves an Outline document to a different collection and/or under a different parent. Must specify at least one destination. | `POST /api/v1/outline/documents/{documentId}/move` |
 | `archiveDocument` | Archives an Outline document (removes from collections but keeps searchable). Reversible via unarchiveDocument. | `POST /api/v1/outline/documents/{documentId}/archive` |
 | `unarchiveDocument` | Unarchives a previously archived Outline document. | `POST /api/v1/outline/documents/{documentId}/unarchive` |
 | `restoreDocument` | Restores an Outline document from the trash back to active status. | `POST /api/v1/outline/documents/{documentId}/restore` |
+| `unpublishDocument` | Returns a published Outline document to draft, hiding it from its collection until it is published again. | `POST /api/v1/outline/documents/{documentId}/unpublish` |
+| `importHtmlDocument` | Creates an Outline document from HTML with Outline's importer, which also copies its images into the workspace. | `POST /api/v1/outline/documents/import` |
 | `deleteDocument` | Moves an Outline document to trash. Set permanent=true to skip trash and delete immediately (irreversible). | — |
 | `listCollections` | Lists all Outline collections in the workspace. | `GET /api/v1/outline/collections` |
 | `getCollectionStructure` | Returns the hierarchical document tree for an Outline collection. | `GET /api/v1/outline/collections/{collectionId}/structure` |
 | `createCollection` | Creates a new Outline collection. | `POST /api/v1/outline/collections` |
-| `updateCollection` | Updates an Outline collection's name, description, or color. Provide at least one field. | `POST /api/v1/outline/collections/{collectionId}` |
+| `updateCollection` | Updates an Outline collection's name, description, color, or icon. Provide at least one field. | `POST /api/v1/outline/collections/{collectionId}` |
+| `archiveCollection` | Archives an Outline collection with its documents: hidden from sidebar and search, not deleted (undo: restoreCollection). | `POST /api/v1/outline/collections/{collectionId}/archive` |
+| `restoreCollection` | Restores an archived Outline collection and its documents to the sidebar and search. | `POST /api/v1/outline/collections/{collectionId}/restore` |
 | `deleteCollection` | Permanently deletes an Outline collection AND all documents in it. This cannot be undone. | — |
 | `exportCollection` | Starts an async export of an Outline collection. Returns a file operation ID and status. | `POST /api/v1/outline/collections/{collectionId}/export` |
 | `exportAllCollections` | Starts an async export of the entire Outline workspace. Returns a file operation ID and status. | `POST /api/v1/outline/exports` |
 | `listDocumentComments` | Lists comments on an Outline document (paginated). | `GET /api/v1/outline/documents/{documentId}/comments` |
 | `getComment` | Retrieves a single Outline comment by ID. | `GET /api/v1/outline/comments/{commentId}` |
-| `addComment` | Adds a comment on an Outline document, or replies to an existing comment. | `POST /api/v1/outline/documents/{documentId}/comments` |
+| `addComment` | Comments on an Outline document or replies to a comment; with anchorText, comments inline on that text. | `POST /api/v1/outline/documents/{documentId}/comments` |
+| `updateComment` | Replaces the text of an Outline comment. Only its author (or an admin) can edit it. | `POST /api/v1/outline/comments/{commentId}/update` |
+| `resolveComment` | Marks an Outline comment thread resolved (top-level comments only). Reopen it with reopenComment. | `POST /api/v1/outline/comments/{commentId}/resolve` |
+| `reopenComment` | Reopens a resolved Outline comment thread. | `POST /api/v1/outline/comments/{commentId}/reopen` |
+| `deleteComment` | Permanently deletes an Outline comment, and with a top-level comment its replies. Cannot be undone. Only the author (or an admin) can delete. | — |
+| `listUsers` | Lists or searches people in the Outline workspace: name, role, last active, and email where this connection may see it. | `GET /api/v1/outline/users` |
+| `getUser` | Reads one Outline user's profile by ID. | `GET /api/v1/outline/users/{userId}` |
+| `listTemplates` | Lists the Outline templates this connection can use, for createDocument templateId. Needs a recent Outline. | `GET /api/v1/outline/templates` |
+| `getTemplate` | Reads one Outline template with its content. | `GET /api/v1/outline/templates/{templateId}` |
+| `listDocumentRevisions` | Lists an Outline document's history, newest first: when each version was saved and by whom. Paginated. | `GET /api/v1/outline/documents/{documentId}/revisions` |
+| `getDocumentRevision` | Reads one saved version of an Outline document: its content, time and author. | `GET /api/v1/outline/revisions/{revisionId}` |
+| `compareDocumentRevisions` | Line diff of an Outline document between a saved version and a later one or the current text, with who saved each. | `GET /api/v1/outline/documents/{documentId}/compare?from={revisionId}` |
 | `listDocumentAttachments` | Lists attachment IDs referenced in an Outline document by parsing its markdown for /api/attachments.redirect links. | `GET /api/v1/outline/documents/{documentId}/attachments` |
 | `getAttachmentUrl` | Resolves an Outline attachment ID to a signed download URL by following the /api/attachments.redirect redirect. | `GET /api/v1/outline/attachments/{attachmentId}/url` |
+| `uploadAttachment` | Uploads a file to Outline and returns its URL and the markdown to insert with updateDocument (not inserted automatically). | `POST /api/v1/outline/attachments` |
 
 ## PeopleForce
 
-Source: `src/peopleforce/server.ts` — 45 tools.
+Source: `src/peopleforce/server.ts` — 50 tools.
 
 | Tool | Description | REST |
 |---|---|---|
 | `listEmployees` | Lists PeopleForce employees, 50 per page (server-fixed). Use `page` to paginate. IMPORTANT: omitting `status` returns ACTIVE employees only, not everyone — there is no "all" option, so a full headcount means one pass with status=active plus one with status=inactive. Use status=probation to get just the employees currently on probation — a real server-side segment, so you get that cohort directly instead of filtering the whole directory. It is paginated like every other list: follow `metadata.pagination` and request further pages whenever more are reported. Each employee shows their probation end date and a derived probation state. Any tenant-defined custom fields are included per employee when the list payload carries them (field names and availability vary by tenant). | `GET /api/v1/peopleforce/employees` |
 | `getEmployee` | Retrieves a single PeopleForce employee by ID. Returns full profile: contact, position, department, division, employment type, location, reporting line, and hiring dates. Any tenant-defined custom fields the profile carries are shown under a Custom Fields section (field names and availability vary by tenant; the section is omitted when the record has none). | `GET /api/v1/peopleforce/employees/{employeeId}` |
 | `listDepartments` | Lists all PeopleForce departments, 50 per page (server-fixed). Use `page` to paginate. | `GET /api/v1/peopleforce/departments` |
-| `listLeaveRequests` | Lists PeopleForce leave requests, 100 per page (server-fixed). Use `page` to paginate; `state` filters by lifecycle state (e.g. "pending", "approved", "declined"). PeopleForce's public API does NOT support server-side filtering by employee or date range — fetch pages and filter client-side if needed. | `GET /api/v1/peopleforce/leave-requests` |
+| `listLeaveRequests` | Lists PeopleForce leave requests, 100 per page (server-fixed). Use `page` to paginate; `state` filters by lifecycle state (e.g. "pending", "approved", "declined"). This list cannot filter by employee or dates; for one person's time off in a date range (with public holidays), use getEmployeeAbsences. | `GET /api/v1/peopleforce/leave-requests` |
 | `createLeaveRequest` | Creates a new PeopleForce leave request (time off) for an employee against a specific leave-type ID. Call `listLeaveTypes` first if you need the ID. | `POST /api/v1/peopleforce/leave-requests` |
 | `getLeaveRequest` | Retrieves a single PeopleForce leave request by ID (state, dates, amount, employee, comment). | `GET /api/v1/peopleforce/leave-requests/{leaveRequestId}` |
 | `listLeaveTypes` | Lists PeopleForce leave types (Vacation, Sick, Sabbatical, etc.) with their IDs and time-tracking unit (days/hours). Call this to find the `leaveTypeId` needed for `createLeaveRequest`. | `GET /api/v1/peopleforce/leave-types` |
@@ -337,7 +355,12 @@ Source: `src/peopleforce/server.ts` — 45 tools.
 | `listSkills` | Lists the PeopleForce skills catalog (workspace-wide) with IDs. Server-fixed 50 per page. | `GET /api/v1/peopleforce/skills` |
 | `listCompetencies` | Lists PeopleForce competencies (behavioral/performance dimensions used in reviews) with their IDs. | `GET /api/v1/peopleforce/competencies` |
 | `listTasks` | Lists PeopleForce tasks (onboarding, applicant follow-ups, etc.) with assignee, dates, and completion state. Server-fixed 50 per page. | `GET /api/v1/peopleforce/tasks` |
+| `listHolidays` | Lists the company's public holidays across all holiday policies, with the policy each belongs to. Working-day exceptions are marked. For one employee use listEmployeeHolidays. | `GET /api/v1/peopleforce/holidays` |
+| `listHolidayPolicies` | Lists the holiday policies (usually one per country); each location uses one. | `GET /api/v1/peopleforce/holiday-policies` |
+| `listEmployeeHolidays` | Lists the public holidays that apply to one employee (from their location's holiday policy). Paginated. | `GET /api/v1/peopleforce/employees/{employeeId}/holidays` |
+| `getEmployeeAbsences` | Answers "is this person off on these dates?": their approved leave (and pending, if asked) plus the public holidays of their holiday policy between two dates, in date order. Working-day exceptions and moved holidays are labelled. Says so if it stopped before reading everything. | `GET /api/v1/peopleforce/employees/{employeeId}/absences?from={date}&to={date}` |
 | `listEmployeeLeaveBalances` | Lists a specific employee's current leave balances per leave type (e.g. "how many vacation days does this person have?"). | `GET /api/v1/peopleforce/employees/{employeeId}/leave-balances` |
+| `listEmployeeSalaries` | Lists an employee's salary history (amount, currency, pay period, effective date, compensation component). Only works when the connected Company API key is allowed to view compensation; the answer follows the key's restriction, not the asking person's. | `GET /api/v1/peopleforce/employees/{employeeId}/salaries` |
 | `listEmployeeSkills` | Lists the skills recorded on a specific employee's profile with proficiency level. | `GET /api/v1/peopleforce/employees/{employeeId}/skills` |
 | `listEmployeeDocuments` | Lists documents attached to a specific employee's profile. Payload shape is dumped as JSON since the public API doesn't document a fixed schema for this endpoint. | `GET /api/v1/peopleforce/employees/{employeeId}/documents` |
 | `listEmployeeNotes` | Lists HR notes on a specific employee's profile. Payload dumped as JSON (undocumented shape). | `GET /api/v1/peopleforce/employees/{employeeId}/notes` |
@@ -370,7 +393,7 @@ Source: `src/peopleforce/server.ts` — 45 tools.
 
 ## PeopleForce v4
 
-Source: `src/peopleforce-v4/server.ts` — 44 tools.
+Source: `src/peopleforce-v4/server.ts` — 46 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -380,6 +403,8 @@ Source: `src/peopleforce-v4/server.ts` — 44 tools.
 | `listBirthdays` | List upcoming birthdays. Defaults upstream to today through 30 days out when no date range is given. | — |
 | `listWorkAnniversaries` | List upcoming work anniversaries. Defaults upstream to today through 30 days out when no date range is given. | — |
 | `listPersonAssets` | List the company assets assigned to a person (laptops, phones, access cards). | — |
+| `listLeaveRequests` | List leave requests across everyone the service account can see, optionally for some people, states, and a date range (from/to keep requests overlapping it). PeopleForce can only narrow "ending on or after from"; the "to" bound is applied to each returned page here, so a page may show fewer rows than it holds — keep paging to the last page. Needs the Time off permission on the key's role (403 without). | — |
+| `listLeaveBalances` | List current leave balances across everyone the service account can see, optionally for some people or leave types. Needs the Time off permission on the key's role (403 without). | — |
 | `listPersonSalaries` | List a person's salary history (amount, currency, pay period, effective date). Needs Compensation granted on the service account's role — without it the call 403s rather than returning an empty list. | — |
 | `getPersonSalary` | Get a single salary record for a person. Needs Compensation granted on the service account's role. | — |
 | `listPersonLifecycles` | List a person's lifecycle records — hire date, prior experience, last working day, last day in office, and termination type/reason/comment plus rehire eligibility. This is where a departure is dated in detail. | — |
@@ -661,4 +686,4 @@ Source: `src/sandbox/server.ts` — 6 tools.
 
 ---
 
-**Grand total: 476 tools across 22 sections.**
+**Grand total: 501 tools across 22 sections.**

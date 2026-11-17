@@ -5925,6 +5925,23 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // POST /api/v1/drive/upload-sessions - Open a resumable upload for a large file
+  app.post('/api/v1/drive/upload-sessions', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { createDriveUploadSessionSchema, performCreateDriveUploadSession } = await import('../google-drive/filesOps.js');
+      const parsed = createDriveUploadSessionSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      res.status(201).json(await performCreateDriveUploadSession(req.userSession!.googleDrive, parsed.data));
+    } catch (err: any) {
+      const mapped = (await import('../google-drive/filesOps.js')).driveRestErrorResponse(err);
+      if (mapped) { res.status(mapped.status).json(mapped.body); return; }
+      sendUpstreamError(res, err, { notFound: 'Parent folder not found', fallback: 'Failed to open upload session' });
+    }
+  });
+
   // GET /api/v1/drive/files/:fileId - Get file info
   app.get('/api/v1/drive/files/:fileId', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
@@ -6866,6 +6883,80 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // GET /api/v1/clickup/workspaces/:workspaceId/attachments?url= - Download a
+  // file ClickUp hosts on its attachments CDN (a recording linked from a Doc).
+  // Streams the bytes and honours Range. The URL is fetched BY THIS SERVER with
+  // the connection's token, so only this workspace's attachments host is
+  // accepted (src/clickup/attachments.ts).
+  app.get('/api/v1/clickup/workspaces/:workspaceId/attachments', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    const controller = new AbortController();
+    // A client that hangs up mid-recording must stop the upstream download too.
+    res.on('close', () => { if (!res.writableFinished) controller.abort(); });
+    try {
+      const workspaceId = req.params.workspaceId as string;
+      const rawUrl = qstr(req.query.url);
+      if (!rawUrl) {
+        res.status(400).json({ error: 'Query param `url` is required: the attachment URL as it appears in a doc or task.' });
+        return;
+      }
+      const range = typeof req.headers.range === 'string' ? req.headers.range : undefined;
+      const {
+        AttachmentUrlError, attachmentFileName, contentDisposition, isForwardableRange,
+        openAttachment, parseAttachmentUrl, workspaceIsVisible,
+      } = await import('../clickup/attachments.js');
+      let url: URL;
+      try {
+        url = parseAttachmentUrl(rawUrl, workspaceId);
+      } catch (err) {
+        if (err instanceof AttachmentUrlError) { res.status(400).json({ error: err.message }); return; }
+        throw err;
+      }
+      if (range !== undefined && !isForwardableRange(range)) {
+        res.status(400).json({ error: `Unsupported Range header "${range}"; only bytes=start-end ranges are forwarded.` });
+        return;
+      }
+
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const token = req.userSession!.clickUpAccessToken!;
+      if (!workspaceIsVisible(await new ClickUpClient(token).getWorkspaces(), workspaceId)) {
+        res.status(404).json({ error: `Workspace ${workspaceId} is not visible to this ClickUp connection.` });
+        return;
+      }
+
+      const opened = await openAttachment(token, url, { range, signal: controller.signal });
+      if (!opened.ok) {
+        if (opened.contentRange) res.setHeader('Content-Range', opened.contentRange);
+        res.status(opened.status).json({ error: opened.error });
+        return;
+      }
+      const upstream = opened.response;
+      res.status(upstream.status);
+      for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+        const value = upstream.headers.get(header);
+        if (value) res.setHeader(header, value);
+      }
+      if (!upstream.headers.get('content-type')) res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', contentDisposition(attachmentFileName(url)));
+      if (!upstream.body) { res.end(); return; }
+      const { Readable } = await import('node:stream');
+      const { pipeline } = await import('node:stream/promises');
+      await pipeline(Readable.fromWeb(upstream.body as any), res);
+    } catch (err: any) {
+      if (res.headersSent) {
+        // Mid-stream failure: the status is already committed, so cut the
+        // connection — a short Content-Length then shows as a truncated file.
+        res.destroy(err);
+        return;
+      }
+      // Only the workspace lookup throws a ClickUp error; its status is
+      // Symbol-tagged, so copy it onto .code or sendUpstreamError answers 500.
+      const { clickUpErrorStatus } = await import('../clickup/apiHelpers.js');
+      const upstream = clickUpErrorStatus(err);
+      if (typeof upstream === 'number') (err as any).code = upstream;
+      sendUpstreamError(res, err, { fallback: 'Failed to download attachment' });
+    }
+  });
+
   // GET /api/v1/clickup/workspaces/:workspaceId/time - Get time entries
   app.get('/api/v1/clickup/workspaces/:workspaceId/time', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
@@ -7568,6 +7659,13 @@ function registerRestApiRoutes(app: express.Express): void {
       run: async (m, c, a) => m.performCreateList(c, a),
     },
     {
+      path: '/api/v1/slack/lists/:listId/update',
+      status: 200,
+      fallback: 'Failed to update list',
+      schema: (m) => m.updateListRestSchema,
+      run: async (m, c, a, p) => m.performUpdateList(c, p.listId, a),
+    },
+    {
       path: '/api/v1/slack/lists/:listId/items',
       status: 201,
       fallback: 'Failed to create list item',
@@ -7827,6 +7925,20 @@ function registerRestApiRoutes(app: express.Express): void {
     fallback: string;
   }> = [
     {
+      path: '/api/v1/peopleforce/holidays',
+      fetch: (c, page) => c.listHolidays({ page }),
+      format: (h, r) => h.formatHolidayList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Holidays not found',
+      fallback: 'Failed to list holidays',
+    },
+    {
+      path: '/api/v1/peopleforce/holiday-policies',
+      fetch: (c, page) => c.listHolidayPolicies({ page }),
+      format: (h, r) => h.formatHolidayPolicyList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Holiday policies not found',
+      fallback: 'Failed to list holiday policies',
+    },
+    {
       path: '/api/v1/peopleforce/leave-types',
       fetch: (c, page) => c.listLeaveTypes({ page }),
       format: (h, r) => h.formatLeaveTypeList(r.data ?? [], r.metadata?.pagination),
@@ -7980,6 +8092,14 @@ function registerRestApiRoutes(app: express.Express): void {
       fallback: 'Failed to list leave balances',
     },
     {
+      // 403 here usually means the key may not view compensation, not a bad key.
+      path: '/api/v1/peopleforce/employees/:employeeId/salaries',
+      fetch: (c, id) => c.listEmployeeSalaries(id),
+      format: (h, r) => h.formatSalaries(r.data ?? []),
+      notFound: 'Employee not found',
+      fallback: 'Failed to list salaries',
+    },
+    {
       path: '/api/v1/peopleforce/employees/:employeeId/skills',
       fetch: (c, id) => c.listEmployeeSkills(id),
       format: (h, r) => h.formatEmployeeSkills(r.data ?? []),
@@ -8024,6 +8144,46 @@ function registerRestApiRoutes(app: express.Express): void {
       }
     });
   }
+
+  // GET /api/v1/peopleforce/employees/:employeeId/holidays?page= - Holidays that apply to one employee
+  app.get('/api/v1/peopleforce/employees/:employeeId/holidays', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const helpers = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listEmployeeHolidays(req.params.employeeId as string, { page: qint(req.query.page, 1, { min: 1 }) });
+      respondNegotiated(req, res, result, () => helpers.formatHolidayList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce employee holidays:', err);
+      sendUpstreamError(res, err, { notFound: 'Employee not found', fallback: 'Failed to list employee holidays' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/employees/:employeeId/absences?from=&to= - Leave plus public holidays in a date range
+  app.get('/api/v1/peopleforce/employees/:employeeId/absences', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const from = qstr(req.query.from);
+      const to = qstr(req.query.to);
+      const { isoDate } = await import('../util/isoDate.js');
+      const isDate = (v: string) => isoDate.safeParse(v).success;
+      if (!isDate(from) || !isDate(to) || from > to) {
+        res.status(400).json({ error: 'from and to are required as YYYY-MM-DD, with from not after to' });
+        return;
+      }
+      const helpers = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await helpers.collectEmployeeAbsences(client, {
+        employeeId: req.params.employeeId as string, from, to, includePending: qflag(req.query.includePending),
+      });
+      respondNegotiated(req, res, result, () => helpers.formatEmployeeAbsences(result));
+    } catch (err: any) {
+      console.error('Error reading PeopleForce absences:', err);
+      sendUpstreamError(res, err, { notFound: 'Employee not found', fallback: 'Failed to read absences' });
+    }
+  });
 
   // GET /api/v1/peopleforce/employees/:employeeId/tables/:tableInternalName
   // tableInternalName is a system slug from /employee-tables, not the display
@@ -8836,6 +8996,14 @@ function registerRestApiRoutes(app: express.Express): void {
       res.status(400).json({ error: (err as any).message });
       return;
     }
+    // Statuses our own ops set: 502 (Outline replaced the whole body on a
+    // passage edit, a storage upload failed) and 413 (storage refused the size).
+    // sendUpstreamError would flatten both to 500.
+    const own = (err as any)?.status;
+    if (own === 502 || own === 413) {
+      res.status(own).json({ error: (err as any).message });
+      return;
+    }
     console.error(`Outline REST call failed (${fallback}):`, err);
     sendUpstreamError(res, err, { notFound, fallback });
   }
@@ -9057,6 +9225,92 @@ function registerRestApiRoutes(app: express.Express): void {
       },
     },
     {
+      path: '/api/v1/outline/documents/:documentId/revisions',
+      notFound: 'Document not found',
+      fallback: 'Failed to list revisions',
+      run: (client, req) => client.listRevisions({
+        documentId: req.params.documentId as string,
+        limit: qint(req.query.limit, 25, { min: 1, max: 100 }),
+        offset: qint(req.query.offset, 0, { min: 0 }),
+      }),
+    },
+    {
+      path: '/api/v1/outline/documents/:documentId/compare',
+      notFound: 'Document or revision not found',
+      fallback: 'Failed to compare revisions',
+      run: async (client, req) => {
+        const from = qstr(req.query.from);
+        if (!from) throw usrError('from query parameter (a revision ID) is required');
+        const { performCompareRevisions } = await import('../outline/restOps.js');
+        const r = await performCompareRevisions(client, req.params.documentId as string, from, qstr(req.query.to) || undefined);
+        return {
+          from: { id: r.from.id, createdAt: r.from.createdAt ?? null, createdBy: r.from.createdBy?.name ?? null },
+          to: r.to === 'current' ? 'current' : { id: r.to.id, createdAt: r.to.createdAt ?? null, createdBy: r.to.createdBy?.name ?? null },
+          added: r.diff.added,
+          removed: r.diff.removed,
+          summarized: r.diff.summarized,
+          diff: r.diff.text,
+        };
+      },
+    },
+    {
+      path: '/api/v1/outline/revisions/:revisionId',
+      notFound: 'Revision not found',
+      fallback: 'Failed to read revision',
+      run: async (client, req) => {
+        const r = await client.getRevision(req.params.revisionId as string);
+        if (!r) throw notFoundError('Revision not found.');
+        return r;
+      },
+    },
+    {
+      path: '/api/v1/outline/users',
+      notFound: 'User not found',
+      fallback: 'Failed to list users',
+      run: (client, req) => {
+        const filters = ['all', 'active', 'invited', 'suspended'] as const;
+        const raw = qstr(req.query.filter);
+        if (raw && !(filters as ReadonlyArray<string>).includes(raw)) throw usrError(`filter must be one of ${filters.join(', ')}`);
+        return client.listUsers({
+          query: qstr(req.query.q) || undefined,
+          filter: (raw || undefined) as (typeof filters)[number] | undefined,
+          limit: qint(req.query.limit, 25, { min: 1, max: 100 }),
+          offset: qint(req.query.offset, 0, { min: 0 }),
+        });
+      },
+    },
+    {
+      path: '/api/v1/outline/users/:userId',
+      notFound: 'User not found',
+      fallback: 'Failed to read user',
+      run: async (client, req) => {
+        const u = await client.getUser(req.params.userId as string);
+        if (!u) throw notFoundError('User not found.');
+        return u;
+      },
+    },
+    {
+      path: '/api/v1/outline/templates',
+      notFound: 'Template not found',
+      fallback: 'Failed to list templates',
+      run: (client, req) => client.listTemplates({
+        query: qstr(req.query.q) || undefined,
+        collectionId: qstr(req.query.collectionId) || undefined,
+        limit: qint(req.query.limit, 25, { min: 1, max: 100 }),
+        offset: qint(req.query.offset, 0, { min: 0 }),
+      }),
+    },
+    {
+      path: '/api/v1/outline/templates/:templateId',
+      notFound: 'Template not found',
+      fallback: 'Failed to read template',
+      run: async (client, req) => {
+        const t = await client.getTemplate(req.params.templateId as string);
+        if (!t) throw notFoundError('Template not found.');
+        return t;
+      },
+    },
+    {
       path: '/api/v1/outline/attachments/:attachmentId/url',
       notFound: 'Attachment not found',
       fallback: 'Failed to resolve attachment URL',
@@ -9139,6 +9393,49 @@ function registerRestApiRoutes(app: express.Express): void {
       run: (m, c, _a, p) => m.performDocumentLifecycle(c, 'restore', p.documentId),
     },
     {
+      path: '/api/v1/outline/documents/:documentId/unpublish',
+      notFound: 'Document not found',
+      fallback: 'Failed to unpublish document',
+      schema: (m) => m.unpublishDocumentRestSchema,
+      run: (m, c, a, p) => m.performUnpublishDocument(c, p.documentId, a),
+    },
+    {
+      // Static: must precede /documents/:documentId, which would take "import" as an id.
+      path: '/api/v1/outline/documents/import',
+      status: 201,
+      notFound: 'Collection or parent document not found',
+      fallback: 'Failed to import document',
+      schema: (m) => m.importHtmlDocumentRestSchema,
+      run: (m, c, a) => m.performImportHtmlDocument(c, a),
+    },
+    {
+      path: '/api/v1/outline/attachments',
+      status: 201,
+      notFound: 'Document not found',
+      fallback: 'Failed to upload attachment',
+      schema: (m) => m.uploadAttachmentRestSchema,
+      run: (m, c, a) => m.performUploadAttachment(c, a),
+    },
+    {
+      path: '/api/v1/outline/comments/:commentId/update',
+      notFound: 'Comment not found',
+      fallback: 'Failed to update comment',
+      schema: (m) => m.updateCommentRestSchema,
+      run: (m, c, a, p) => m.performUpdateComment(c, p.commentId, a),
+    },
+    {
+      path: '/api/v1/outline/comments/:commentId/resolve',
+      notFound: 'Comment not found',
+      fallback: 'Failed to resolve comment',
+      run: (m, c, _a, p) => m.performCommentResolution(c, 'resolve', p.commentId),
+    },
+    {
+      path: '/api/v1/outline/comments/:commentId/reopen',
+      notFound: 'Comment not found',
+      fallback: 'Failed to reopen comment',
+      run: (m, c, _a, p) => m.performCommentResolution(c, 'unresolve', p.commentId),
+    },
+    {
       path: '/api/v1/outline/documents/:documentId/comments',
       status: 201,
       notFound: 'Document not found',
@@ -9176,6 +9473,19 @@ function registerRestApiRoutes(app: express.Express): void {
       fallback: 'Failed to create collection',
       schema: (m) => m.createCollectionRestSchema,
       run: (m, c, a) => m.performCreateCollection(c, a),
+    },
+    {
+      path: '/api/v1/outline/collections/:collectionId/archive',
+      notFound: 'Collection not found',
+      fallback: 'Failed to archive collection',
+      schema: (m) => m.archiveCollectionRestSchema,
+      run: (m, c, a, p) => m.performCollectionLifecycle(c, 'archive', p.collectionId, a),
+    },
+    {
+      path: '/api/v1/outline/collections/:collectionId/restore',
+      notFound: 'Collection not found',
+      fallback: 'Failed to restore collection',
+      run: (m, c, _a, p) => m.performCollectionLifecycle(c, 'restore', p.collectionId),
     },
     {
       path: '/api/v1/outline/collections/:collectionId',
