@@ -4,6 +4,7 @@ import { HubSpotClient } from '../../hubspot/apiHelpers.js';
 import {
   opLogEmail,
   performUpdateEngagement,
+  opUpdateEngagement,
   performCreateTicket,
   fetchTicketsSearch,
   searchTicketsSchema,
@@ -107,12 +108,30 @@ test('pipeline stages get the metadata their object type requires', async () => 
   }), /ticketState applies to ticket stages/);
 });
 
-test('an update naming nothing is refused before any call, and a new stage has no forced position', async () => {
-  const calls = router(() => ({ body: { id: 's1' } }));
+test('an update naming nothing is refused before any call, and a new stage goes after the last one', async () => {
+  const calls = router((method) => (method === 'GET'
+    ? { body: { id: 'p', stages: [{ id: 'a', displayOrder: 0 }, { id: 'b', displayOrder: 4 }, { id: 'c', displayOrder: 2 }] } }
+    : { body: { id: 's1' } }));
   await assert.rejects(() => performUpdatePipelineStage(client(), { objectType: 'tickets', pipelineId: 'p', stageId: 's' }), /at least one/);
   assert.equal(calls.length, 0);
+  // HubSpot requires displayOrder on a new stage; 0 would put it first.
   await performCreatePipelineStage(client(), { objectType: 'tickets', pipelineId: 'p', label: 'Waiting', ticketState: 'OPEN' });
-  assert.equal('displayOrder' in calls[0].body, false);
+  assert.match(calls[0].url, /\/pipelines\/tickets\/p$/);
+  assert.equal(calls[1].body.displayOrder, 5);
+  // An explicit position is sent as given, with no extra read.
+  const before = calls.length;
+  await performCreatePipelineStage(client(), { objectType: 'tickets', pipelineId: 'p', label: 'First', displayOrder: 0, ticketState: 'OPEN' });
+  assert.equal(calls.length, before + 1);
+  assert.equal(calls[before].body.displayOrder, 0);
+});
+
+test('an engagement update reports mismatched and unconfirmed properties together', async () => {
+  router((method) => (method === 'PATCH'
+    ? { body: { id: 'e1' } }
+    : { body: { id: 'e1', properties: { hs_note_body: 'changed by HubSpot' } } }));
+  const out = await opUpdateEngagement(client(), { engagementType: 'notes', engagementId: 'e1', properties: { hs_note_body: 'mine', hs_timestamp: '2026-01-01T00:00:00Z' } });
+  assert.match(out, /read back differently from what was sent: hs_note_body/);
+  assert.match(out, /Could not confirm on re-read .*: hs_timestamp/);
 });
 
 test('a failed re-read after an engagement update leaves it unconfirmed, not failed', async () => {

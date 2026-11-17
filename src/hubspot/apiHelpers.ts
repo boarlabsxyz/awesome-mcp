@@ -300,6 +300,10 @@ export class HubSpotClient {
     return this.request('GET', `/crm/v3/pipelines/${objectType}`);
   }
 
+  getPipeline(objectType: HubSpotPipelineObjectType, pipelineId: string): Promise<HubSpotPipeline> {
+    return this.request('GET', `/crm/v3/pipelines/${objectType}/${encodeURIComponent(pipelineId)}`);
+  }
+
   createPipeline(objectType: HubSpotPipelineObjectType, body: Record<string, unknown>): Promise<HubSpotPipeline> {
     return this.request('POST', `/crm/v3/pipelines/${objectType}`, body);
   }

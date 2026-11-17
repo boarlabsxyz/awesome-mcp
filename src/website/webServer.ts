@@ -1383,6 +1383,8 @@ const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
   '/api/v1/hubspot/tasks',    // createTask — free text
   '/api/v1/hubspot/calls',    // logCall — can be a whole transcript
   '/api/v1/hubspot/meetings', // logMeeting — can be full minutes
+  '/api/v1/hubspot/emails',   // logEmail — an email body, possibly HTML
+  '/api/v1/hubspot/engagements', // updateEngagement — can replace any of the bodies above
   '/api/v1/pinecone/indexes', // upsert-records — a bulk record load, up to Pinecone's 2 MB body limit
   // Docs writes carry document-sized payloads: appended text, an import body,
   // a 50-operation batch, a base64 image.
@@ -9973,6 +9975,15 @@ function registerRestApiRoutes(app: express.Express): void {
     try {
       const client = await hubspotRestClient(req, res);
       if (!client) return;
+      // A repeated ?pipelineId=0&pipelineId=1 arrives as an array, which qstr
+      // drops to '': the filter would vanish and tickets from every pipeline
+      // come back. Refused by name instead.
+      const nonScalar = ['state', 'pipelineId', 'stageId', 'q', 'modifiedAfter', 'limit', 'after']
+        .filter((k) => req.query[k] !== undefined && typeof req.query[k] !== 'string');
+      if (nonScalar.length) {
+        res.status(400).json({ error: `Query parameter(s) ${nonScalar.join(', ')} must be given exactly once, as a plain value.` });
+        return;
+      }
       const { searchTicketsSchema, fetchTicketsSearch } = await import('../hubspot/server.js');
       const parsed = searchTicketsSchema.safeParse({
         state: qstr(req.query.state) || undefined,

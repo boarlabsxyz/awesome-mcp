@@ -28,7 +28,7 @@ REST-plane handlers for this service: see src/website/CLAUDE.md.
 
 ### Tickets, pipelines, users (NOT exercised live)
 - **"Open"/"closed" tickets come from pipeline stages** — each ticket stage has `metadata.ticketState`; `searchTickets` reads the ticket pipelines and filters `hs_pipeline_stage IN` those IDs. No stage in the wanted state → refused, never "no tickets".
-- **Stage metadata is per object** — deal stages need `probability`, ticket stages `ticketState`; checked before calling. Pipeline updates PATCH (PUT would drop stages); archive/replace/delete are not exposed. UNVERIFIED live: that a stage PATCH accepts a label without its metadata.
+- **Stage metadata is per object** — deal stages need `probability`, ticket stages `ticketState`; checked before calling. A new stage without `displayOrder` goes after the last one (HubSpot requires a position; 0 would put it first). Pipeline updates PATCH (PUT would drop stages); archive/replace/delete are not exposed. UNVERIFIED live: that a stage PATCH accepts a label without its metadata.
 - **`updateEngagement` re-reads each changed property** → `confirmed` true / false / null (HubSpot normalises dates, so null is common there).
 - **`logEmail` records, never sends.** Tickets are an engagement target (`engagementTargetParam`), not a property-tool object type.
 - **Logged emails are deletable over MCP only** — `deleteEngagementRestSchema` keeps the REST delete to the four types it was signed off for.
