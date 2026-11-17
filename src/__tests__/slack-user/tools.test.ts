@@ -55,7 +55,7 @@ describe('slack-user tool registry', () => {
       'postMessage', 'replyInThread', 'editMessage', 'listUsers', 'openDm',
       'createChannel', 'addReaction', 'getUserProfile', 'listChannelMembers', 'uploadFile', 'scheduleMessage',
       'createCanvas', 'getCanvasContent', 'findCanvasSections', 'editCanvas',
-      'createList', 'getListItems', 'getListItem', 'createListItem', 'updateListItem',
+      'createList', 'updateList', 'getListItems', 'getListItem', 'createListItem', 'updateListItem',
       'diagnoseChannelAccess',
       ...SEARCH_TOOLS,
       ...EVENT_TOOLS,
@@ -253,7 +253,7 @@ describe('slack-user access gating', () => {
   });
 
   it('runs the file guard in every canvas and list tool before calling Slack', () => {
-    for (const name of ['getCanvasContent', 'findCanvasSections', 'editCanvas', 'getListItems', 'getListItem', 'createListItem', 'updateListItem']) {
+    for (const name of ['getCanvasContent', 'findCanvasSections', 'editCanvas', 'updateList', 'getListItems', 'getListItem', 'createListItem', 'updateListItem']) {
       const block = toolSource(name);
       const guard = block.indexOf('guardFile(');
       assert.ok(guard > 0, `${name} must call guardFile`);

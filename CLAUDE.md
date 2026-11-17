@@ -69,6 +69,7 @@ Per-provider files are listed in each provider's `CLAUDE.md`.
 | `src/util/mcpProxyClient.ts` | Streamable-HTTP MCP transport shared by Browserbase, Pinecone and Supabase: per-call transport, SSE frames, the legacy `initialize` path and the stateless `protocol: 'modern'` path; a replica-affine session is never cached |
 | `src/util/firstPartyConnect.ts` | `connectFirstPartyMcp` — one-click, one-per-user connect for the no-credential connectors (Storage, Sandbox) |
 | `src/util/baseUrlGuard.ts` | `isPrivateHost` + `checkBaseUrl` — SSRF guard for the self-hosted connectors (Outline, Redmine) |
+| `src/util/pinnedHttps.ts` | `pinnedHttpsRequest` — https request whose DNS lookup refuses private addresses, so the checked address is the connected one (Outline attachment uploads) |
 | `src/util/oauthTokenGrant.ts` | `postTokenGrant` — shared OAuth token-endpoint POST (HubSpot, Redmine) |
 | `src/website/webServer.ts` | Express app, proxy routes, registration/OAuth pages, REST routes |
 | `src/website/restUpstreamError.ts` | `sendUpstreamError` — the shared 404/403/500 mapper for REST handlers |

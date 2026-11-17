@@ -37,7 +37,7 @@ for (const n of (notesMatch?.[1] ?? '').matchAll(/^\s*'?([a-z][a-z-]*)'?:\s*'([^
 }
 
 const entries = [];
-const entryRe = /\{\s*service:\s*'([^']+)',\s*method:\s*'([^']+)',\s*path:\s*'([^']+)',\s*summary:\s*'([^']+)',\s*mcpToolName:\s*'([^']+)',\s*openapiOperationId:\s*'([^']+)',\s*status:\s*'([^']+)'(?:,\s*notes:\s*'([^']+)')?\s*\}/g;
+const entryRe = /\{\s*service:\s*'([^']+)',\s*method:\s*'([^']+)',\s*path:\s*'([^']+)',\s*summary:\s*'([^']+)',\s*mcpToolName:\s*'([^']+)',\s*openapiOperationId:\s*'([^']+)',\s*status:\s*'([^']+)'(?:,\s*notes:\s*'([^']+)')?(?:,\s*mcpOnly:\s*'[^']+')?\s*\}/g;
 let m;
 while ((m = entryRe.exec(body)) !== null) {
   entries.push({

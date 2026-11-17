@@ -72,7 +72,49 @@ export const HUBSPOT_WRITE_ROUTES: ReadonlyArray<HubSpotWriteRoute> = [
     notFound: 'Property not found', fallback: 'Failed to update property',
   },
   {
-    path: '/api/v1/hubspot/engagements/:engagementType/:engagementId/delete', tool: 'deleteEngagement', schema: m => m.deleteEngagementSchema,
+    path: '/api/v1/hubspot/engagements/:engagementType/:engagementId/update', tool: 'updateEngagement', schema: m => m.updateEngagementSchema,
+    params: req => ({ engagementType: param(req, 'engagementType'), engagementId: param(req, 'engagementId') }),
+    run: async (m, c, a) => ({ status: 200, body: await m.performUpdateEngagement(c, a) }),
+    notFound: 'Engagement not found', fallback: 'Failed to update engagement',
+  },
+  {
+    path: '/api/v1/hubspot/tickets', tool: 'createTicket', schema: m => m.createTicketSchema,
+    params: () => ({}),
+    run: async (m, c, a) => ({ status: 201, body: await m.performCreateTicket(c, a) }),
+    notFound: 'Pipeline or stage not found', fallback: 'Failed to create ticket',
+  },
+  {
+    path: '/api/v1/hubspot/tickets/:ticketId/update', tool: 'updateTicket', schema: m => m.updateTicketSchema,
+    params: req => ({ ticketId: param(req, 'ticketId') }),
+    run: async (m, c, a) => ({ status: 200, body: await m.performUpdateTicket(c, a) }),
+    notFound: 'Ticket not found', fallback: 'Failed to update ticket',
+  },
+  {
+    path: '/api/v1/hubspot/pipelines/:objectType', tool: 'createPipeline', schema: m => m.createPipelineSchema,
+    params: req => ({ objectType: param(req, 'objectType') }),
+    run: async (m, c, a) => ({ status: 201, body: await m.performCreatePipeline(c, a) }),
+    notFound: 'Object type not found', fallback: 'Failed to create pipeline',
+  },
+  {
+    path: '/api/v1/hubspot/pipelines/:objectType/:pipelineId/update', tool: 'updatePipeline', schema: m => m.updatePipelineSchema,
+    params: req => ({ objectType: param(req, 'objectType'), pipelineId: param(req, 'pipelineId') }),
+    run: async (m, c, a) => ({ status: 200, body: await m.performUpdatePipeline(c, a) }),
+    notFound: 'Pipeline not found', fallback: 'Failed to update pipeline',
+  },
+  {
+    path: '/api/v1/hubspot/pipelines/:objectType/:pipelineId/stages', tool: 'createPipelineStage', schema: m => m.createPipelineStageSchema,
+    params: req => ({ objectType: param(req, 'objectType'), pipelineId: param(req, 'pipelineId') }),
+    run: async (m, c, a) => ({ status: 201, body: await m.performCreatePipelineStage(c, a) }),
+    notFound: 'Pipeline not found', fallback: 'Failed to create pipeline stage',
+  },
+  {
+    path: '/api/v1/hubspot/pipelines/:objectType/:pipelineId/stages/:stageId/update', tool: 'updatePipelineStage', schema: m => m.updatePipelineStageSchema,
+    params: req => ({ objectType: param(req, 'objectType'), pipelineId: param(req, 'pipelineId'), stageId: param(req, 'stageId') }),
+    run: async (m, c, a) => ({ status: 200, body: await m.performUpdatePipelineStage(c, a) }),
+    notFound: 'Stage not found', fallback: 'Failed to update pipeline stage',
+  },
+  {
+    path: '/api/v1/hubspot/engagements/:engagementType/:engagementId/delete', tool: 'deleteEngagement', schema: m => m.deleteEngagementRestSchema,
     params: req => ({ engagementType: param(req, 'engagementType'), engagementId: param(req, 'engagementId') }),
     run: async (_m, c, a) => {
       await c.deleteEngagement(a.engagementType, a.engagementId);

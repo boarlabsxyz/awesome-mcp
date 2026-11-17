@@ -59,8 +59,24 @@ export type HubSpotProperty = {
 /** Object types the property + search tools operate on. */
 export type HubSpotObjectType = 'companies' | 'contacts' | 'deals';
 
-/** A deal pipeline stage (from /crm/v3/pipelines/deals). */
-export type HubSpotPipelineStage = { id?: string; label?: string; displayOrder?: number };
+/**
+ * A pipeline stage. Deal stages carry `metadata.probability` (0.0–1.0); ticket
+ * stages carry `metadata.ticketState` (OPEN | CLOSED).
+ */
+export type HubSpotPipelineStage = {
+  id?: string;
+  label?: string;
+  displayOrder?: number;
+  metadata?: { probability?: string; ticketState?: string; isClosed?: string };
+};
+
+/** Object types whose pipelines these tools manage. Both use scopes already granted. */
+export type HubSpotPipelineObjectType = 'deals' | 'tickets';
+
+/** An account user (settings API). */
+export type HubSpotUser = { id?: string; email?: string; firstName?: string; lastName?: string; roleIds?: string[]; primaryTeamId?: string; secondaryTeamIds?: string[]; superAdmin?: boolean };
+
+export type HubSpotTeam = { id?: string; name?: string; userIds?: string[]; secondaryUserIds?: string[] };
 
 /** A deal pipeline with its ordered stages. */
 export type HubSpotPipeline = { id?: string; label?: string; displayOrder?: number; stages?: HubSpotPipelineStage[] };
@@ -68,7 +84,7 @@ export type HubSpotPipeline = { id?: string; label?: string; displayOrder?: numb
 export type HubSpotPipelinePage = { results?: HubSpotPipeline[] };
 
 /** Engagement (activity) object types that support create + timeline association. */
-export type HubSpotEngagementType = 'notes' | 'tasks' | 'calls' | 'meetings';
+export type HubSpotEngagementType = 'notes' | 'tasks' | 'calls' | 'meetings' | 'emails';
 
 /** A dropdown option, as accepted by the property create/update tools. */
 export type HubSpotPropertyOption = {
@@ -280,11 +296,74 @@ export class HubSpotClient {
     return this.request('GET', '/crm/v3/pipelines/deals');
   }
 
+  listPipelines(objectType: HubSpotPipelineObjectType): Promise<HubSpotPipelinePage> {
+    return this.request('GET', `/crm/v3/pipelines/${objectType}`);
+  }
+
+  getPipeline(objectType: HubSpotPipelineObjectType, pipelineId: string): Promise<HubSpotPipeline> {
+    return this.request('GET', `/crm/v3/pipelines/${objectType}/${encodeURIComponent(pipelineId)}`);
+  }
+
+  createPipeline(objectType: HubSpotPipelineObjectType, body: Record<string, unknown>): Promise<HubSpotPipeline> {
+    return this.request('POST', `/crm/v3/pipelines/${objectType}`, body);
+  }
+
+  /** PATCH, not PUT: PUT replaces the pipeline and drops any stage not sent. */
+  updatePipeline(objectType: HubSpotPipelineObjectType, pipelineId: string, body: Record<string, unknown>): Promise<HubSpotPipeline> {
+    return this.request('PATCH', `/crm/v3/pipelines/${objectType}/${encodeURIComponent(pipelineId)}`, body);
+  }
+
+  createPipelineStage(objectType: HubSpotPipelineObjectType, pipelineId: string, body: Record<string, unknown>): Promise<HubSpotPipelineStage> {
+    return this.request('POST', `/crm/v3/pipelines/${objectType}/${encodeURIComponent(pipelineId)}/stages`, body);
+  }
+
+  updatePipelineStage(objectType: HubSpotPipelineObjectType, pipelineId: string, stageId: string, body: Record<string, unknown>): Promise<HubSpotPipelineStage> {
+    return this.request('PATCH', `/crm/v3/pipelines/${objectType}/${encodeURIComponent(pipelineId)}/stages/${encodeURIComponent(stageId)}`, body);
+  }
+
+  // === Tickets (the `tickets` scope covers read and write) ===
+
+  createTicket(properties: Record<string, unknown>): Promise<HubSpotObject> {
+    return this.request('POST', '/crm/v3/objects/tickets', { properties });
+  }
+
+  getTicket(ticketId: string, properties?: string[]): Promise<HubSpotObject> {
+    const q = properties?.length ? `?properties=${properties.map(encodeURIComponent).join(',')}` : '';
+    return this.request('GET', `/crm/v3/objects/tickets/${encodeURIComponent(ticketId)}${q}`);
+  }
+
+  updateTicket(ticketId: string, properties: Record<string, unknown>): Promise<HubSpotObject> {
+    return this.request('PATCH', `/crm/v3/objects/tickets/${encodeURIComponent(ticketId)}`, { properties });
+  }
+
+  // === Users and teams (settings.users.read / settings.users.teams.read) ===
+
+  listUsers(input: { limit?: number; after?: string } = {}): Promise<{ results?: HubSpotUser[]; paging?: { next?: { after?: string } } }> {
+    const q = new URLSearchParams();
+    if (input.limit) q.set('limit', String(input.limit));
+    if (input.after) q.set('after', input.after);
+    const qs = q.toString();
+    return this.request('GET', `/settings/v3/users${qs ? `?${qs}` : ''}`);
+  }
+
+  listTeams(): Promise<{ results?: HubSpotTeam[] }> {
+    return this.request('GET', '/settings/v3/users/teams');
+  }
+
   // === Engagements (activity writes: notes, tasks, calls, meetings) ===
 
   /** Create an engagement object (standalone; associate separately). */
   createEngagement(objectType: HubSpotEngagementType, properties: Record<string, unknown>): Promise<HubSpotObject> {
     return this.request('POST', `/crm/v3/objects/${objectType}`, { properties });
+  }
+
+  /** Partial update; HubSpot's echo omits populated properties, so re-read to confirm. */
+  updateEngagement(objectType: HubSpotEngagementType, engagementId: string, properties: Record<string, unknown>): Promise<HubSpotObject> {
+    return this.request('PATCH', `/crm/v3/objects/${objectType}/${encodeURIComponent(engagementId)}`, { properties });
+  }
+
+  getEngagement(objectType: HubSpotEngagementType, engagementId: string, properties: string[]): Promise<HubSpotObject> {
+    return this.request('GET', `/crm/v3/objects/${objectType}/${encodeURIComponent(engagementId)}?properties=${properties.map(encodeURIComponent).join(',')}`);
   }
 
   /**
@@ -490,17 +569,41 @@ export function formatEngagement(obj: HubSpotObject | undefined, label: string):
   return fmtObject(obj, label);
 }
 
-/** Render deal pipelines with their stages (ordered by displayOrder). */
-export function formatPipelines(pipelines: HubSpotPipeline[]): string {
-  if (pipelines.length === 0) return 'No deal pipelines found.';
-  const parts = [`Found ${pipelines.length} deal pipeline${pipelines.length === 1 ? '' : 's'}:`, ''];
+/** Render pipelines with their stages (ordered by displayOrder), plus each stage's probability or open/closed state. */
+export function formatPipelines(pipelines: HubSpotPipeline[], kind: 'deal' | 'ticket' = 'deal'): string {
+  if (pipelines.length === 0) return `No ${kind} pipelines found.`;
+  const parts = [`Found ${pipelines.length} ${kind} pipeline${pipelines.length === 1 ? '' : 's'}:`, ''];
   for (const p of pipelines) {
     parts.push(`${p.label ?? '(unnamed)'} (id ${p.id ?? ''})`);
     const stages = [...(p.stages ?? [])].sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0));
-    for (const s of stages) parts.push(`   - ${s.label ?? ''} (id ${s.id ?? ''})`);
+    for (const s of stages) {
+      const meta = s.metadata?.ticketState ? `, ${s.metadata.ticketState.toLowerCase()}`
+        : s.metadata?.probability !== undefined ? `, probability ${s.metadata.probability}` : '';
+      parts.push(`   - ${s.label ?? ''} (id ${s.id ?? ''}${meta})`);
+    }
     parts.push('');
   }
   return parts.join('\n').trimEnd();
+}
+
+export function formatUsers(users: HubSpotUser[], nextAfter?: string): string {
+  if (users.length === 0) return 'No users found.';
+  const parts = [`Found ${users.length} user${users.length === 1 ? '' : 's'}:`, ''];
+  for (const u of users) {
+    const name = [u.firstName, u.lastName].filter(Boolean).join(' ');
+    const bits = [`id ${u.id ?? ''}`];
+    if (u.primaryTeamId) bits.push(`team ${u.primaryTeamId}`);
+    if (u.superAdmin) bits.push('super admin');
+    parts.push(`- ${name || '(no name)'} <${u.email ?? 'no email'}> (${bits.join(', ')})`);
+  }
+  if (nextAfter) parts.push('', `More available. Pass after="${nextAfter}" to page.`);
+  return parts.join('\n');
+}
+
+export function formatTeams(teams: HubSpotTeam[]): string {
+  if (teams.length === 0) return 'No teams found.';
+  return [`Found ${teams.length} team${teams.length === 1 ? '' : 's'}:`, '',
+    ...teams.map(t => `- ${t.name ?? '(unnamed)'} (id ${t.id ?? ''}, ${(t.userIds ?? []).length} member(s)${(t.secondaryUserIds ?? []).length ? `, ${(t.secondaryUserIds ?? []).length} secondary` : ''})`)].join('\n');
 }
 
 export function formatObjectList(results: HubSpotObject[], label: string, requestedProps?: string[]): string {

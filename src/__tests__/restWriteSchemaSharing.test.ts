@@ -8,6 +8,8 @@ import {
 import {
   createDocumentFields, updateDocumentFields, moveDocumentFields,
   createCollectionFields, updateCollectionFields, addCommentFields,
+  unpublishDocumentFields, importHtmlDocumentFields, uploadAttachmentFields,
+  archiveCollectionFields, updateCommentFields,
 } from '../outline/restOps.js';
 import {
   navigateFields, actFields, observeFields, extractFields,
@@ -40,13 +42,20 @@ const GROUPS: Record<string, [Record<string, z.ZodTypeAny>, string[]]> = {
     'imageUrl', 'imageBase64', 'fileName', 'altText', 'editMode', 'skipRehost',
   ]],
   createDocumentFields: [createDocumentFields as any, [
-    'title', 'collectionId', 'text', 'parentDocumentId', 'publish', 'template', 'icon',
+    'title', 'collectionId', 'text', 'parentDocumentId', 'publish', 'template', 'icon', 'color', 'fullWidth', 'templateId',
   ]],
-  updateDocumentFields: [updateDocumentFields as any, ['title', 'text', 'append', 'template', 'icon']],
+  updateDocumentFields: [updateDocumentFields as any, [
+    'title', 'text', 'append', 'findText', 'template', 'icon', 'color', 'fullWidth', 'publish',
+  ]],
   moveDocumentFields: [moveDocumentFields as any, ['collectionId', 'parentDocumentId']],
-  createCollectionFields: [createCollectionFields as any, ['name', 'description', 'color']],
-  updateCollectionFields: [updateCollectionFields as any, ['name', 'description', 'color']],
-  addCommentFields: [addCommentFields as any, ['text', 'parentCommentId']],
+  createCollectionFields: [createCollectionFields as any, ['name', 'description', 'color', 'icon']],
+  updateCollectionFields: [updateCollectionFields as any, ['name', 'description', 'color', 'icon']],
+  addCommentFields: [addCommentFields as any, ['text', 'parentCommentId', 'anchorText', 'anchorPrefix', 'anchorSuffix']],
+  unpublishDocumentFields: [unpublishDocumentFields as any, ['detach']],
+  importHtmlDocumentFields: [importHtmlDocumentFields as any, ['html', 'title', 'collectionId', 'parentDocumentId', 'publish']],
+  uploadAttachmentFields: [uploadAttachmentFields as any, ['fileName', 'contentType', 'contentBase64', 'textContent', 'documentId']],
+  archiveCollectionFields: [archiveCollectionFields as any, ['reason']],
+  updateCommentFields: [updateCommentFields as any, ['text']],
   // Browserbase. These groups deliberately do NOT include sessionId: the MCP
   // tool takes it as a parameter and the REST route reads it from the path, so
   // a sessionId appearing here would let a URL and a body disagree about which
@@ -123,6 +132,11 @@ describe('REST write schema sharing', () => {
       createCollectionFields: [],
       updateCollectionFields: ['collectionId'],
       addCommentFields: ['documentId'],
+      unpublishDocumentFields: ['documentId'],
+      importHtmlDocumentFields: [],
+      uploadAttachmentFields: [],
+      archiveCollectionFields: ['collectionId'],
+      updateCommentFields: ['commentId'],
       // Browserbase addresses a browser by sessionId in the path. A body field
       // of the same name would let a URL and a body name different browsers —
       // and on this connector that is not a cosmetic conflict: the whole

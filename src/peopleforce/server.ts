@@ -26,6 +26,11 @@ import {
   formatEmployeeSkills,
   formatLeaveBalances,
   formatLeaveRequestList,
+  formatSalaries,
+  formatHolidayList,
+  formatHolidayPolicyList,
+  formatEmployeeAbsences,
+  collectEmployeeAbsences,
   formatLeaveTypeList,
   formatLocationList,
   formatNamedList,
@@ -276,7 +281,7 @@ peopleForceServer.addTool({
   name: 'listLeaveRequests',
   annotations: { readOnlyHint: true },
   description:
-    'Lists PeopleForce leave requests, 100 per page (server-fixed). Use `page` to paginate; `state` filters by lifecycle state (e.g. "pending", "approved", "declined"). PeopleForce\'s public API does NOT support server-side filtering by employee or date range — fetch pages and filter client-side if needed.',
+    'Lists PeopleForce leave requests, 100 per page (server-fixed). Use `page` to paginate; `state` filters by lifecycle state (e.g. "pending", "approved", "declined"). This list cannot filter by employee or dates; for one person\'s time off in a date range (with public holidays), use getEmployeeAbsences.',
   parameters: z.object({
     page: z.number().int().min(1).optional().default(1).describe('Page number (1-based). 100 leave requests per page (server-fixed).'),
     state: z.string().optional().describe('Filter by leave-request state (e.g. "pending", "approved", "declined").'),
@@ -405,12 +410,87 @@ addPaginatedListTool({
 
 // === Employee-nested ===
 
+addPaginatedListTool({
+  name: 'listHolidays',
+  description: 'Lists the company\'s public holidays across all holiday policies, with the policy each belongs to. Working-day exceptions are marked. For one employee use listEmployeeHolidays.',
+  errorPrefix: 'Failed to list holidays',
+  fetch: (client, page) => client.listHolidays({ page }),
+  format: formatHolidayList,
+});
+
+addPaginatedListTool({
+  name: 'listHolidayPolicies',
+  description: 'Lists the holiday policies (usually one per country); each location uses one.',
+  errorPrefix: 'Failed to list holiday policies',
+  fetch: (client, page) => client.listHolidayPolicies({ page }),
+  format: formatHolidayPolicyList,
+});
+
+peopleForceServer.addTool({
+  name: 'listEmployeeHolidays',
+  annotations: { readOnlyHint: true },
+  description: 'Lists the public holidays that apply to one employee (from their location\'s holiday policy). Paginated.',
+  parameters: z.object({
+    employeeId: z.union([z.string(), z.number()]).describe('The employee ID.'),
+    page: z.number().int().min(1).optional().default(1).describe('Page number (1-based).'),
+  }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to list employee holidays', session, log, async (client) => {
+      log.info(`listEmployeeHolidays for employee ${args.employeeId} (page=${args.page})`);
+      const res = await client.listEmployeeHolidays(args.employeeId, { page: args.page });
+      return formatHolidayList(res.data ?? [], res.metadata?.pagination);
+    }),
+});
+
+peopleForceServer.addTool({
+  name: 'getEmployeeAbsences',
+  annotations: { readOnlyHint: true },
+  description: 'Answers "is this person off on these dates?": their approved leave (and pending, if asked) plus the public holidays of their holiday policy '
+    + 'between two dates, in date order. Working-day exceptions and moved holidays are labelled. Says so if it stopped before reading everything.',
+  parameters: z.object({
+    employeeId: z.union([z.string(), z.number()]).describe('The employee ID.'),
+    from: isoDate.describe('First day, YYYY-MM-DD.'),
+    to: isoDate.describe('Last day, YYYY-MM-DD.'),
+    includePending: z.boolean().optional().default(false).describe('Also list leave requests still awaiting approval.'),
+  }),
+  execute: (args, { log, session }) => {
+    if (args.from > args.to) throw new UserError('from must not be after to.');
+    return withPeopleForceClient('Failed to read absences', session, log, async (client) => {
+      log.info(`getEmployeeAbsences for employee ${args.employeeId} ${args.from}..${args.to}`);
+      return formatEmployeeAbsences(await collectEmployeeAbsences(client, args));
+    });
+  },
+});
+
 addEmployeeScopedListTool({
   name: 'listEmployeeLeaveBalances',
   description: 'Lists a specific employee\'s current leave balances per leave type (e.g. "how many vacation days does this person have?").',
   errorPrefix: 'Failed to list leave balances',
   fetch: (client, id) => client.listEmployeeLeaveBalances(id),
   format: formatLeaveBalances,
+});
+
+peopleForceServer.addTool({
+  name: 'listEmployeeSalaries',
+  annotations: { readOnlyHint: true },
+  description: 'Lists an employee\'s salary history (amount, currency, pay period, effective date, compensation component). '
+    + 'Only works when the connected Company API key is allowed to view compensation; the answer follows the key\'s restriction, not the asking person\'s.',
+  parameters: z.object({ employeeId: z.union([z.string(), z.number()]).describe('The employee ID.') }),
+  execute: (args, { log, session }) =>
+    withPeopleForceClient('Failed to list salaries', session, log, async (client) => {
+      log.info(`listEmployeeSalaries for employee ${args.employeeId}`);
+      try {
+        const res = await client.listEmployeeSalaries(args.employeeId);
+        return formatSalaries(res.data ?? []);
+      } catch (err: any) {
+        // The generic mapper says "check your key" for 403; here the key is fine
+        // and the restriction is what blocks it, so name the fix.
+        if (err?.status === 403) {
+          throw new UserError('This PeopleForce API key may not view compensation (403). An admin can allow it in Settings → API keys → the key\'s restrictions (People → Compensation).');
+        }
+        throw err;
+      }
+    }),
 });
 
 addEmployeeScopedListTool({

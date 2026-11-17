@@ -255,6 +255,13 @@ describe('REST data plane: HubSpot and Redmine handler bodies', () => {
       assert.equal(calls.length, 0, 'nothing should reach HubSpot');
     });
 
+    it('refuses a repeated ticket-search filter instead of dropping it', async () => {
+      reset();
+      const res = await request(app).get('/api/v1/hubspot/tickets/search?pipelineId=0&pipelineId=1').set(auth()).expect(400);
+      assert.match(res.body.error, /pipelineId must be given exactly once/);
+      assert.equal(calls.length, 0, 'nothing should reach HubSpot');
+    });
+
     it('filters tickets with epoch millis, never ISO-8601', async () => {
       reset();
       when('/objects/tickets/search', { json: { total: 0, results: [] } });
@@ -400,6 +407,20 @@ describe('REST data plane: HubSpot and Redmine handler bodies', () => {
         .send({ title: 'Kickoff', associateToObjectType: 'deals', associateToObjectId: 'd1' });
       assert.equal(res.status, 201);
       assert.equal(res.body.association.attached, true);
+    });
+
+    // Proves /api/v1/hubspot/emails and /engagements are in REST_LARGE_BODY_PREFIXES:
+    // an HTML email past the 100kb default would otherwise 413 before the handler.
+    it('accepts a logged email and an engagement edit well past the 100kb Express default', async () => {
+      reset();
+      when('/objects/emails/e1', { json: { id: 'e1', properties: {} } });
+      when('/objects/emails', { json: { id: 'e1', properties: {} } });
+      const html = `<p>${'x'.repeat(300_000)}</p>`;
+      const logged = await request(app).post('/api/v1/hubspot/emails').set(auth()).send({ subject: 'Re', html });
+      assert.equal(logged.status, 201, `expected the large body to be parsed, got ${logged.status}`);
+      const edited = await request(app).post('/api/v1/hubspot/engagements/emails/e1/update').set(auth())
+        .send({ properties: { hs_email_html: html } });
+      assert.equal(edited.status, 200, `expected the large body to be parsed, got ${edited.status}`);
     });
 
     it('rejects half an association target', async () => {
