@@ -58,6 +58,12 @@ export interface ToolCheckSpec<C extends object = Record<string, never>> {
   service: ServiceName;
   account: AccountName;
   shape: Shape;
+  /**
+   * Tells apart checks that share service, tool and shape (two searchEmails
+   * needles, say). It names the forensics bundle, so without it the later
+   * check's bundle overwrites the earlier one's.
+   */
+  variant?: string;
   /** Declares that this check mutates state. Gates credential resolution. */
   writes?: boolean;
   /** Runs before the call. Seed scratch fixtures here. */
@@ -68,12 +74,22 @@ export interface ToolCheckSpec<C extends object = Record<string, never>> {
    *
    * A write tool's reply is its own claim that it worked; the only thing that
    * makes a write check meaningful is reading the resource back with a different
-   * tool. The write's reply is still checked for isError and kept in forensics.
+   * tool. The write's reply is still checked for isError and kept in forensics,
+   * and is passed here for anything only it carries, such as a created ID.
    */
-  readback?: (c: CheckContext, ctx: C) => Promise<string>;
+  readback?: (c: CheckContext, ctx: C, reply: string) => Promise<string>;
   invariants: Invariants | ((ctx: C) => Invariants);
-  /** Always runs, including after a failed assertion. */
-  teardown?: (c: CheckContext, ctx: C) => Promise<void>;
+  /**
+   * With `readback`, assertions on the tool's own reply as well -- a count it
+   * reports, say. Without readback, `invariants` already apply to the reply.
+   */
+  replyInvariants?: Invariants | ((ctx: C) => Invariants);
+  /**
+   * Always runs, including after a failed assertion. `reply` is the tool's own
+   * reply, undefined when the call never answered, so a resource it created can
+   * be removed even when the readback that would have found it failed.
+   */
+  teardown?: (c: CheckContext, ctx: C, reply: string | undefined) => Promise<void>;
   /** The tool is expected to answer with isError: true (bad-input checks). */
   expectToolError?: boolean;
 }
@@ -115,7 +131,13 @@ export async function runToolCheck<C extends object>(spec: ToolCheckSpec<C>): Pr
       throw new Error(`${spec.tool} was expected to fail but succeeded: ${truncate(result.text)}`);
     }
 
-    asserted = spec.readback ? await spec.readback(context, ctx) : result.text;
+    if (spec.replyInvariants) {
+      checkInvariants(
+        result.text,
+        typeof spec.replyInvariants === 'function' ? spec.replyInvariants(ctx) : spec.replyInvariants,
+      );
+    }
+    asserted = spec.readback ? await spec.readback(context, ctx, result.text) : result.text;
     checkInvariants(
       asserted,
       typeof spec.invariants === 'function' ? spec.invariants(ctx) : spec.invariants,
@@ -129,7 +151,7 @@ export async function runToolCheck<C extends object>(spec: ToolCheckSpec<C>): Pr
   // stacked on an assertion error hides the thing you actually need to read.
   if (spec.teardown) {
     try {
-      await spec.teardown(context, ctx);
+      await spec.teardown(context, ctx, response);
     } catch (teardownErr) {
       if (caught) {
         console.error(`[e2e] teardown for ${spec.tool} also failed: ${message(teardownErr)}`);
@@ -144,7 +166,9 @@ export async function runToolCheck<C extends object>(spec: ToolCheckSpec<C>): Pr
   // leaked sessions accumulate across a whole run rather than dying with it.
   try {
     await writeForensicsBundle({
-      testName: `${spec.tool}.${spec.shape}`,
+      // Service-qualified: slack and slack-bot both register readChannelHistory,
+      // and an unqualified name would have one overwrite the other's bundle.
+      testName: `${spec.service}.${spec.tool}.${spec.shape}${spec.variant ? `.${spec.variant}` : ''}`,
       client: `direct-${spec.account}`,
       prompt: `${spec.tool}(${JSON.stringify(args ?? {}, null, 2)}) via ${mcp.describe()}`,
       response:

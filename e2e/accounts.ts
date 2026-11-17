@@ -39,7 +39,8 @@ export type ServiceName =
   | 'slack-bot'
   | 'outline'
   | 'peopleforce'
-  | 'hubspot';
+  | 'hubspot'
+  | 'redmine';
 
 export interface Endpoint {
   url: string;
