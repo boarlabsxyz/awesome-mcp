@@ -28,11 +28,18 @@ test('listFolderContents lists the fixture doc in the fixture folder', { timeout
     shape: 'needle',
     args: { folderId: FOLDER_ID, maxResults: 100 },
     invariants: {
-      // Name and ID together, in the file-entry shape: the ID alone could also
-      // appear in a Link line, and the title alone in a same-named copy.
-      includes: [`📄 ${DOC_TITLE}`, `   ID: ${DOC_ID}\n`],
-      matches: [/^Contents of folder \(\d+ items?\):/],
+      // Name and ID as ONE entry, in the file-entry shape: separately, the ID
+      // could come from a Link line and the title from a same-named copy. A doc
+      // on a shared drive carries " (Shared Drive)" after its name.
+      matches: [
+        /^Contents of folder \(\d+ items?\):/,
+        new RegExp(`^📄 ${escapeRegExp(DOC_TITLE)}(?: \\(Shared Drive\\))?\\n   ID: ${escapeRegExp(DOC_ID)}\\n`, 'm'),
+      ],
       excludes: ["The folder is empty or you don't have permission"],
     },
   });
 });
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

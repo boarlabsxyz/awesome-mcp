@@ -11,7 +11,8 @@ import { scratchClients } from '../../../setup/clients.ts';
 // The two halves of its contract:
 //
 //   1. Every occurrence is replaced, and nothing else is touched -- asserted on
-//      a read-back, because the reply's count is the tool's own claim.
+//      a read-back, because the reply's count is the tool's own claim (which
+//      is checked as well).
 //   2. A replace that matches nothing is a success reporting 0, not an error
 //      (src/google-docs/CLAUDE.md: "returns occurrencesChanged: 0 as success").
 //      performFindAndReplace (writeOps.ts) only increments the count when the
@@ -24,6 +25,7 @@ test('findAndReplace replaces every occurrence and leaves the rest alone', { tim
     service: 'google-docs',
     account: 'sandbox',
     shape: 'zero',
+    variant: 'replaces',
     writes: true,
     setup: async (c) => {
       const stamp = Date.now();
@@ -41,13 +43,25 @@ test('findAndReplace replaces every occurrence and leaves the rest alone', { tim
     args: ({ documentId, oldToken, newToken }) => ({ documentId, findText: oldToken, replaceText: newToken }),
     readback: async (c, { documentId }) =>
       (await c.mcp.callTool('readGoogleDoc', { documentId, format: 'text' })).text,
+    // The reply's count is still the tool's claim, but a wrong one misleads a
+    // caller just as surely, so it is pinned too (findAndReplace execute,
+    // src/google-docs/server.ts).
+    replyInvariants: ({ oldToken, newToken }) => ({
+      includes: [`Replaced 2 occurrence(s) of "${oldToken}" with "${newToken}".`],
+    }),
     invariants: ({ oldToken, newToken }) => ({
-      includes: ['Keep this line.', `${newToken} first.`, 'Middle line stays.', `${newToken} second.`],
       excludes: [oldToken],
       transportSafe: true,
+      // The whole body, in order: separate substrings would also accept
+      // reordered lines or text appended after them. readGoogleDoc prints
+      // "Content (N characters):\n---\n<text>" then the revisionId footer; the
+      // text is compared trimmed, since how many newlines the empty doc and the
+      // append leave at either end is Docs' business, not findAndReplace's.
       predicate: (body) => {
-        const count = body.split(newToken).length - 1;
-        return count === 2 ? undefined : `expected the replacement exactly twice, found it ${count} time(s)`;
+        const expected = `Keep this line.\n${newToken} first.\nMiddle line stays.\n${newToken} second.`;
+        const text = body.match(/^Content \(\d+ characters\):\n---\n([^]*?)(?:\n\n\[revisionId: [^\]]*\])?$/)?.[1];
+        if (text === undefined) return 'readGoogleDoc did not answer in its "Content (N characters):" text shape';
+        return text.trim() === expected ? undefined : `expected the document to read ${JSON.stringify(expected)}, got ${JSON.stringify(text.trim())}`;
       },
     }),
     teardown: async (c, { documentId }) => trashFile(await c.service('google-drive'), documentId),
@@ -62,6 +76,7 @@ test('findAndReplace reports zero replacements in an empty document', { timeout:
     service: 'google-docs',
     account: 'sandbox',
     shape: 'zero',
+    variant: 'empty-doc',
     writes: true,
     setup: async (c) => ({ documentId: await createScratchDoc(await scratchClients(c), 'findAndReplace-zero-empty') }),
     args: ({ documentId }) => ({ documentId, findText, replaceText }),

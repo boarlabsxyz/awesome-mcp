@@ -21,9 +21,17 @@ test('getDocument returns the frozen fixture doc body', { timeout: 30_000, skip:
     shape: 'needle',
     args: { documentId: DOC_ID },
     invariants: {
-      includes: [NEEDLE],
       matches: [/^# \S/, /\nURL: \S+$/],
       transportSafe: true,
+      // Between the title and the URL line: a needle that also sits in the title
+      // would otherwise pass a reply that dropped the body.
+      predicate: (body) => {
+        const start = body.indexOf('\n\n');
+        const end = body.lastIndexOf('\n\nURL: ');
+        return start !== -1 && end > start && body.slice(start + 2, end).includes(NEEDLE)
+          ? undefined
+          : `the document body (between the title and URL lines) does not include ${JSON.stringify(NEEDLE)}`;
+      },
     },
   });
 });

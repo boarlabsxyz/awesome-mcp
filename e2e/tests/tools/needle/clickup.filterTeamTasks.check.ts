@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import { runToolCheck } from '../../../runToolCheck.ts';
 import { serviceEnv } from '../../../env.ts';
+import { checkFixtureTaskRow } from '../clickupTaskRow.ts';
 
 // The fixture task, found workspace-wide by narrowing to its home list.
 // filterTeamTasks has no name search, and listIds is the one filter that pins a
@@ -11,7 +12,8 @@ import { serviceEnv } from '../../../env.ts';
 // check is what catches a dropped filter; this one catches a filter that
 // excludes what it should match.
 //
-// The header is `Found ${n} task(s):` (src/clickup/server.ts:1147).
+// The header is `Found ${n} task(s):` (src/clickup/server.ts). subtasks, as in
+// the listTasks check, so a fixture that is a subtask is not silently omitted.
 
 const env = serviceEnv('clickup', [
   'E2E_FIXTURE_CLICKUP_WORKSPACE_ID',
@@ -31,11 +33,11 @@ test('filterTeamTasks finds the fixture task by its home list', { timeout: 30_00
     service: 'clickup',
     account: 'fixture',
     shape: 'needle',
-    args: { workspaceId: WORKSPACE_ID, listIds: [LIST_ID], includeClosed: true },
+    args: { workspaceId: WORKSPACE_ID, listIds: [LIST_ID], includeClosed: true, subtasks: true },
     invariants: {
       matches: [/^Found \d+ task\(s\):/],
-      includes: [NEEDLE, `  ID: ${TASK_ID}\n`, `(${LIST_ID})`],
       transportSafe: true,
+      predicate: (body) => checkFixtureTaskRow(body, { taskId: TASK_ID, listId: LIST_ID, needle: NEEDLE }),
     },
   });
 });

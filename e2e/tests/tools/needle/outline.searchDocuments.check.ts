@@ -38,7 +38,10 @@ test('searchDocuments finds the frozen fixture doc by its body needle', { timeou
             'UUID (search prints `document.id`, not the URL slug), and the doc must be published with the needle in its body.'
           );
         }
-        return block.includes(NEEDLE)
+        // Context is the block's last field and may run over several lines; a
+        // needle in the title alone must not pass.
+        const at = block.indexOf('\nContext: ');
+        return at !== -1 && block.slice(at).includes(NEEDLE)
           ? undefined
           : `the hit for ${DOC_ID} does not carry the needle in its Context: ${JSON.stringify(block.slice(0, 300))}`;
       },

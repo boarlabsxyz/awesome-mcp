@@ -15,6 +15,7 @@ test('readGoogleDoc returns the whole document when maxLength is omitted', { tim
     service: 'google-docs',
     account: 'rich',
     shape: 'volume',
+    variant: 'whole',
     args: { documentId: DOC_ID, format: 'text' },
     invariants: {
       minLength: MIN_CHARS,
@@ -32,6 +33,7 @@ test('readGoogleDoc truncates text without splitting a character', { timeout: 30
     service: 'google-docs',
     account: 'rich',
     shape: 'volume',
+    variant: 'truncated-text',
     // An odd boundary on purpose: an even cut can land between code units by
     // luck, and a passing check would then prove nothing.
     args: { documentId: DOC_ID, format: 'text', maxLength: 4097 },
@@ -79,6 +81,7 @@ test('readGoogleDoc format:json stays parseable when truncated', { timeout: 30_0
     service: 'google-docs',
     account: 'rich',
     shape: 'volume',
+    variant: 'truncated-json',
     args: { documentId: DOC_ID, format: 'json', maxLength: 4097 },
     invariants: {
       parsesAsJson: true,

@@ -8,6 +8,7 @@ import {
   isoWithOffset,
   findScratchEventId,
   deleteScratchEvent,
+  createdEventId,
 } from '../../../setup/calendarScratch.ts';
 
 // Creating an event and reading it back with listEvents + getEvent, rather than
@@ -84,11 +85,12 @@ test('createEvent lands the event at the requested instant', { timeout: 90_000, 
         return undefined;
       },
     }),
-    // Looks the event up again if readback never got that far -- a failed
-    // assertion must not leak it. Nothing listed means createEvent made nothing.
-    teardown: async (c, ctx) => {
+    // The ID from createEvent's own reply first: readback may have failed in
+    // the very listing that would have found it, and repeating that lookup here
+    // would leak the event. Listing is the fallback for a reply that never came.
+    teardown: async (c, ctx, reply) => {
       if (!ctx.summary) return; // setup never ran
-      const eventId = ctx.eventId ?? (await findScratchEventId(c.mcp, ctx));
+      const eventId = createdEventId(reply) ?? ctx.eventId ?? (await findScratchEventId(c.mcp, ctx));
       if (eventId) await deleteScratchEvent(c.mcp, ctx.calendarId, eventId);
     },
   });

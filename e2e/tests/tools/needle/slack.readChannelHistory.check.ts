@@ -21,7 +21,13 @@ test('readChannelHistory returns the frozen fixture message', { timeout: 30_000,
   const CHANNEL_ID = env.get('E2E_FIXTURE_SLACK_CHANNEL_ID');
   const THREAD_TS = env.get('E2E_FIXTURE_SLACK_THREAD_TS');
   const NEEDLE = env.get('E2E_FIXTURE_SLACK_NEEDLE');
-  const second = Math.floor(Number(THREAD_TS));
+  // A non-numeric ts would go to Slack as "NaN" bounds and come back as a tool
+  // error, blaming the tool for a fixture typo.
+  const parsed = Number(THREAD_TS);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`E2E_FIXTURE_SLACK_THREAD_TS must be a Slack ts like 1700000000.123456, got ${JSON.stringify(THREAD_TS)}`);
+  }
+  const second = Math.floor(parsed);
 
   await runToolCheck({
     tool: 'readChannelHistory',

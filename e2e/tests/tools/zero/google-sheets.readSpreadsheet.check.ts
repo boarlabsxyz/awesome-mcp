@@ -23,7 +23,7 @@ test('readSpreadsheet says an empty range is empty, and does not read as an erro
     account: 'sandbox',
     shape: 'zero',
     writes: true,
-    setup: async (c) => ({ spreadsheetId: await createScratchSpreadsheet(c.mcp, 'readSpreadsheet-zero') }),
+    setup: async (c) => ({ spreadsheetId: await createScratchSpreadsheet({ sheets: c.mcp, drive: await c.service('google-drive') }, 'readSpreadsheet-zero') }),
     args: ({ spreadsheetId }) => ({ spreadsheetId, range: 'A1:B2' }),
     invariants: {
       includes: ['Range A1:B2 is empty or does not exist.'],

@@ -44,10 +44,17 @@ test('listTimeEntries finds the fixture entry and reports its page', { timeout: 
       ],
       matches: [/^# Time entries\n\nShowing \d+-\d+ of \d+\./],
       transportSafe: true,
-      predicate: (body) =>
-        body.split('\n').some((line) => line.startsWith('Comments: ') && line.includes(NEEDLE))
+      // In the fixture entry's own block ("## N. ..." up to the next "## "):
+      // another entry on that day could carry the needle too.
+      predicate: (body) => {
+        const lines = body.split('\n');
+        const at = lines.indexOf(`ID: ${ENTRY_ID}`);
+        if (at === -1) return `no entry has ID ${ENTRY_ID}`;
+        const next = lines.findIndex((line, i) => i > at && line.startsWith('## '));
+        return lines.slice(at, next === -1 ? undefined : next).some((line) => line.startsWith('Comments: ') && line.includes(NEEDLE))
           ? undefined
-          : `no "Comments:" line contains ${JSON.stringify(NEEDLE)}. The fixture entry ${ENTRY_ID} on ${DATE} must carry the needle in its comment.`,
+          : `entry ${ENTRY_ID} has no "Comments:" line containing ${JSON.stringify(NEEDLE)}. The fixture entry on ${DATE} must carry the needle in its comment.`;
+      },
     },
   });
 });

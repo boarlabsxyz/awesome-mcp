@@ -26,6 +26,7 @@ test('serviceEnv runs a listed service, and the baseline without listing', () =>
   assert.equal(serviceEnv('slack').skip, false);
   delete process.env.E2E_SERVICES;
   assert.equal(serviceEnv('google-docs').skip, false);
+  assert.equal(serviceEnv('google-drive').skip, false);
   process.env.E2E_SERVICES = 'all';
   assert.equal(serviceEnv('hubspot').skip, false);
 });

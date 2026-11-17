@@ -19,6 +19,7 @@ test('searchEmails finds the fixture email by subject', { timeout: 30_000, skip:
     service: 'google-gmail',
     account: 'fixture',
     shape: 'needle',
+    variant: 'subject',
     args: { query: `subject:"${NEEDLE}"`, maxResults: 10 },
     invariants: {
       // Entry format from formatEmailList (src/google-gmail/apiHelpers.ts):
@@ -47,6 +48,7 @@ test('searchEmails hands back a page token when the result is capped', { timeout
     service: 'google-gmail',
     account: 'fixture',
     shape: 'needle',
+    variant: 'capped',
     args: { query: 'in:anywhere', maxResults: 1 },
     invariants: {
       matches: [/^\*\*Next page token:\*\* \S+$/m],

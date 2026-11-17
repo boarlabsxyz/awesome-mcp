@@ -82,59 +82,86 @@ export async function trashFile(drive: McpClient, fileId: string): Promise<void>
   if (isError) throw new Error(explainToolError('sandbox', `deleteFile(${fileId})`, text));
 }
 
+/** The epoch-ms a scratch title was stamped with, or undefined for any other title. */
+export function scratchStamp(title: string): number | undefined {
+  const stamp = Number(title.match(/^e2e-(\d+)-/)?.[1]);
+  return Number.isFinite(stamp) ? stamp : undefined;
+}
+
 /**
- * Trash scratch docs left behind by runs that died before teardown.
+ * A non-negative age in hours, or a throw. A negative or NaN age puts the cutoff
+ * in the future, which would trash every scratch resource including the ones a
+ * run in flight is still asserting against. SWEEP_MAX_AGE_HOURS comes from the
+ * environment, so a typo reaches here.
+ */
+export function sweepCutoff(maxAgeHours: number, now = Date.now()): number {
+  if (!Number.isFinite(maxAgeHours) || maxAgeHours < 0) {
+    throw new Error(`maxAgeHours must be a non-negative number, got ${JSON.stringify(maxAgeHours)}`);
+  }
+  return now - maxAgeHours * 60 * 60 * 1000;
+}
+
+/** Pages of 100 the sweep reads before stopping; it says so when it stops early. */
+const SWEEP_MAX_PAGES = 20;
+
+/**
+ * Trash scratch files left behind by runs that died before teardown: docs,
+ * spreadsheets and folders alike, wherever they sit (the Drive root included).
  *
  * Without this the sandbox account accumulates, and the zero-state checks -- the
  * ones that assert "this account has nothing" -- start failing for reasons that
  * have nothing to do with the code under test. Run it on a schedule, not in-band:
  * `maxAgeHours` defaults to 24 so it can never race a run still in flight.
  *
- * Takes BOTH clients, and the split is not incidental: `listGoogleDocs` is
- * registered on the docs server while `deleteFile` is on the drive server, and
- * the deployment runs them as separate hosts. Passing one client for both fails
- * with "Unknown tool", which reads like a broken deployment rather than a caller
- * holding the wrong endpoint.
+ * Both halves are on the drive server: `searchDriveFiles` (any file type, by
+ * name) and `deleteFile`. A file is trashed only when its title carries an
+ * `e2e-<epochMs>-` stamp older than the cutoff -- a human-named file that merely
+ * contains "e2e-" is kept. Folders are trashed after files, so a file inside a
+ * scratch folder is trashed by itself rather than found already gone.
  */
 export async function sweepScratch(
-  clients: { docs: McpClient; drive: McpClient },
+  drive: McpClient,
   { maxAgeHours = 24, dryRun = false }: { maxAgeHours?: number; dryRun?: boolean } = {},
-): Promise<{ trashed: string[]; kept: number }> {
-  // A negative or NaN age puts the cutoff in the future, which would trash every
-  // scratch doc including the ones a run in flight is still asserting against.
-  // SWEEP_MAX_AGE_HOURS comes from the environment, so a typo reaches here.
-  if (!Number.isFinite(maxAgeHours) || maxAgeHours < 0) {
-    throw new Error(`maxAgeHours must be a non-negative number, got ${JSON.stringify(maxAgeHours)}`);
-  }
-
-  const { text, isError } = await clients.docs.callTool('listGoogleDocs', {
-    query: TITLE_PREFIX,
-    maxResults: 100,
-    orderBy: 'createdTime',
-  });
-  // Silence here would be indistinguishable from a clean account: the sweep
-  // would report "trashed 0, kept 0" and the leak it exists to prevent would
-  // keep growing.
-  if (isError) throw new Error(explainToolError('sandbox', 'listGoogleDocs', text));
-
-  const cutoff = Date.now() - maxAgeHours * 60 * 60 * 1000;
-  const trashed: string[] = [];
+): Promise<{ trashed: string[]; kept: number; capped: boolean }> {
+  const cutoff = sweepCutoff(maxAgeHours);
+  const stale: Array<{ title: string; id: string; folder: boolean }> = [];
   let kept = 0;
+  let pageToken: string | undefined;
+  let pages = 0;
 
-  // Entries render as "N. **<title>**" followed by "   ID: <id>" (see
-  // formatFileListEntry in src/google-drive/toolHandlers.ts).
-  const entries = [...text.matchAll(/^\d+\. \*\*(.+?)\*\*.*\n\s+ID: (\S+)/gm)];
-  for (const [, title, id] of entries) {
-    const stamp = Number(title.match(/^e2e-(\d+)-/)?.[1]);
-    if (!Number.isFinite(stamp) || stamp >= cutoff) {
-      kept++;
-      continue;
+  do {
+    const { text, isError } = await drive.callTool('searchDriveFiles', {
+      query: TITLE_PREFIX,
+      searchIn: 'name',
+      maxResults: 100,
+      ...(pageToken ? { pageToken } : {}),
+    });
+    // Silence here would be indistinguishable from a clean account: the sweep
+    // would report "trashed 0, kept 0" and the leak it exists to prevent would
+    // keep growing.
+    if (isError) throw new Error(explainToolError('sandbox', 'searchDriveFiles', text));
+    pages++;
+
+    // Entries render as "N. **<name>** (<mimeType>)" then "   ID: <id> · modified ..."
+    // (fileLine in src/google-drive/server.ts).
+    for (const [, title, mimeType, id] of text.matchAll(/^\d+\. \*\*(.+?)\*\* \(([^)]*)\)\n\s+ID: (\S+)/gm)) {
+      const stamp = scratchStamp(title);
+      if (stamp === undefined || stamp >= cutoff) {
+        kept++;
+        continue;
+      }
+      stale.push({ title, id, folder: mimeType === 'application/vnd.google-apps.folder' });
     }
-    if (!dryRun) await trashFile(clients.drive, id);
+    pageToken = text.match(/call again with pageToken "([^"]+)"/)?.[1];
+  } while (pageToken && pages < SWEEP_MAX_PAGES);
+
+  stale.sort((a, b) => Number(a.folder) - Number(b.folder));
+  const trashed: string[] = [];
+  for (const { title, id } of stale) {
+    if (!dryRun) await trashFile(drive, id);
     trashed.push(`${title} (${id})`);
   }
-
-  return { trashed, kept };
+  return { trashed, kept, capped: pageToken !== undefined };
 }
 
 /** Paragraphs of filler, for seeding a document large enough to be interesting. */

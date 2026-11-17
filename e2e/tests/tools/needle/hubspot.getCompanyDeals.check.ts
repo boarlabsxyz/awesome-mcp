@@ -46,6 +46,7 @@ test('getCompanyDeals lists every deal of the fixture company', { timeout: 30_00
     service: 'hubspot',
     account: 'fixture',
     shape: 'needle',
+    variant: 'all-deals',
     args: { companyId: COMPANY_ID, limit: 100 },
     invariants: {
       includes: [`Found ${COUNT} deals:\n`],
@@ -72,6 +73,7 @@ test('getCompanyDeals reports the exact total when limit caps the list', { timeo
     service: 'hubspot',
     account: 'fixture',
     shape: 'needle',
+    variant: 'capped',
     args: { companyId: COMPANY_ID, limit: 1 },
     invariants: {
       // Verbatim from renderCompanyDeals (src/hubspot/server.ts:590), em dash and

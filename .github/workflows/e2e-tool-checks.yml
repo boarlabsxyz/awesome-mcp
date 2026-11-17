@@ -197,9 +197,9 @@ jobs:
             exit 1
           fi
 
-  # Trash scratch documents from runs that died before teardown. Without this the
-  # sandbox account accumulates and the zero-state checks start failing for
-  # reasons that have nothing to do with the code under test.
+  # Trash scratch files and calendar events from runs that died before teardown.
+  # Without this the sandbox account accumulates and the zero-state checks start
+  # failing for reasons that have nothing to do with the code under test.
   sweep:
     if: ${{ github.event_name == 'schedule' && vars.E2E_BASE_URL != '' }}
     needs: [checks]
@@ -208,6 +208,9 @@ jobs:
     env:
       E2E_BASE_URL: ${{ vars.E2E_BASE_URL }}
       E2E_SANDBOX_API_KEY: ${{ secrets.E2E_SANDBOX_API_KEY }}
+      # The calendar half runs only when google-calendar is enabled, on the same calendar the checks write to.
+      E2E_SERVICES: ${{ vars.E2E_SERVICES }}
+      E2E_SANDBOX_CAL_ID: ${{ vars.E2E_SANDBOX_CAL_ID }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:

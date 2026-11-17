@@ -1,14 +1,16 @@
 import { test } from 'node:test';
 import { runToolCheck } from '../../../runToolCheck.ts';
 import { serviceEnv } from '../../../env.ts';
+import { checkFixtureTaskRow } from '../clickupTaskRow.ts';
 
-// The fixture task, found by listing its HOME list. Asserting `(${LIST_ID})`
-// beside the ID and excluding sharedTaskNote's sentence (src/clickup/server.ts:224)
-// pins that it came back as a native member of the list, not shared in through
-// include_timl -- which listTasks turns on by default.
+// The fixture task, found by listing its HOME list. Its row must name the list,
+// and sharedTaskNote (src/clickup/server.ts) must not list it among the tasks
+// shared in through include_timl -- which listTasks turns on by default. Other
+// tasks shared into the list are fine; the note naming them is not a failure.
 //
-// includeClosed so the check does not depend on the fixture task's status. The
-// list must stay under 100 tasks: listTasks returns ClickUp's first page only.
+// includeClosed so the check does not depend on the fixture task's status, and
+// subtasks so a fixture that is a subtask is not silently omitted. The list
+// must stay under 100 tasks: listTasks returns ClickUp's first page only.
 
 const env = serviceEnv('clickup', [
   'E2E_FIXTURE_CLICKUP_TASK_ID',
@@ -26,11 +28,11 @@ test('listTasks finds the fixture task in its home list', { timeout: 30_000, ski
     service: 'clickup',
     account: 'fixture',
     shape: 'needle',
-    args: { listId: LIST_ID, includeClosed: true },
+    args: { listId: LIST_ID, includeClosed: true, subtasks: true },
     invariants: {
-      includes: [NEEDLE, `  ID: ${TASK_ID}\n`, `(${LIST_ID})`],
-      excludes: ['appear here through Tasks in Multiple Lists', 'No tasks found.'],
+      excludes: [`${TASK_ID} (home:`, 'No tasks found.'],
       transportSafe: true,
+      predicate: (body) => checkFixtureTaskRow(body, { taskId: TASK_ID, listId: LIST_ID, needle: NEEDLE }),
     },
   });
 });

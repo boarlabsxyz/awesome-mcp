@@ -114,7 +114,7 @@ connection, which would otherwise fail every write check at setup time.
 ```bash
 export E2E_FIXTURE_DOC_ID=1nZ8Q1StnT0QDUcfZ9_Ihrzh3PZJjVpGC0Kvg4qTW688
 export E2E_FIXTURE_DOC_NEEDLE=BANANA-PHONE-7714
-export E2E_FIXTURE_DOC_TITLE="<the doc's exact title>"
+export E2E_FIXTURE_DOC_TITLE="<the doc's exact title, unique in the account>"
 ```
 
 Only if you build a fresh fixture account:

@@ -8,8 +8,9 @@ import { serviceEnv } from '../../../env.ts';
 //
 // includeContent: true because it switches the Docs `fields` projection from
 // 'title,tabs(tabProperties,childTabs)' to 'title,tabs' -- the content count is
-// only right if that projection actually carries the body. "Empty" on the
-// fixture doc, which holds the needle text, means the projection dropped it.
+// only right if that projection actually carries the body. At least one tab of
+// the fixture doc, which holds the needle text, must report characters; other
+// tabs may legitimately be empty, so "Empty" alone is not a failure.
 
 const env = serviceEnv('google-docs', ['E2E_FIXTURE_DOC_ID', 'E2E_FIXTURE_DOC_TITLE']);
 
@@ -31,7 +32,7 @@ test('listDocumentTabs lists the fixture doc and a usable tab ID', { timeout: 30
         /(?:Tab ID|- ID): (?!Unknown)\S+/,
         /- Content: [\d,]+ characters/,
       ],
-      excludes: ['appears to have no tabs', '- Content: Empty'],
+      excludes: ['appears to have no tabs'],
       transportSafe: true,
     },
   });

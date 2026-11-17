@@ -21,6 +21,7 @@ test('searchGoogleDocs finds the fixture doc by name', { timeout: 30_000, skip: 
     service: 'google-docs',
     account: 'fixture',
     shape: 'needle',
+    variant: 'by-name',
     args: { searchQuery: DOC_TITLE, searchIn: 'name', maxResults: 10 },
     invariants: {
       // The ID is the assertion that matters: a title match alone would also be
@@ -39,6 +40,7 @@ test('searchGoogleDocs finds the fixture doc by its body text', { timeout: 30_00
     service: 'google-docs',
     account: 'fixture',
     shape: 'needle',
+    variant: 'by-content',
     // The needle is in the body, not the title, so only the fullText branch can
     // find it -- a name-only query regression shows up here and nowhere else.
     args: { searchQuery: NEEDLE, searchIn: 'content', maxResults: 10 },

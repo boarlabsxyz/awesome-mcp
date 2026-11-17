@@ -56,7 +56,7 @@ Fixture content:
 |---|---|
 | `E2E_FIXTURE_DOC_ID` | `needle/readGoogleDoc`, and the existing live-client smoke |
 | `E2E_FIXTURE_DOC_NEEDLE` | same — the marker token, e.g. `BANANA-PHONE-7714` |
-| `E2E_FIXTURE_DOC_TITLE` | `needle/listGoogleDocs` |
+| `E2E_FIXTURE_DOC_TITLE` | `needle/listGoogleDocs`, `needle/searchGoogleDocs` — must be **unique** in the account: the name search reads the first 10 matches, so ten newer docs sharing the title would push the fixture out |
 
 Rich content:
 
@@ -90,7 +90,9 @@ checks need only the sandbox account to be connected to it.
 
 The tools covered are the most-used ones per service from the Admin MCP's
 `listToolUsage` (30 days, November 2026); `tools.ts` lists them. Each
-read has a `needle` (fixture) and a `zero` (sandbox) check; each write a `zero`.
+read has a `needle` (fixture) and a `zero` (sandbox) check, except
+`slack-bot.listUsers` and `peopleforce.listEmployees`, which have only a
+`needle`. Each write has a `zero` check.
 
 Fixture values. Every NEEDLE is a frozen marker string that appears nowhere else
 in that tenant — the same rule as `E2E_FIXTURE_DOC_NEEDLE`.
@@ -155,10 +157,10 @@ in that tenant — the same rule as `E2E_FIXTURE_DOC_NEEDLE`.
 | `E2E_FIXTURE_HUBSPOT_DEAL_NEEDLE` | a token in that deal's name |
 | `E2E_SANDBOX_HUBSPOT_EMPTY_COMPANY_ID` | a real company with no deals |
 
-**Not swept:** `sweepScratch` lists Google Docs only, so scratch spreadsheets
-(`setup/sheetsScratch.ts`), folders (`setup/driveScratch.ts`) and calendar events
-(`setup/calendarScratch.ts`) leaked by a run killed before teardown stay in the
-sandbox. They are self-dating, so extending the sweeper is mechanical.
+**Swept:** `npm run sweep:sandbox` trashes stale scratch docs, spreadsheets and
+folders (`searchDriveFiles` by the `e2e-` title prefix, anywhere in Drive) and,
+when `google-calendar` is in `E2E_SERVICES`, deletes stale scratch events on
+`E2E_SANDBOX_CAL_ID` from the last 90 days.
 
 ## Why "empty account" is not the sandbox's contract
 
