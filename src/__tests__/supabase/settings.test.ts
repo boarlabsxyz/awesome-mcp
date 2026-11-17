@@ -7,9 +7,11 @@ import { argsForSettings, hostedUrlFor, normalizeSupabaseSettings, SUPABASE_FEAT
 import { createWebOnlyApp } from '../../website/webServer.js';
 import { createSession } from '../../website/sessionStore.js';
 import { createOrUpdateUser, getUserByGoogleId, UserTokens } from '../../userStore.js';
-import { createMcpInstance, getMcpConnectionByInstanceId, GoogleTokens } from '../../mcpConnectionStore.js';
+import {
+  createMcpInstance, getMcpConnectionByInstanceId, GoogleTokens, patchMcpInstanceProviderTokens, updateMcpInstanceProviderTokens,
+} from '../../mcpConnectionStore.js';
 import { createMcpCatalog } from '../../mcpCatalogStore.js';
-import { runSupabaseTool } from '../../supabase/apiHelpers.js';
+import { maybeRefreshSupabaseToken, runSupabaseTool } from '../../supabase/apiHelpers.js';
 import { mergeProviderReconnectTokens } from '../../website/webServer.js';
 
 const READ = { readOnlyHint: true };
@@ -172,5 +174,57 @@ describe('a call through a connection with settings', () => {
       access_token: 'old', supabaseSettings: { readOnly: true },
     });
     assert.deepEqual((merged as any).supabaseSettings, { readOnly: true });
+  });
+});
+
+// The settings save, the call-time refresh and a reconnect all write the one
+// provider_tokens value. Each must change only its own keys, or a refresh that
+// read before a "read-only" save puts the unrestricted settings back. These run
+// on the file store; the Postgres statements do the same inside one UPDATE.
+describe('provider_tokens writers keep each other\'s keys', () => {
+  const realFetch = globalThis.fetch;
+  after(() => { globalThis.fetch = realFetch; });
+  const LIMITED = { projectRef: 'abcdefghijklmnopqrst', readOnly: true };
+  const fresh = async (tokens: Record<string, unknown>) =>
+    (await createMcpInstance(OWNER_ID, 'supabase', 'Writers', emptyGoogleTokens, null, 'supabase', tokens as any, null)).instanceId;
+  const stored = async (id: string) => (await getMcpConnectionByInstanceId(id))?.providerTokens as any;
+
+  it('patch sets and deletes only the keys it names', async () => {
+    const id = await fresh({ access_token: 'a', expiry_date: 1, supabaseSettings: LIMITED });
+    await patchMcpInstanceProviderTokens(id, { access_token: 'b', expiry_date: undefined });
+    assert.deepEqual(await stored(id), { access_token: 'b', supabaseSettings: LIMITED });
+  });
+
+  it('a refresh stores the new token without touching the settings', async () => {
+    const id = await fresh({ access_token: 'old', refresh_token: 'rt', supabaseSettings: LIMITED });
+    globalThis.fetch = (async () => new Response(JSON.stringify({ access_token: 'new', refresh_token: 'rt2', expires_in: 3600 }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    })) as typeof fetch;
+    await maybeRefreshSupabaseToken({
+      supabaseAccessToken: 'old', supabaseRefreshToken: 'rt', supabaseTokenExpiry: Date.now() - 1_000,
+      supabaseOauthClientId: 'id', supabaseOauthClientSecret: 'sec', supabaseInstanceId: id,
+    } as any, { info: () => {}, error: () => {} });
+    const tokens = await stored(id);
+    assert.equal(tokens.access_token, 'new');
+    assert.equal(tokens.refresh_token, 'rt2');
+    assert.deepEqual(tokens.supabaseSettings, LIMITED);
+  });
+
+  it('a reconnect keeps the settings as stored at write time, not as the caller last read them', async () => {
+    const id = await fresh({ access_token: 'old', refresh_token: 'rt' });
+    // Saved after the reconnect read the record: it never saw these settings.
+    await patchMcpInstanceProviderTokens(id, { supabaseSettings: LIMITED });
+    await updateMcpInstanceProviderTokens(id, { access_token: 'new', refresh_token: '' } as any, {
+      keepIfAbsent: ['refresh_token', 'supabaseSettings'],
+    });
+    assert.deepEqual(await stored(id), { access_token: 'new', refresh_token: 'rt', supabaseSettings: LIMITED });
+  });
+
+  it('a reconnect that supplies a preserved key replaces it, and drops everything unlisted', async () => {
+    const id = await fresh({ access_token: 'old', stale: true, supabaseSettings: LIMITED });
+    await updateMcpInstanceProviderTokens(id, { access_token: 'new', supabaseSettings: { readOnly: true } } as any, {
+      keepIfAbsent: ['supabaseSettings'],
+    });
+    assert.deepEqual(await stored(id), { access_token: 'new', supabaseSettings: { readOnly: true } });
   });
 });

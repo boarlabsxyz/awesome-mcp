@@ -2663,6 +2663,10 @@
     // Three options Supabase takes on its hosted URL. The server validates and
     // stores them (normalizeSupabaseSettings); this form only collects them.
     let supabaseSettingsInstanceId = null;
+    // Bumped on every open and close: a load that answers after its dialog was
+    // closed or reopened for another connection must not fill the form, or the
+    // next save writes one connection's settings onto another.
+    let supabaseSettingsRequestId = 0;
     const SUPABASE_GROUP_LABELS = {
       docs: 'Docs', account: 'Account (projects, organizations, costs)', database: 'Database', debugging: 'Debugging (logs, advisors)',
       development: 'Development (URLs, keys, types)', functions: 'Edge Functions', branching: 'Branching (paid plans)',
@@ -2670,6 +2674,7 @@
     };
 
     async function openSupabaseSettings(instanceId) {
+      const requestId = ++supabaseSettingsRequestId;
       supabaseSettingsInstanceId = instanceId;
       openModal(document.getElementById('supabaseSettingsModal'));
       const content = document.getElementById('supabaseSettingsContent');
@@ -2678,6 +2683,7 @@
         const response = await fetch(`/api/instances/${instanceId}/supabase-settings`, { credentials: 'include' });
         if (!response.ok) throw new Error('Failed to load');
         const data = await response.json();
+        if (requestId !== supabaseSettingsRequestId) return;
         const s = data.settings || {};
         const groups = data.featureGroups || [];
         content.innerHTML = `
@@ -2695,11 +2701,13 @@
             ${groups.map(g => `<label style="display:block;"><input type="checkbox" class="supabase-feature" value="${escapeHtml(g)}" ${(s.features || []).includes(g) ? 'checked' : ''} /> ${escapeHtml(SUPABASE_GROUP_LABELS[g] || g)}</label>`).join('')}
           </fieldset>`;
       } catch (err) {
+        if (requestId !== supabaseSettingsRequestId) return;
         content.innerHTML = `<p style="color: #dc3545;" role="alert">Error: ${escapeHtml(err.message)}</p>`;
       }
     }
 
     function closeSupabaseSettings() {
+      supabaseSettingsRequestId++;
       closeModal(document.getElementById('supabaseSettingsModal'));
       supabaseSettingsInstanceId = null;
     }

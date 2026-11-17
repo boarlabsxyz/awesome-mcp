@@ -101,16 +101,15 @@ async function refreshAndPersist(session: UserSession, log: SupabaseToolLog): Pr
   const instanceId = session.supabaseInstanceId;
   if (!instanceId) return;
   try {
-    const { getMcpConnectionByInstanceId, updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
-    // The store REPLACES provider_tokens, so read the record and swap only the
-    // token fields — anything stored beside them must survive a refresh.
-    const stored = (await getMcpConnectionByInstanceId(instanceId))?.providerTokens as Record<string, unknown> | undefined;
-    await updateMcpInstanceProviderTokens(instanceId, {
-      ...stored,
+    const { patchMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+    // Patch only the token fields: a read-spread-replace here would put back
+    // settings the dashboard changed since the read (read-only, project limit).
+    // An undefined expiry deletes the stored one.
+    await patchMcpInstanceProviderTokens(instanceId, {
       access_token: result.accessToken,
       refresh_token: refreshToken,
       expiry_date: expiry,
-    } as any);
+    });
   } catch (err: any) {
     log.error(`Failed to persist refreshed Supabase tokens for ${instanceId}: ${err?.message ?? err}`);
   }
